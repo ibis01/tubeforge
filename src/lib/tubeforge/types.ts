@@ -183,6 +183,14 @@ export interface VideoDTO {
   previewUrl: string | null;
   hasComments: boolean; // engagement kit generated (Phase 4)
   youtubeUrl: string | null; // set after a successful OAuth upload (Phase 4)
+  publishedAt: string | null; // real YouTube publish date once synced (Phase 5)
+  // Auto-Short (Phase 5)
+  hasShort: boolean;
+  shortUrl: string | null;
+  shortDuration: number | null;
+  shortScene: number | null;
+  // Latest synced performance (Phase 5, null before the first sync)
+  stats: { views: number; likes: number; comments: number } | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -232,6 +240,9 @@ export interface ResearchIdea {
   viralScore: number;
   suggestedLength: string;
   why: string;
+  // Phase 5 — performance feedback loop (optional, set after a boost/rescore)
+  perfBoost?: number; // points added by real channel performance (can be negative)
+  boostReason?: string; // why the boost was applied
 }
 
 export interface ResearchSessionDTO {
@@ -375,4 +386,56 @@ export interface YouTubeStatusDTO {
   privacyStatus: string; // public | unlisted | private
   callbackUrl: string; // redirect URI to register in Google Cloud
   clientId?: string | null; // echoed back for the settings edit form
+}
+
+// ---------- Phase 5: performance loop DTOs ----------
+
+/** One published video's performance row in the Analytics view. */
+export interface AnalyticsRowDTO {
+  videoId: string;
+  title: string;
+  niche: string;
+  thumbnailUrl: string | null;
+  youtubeUrl: string | null;
+  publishedAt: string | null;
+  views: number;
+  likes: number;
+  comments: number;
+  viewDelta: number; // gained since the previous snapshot (0 on first sync)
+  likeDelta: number;
+  snapshots: number; // how many syncs recorded this video
+  engagementRate: number; // (likes + comments) / views, 0..1
+}
+
+/** Aggregated channel performance + feedback-loop state (GET /api/analytics). */
+export interface AnalyticsOverviewDTO {
+  publishedCount: number; // videos with youtubeUrl
+  trackedCount: number; // videos with at least one stats snapshot
+  totals: { views: number; likes: number; comments: number };
+  viewDelta: number; // views gained across the latest sync round
+  avgEngagement: number; // 0..1 across tracked videos
+  lastSyncAt: string | null;
+  rows: AnalyticsRowDTO[]; // sorted by views desc
+  series: { day: string; views: number }[]; // cumulative views per snapshot day
+  feedback: {
+    active: boolean; // boost can run (has tracked stats)
+    winners: string[]; // titles of top performers feeding the loop
+    topKeywords: string[]; // dominant keywords in winning videos
+  };
+}
+
+/** Result of POST /api/youtube/sync. */
+export interface YouTubeSyncDTO {
+  synced: number; // videos whose stats were fetched
+  skipped: number; // published videos missing from the API response (private/deleted)
+  totals: { views: number; likes: number; comments: number };
+  syncedAt: string;
+}
+
+/** Result of POST /api/analytics/rescore (performance boost on a radar session). */
+export interface RescoreDTO {
+  sessionId: string;
+  boosted: number; // ideas that received a nonzero boost
+  changed: number; // ideas whose viralScore moved
+  ideas: ResearchIdea[];
 }

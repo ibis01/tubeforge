@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { latestStatsFor } from "@/lib/tubeforge/analytics";
 import { jobSnapshot } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
 import { RENDER_MODES } from "@/lib/tubeforge/types";
@@ -19,7 +20,10 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   if (!video)
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
   return NextResponse.json({
-    video: serializeVideo(video, video.channel?.name, { includeScenes: true }),
+    video: serializeVideo(video, video.channel?.name, {
+      includeScenes: true,
+      stats: await latestStatsFor(id),
+    }),
     generating: jobSnapshot(id),
   });
 }

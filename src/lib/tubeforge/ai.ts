@@ -333,11 +333,16 @@ export interface ResearchResult {
   nicheSummary: string;
 }
 
-/** Topic Radar — GLM mines a niche for high-potential video topics with SEO metrics. */
+/** Topic Radar — GLM mines a niche for high-potential video topics with SEO metrics.
+ * Phase 5: the prompt carries a PERFORMANCE INTELLIGENCE brief built from real
+ * synced YouTube stats, so the strategist steers toward the channel's winners. */
 export async function generateTopicResearch(opts: {
   niche: string;
   query: string;
 }): Promise<ResearchResult> {
+  const { performanceBriefBlock } = await import("./analytics");
+  const performanceBrief = await performanceBriefBlock();
+
   const zai = await getZAI();
   const completion = await aiCall("llm", "research LLM", () =>
     zai.chat.completions.create({
@@ -350,7 +355,7 @@ export async function generateTopicResearch(opts: {
       {
         role: "user",
         content: `Research the "${opts.niche}" niche on YouTube${opts.query ? ` with a focus on "${opts.query}"` : ""}.
-
+${performanceBrief}
 Find 8 concrete, specific faceless-video topic ideas that are most likely to perform well right now. Favor evergreen topics with proven search demand and strong curiosity gaps that work without a host on camera.
 
 Return JSON with exactly these keys:

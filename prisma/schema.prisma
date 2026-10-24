@@ -69,10 +69,17 @@ model Video {
   verifyReport String? // JSON ASR narration-check report (Phase 3)
   commentsKit  String? // JSON engagement kit: pinned comment + replies + strategy (Phase 4)
   youtubeUrl   String? // https://youtu.be/<id> after a successful OAuth upload (Phase 4)
+  publishedAt  DateTime? // real publish date reported by YouTube (Phase 5 analytics)
+
+  // Auto-Short (Phase 5) — 9:16 vertical cut rendered from the final video
+  hasShort     Boolean  @default(false)
+  shortScene   Int? // scene index the short was cut from (null = auto-picked)
+  shortDuration Float? @default(0)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   activities    Activity[]
   slots         ScheduleSlot[]
+  stats         VideoStat[]
 
   @@index([status])
   @@index([createdAt])
@@ -115,6 +122,22 @@ model ScheduleSlot {
   updatedAt DateTime @updatedAt
 
   @@index([slotDate])
+}
+
+// Phase 5 — performance snapshots pulled from the YouTube Data API for
+// published videos. One row per (video, sync) so the analytics view can chart
+// growth deltas between syncs and the Topic Radar can learn from winners.
+model VideoStat {
+  id        String   @id @default(cuid())
+  videoId   String
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  views     Int      @default(0)
+  likes     Int      @default(0)
+  comments  Int      @default(0)
+  favorites Int      @default(0)
+  snapshotAt DateTime @default(now())
+
+  @@index([videoId, snapshotAt])
 }
 
 model Setting {

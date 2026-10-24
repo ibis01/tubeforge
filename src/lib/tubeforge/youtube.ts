@@ -183,6 +183,74 @@ export async function fetchChannelInfo(): Promise<ChannelInfo> {
   };
 }
 
+// ---------- performance stats (Phase 5) ----------
+
+/** https://youtu.be/<id> -> <id> (also accepts watch?v= and /shorts/ forms). */
+export function youtubeIdFromUrl(url: string): string | null {
+  const m =
+    /^https?:\/\/(?:www\.)?youtu\.be\/([\w-]{6,})/.exec(url) ??
+    /^https?:\/\/(?:www\.)?youtube\.com\/watch\?v=([\w-]{6,})/.exec(url) ??
+    /^https?:\/\/(?:www\.)?youtube\.com\/shorts\/([\w-]{6,})/.exec(url);
+  return m ? m[1] : null;
+}
+
+export interface RemoteVideoStats {
+  youtubeId: string;
+  views: number;
+  likes: number;
+  comments: number;
+  favorites: number;
+  publishedAt: string | null; // ISO from the API
+}
+
+/**
+ * Fetch statistics + publish dates for up to 50 uploaded videos in ONE
+ * videos.list call. Callers reconcile the returned set against the ids they
+ * asked for (missing = private / deleted / wrong account).
+ */
+export async function fetchVideoStats(youtubeIds: string[]): Promise<Map<string, RemoteVideoStats>> {
+  if (youtubeIds.length === 0) return new Map();
+  if (youtubeIds.length > 50)
+    throw new Error("Sync more than 50 published videos is not supported yet — sync in batches");
+
+  const token = await getAccessToken();
+  const res = await fetch(
+    `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet&id=${youtubeIds.join(",")}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = (body as { error?: { message?: string; errors?: { reason?: string }[] } }).error;
+    const quota = err?.errors?.[0]?.reason === "quotaExceeded"
+      ? " — the YouTube Data API daily quota is used up; try again tomorrow"
+      : "";
+    throw new Error(
+      `YouTube stats sync failed (${res.status}): ${err?.message ?? `HTTP ${res.status}`}${quota}`
+    );
+  }
+
+  const data = (await res.json()) as {
+    items?: {
+      id: string;
+      statistics?: { viewCount?: string; likeCount?: string; commentCount?: string; favoriteCount?: string };
+      snippet?: { publishedAt?: string };
+    }[];
+  };
+
+  const out = new Map<string, RemoteVideoStats>();
+  for (const item of data.items ?? []) {
+    out.set(item.id, {
+      youtubeId: item.id,
+      views: Math.max(0, Math.trunc(Number(item.statistics?.viewCount ?? 0)) || 0),
+      likes: Math.max(0, Math.trunc(Number(item.statistics?.likeCount ?? 0)) || 0),
+      comments: Math.max(0, Math.trunc(Number(item.statistics?.commentCount ?? 0)) || 0),
+      favorites: Math.max(0, Math.trunc(Number(item.statistics?.favoriteCount ?? 0)) || 0),
+      publishedAt: item.snippet?.publishedAt ?? null,
+    });
+  }
+  return out;
+}
+
 // ---------- upload ----------
 
 /** Extract Google's API error reason into a human-readable message. */

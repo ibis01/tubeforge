@@ -39,6 +39,7 @@ import {
   KeyRound,
   Lightbulb,
   Clapperboard,
+  Zap,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -133,6 +134,22 @@ function IdeaCard({
           <Clock className="h-3 w-3 mr-1" />
           {lengthLabel}
         </Badge>
+        {idea.perfBoost != null && idea.perfBoost !== 0 && (
+          <Badge
+            variant="outline"
+            className={clsx(
+              "text-[11px] border font-normal",
+              idea.perfBoost > 0
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                : "border-amber-500/30 bg-amber-500/10 text-amber-200"
+            )}
+            title={idea.boostReason}
+          >
+            <Zap className="h-3 w-3 mr-1" />
+            {idea.perfBoost > 0 ? "+" : ""}
+            {idea.perfBoost} performance
+          </Badge>
+        )}
       </div>
 
       {idea.keywords.length > 0 && (

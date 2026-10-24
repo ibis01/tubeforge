@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { AppSidebar, MOBILE_NAV_ITEMS, NAV_ITEMS } from "@/components/tubeforge/app-sidebar";
 import { DashboardView } from "@/components/tubeforge/views/dashboard-view";
+import { AnalyticsView } from "@/components/tubeforge/views/analytics-view";
 import { ResearchView } from "@/components/tubeforge/views/research-view";
 import { CreateView } from "@/components/tubeforge/views/create-view";
 import { LibraryView } from "@/components/tubeforge/views/library-view";
@@ -19,6 +20,10 @@ const VIEW_META: Record<ViewId, { title: string; subtitle: string }> = {
   dashboard: {
     title: "Mission Control",
     subtitle: "Your faceless-channel factory at a glance",
+  },
+  analytics: {
+    title: "Analytics",
+    subtitle: "Real YouTube performance feeding the Topic Radar",
   },
   research: {
     title: "Topic Radar",
@@ -123,6 +128,7 @@ export default function Home() {
         {/* View content */}
         <main className="flex-1 px-4 sm:px-6 py-6 w-full max-w-[1400px] mx-auto">
           {view === "dashboard" && <DashboardView />}
+          {view === "analytics" && <AnalyticsView />}
           {view === "research" && <ResearchView />}
           {view === "create" && <CreateView />}
           {view === "library" && <LibraryView />}

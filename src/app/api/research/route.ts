@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { generateTopicResearch } from "@/lib/tubeforge/ai";
+import { applyPerformanceBoost } from "@/lib/tubeforge/analytics";
 import { serializeSession } from "@/lib/tubeforge/research";
 
 /** GET — recent research sessions (newest first). */
@@ -35,18 +36,22 @@ export async function POST(req: NextRequest) {
   try {
     const result = await generateTopicResearch({ niche, query });
 
+    // Phase 5 — lift/ding the fresh ideas with real channel performance.
+    const boosted = await applyPerformanceBoost(result.ideas);
+    const finalResult = { ...result, ideas: boosted.ideas };
+
     const row = await db.researchSession.create({
       data: {
         niche,
         query: query || "—",
-        ideas: JSON.stringify(result),
+        ideas: JSON.stringify(finalResult),
       },
     });
 
     await db.activity.create({
       data: {
         stage: "research",
-        message: `Topic Radar scanned "${niche}"${query ? ` for "${query}"` : ""} — ${result.ideas.length} ideas found`,
+        message: `Topic Radar scanned "${niche}"${query ? ` for "${query}"` : ""} — ${finalResult.ideas.length} ideas found${boosted.boosted > 0 ? ` (${boosted.boosted} performance-boosted)` : ""}`,
       },
     });
 

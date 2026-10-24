@@ -13,6 +13,7 @@ export interface GeneratingFlags {
   verify: boolean;
   comments: boolean;
   upload: boolean;
+  short: boolean;
 }
 
 export interface RenderStatus {
@@ -184,6 +185,16 @@ export function pollUpload(videoId: string, opts?: PollOpts) {
     (v) => Boolean(v.youtubeUrl),
     (v) => Boolean(v.error) && !v.youtubeUrl,
     { ...opts, timeoutMs: opts?.timeoutMs ?? 20 * 60 * 1000 }
+  );
+}
+
+/** Poll until the vertical Short lands (hasShort set) or records an error. */
+export function pollShort(videoId: string, opts?: PollOpts) {
+  return pollVideo(
+    videoId,
+    (v) => v.hasShort,
+    (v) => Boolean(v.error) && !v.hasShort,
+    { ...opts, timeoutMs: opts?.timeoutMs ?? 10 * 60 * 1000 }
   );
 }
 

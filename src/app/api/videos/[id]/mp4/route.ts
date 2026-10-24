@@ -1,23 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readVideoFile } from "@/lib/tubeforge/render";
+import { readShortFile } from "@/lib/tubeforge/shorts";
 
 type Ctx = { params: Promise<{ id: string }> };
 
 /**
  * GET — stream the rendered MP4 with HTTP Range support so the browser
- * <video> player can seek instantly. ?variant=preview streams preview.mp4.
+ * <video> player can seek instantly. ?variant=preview streams preview.mp4,
+ * ?variant=short streams the 9:16 vertical Short (Phase 5).
  */
 export async function GET(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
+  const variantParam = new URL(req.url).searchParams.get("variant");
   const variant =
-    new URL(req.url).searchParams.get("variant") === "preview"
+    variantParam === "preview"
       ? ("preview" as const)
-      : ("final" as const);
+      : variantParam === "short"
+        ? ("short" as const)
+        : ("final" as const);
 
-  const media = readVideoFile(id, variant);
+  const media =
+    variant === "short"
+      ? readShortFile(id)
+      : readVideoFile(id, variant);
   if (!media)
     return NextResponse.json(
-      { error: variant === "preview" ? "No preview rendered yet" : "No video rendered yet" },
+      {
+        error:
+          variant === "preview"
+            ? "No preview rendered yet"
+            : variant === "short"
+              ? "No Short rendered yet"
+              : "No video rendered yet",
+      },
       { status: 404 }
     );
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { generateScriptPackage } from "@/lib/tubeforge/ai";
+import { latestStatsMap } from "@/lib/tubeforge/analytics";
 import { generateSceneScriptPackage } from "@/lib/tubeforge/story";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
 import { FORMATS, RENDER_MODES, type VideoDTO } from "@/lib/tubeforge/types";
@@ -21,8 +22,13 @@ export async function GET(req: NextRequest) {
     },
   });
 
+  // Latest synced YouTube performance per video (Phase 5) — one query.
+  const stats = await latestStatsMap(videos.map((v) => v.id));
+
   return NextResponse.json({
-    videos: videos.map((v) => serializeVideo(v, v.channel?.name)),
+    videos: videos.map((v) =>
+      serializeVideo(v, v.channel?.name, { stats: stats.get(v.id) ?? null })
+    ),
   });
 }
 

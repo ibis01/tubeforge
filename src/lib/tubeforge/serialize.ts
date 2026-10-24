@@ -1,6 +1,7 @@
 // Shared Video -> VideoDTO serializer. One source of truth so every route
 // (list, detail, stage jobs) emits the same shape, including story-engine
-// fields (format, scenes, storyboard, rendered video).
+// fields (format, scenes, storyboard, rendered video) and Phase 5 fields
+// (auto-short state + latest synced YouTube performance).
 
 import fs from "fs";
 import path from "path";
@@ -17,12 +18,17 @@ type VideoWithJoins = Video & {
 export function serializeVideo(
   v: VideoWithJoins,
   channelName?: string | null,
-  opts: { includeScenes?: boolean } = {}
+  opts: {
+    includeScenes?: boolean;
+    /** Latest synced performance for this video (Phase 5) — avoids N+1s. */
+    stats?: { views: number; likes: number; comments: number } | null;
+  } = {}
 ): VideoDTO {
   const isStory = v.format === "story";
   const scenes = isStory ? parseScenes(v.scenes) : [];
   const hasFinal = isStory && fs.existsSync(path.join(UPLOAD_ROOT, v.id, "final.mp4"));
   const hasPreview = isStory && fs.existsSync(path.join(UPLOAD_ROOT, v.id, "preview.mp4"));
+  const hasShortFile = isStory && v.hasShort && fs.existsSync(path.join(UPLOAD_ROOT, v.id, "short.mp4"));
 
   return {
     id: v.id,
@@ -62,6 +68,12 @@ export function serializeVideo(
     previewUrl: hasPreview ? `/api/videos/${v.id}/mp4?variant=preview` : null,
     hasComments: Boolean(v.commentsKit),
     youtubeUrl: v.youtubeUrl ?? null,
+    publishedAt: v.publishedAt ? v.publishedAt.toISOString() : null,
+    hasShort: hasShortFile,
+    shortUrl: hasShortFile ? `/api/videos/${v.id}/mp4?variant=short` : null,
+    shortDuration: hasShortFile ? v.shortDuration : null,
+    shortScene: hasShortFile ? v.shortScene : null,
+    stats: opts.stats ?? null,
     createdAt: v.createdAt.toISOString(),
     updatedAt: v.updatedAt.toISOString(),
   };

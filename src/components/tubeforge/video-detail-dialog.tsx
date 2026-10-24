@@ -27,6 +27,7 @@ import {
   pollVerify,
   pollComments,
   pollUpload,
+  pollShort,
 } from "@/lib/tubeforge/poll";
 import {
   VOICES,
@@ -63,6 +64,7 @@ import {
   Youtube,
   ExternalLink,
   Captions,
+  Smartphone,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -116,6 +118,10 @@ export function VideoDetailDialog({
   const [ytStatus, setYtStatus] = useState<YouTubeStatusDTO | null>(null);
   const [uploading, setUploading] = useState(false);
 
+  // Auto-Short state (Phase 5 — 9:16 vertical cut)
+  const [shortScenePick, setShortScenePick] = useState<number | "auto">("auto");
+  const [shortRunning, setShortRunning] = useState(false);
+
   const isStory = video?.format === "story";
 
   const reloadScenes = useCallback(async (videoId: string) => {
@@ -157,6 +163,8 @@ export function VideoDetailDialog({
     setKitRunning(false);
     setUploading(false);
     setCopiedKey(null);
+    setShortScenePick("auto");
+    setShortRunning(false);
     fetch(`/api/videos/${video.id}/verify`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -188,6 +196,13 @@ export function VideoDetailDialog({
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
           if (!cancelled && d?.rendering) setRenderLabel("Rendering in progress…");
+        })
+        .catch(() => {});
+      // Adopt any Short cut already in flight (Phase 5).
+      fetch(`/api/videos/${video.id}/short`, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!cancelled && d?.generating) setShortRunning(true);
         })
         .catch(() => {});
     }
@@ -491,6 +506,38 @@ export function VideoDetailDialog({
     }
   };
 
+  const startShort = async () => {
+    if (!video || busy || shortRunning) return;
+    setShortRunning(true);
+    try {
+      const res = await fetch(`/api/videos/${video.id}/short`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          shortScenePick === "auto" ? {} : { sceneIndex: shortScenePick }
+        ),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Short render failed");
+      await pollShort(video.id);
+      await refreshVideo(video.id);
+      toast({
+        title: "Vertical Short ready",
+        description: "9:16 cut with punch-in zoom and big captions — preview and download below.",
+      });
+      bumpRefresh();
+    } catch (e) {
+      toast({
+        title: "Short render failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+      await refreshVideo(video.id);
+    } finally {
+      setShortRunning(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (busy) return;
     setBusy("delete");
@@ -784,6 +831,101 @@ export function VideoDetailDialog({
         <p className="text-sm text-muted-foreground">
           No video rendered yet — pick a mode above and roll it.
         </p>
+      )}
+
+      {/* Auto-Short (Phase 5) — 9:16 vertical cut */}
+      {video.hasVideo && (
+        <div className="rounded-xl border border-white/10 bg-white/3 p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
+                Auto-Short · 9:16 vertical
+              </p>
+              <p className="text-[11px] text-muted-foreground/80 mt-0.5">
+                Center-cropped punch-in with big Shorts-style captions · capped at 45s
+              </p>
+            </div>
+            {video.hasShort && (
+              <Badge variant="outline" className="border-sky-500/25 bg-sky-500/10 text-sky-200 text-[10px]">
+                <Smartphone className="h-2.5 w-2.5 mr-1" />
+                Scene {video.shortScene} · {formatDuration(video.shortDuration)}
+              </Badge>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              disabled={Boolean(busy) || shortRunning}
+              onClick={() => setShortScenePick("auto")}
+              className={clsx(
+                "rounded-full border px-3 py-1 text-[11px] transition-all",
+                shortScenePick === "auto"
+                  ? "border-primary/50 bg-primary/15 text-red-200"
+                  : "border-white/10 bg-white/4 text-muted-foreground hover:border-white/25"
+              )}
+            >
+              <Zap className="inline h-3 w-3 mr-1" />
+              Auto-pick
+            </button>
+            {scenes.map((s) => (
+              <button
+                key={s.index}
+                type="button"
+                disabled={Boolean(busy) || shortRunning}
+                onClick={() => setShortScenePick(s.index)}
+                title={s.title}
+                className={clsx(
+                  "rounded-full border px-3 py-1 text-[11px] transition-all max-w-[160px] truncate",
+                  shortScenePick === s.index
+                    ? "border-primary/50 bg-primary/15 text-red-200"
+                    : "border-white/10 bg-white/4 text-muted-foreground hover:border-white/25"
+                )}
+              >
+                Scene {s.index}
+              </button>
+            ))}
+          </div>
+
+          <Button
+            size="sm"
+            disabled={Boolean(busy) || shortRunning}
+            onClick={startShort}
+            className="bg-brand-gradient hover:opacity-90 font-medium"
+          >
+            {shortRunning ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Smartphone className="h-3.5 w-3.5" />
+            )}
+            {video.hasShort ? "Re-cut Short" : "Cut Short"}
+          </Button>
+
+          {video.hasShort && video.shortUrl && (
+            <div className="flex items-start gap-4 pt-1">
+              <video
+                controls
+                preload="metadata"
+                src={video.shortUrl}
+                className="w-32 sm:w-36 rounded-xl border border-white/10 aspect-[9/16] bg-black shrink-0"
+              >
+                Your browser does not support the video element.
+              </video>
+              <div className="flex flex-col gap-2 items-start">
+                <p className="text-[11px] text-muted-foreground leading-relaxed max-w-[280px]">
+                  Vertical cut ready — upload it as a YouTube Short to squeeze extra reach out of
+                  this video.
+                </p>
+                <Button variant="outline" size="sm" asChild className="border-white/15 bg-white/4">
+                  <a href={`${video.shortUrl}&download=1`} download>
+                    <Download className="h-3.5 w-3.5" />
+                    Download Short
+                  </a>
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -1315,6 +1457,12 @@ export function VideoDetailDialog({
               {isStory && video.hasVideo && (
                 <Badge variant="outline" className="border-emerald-500/25 bg-emerald-500/10 text-emerald-200">
                   MP4 · {formatDuration(video.videoDuration)}
+                </Badge>
+              )}
+              {video.hasShort && (
+                <Badge variant="outline" className="border-sky-500/25 bg-sky-500/10 text-sky-200 gap-1">
+                  <Smartphone className="h-3 w-3" />
+                  Short · {formatDuration(video.shortDuration)}
                 </Badge>
               )}
               {video.youtubeUrl && (
