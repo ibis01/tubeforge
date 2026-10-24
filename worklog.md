@@ -86,3 +86,17 @@ Work Log:
 
 Stage Summary:
 - Stage generation is now gateway-proof: POSTs return 202 instantly, work continues server-side, clients poll to completion. Upstream 429/500 bursts self-heal with escalated backoff. All 6 library videos ready; A/B variants route also converted (same 502 risk). Research (10-20s) intentionally left synchronous — under gateway timeout.
+
+---
+Task ID: 5
+Agent: main (Z.ai)
+Task: Investigate 429 "Voiceover failed" screenshot — turned out to be the pre-fix failure; added TTS pacing + full E2E proof.
+
+Work Log:
+- Forensics: screenshot toast matches bf1qno's 15:39:10 UTC failure byte-for-byte (filename 16:39 Lagos = 15:39 UTC); dev.log shows NO voiceover POST after the async fix; DB has all 7 videos ready/error=null → screenshot was the already-repaired failure, not a regression.
+- Re-verified upstream health: TTS OK (1.6s), image OK (27s).
+- Hardening: added 2s inter-chunk pacing in generateVoiceover to stay under upstream burst/rate limits (in addition to existing 429-aware x4 backoff).
+- Proof: full fresh Auto-Pilot E2E via API — script 4s, voiceover 202-in-69ms→done 21s, thumbnail 202-in-111ms→done 31s, final status=ready, zero errors (scripts/test-full-autopilot.mjs). eslint clean.
+
+Stage Summary:
+- No regression existed; TTS quota had recovered. Pipeline now paces TTS requests (2s gaps) on top of async jobs + escalated backoff. Complete Auto-Pilot run verified green end-to-end (56s total).

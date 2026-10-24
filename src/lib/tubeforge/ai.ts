@@ -200,7 +200,9 @@ export async function generateVoiceover(opts: {
   const zai = await getZAI();
   const buffers: Buffer[] = [];
 
-  for (const chunk of chunks) {
+  for (const [i, chunk] of chunks.entries()) {
+    // Pace chunk requests — rapid back-to-back TTS calls trip upstream burst limits.
+    if (i > 0) await sleep(2000);
     const response = await withRetry(
       `tts chunk (${chunk.length} chars)`,
       () =>
