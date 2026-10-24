@@ -94,6 +94,8 @@ export function CreateView() {
   const [thumbStyle, setThumbStyle] = useState<string>("cinematic");
   const [channelId, setChannelId] = useState<string>("none");
   const [channels, setChannels] = useState<{ id: string; name: string }[]>([]);
+  const [characterId, setCharacterId] = useState<string>("none");
+  const [characters, setCharacters] = useState<{ id: string; name: string; voice: string; hasPortrait: boolean }[]>([]);
   const [autoVoice, setAutoVoice] = useState(true);
   const [autoThumb, setAutoThumb] = useState(true);
 
@@ -128,6 +130,19 @@ export function CreateView() {
       .then((r) => r.json())
       .then((d) => setChannels((d.channels ?? []).map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }))))
       .catch(() => undefined);
+    fetch("/api/characters")
+      .then((r) => r.json())
+      .then((d) =>
+        setCharacters(
+          (d.characters ?? []).map((c: { id: string; name: string; voice: string; hasPortrait: boolean }) => ({
+            id: c.id,
+            name: c.name,
+            voice: c.voice,
+            hasPortrait: c.hasPortrait,
+          }))
+        )
+      )
+      .catch(() => undefined);
   }, []);
 
   // Prefill topic from other views
@@ -139,6 +154,14 @@ export function CreateView() {
   }, [prefillTopic, setPrefillTopic]);
 
   const busy = anyRunning || runningRef.current;
+
+  // Casting a character adopts their voice so narration matches the persona.
+  const castCharacter = characters.find((c) => c.id === characterId) ?? null;
+  const applyCastVoice = (id: string) => {
+    setCharacterId(id);
+    const character = characters.find((c) => c.id === id);
+    if (character) setVoice(character.voice);
+  };
 
   const runStage = useCallback(
     async (stage: Stage, fn: () => Promise<VideoDTO>) => {
@@ -177,9 +200,10 @@ export function CreateView() {
           ttsSpeed: speed,
           thumbStyle,
           channelId: channelId !== "none" ? channelId : null,
+          characterId: characterId !== "none" ? characterId : null,
         }),
       }).then((d) => d.video),
-    [topic, niche, tone, length, voice, speed, thumbStyle, channelId]
+    [topic, niche, tone, length, voice, speed, thumbStyle, channelId, characterId]
   );
 
   const startVoiceover = useCallback(
@@ -365,6 +389,28 @@ export function CreateView() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Cast (optional)</Label>
+              <Select value={characterId} onValueChange={applyCastVoice} disabled={busy}>
+                <SelectTrigger className="bg-white/5">
+                  <SelectValue placeholder="No recurring host" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No recurring host</SelectItem>
+                  {characters.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}{c.hasPortrait ? " ●" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {castCharacter && (
+                <p className="text-[11px] text-emerald-300/90 leading-relaxed">
+                  {castCharacter.name} hosts this video — identity is stamped into the
+                  thumbnail and the voice defaults to their persona.
+                </p>
+              )}
             </div>
           </div>
 

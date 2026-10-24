@@ -16,7 +16,7 @@ export function videoDir(videoId: string) {
 }
 
 let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null;
-async function getZAI() {
+export async function getZAI() {
   if (!zaiInstance) zaiInstance = await ZAI.create();
   return zaiInstance;
 }
@@ -28,7 +28,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * The upstream GLM/TTS/CogView services occasionally return transient 500s
  * ("network error, please try again later") — one blip should never fail a stage.
  */
-async function withRetry<T>(
+export async function withRetry<T>(
   label: string,
   fn: () => Promise<T>,
   attempts = 3,
@@ -59,7 +59,7 @@ async function withRetry<T>(
 }
 
 /** Extract JSON from an LLM response that may contain markdown fences or prose. */
-function parseJsonLoose(raw: string): Record<string, unknown> {
+export function parseJsonLoose(raw: string): Record<string, unknown> {
   const cleaned = raw
     .replace(/```json/gi, "```")
     .replace(/```/g, "")
@@ -230,29 +230,64 @@ export async function generateVoiceover(opts: {
 }
 
 /** Stage 3 — CogView generates the 16:9 thumbnail.
- * `variant` targets an A/B variant file (variant-<style>.png) instead of the primary. */
+ * `variant` targets an A/B variant file (variant-<style>.png) instead of the primary.
+ * `character` stamps the recurring host's identity onto the artwork — via visual
+ * reference editing when a portrait exists, otherwise via the text identity anchor. */
 export async function generateThumbnail(opts: {
   title: string;
   topic: string;
   style: string;
   videoId: string;
   variant?: boolean;
+  character?: {
+    id?: string;
+    name: string;
+    identityAnchor: string | null;
+    appearance: string | null;
+  } | null;
 }): Promise<{ fileBytes: number; fileName: string }> {
   const stylePrompt =
     THUMB_STYLES.find((s) => s.id === opts.style)?.prompt ??
     THUMB_STYLES[0].prompt;
 
-  const zai = await getZAI();
-  const response = await withRetry(
-    "thumbnail image",
-    () =>
-      zai.images.generations.create({
-        prompt: `YouTube video thumbnail about "${opts.topic}". ${stylePrompt}. Wide 16:9 cinematic frame, extremely detailed, eye-catching composition built for high click-through rate, professional color grading. Absolutely no text, no letters, no words, no watermarks.`,
-        size: "1344x768",
-      }),
-    4, // background job — room for rate-limit windows
-    5000 // 5/10/20s backoff (x4 for 429s)
-  );
+  const scenePrompt = `YouTube video thumbnail about "${opts.topic}". ${stylePrompt}. Wide 16:9 cinematic frame, extremely detailed, eye-catching composition built for high click-through rate, professional color grading. The host character is the single focal point. Absolutely no text, no letters, no words, no watermarks.`;
+
+  let zai = await getZAI();
+  let response;
+
+  // Preferred path — visually seed the generation with the character's portrait
+  // so the host keeps their real likeness inside the scene.
+  const { readPortrait } = await import("./characters");
+  const portrait =
+    opts.character?.id ? readPortrait(opts.character.id) : null;
+  if (opts.character && portrait) {
+    response = await withRetry(
+      "thumbnail edit (cast likeness)",
+      () =>
+        zai.images.generations.edit({
+          prompt: `Place this exact person into a new scene — keep their face, hairstyle, glasses, facial hair and signature outfit perfectly recognizable. ${scenePrompt}`,
+          images: [{ url: `data:image/png;base64,${portrait.toString("base64")}` }],
+          size: "1344x768",
+        }),
+      4,
+      5000
+    );
+  } else {
+    const { characterSceneFragment } = await import("./characters");
+    const castFragment = opts.character
+      ? characterSceneFragment(opts.character)
+      : "";
+    response = await withRetry(
+      "thumbnail image",
+      () =>
+        zai.images.generations.create({
+          prompt: `${scenePrompt}${castFragment ? ` ${castFragment}` : ""}`,
+          size: "1344x768",
+        }),
+      4, // background job — room for rate-limit windows
+      5000 // 5/10/20s backoff (x4 for 429s)
+    );
+  }
 
   const base64 = response.data[0]?.base64;
   if (!base64) throw new Error("Image generation returned no data");

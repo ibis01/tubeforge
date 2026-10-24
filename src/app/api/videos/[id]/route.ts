@@ -4,7 +4,10 @@ import { jobSnapshot } from "@/lib/tubeforge/jobs";
 import type { VideoDTO, VideoStatus } from "@/lib/tubeforge/types";
 import type { Video } from "@prisma/client";
 
-const serialize = (v: Video, channelName?: string | null): VideoDTO => ({
+const serialize = (
+  v: Video & { character?: { name: string; hasPortrait: boolean } | null },
+  channelName?: string | null
+): VideoDTO => ({
   id: v.id,
   title: v.title,
   topic: v.topic,
@@ -25,6 +28,12 @@ const serialize = (v: Video, channelName?: string | null): VideoDTO => ({
   error: v.error,
   channelId: v.channelId,
   channelName: channelName ?? null,
+  characterId: v.characterId,
+  characterName: v.character?.name ?? null,
+  characterPortraitUrl:
+    v.characterId && v.character?.hasPortrait
+      ? `/api/characters/${v.characterId}/portrait`
+      : null,
   createdAt: v.createdAt.toISOString(),
   updatedAt: v.updatedAt.toISOString(),
 });
@@ -36,7 +45,10 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const video = await db.video.findUnique({
     where: { id },
-    include: { channel: { select: { name: true } } },
+    include: {
+      channel: { select: { name: true } },
+      character: { select: { name: true, hasPortrait: true } },
+    },
   });
   if (!video)
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
@@ -67,6 +79,16 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     data.ttsSpeed = Math.min(Math.max(body.ttsSpeed, 0.5), 2.0);
   if (typeof body.channelId === "string" || body.channelId === null)
     data.channelId = body.channelId;
+  if (typeof body.characterId === "string" || body.characterId === null) {
+    if (body.characterId) {
+      const character = await db.character.findUnique({
+        where: { id: String(body.characterId) },
+      });
+      if (!character)
+        return NextResponse.json({ error: "Character not found" }, { status: 400 });
+    }
+    data.characterId = body.characterId;
+  }
 
   // Status transitions (publish / mark ready / retry)
   if (typeof body.status === "string") {
@@ -98,7 +120,10 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   const updated = await db.video.update({
     where: { id },
     data,
-    include: { channel: { select: { name: true } } },
+    include: {
+      channel: { select: { name: true } },
+      character: { select: { name: true, hasPortrait: true } },
+    },
   });
   return NextResponse.json({ video: serialize(updated, updated.channel?.name) });
 }

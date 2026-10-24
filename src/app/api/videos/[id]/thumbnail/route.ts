@@ -35,7 +35,14 @@ const serialize = (v: Video): VideoDTO => ({
 /** POST — kick off CogView thumbnail generation as a background job (returns 202 immediately). */
 export async function POST(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
-  const video = await db.video.findUnique({ where: { id } });
+  const video = await db.video.findUnique({
+    where: { id },
+    include: {
+      character: {
+        select: { id: true, name: true, identityAnchor: true, appearance: true },
+      },
+    },
+  });
 
   if (!video)
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
@@ -55,6 +62,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
         topic: video.topic,
         style: video.thumbStyle,
         videoId: video.id,
+        character: video.character ?? null,
       });
 
       const fresh = await db.video.findUnique({ where: { id } });
@@ -72,7 +80,9 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
         data: {
           videoId: id,
           stage: "thumbnail",
-          message: `Thumbnail generated (${video.thumbStyle} style) for "${video.title}"`,
+          message: `Thumbnail generated (${video.thumbStyle} style)${
+            video.character ? ` featuring ${video.character.name}` : ""
+          } for "${video.title}"`,
         },
       });
     } catch (err) {

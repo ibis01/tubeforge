@@ -7,6 +7,7 @@ import { DashboardView } from "@/components/tubeforge/views/dashboard-view";
 import { ResearchView } from "@/components/tubeforge/views/research-view";
 import { CreateView } from "@/components/tubeforge/views/create-view";
 import { LibraryView } from "@/components/tubeforge/views/library-view";
+import { CastView } from "@/components/tubeforge/views/cast-view";
 import { CalendarView } from "@/components/tubeforge/views/calendar-view";
 import { ChannelsView } from "@/components/tubeforge/views/channels-view";
 import { SettingsView } from "@/components/tubeforge/views/settings-view";
@@ -30,6 +31,10 @@ const VIEW_META: Record<ViewId, { title: string; subtitle: string }> = {
   library: {
     title: "Video Library",
     subtitle: "Every asset the pipeline has produced",
+  },
+  cast: {
+    title: "Cast",
+    subtitle: "Recurring characters with locked-in visual identity",
   },
   calendar: {
     title: "Publishing Calendar",
@@ -121,6 +126,7 @@ export default function Home() {
           {view === "research" && <ResearchView />}
           {view === "create" && <CreateView />}
           {view === "library" && <LibraryView />}
+          {view === "cast" && <CastView />}
           {view === "calendar" && <CalendarView />}
           {view === "channels" && <ChannelsView />}
           {view === "settings" && <SettingsView />}

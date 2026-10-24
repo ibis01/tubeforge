@@ -18,6 +18,22 @@ model Channel {
   videos      Video[]
 }
 
+model Character {
+  id             String   @id @default(cuid())
+  name           String
+  role           String?
+  personality    String?
+  appearance     String?
+  identityAnchor String?
+  voice          String   @default("jam")
+  artStyle       String   @default("cinematic")
+  hasPortrait    Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  videos         Video[]
+}
+
 model Video {
   id            String    @id @default(cuid())
   title         String?
@@ -39,6 +55,8 @@ model Video {
   error         String?
   channelId     String?
   channel       Channel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  characterId   String?
+  character     Character? @relation(fields: [characterId], references: [id], onDelete: SetNull)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   activities    Activity[]

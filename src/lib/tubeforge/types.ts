@@ -98,6 +98,9 @@ export interface VideoDTO {
   error: string | null;
   channelId: string | null;
   channelName?: string | null;
+  characterId: string | null;
+  characterName?: string | null;
+  characterPortraitUrl?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -192,4 +195,42 @@ export interface VariantDTO {
   label: string;
   url: string;
   isPrimary: boolean;
+}
+
+// ---------- Characters (Cast) ----------
+
+export const ART_STYLES = [
+  { id: "cinematic", label: "Cinematic Real", prompt: "semi-realistic cinematic digital portrait, dramatic studio lighting, shallow depth of field, rich color grading" },
+  { id: "stylized", label: "Stylized Art", prompt: "stylized digital illustration portrait, painterly rendering, vibrant but tasteful palette, clean shapes" },
+  { id: "anime", label: "Anime", prompt: "high-quality anime portrait, crisp cel shading, expressive eyes, professional key visual" },
+  { id: "comic", label: "Comic Ink", prompt: "bold comic-book inked portrait, dynamic halftone accents, strong outlines, high contrast" },
+  { id: "noir", label: "Dark Noir", prompt: "moody noir portrait, low-key lighting with a single accent glow, mysterious atmosphere, film grain" },
+] as const;
+
+export const POSES = [
+  { id: "explaining", label: "Explaining", desc: "gesturing with one hand raised mid-explanation, engaged open-mouth expression, waist-up shot" },
+  { id: "thinking", label: "Thinking", desc: "pensive pose, hand on chin, thoughtful narrowed eyes looking slightly upward, waist-up shot" },
+  { id: "welcoming", label: "Welcoming", desc: "both arms open in a warm welcoming gesture, confident smile facing camera, waist-up shot" },
+] as const;
+
+export type PoseId = (typeof POSES)[number]["id"];
+
+export interface CharacterDTO {
+  id: string;
+  name: string;
+  role: string | null;
+  personality: string | null;
+  appearance: string | null;
+  identityAnchor: string | null;
+  voice: string;
+  artStyle: string;
+  hasPortrait: boolean;
+  videoCount: number;
+  poseCount: number;
+  portraitUrl: string | null;
+  poseUrls: { pose: string; label: string; url: string }[];
+  generating: { portrait: boolean; poses: boolean };
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
 }

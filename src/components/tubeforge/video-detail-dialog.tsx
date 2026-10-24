@@ -34,6 +34,7 @@ import {
   CalendarPlus,
   FlaskConical,
   Check,
+  UserRound,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -220,6 +221,12 @@ export function VideoDetailDialog({
               <Badge variant="outline" className="border-white/15 bg-white/5 text-muted-foreground">
                 {video.niche}
               </Badge>
+              {video.characterName && (
+                <Badge className="bg-primary/15 text-red-200 border border-primary/25 gap-1">
+                  <UserRound className="h-3 w-3" />
+                  {video.characterName}
+                </Badge>
+              )}
               <span className="text-xs text-muted-foreground">{timeAgo(video.createdAt)}</span>
             </div>
             <DialogTitle className="text-lg leading-snug">

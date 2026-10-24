@@ -11,7 +11,10 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const video = await db.video.findUnique({
     where: { id },
-    include: { channel: { select: { name: true, niche: true } } },
+    include: {
+      channel: { select: { name: true, niche: true } },
+      character: { select: { name: true, role: true, identityAnchor: true } },
+    },
   });
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
@@ -40,6 +43,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
       `TONE: ${TONES.find((t) => t.id === video.tone)?.label ?? video.tone}`,
       `LENGTH: ${LENGTHS.find((l) => l.id === video.length)?.label ?? video.length}`,
       `VOICE: ${VOICES.find((v) => v.id === video.voice)?.label ?? video.voice}`,
+      `CAST: ${video.character ? `${video.character.name} — ${video.character.role ?? "recurring host"}` : "—"}`,
       `WORD COUNT: ${video.wordCount ?? "—"}`,
       `AUDIO DURATION: ${video.audioDuration ? `${Math.round(video.audioDuration)} seconds` : "—"}`,
       ``,
@@ -72,6 +76,13 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
         length: video.length,
         voice: video.voice,
         thumbnailStyle: video.thumbStyle,
+        cast: video.character
+          ? {
+              name: video.character.name,
+              role: video.character.role,
+              identityAnchor: video.character.identityAnchor,
+            }
+          : null,
         wordCount: video.wordCount,
         audioDurationSec: video.audioDuration,
         description: video.description,

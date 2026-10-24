@@ -2,23 +2,28 @@
 // Stage POSTs return 202 immediately so preview proxies/gateways never time out
 // (long requests were killed with 502 Bad Gateway). Clients poll for completion.
 
-export type JobKind = "voiceover" | "thumbnail" | "variants";
+export type JobKind =
+  | "voiceover"
+  | "thumbnail"
+  | "variants"
+  | "portrait"
+  | "poses";
 
 const running = new Map<string, number>(); // key -> startedAt (ms)
 const lastErrors = new Map<string, string>(); // key -> last failure message
 
-const key = (videoId: string, kind: JobKind) => `${videoId}:${kind}`;
+const key = (entityId: string, kind: JobKind) => `${entityId}:${kind}`;
 
-export function isJobRunning(videoId: string, kind: JobKind): boolean {
-  return running.has(key(videoId, kind));
+export function isJobRunning(entityId: string, kind: JobKind): boolean {
+  return running.has(key(entityId, kind));
 }
 
-export function jobStartedAt(videoId: string, kind: JobKind): number | null {
-  return running.get(key(videoId, kind)) ?? null;
+export function jobStartedAt(entityId: string, kind: JobKind): number | null {
+  return running.get(key(entityId, kind)) ?? null;
 }
 
-export function lastJobError(videoId: string, kind: JobKind): string | null {
-  return lastErrors.get(key(videoId, kind)) ?? null;
+export function lastJobError(entityId: string, kind: JobKind): string | null {
+  return lastErrors.get(key(entityId, kind)) ?? null;
 }
 
 /**
@@ -28,11 +33,11 @@ export function lastJobError(videoId: string, kind: JobKind): string | null {
  * HTTP client (or proxy) disconnects.
  */
 export function startJob(
-  videoId: string,
+  entityId: string,
   kind: JobKind,
   fn: () => Promise<void>
 ): boolean {
-  const k = key(videoId, kind);
+  const k = key(entityId, kind);
   if (running.has(k)) return false;
 
   lastErrors.delete(k);
@@ -52,10 +57,24 @@ export function startJob(
 }
 
 /** Snapshot of all running jobs for a video — merged into GET video responses. */
-export function jobSnapshot(videoId: string): Record<JobKind, boolean> {
+export function jobSnapshot(videoId: string): Record<
+  "voiceover" | "thumbnail" | "variants",
+  boolean
+> {
   return {
     voiceover: isJobRunning(videoId, "voiceover"),
     thumbnail: isJobRunning(videoId, "thumbnail"),
     variants: isJobRunning(videoId, "variants"),
+  };
+}
+
+/** Snapshot of the image jobs for a character — merged into GET character responses. */
+export function characterJobSnapshot(characterId: string): {
+  portrait: boolean;
+  poses: boolean;
+} {
+  return {
+    portrait: isJobRunning(characterId, "portrait"),
+    poses: isJobRunning(characterId, "poses"),
   };
 }

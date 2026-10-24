@@ -2,7 +2,7 @@
 // Stage POSTs return 202 + start a server-side background job; the client
 // polls the video record until the artifact exists or an error is recorded.
 
-import type { VideoDTO } from "./types";
+import type { VideoDTO, CharacterDTO } from "./types";
 
 export interface GeneratingFlags {
   voiceover: boolean;
@@ -115,4 +115,55 @@ export interface VariantListResponse {
   }[];
   generating?: boolean;
   error?: string | null;
+}
+
+// ---------- Character polling ----------
+
+interface CharacterResponse {
+  character?: CharacterDTO;
+  error?: string;
+}
+
+/**
+ * Poll a character until `predicate` fires or the server records a job error.
+ * Used by the portrait studio and consistency-sheet generator.
+ */
+export async function pollCharacter(
+  characterId: string,
+  predicate: (c: CharacterDTO) => boolean,
+  opts: PollOpts = {}
+): Promise<CharacterDTO> {
+  const interval = opts.intervalMs ?? 3000;
+  const timeout = opts.timeoutMs ?? 8 * 60 * 1000;
+  const deadline = Date.now() + timeout;
+
+  for (;;) {
+    const res = await fetch(`/api/characters/${characterId}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data: CharacterResponse = await res.json();
+    const character = data.character;
+    if (!character) throw new Error(data.error ?? "Character not found");
+
+    if (predicate(character)) return character;
+    if (character.error) throw new Error(character.error);
+
+    if (Date.now() > deadline)
+      throw new Error(
+        "Generation is taking unusually long — check the Cast page in a minute; the job may still be running."
+      );
+
+    await sleep(interval);
+  }
+}
+
+/** Poll until the portrait job finishes (handles re-rolls — watch the job flag, not the artifact). */
+export function pollPortrait(characterId: string, opts?: PollOpts) {
+  return pollCharacter(characterId, (c) => !c.generating.portrait, opts);
+}
+
+/** Poll until the consistency-sheet job finishes. */
+export function pollPoses(characterId: string, opts?: PollOpts) {
+  return pollCharacter(characterId, (c) => !c.generating.poses, opts);
 }

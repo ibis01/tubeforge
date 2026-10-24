@@ -115,3 +115,27 @@ Work Log:
 
 Stage Summary:
 - Deliverable: download/tubeforge-local.zip + LOCAL-SETUP.md. Local run needs: npm install -> cp .env.example .env -> db:generate + db:push -> cp .z-ai-config.example .z-ai-config (fill credentials) -> npm run dev. App works without credentials for UI; AI stages need valid Z.ai config values.
+
+---
+Task ID: 7
+Agent: main (Z.ai)
+Task: TubeForge Phase 1 — Characters ("Cast"): character model, GLM character bible, CogView reference portraits, identity-consistent pose sheets via image editing, cast integration across the video pipeline.
+
+Work Log:
+- Verified SDK image-edit capability first (scripts/test-character-edit.mjs): `zai.images.generations.edit` requires `images: [{ url: dataUrl }]` (NOT `image: string` — SDK types are wrong); portrait (48s) + identity-preserving pose edit (14s) both confirmed visually.
+- Prisma: new Character model (name/role/personality/appearance/identityAnchor/voice/artStyle/hasPortrait) + Video.characterId (SetNull). db push + client regen + dev server restart with .next wipe (stale-client pitfall avoided).
+- New src/lib/tubeforge/characters.ts: serializeCharacter (DTO with poseUrls/generating flags), file helpers (uploads/characters/<id>/portrait.png + pose-<pose>.png), generateCharacterBible (GLM persona designer -> role/personality/appearance/identityAnchor/voice/artStyle), generateCharacterPortrait (CogView 1024x1024), generateCharacterPoses (3 identity-locked poses via images.edit seeded from portrait, 2s pacing), characterSceneFragment, buildAnchorFallback.
+- ai.ts: exported getZAI/withRetry/parseJsonLoose; generateThumbnail now accepts character — PREFERS images.edit with the reference portrait as visual seed (true likeness in thumbnails) and falls back to text identity-anchor prompting when no portrait exists.
+- jobs.ts generalized to arbitrary entity ids (+ portrait/poses kinds, characterJobSnapshot).
+- API: /api/characters (GET/POST), /api/characters/[id] (GET/PATCH/DELETE incl. file cleanup), /api/characters/[id]/portrait (POST 202 job + GET PNG stream), /api/characters/[id]/poses (POST 202 job + GET list), /api/characters/[id]/poses/[pose] (GET PNG), /api/characters/bible (sync GLM, applies to existing character when characterId given). Videos API: characterId in POST (validated)/PATCH, character fields in all serializers; thumbnail route passes character; export ZIP now includes CAST line + cast block in metadata.json.
+- poll.ts: pollCharacter/pollPortrait/pollPoses — predicates watch job flags (NOT artifacts) so re-rolls poll correctly.
+- UI: new "cast" ViewId (nav position: after Library, Users icon), CastView with character cards (portrait/placeholder, art style chip, video count, pose badge) + create dialog (name+concept -> "Auto-fill with AI bible" fills role/personality/appearance/voice/artStyle) + Character Studio dialog (portrait panel with generate/re-roll + consistency sheet strip 3 poses + editable profile incl. identity anchor + delete). Create view: "Cast (optional)" selector, adopts character's voice on selection, explains identity stamping. Detail dialog: cast badge.
+- Seeded 2 demo characters: Professor Vex (History/Mysteries, cinematic, voice jam) + Nova (Space/Science, stylized, voice kazi) — scripts/seed-characters.mjs.
+- E2E verified (scripts/test-characters-e2e.mjs, 162s total): GLM bible 3s (noir Archivist) + apply-to-character path; portrait 202->73s; consistency sheet 202->49s (3/3 poses); video cast to Professor Vex -> scripted -> cast thumbnail 202->28s. Visual check: pose images and thumbnail are unmistakably the same person (glasses/beard/cardigan locked).
+- Browser E2E via agent-browser: Cast grid renders both characters, Character Studio shows portrait + 3/3 locked poses + editable fields, Create cast selector with voice adoption + helper text, detail dialog cast badge, export ZIP carries cast metadata, mobile 375px Cast layout OK. Zero page errors, lint clean.
+
+Stage Summary:
+- TubeForge now has a recurring-cast system: GLM designs the persona (character bible), CogView paints a canonical reference portrait, and image-editing derives an identity-locked consistency sheet (explaining/thinking/welcoming) that becomes the storyboard brick set for Phase 2 scene rendering. Thumbnails featuring the cast use the portrait as a visual seed for true likeness.
+- Key artifacts: src/lib/tubeforge/characters.ts, src/app/api/characters/**, src/components/tubeforge/views/cast-view.tsx, Prisma Character model, Video.characterId.
+- Demo state: Professor Vex fully generated (portrait + 3 poses + hosted demo video with cast-likeness thumbnail cmvmsjntl0004nfu7c6ollyhx); Nova awaiting portrait generation (one click in Cast).
+- Next: Phase 2 Story Engine — scene-based scripts {scenes:[narration,visual,camera,mood]}, storyboard generation reusing pose sheet + identity anchor, Ken Burns vs full i2v render modes, ffmpeg compositor.

@@ -5,7 +5,7 @@ import type { VideoDTO, VideoStatus } from "@/lib/tubeforge/types";
 import type { Video } from "@prisma/client";
 
 const serialize = (
-  v: Video,
+  v: Video & { character?: { name: string; hasPortrait: boolean } | null },
   channelName?: string | null
 ): VideoDTO => ({
   id: v.id,
@@ -28,6 +28,12 @@ const serialize = (
   error: v.error,
   channelId: v.channelId,
   channelName: channelName ?? null,
+  characterId: v.characterId,
+  characterName: v.character?.name ?? null,
+  characterPortraitUrl:
+    v.characterId && v.character?.hasPortrait
+      ? `/api/characters/${v.characterId}/portrait`
+      : null,
   createdAt: v.createdAt.toISOString(),
   updatedAt: v.updatedAt.toISOString(),
 });
@@ -42,7 +48,10 @@ export async function GET(req: NextRequest) {
     where,
     orderBy: { createdAt: "desc" },
     take: limit,
-    include: { channel: { select: { name: true } } },
+    include: {
+      channel: { select: { name: true } },
+      character: { select: { name: true, hasPortrait: true } },
+    },
   });
 
   return NextResponse.json({
@@ -66,6 +75,14 @@ export async function POST(req: NextRequest) {
     const ttsSpeed = Math.min(Math.max(Number(body.ttsSpeed ?? 1.0), 0.5), 2.0);
     const thumbStyle = String(body.thumbStyle ?? "cinematic");
     const channelId = body.channelId ? String(body.channelId) : null;
+    const characterId = body.characterId ? String(body.characterId) : null;
+
+    // Validate the character exists (avoids dangling FK on SQLite)
+    if (characterId) {
+      const character = await db.character.findUnique({ where: { id: characterId } });
+      if (!character)
+        return NextResponse.json({ error: "Character not found" }, { status: 400 });
+    }
 
     // Create the video record first (draft)
     const video = await db.video.create({
@@ -78,9 +95,13 @@ export async function POST(req: NextRequest) {
         ttsSpeed,
         thumbStyle,
         channelId,
+        characterId,
         status: "draft",
       },
-      include: { channel: { select: { name: true } } },
+      include: {
+        channel: { select: { name: true } },
+        character: { select: { name: true, hasPortrait: true } },
+      },
     });
 
     await db.activity.create({
@@ -107,7 +128,10 @@ export async function POST(req: NextRequest) {
           status: "scripted",
           error: null,
         },
-        include: { channel: { select: { name: true } } },
+        include: {
+          channel: { select: { name: true } },
+          character: { select: { name: true, hasPortrait: true } },
+        },
       });
 
       await db.activity.create({
@@ -124,7 +148,10 @@ export async function POST(req: NextRequest) {
       const failed = await db.video.update({
         where: { id: video.id },
         data: { status: "failed", error: message },
-        include: { channel: { select: { name: true } } },
+        include: {
+          channel: { select: { name: true } },
+          character: { select: { name: true, hasPortrait: true } },
+        },
       });
       await db.activity.create({
         data: {
