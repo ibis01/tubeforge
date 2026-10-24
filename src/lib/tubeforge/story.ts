@@ -5,7 +5,7 @@
 
 import fs from "fs";
 import path from "path";
-import { getZAI, parseJsonLoose, videoDir, splitForTts } from "./ai";
+import { getZAI, parseJsonLoose, videoDir, splitForTts, researchBriefBlock, type ResearchBrief } from "./ai";
 import { aiCall } from "./budget";
 import { runQualityGate } from "./quality";
 import { mergeWavs } from "./wav";
@@ -106,6 +106,7 @@ export async function generateSceneScriptPackage(opts: {
   niche: string;
   tone: string;
   length: string;
+  brief?: ResearchBrief | null;
   character?: {
     name: string;
     personality: string | null;
@@ -146,7 +147,7 @@ Niche: ${opts.niche}
 Tone: ${toneDesc}
 Topic: "${opts.topic}"
 Structure: exactly ${sceneCount} scenes, about ${wordsPerScene} words of narration per scene (total ≈ ${words} words).
-${castBlock}
+${researchBriefBlock(opts.brief)}${castBlock}
 
 Return JSON with exactly these keys:
 {

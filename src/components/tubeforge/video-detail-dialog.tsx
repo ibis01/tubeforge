@@ -25,6 +25,8 @@ import {
   pollRender,
   pollScene,
   pollVerify,
+  pollComments,
+  pollUpload,
 } from "@/lib/tubeforge/poll";
 import {
   VOICES,
@@ -34,6 +36,8 @@ import {
   type VariantDTO,
   type SceneDTO,
   type VerifyReportDTO,
+  type CommentsKitDTO,
+  type YouTubeStatusDTO,
 } from "@/lib/tubeforge/types";
 import {
   Mic,
@@ -54,6 +58,11 @@ import {
   Zap,
   Eye,
   ScanText,
+  MessageCircle,
+  Copy,
+  Youtube,
+  ExternalLink,
+  Captions,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -90,12 +99,22 @@ export function VideoDetailDialog({
   // Render state
   const [renderMode, setRenderMode] = useState<string>("kenburns");
   const [subtitles, setSubtitles] = useState(true);
+  const [smartCaps, setSmartCaps] = useState(true); // ASR-synced caption cues (Phase 4)
   const [music, setMusic] = useState(true);
   const [renderLabel, setRenderLabel] = useState<string | null>(null);
 
   // Narration check state (Phase 3 — ASR proofreading)
   const [verifyReport, setVerifyReport] = useState<VerifyReportDTO | null>(null);
   const [verifyRunning, setVerifyRunning] = useState(false);
+
+  // Engagement kit state (Phase 4 — retention comments)
+  const [commentsKit, setCommentsKit] = useState<CommentsKitDTO | null>(null);
+  const [kitRunning, setKitRunning] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  // YouTube upload state (Phase 4 — OAuth upload)
+  const [ytStatus, setYtStatus] = useState<YouTubeStatusDTO | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   const isStory = video?.format === "story";
 
@@ -134,10 +153,26 @@ export function VideoDetailDialog({
     setRenderLabel(null);
     setVerifyReport(null);
     setVerifyRunning(false);
+    setCommentsKit(null);
+    setKitRunning(false);
+    setUploading(false);
+    setCopiedKey(null);
     fetch(`/api/videos/${video.id}/verify`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!cancelled && d?.report) setVerifyReport(d.report);
+      })
+      .catch(() => {});
+    fetch(`/api/videos/${video.id}/comments`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d?.kit) setCommentsKit(d.kit);
+      })
+      .catch(() => {});
+    fetch(`/api/youtube/status`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d?.status) setYtStatus(d.status);
       })
       .catch(() => {});
     fetch(`/api/videos/${video.id}/variants`)
@@ -243,6 +278,74 @@ export function VideoDetailDialog({
       await refreshVideo(video.id);
     } finally {
       setVerifyRunning(false);
+    }
+  };
+
+  // ---------- Phase 4: engagement kit ----------
+  const copyText = async (key: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey((c) => (c === key ? null : c)), 1600);
+    } catch {
+      toast({
+        title: "Copy failed",
+        description: "Select the text and copy manually — the browser blocked clipboard access.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const runComments = async () => {
+    if (kitRunning || !video?.script) return;
+    setKitRunning(true);
+    try {
+      const res = await fetch(`/api/videos/${video.id}/comments`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not start the engagement kit");
+      const kit = await pollComments(video.id);
+      setCommentsKit(kit);
+      toast({
+        title: "Engagement kit ready",
+        description: "Pinned comment + reply templates — paste them in the first golden hour.",
+      });
+      bumpRefresh();
+    } catch (e) {
+      toast({
+        title: "Engagement kit failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+      await refreshVideo(video.id);
+    } finally {
+      setKitRunning(false);
+    }
+  };
+
+  // ---------- Phase 4: YouTube upload ----------
+  const uploadVideo = async () => {
+    if (uploading || !video?.hasVideo) return;
+    setUploading(true);
+    try {
+      const res = await fetch(`/api/videos/${video.id}/upload`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not start the upload");
+      const done = await pollUpload(video.id);
+      onChanged(done);
+      toast({
+        title: "Live on YouTube",
+        description: done.youtubeUrl ?? "Uploaded successfully.",
+      });
+      bumpRefresh();
+    } catch (e) {
+      toast({
+        title: "Upload failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+      await refreshVideo(video.id);
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -358,7 +461,7 @@ export function VideoDetailDialog({
       await fetch(`/api/videos/${video.id}/render`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, subtitles, music, sceneLimit }),
+        body: JSON.stringify({ mode, subtitles, smartCaptions: smartCaps, music, sceneLimit }),
       });
       await pollRender(
         video.id,
@@ -559,6 +662,25 @@ export function VideoDetailDialog({
             <Switch id="subs" checked={subtitles} onCheckedChange={setSubtitles} disabled={Boolean(busy)} />
             <label htmlFor="subs" className="text-xs text-muted-foreground cursor-pointer">
               Burn captions
+            </label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Switch
+              id="smartcaps"
+              checked={smartCaps}
+              onCheckedChange={setSmartCaps}
+              disabled={Boolean(busy) || !subtitles}
+            />
+            <label
+              htmlFor="smartcaps"
+              className={clsx(
+                "text-xs cursor-pointer flex items-center gap-1",
+                subtitles ? "text-foreground/80" : "text-muted-foreground/50"
+              )}
+              title="ASR-synced cues: captions change exactly when the narration moves instead of one static line per scene"
+            >
+              <Captions className="h-3 w-3" />
+              ASR-synced cues
             </label>
           </div>
           <div className="flex items-center gap-2">
@@ -783,6 +905,137 @@ export function VideoDetailDialog({
         )}
       </div>
 
+      {/* Engagement kit (Phase 4 — retention comments) */}
+      <div className="mt-5">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
+            <MessageCircle className="h-3 w-3" /> Engagement kit
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!video.script || kitRunning || Boolean(busy)}
+            onClick={runComments}
+            className="border-white/15 bg-white/4 h-7 text-xs px-2.5"
+            title={video.script ? "Write the launch-day pinned comment, reply templates and engagement playbook" : "Write the script first"}
+          >
+            {kitRunning ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <MessageCircle className="h-3 w-3" />
+            )}
+            {commentsKit ? "Re-roll kit" : "Write kit"}
+          </Button>
+        </div>
+
+        {!commentsKit ? (
+          <p className="text-sm text-muted-foreground">
+            Generate a pinned comment, ready-to-paste reply templates and a
+            golden-hour playbook — the comment section is a retention engine.
+          </p>
+        ) : (
+          <div className="rounded-xl border border-white/10 bg-white/3 p-3 space-y-3">
+            {/* Pinned comment */}
+            <div>
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <Badge className="bg-primary/15 text-red-200 border border-primary/25 text-[10px] gap-1">
+                  <MessageCircle className="h-2.5 w-2.5" /> Pin this comment
+                </Badge>
+                <button
+                  onClick={() => copyText("pinned", commentsKit.pinnedComment)}
+                  className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+                  title="Copy the pinned comment"
+                >
+                  {copiedKey === "pinned" ? (
+                    <Check className="h-3 w-3 text-emerald-300" />
+                  ) : (
+                    <Copy className="h-3 w-3" />
+                  )}
+                  {copiedKey === "pinned" ? "Copied" : "Copy"}
+                </button>
+              </div>
+              <p className="text-sm text-foreground/90 leading-relaxed bg-white/4 border border-white/8 rounded-lg p-2.5">
+                {commentsKit.pinnedComment}
+              </p>
+            </div>
+
+            {/* Reply templates */}
+            <div className="space-y-1.5">
+              <p className="text-[11px] text-muted-foreground font-medium flex items-center justify-between">
+                <span>Reply templates</span>
+                <button
+                  onClick={() =>
+                    copyText(
+                      "all-replies",
+                      commentsKit.replies.map((r) => `WHEN: ${r.trigger}\nREPLY: ${r.text}`).join("\n\n")
+                    )
+                  }
+                  className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+                  title="Copy all reply templates"
+                >
+                  {copiedKey === "all-replies" ? (
+                    <Check className="h-3 w-3 text-emerald-300" />
+                  ) : (
+                    <Copy className="h-3 w-3" />
+                  )}
+                  {copiedKey === "all-replies" ? "Copied" : "Copy all"}
+                </button>
+              </p>
+              {commentsKit.replies.map((reply, ri) => (
+                <div
+                  key={ri}
+                  className="group/reply rounded-lg border border-white/8 bg-white/3 px-2.5 py-2 hover:border-white/15 transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[10px] text-muted-foreground/80 leading-snug">
+                        When: {reply.trigger}
+                      </p>
+                      <p className="text-[13px] text-foreground/85 leading-relaxed mt-0.5">
+                        {reply.text}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => copyText(`reply-${ri}`, reply.text)}
+                      className="shrink-0 text-muted-foreground/60 hover:text-foreground opacity-0 group-hover/reply:opacity-100 transition-all"
+                      title="Copy this reply"
+                    >
+                      {copiedKey === `reply-${ri}` ? (
+                        <Check className="h-3 w-3 text-emerald-300" />
+                      ) : (
+                        <Copy className="h-3 w-3" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Heart targets */}
+            {commentsKit.heartTargets.length > 0 && (
+              <div>
+                <p className="text-[11px] text-muted-foreground font-medium mb-1.5">
+                  Heart these early comments
+                </p>
+                <ul className="space-y-1">
+                  {commentsKit.heartTargets.map((t, i) => (
+                    <li key={i} className="text-[12px] text-foreground/75 flex items-start gap-1.5">
+                      <span className="text-primary mt-px">♥</span> {t}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Strategy */}
+            <p className="text-[11px] text-muted-foreground leading-relaxed border-t border-white/8 pt-2.5 italic">
+              <span className="text-foreground/70 not-italic font-medium">Playbook: </span>
+              {commentsKit.strategy}
+            </p>
+          </div>
+        )}
+      </div>
+
       {/* Description */}
       {video.description && (
         <div className="mt-5">
@@ -956,6 +1209,41 @@ export function VideoDetailDialog({
         </Button>
       </div>
       <div className="flex flex-wrap gap-2">
+        {isStory && video.hasVideo && video.youtubeUrl ? (
+          <Button
+            size="sm"
+            variant="outline"
+            asChild
+            className="bg-red-500/15 text-red-200 border-red-500/30 hover:bg-red-500/25 font-medium"
+            title={video.youtubeUrl}
+          >
+            <a href={video.youtubeUrl} target="_blank" rel="noreferrer">
+              <Youtube className="h-3.5 w-3.5" />
+              Live on YouTube
+              <ExternalLink className="h-3 w-3 opacity-60" />
+            </a>
+          </Button>
+        ) : isStory && video.hasVideo && ytStatus?.connected && video.status !== "published" ? (
+          <Button
+            size="sm"
+            disabled={Boolean(busy) || uploading}
+            onClick={uploadVideo}
+            className="bg-brand-gradient hover:opacity-90 font-medium"
+            title={`Upload final.mp4 to "${ytStatus.channelTitle ?? "your channel"}" (${ytStatus.privacyStatus}) with title, description, tags and thumbnail`}
+          >
+            {uploading ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Uploading…
+              </>
+            ) : (
+              <>
+                <Youtube className="h-3.5 w-3.5" />
+                Upload to YouTube
+              </>
+            )}
+          </Button>
+        ) : null}
         {video.status !== "published" ? (
           <Button
             size="sm"
@@ -1027,6 +1315,14 @@ export function VideoDetailDialog({
               {isStory && video.hasVideo && (
                 <Badge variant="outline" className="border-emerald-500/25 bg-emerald-500/10 text-emerald-200">
                   MP4 · {formatDuration(video.videoDuration)}
+                </Badge>
+              )}
+              {video.youtubeUrl && (
+                <Badge variant="outline" className="border-red-500/30 bg-red-500/12 text-red-200 gap-1">
+                  <Youtube className="h-3 w-3" />
+                  <a href={video.youtubeUrl} target="_blank" rel="noreferrer" className="hover:underline">
+                    Live on YouTube
+                  </a>
                 </Badge>
               )}
               <span className="text-xs text-muted-foreground">{timeAgo(video.createdAt)}</span>

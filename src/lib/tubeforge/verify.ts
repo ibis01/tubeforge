@@ -121,7 +121,7 @@ const ASR_CHUNK_SEC = 25;
  * (upstream accepts only WAV/WebM) with ffmpeg's segment muxer, each chunk
  * is ASR'd, transcripts joined.
  */
-async function transcribe(filePath: string): Promise<string> {
+export async function transcribe(filePath: string): Promise<string> {
   const durationSec = await probeDurationSec(filePath);
   if (durationSec <= 28) return asrOnce(filePath);
 

@@ -12,6 +12,7 @@ import path from "path";
 import { promisify } from "util";
 import type { Scene } from "./types";
 import { sceneImageFile, sceneWavFile, buildSrtFromSegments } from "./story";
+import { buildSmartSrt } from "./captions";
 import { getZAI, videoDir } from "./ai";
 import { aiCall } from "./budget";
 
@@ -30,6 +31,7 @@ export interface RenderOptions {
   scenes: Scene[];
   mode: "kenburns" | "animated";
   burnSubtitles: boolean;
+  smartCaptions: boolean; // audio-synced cues (silence + ASR alignment) vs one caption per scene
   music: boolean;
   sceneLimit?: number; // render only the first N scenes (preview render)
   onProgress?: (current: number, total: number, label: string) => void;
@@ -356,7 +358,28 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     let srtPath: string | null = null;
     if (opts.burnSubtitles) {
       srtPath = path.join(tmpDir, "captions.srt");
-      fs.writeFileSync(srtPath, buildSrtFromSegments(scenes, segments));
+      if (opts.smartCaptions) {
+        // Audio-synced cues: ASR word alignment + speech-run detection.
+        try {
+          report(scenes.length, "Syncing captions to narration");
+          const smart = await buildSmartSrt({
+            videoId: opts.videoId,
+            scenes,
+            segments,
+            asr: true,
+            onProgress: (label) => opts.onProgress?.(scenes.length + 1, scenes.length + 1, label),
+          });
+          fs.writeFileSync(srtPath, smart.srt);
+          console.log(
+            `[render] smart captions: ${smart.cueCount} cues (${smart.method}-aligned)`
+          );
+        } catch (err) {
+          console.warn("[render] smart captions failed — falling back to scene captions:", err);
+          fs.writeFileSync(srtPath, buildSrtFromSegments(scenes, segments));
+        }
+      } else {
+        fs.writeFileSync(srtPath, buildSrtFromSegments(scenes, segments));
+      }
     }
     report(scenes.length, "Adding captions & music");
     await finalize({
@@ -371,7 +394,10 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
 
     // Always refresh the exported caption track for the ZIP (full render only).
     if (!isPreview) {
-      fs.writeFileSync(path.join(dir, "subtitles.srt"), buildSrtFromSegments(scenes, segments));
+      const exportSrt = path.join(dir, "subtitles.srt");
+      if (opts.burnSubtitles && srtPath && fs.existsSync(srtPath))
+        fs.copyFileSync(srtPath, exportSrt);
+      else fs.writeFileSync(exportSrt, buildSrtFromSegments(scenes, segments));
     }
 
     const durationSec = await probeDuration(outPath);

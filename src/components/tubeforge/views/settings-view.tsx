@@ -5,6 +5,7 @@ import { useAppStore } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
@@ -18,7 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { VOICES, NICHES, TONES, LENGTHS, THUMB_STYLES, type JobDTO } from "@/lib/tubeforge/types";
+import { VOICES, NICHES, TONES, LENGTHS, THUMB_STYLES, type JobDTO, type YouTubeStatusDTO } from "@/lib/tubeforge/types";
 import {
   Save,
   Loader2,
@@ -33,6 +34,10 @@ import {
   Film,
   LayoutGrid,
   ScanText,
+  Youtube,
+  ExternalLink,
+  Copy,
+  Check,
 } from "lucide-react";
 
 const KIND_META: Record<string, { label: string; icon: typeof Mic }> = {
@@ -45,6 +50,8 @@ const KIND_META: Record<string, { label: string; icon: typeof Mic }> = {
   render: { label: "Render", icon: Film },
   scene: { label: "Scene art", icon: ImageIcon },
   verify: { label: "Narration check", icon: ScanText },
+  comments: { label: "Engagement kit", icon: History },
+  upload: { label: "YT upload", icon: Youtube },
 };
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
@@ -87,6 +94,26 @@ export function SettingsView() {
   const [jobs, setJobs] = useState<JobDTO[]>([]);
   const [jobsLoading, setJobsLoading] = useState(false);
 
+  // YouTube connection (Phase 4 — OAuth upload)
+  const [yt, setYt] = useState<YouTubeStatusDTO | null>(null);
+  const [ytClientId, setYtClientId] = useState("");
+  const [ytClientSecret, setYtClientSecret] = useState("");
+  const [ytSaving, setYtSaving] = useState(false);
+  const [ytConnecting, setYtConnecting] = useState(false);
+  const [ytCopied, setYtCopied] = useState(false);
+
+  const loadYouTube = useCallback(async () => {
+    try {
+      const res = await fetch("/api/youtube/status", { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setYt(data.status ?? null);
+      setYtClientId(data.status?.clientId ?? "");
+    } catch {
+      /* non-critical */
+    }
+  }, []);
+
   const loadJobs = useCallback(async () => {
     setJobsLoading(true);
     try {
@@ -128,7 +155,8 @@ export function SettingsView() {
       .catch(() => undefined)
       .finally(() => setLoaded(true));
     void loadJobs();
-  }, [loadJobs]);
+    void loadYouTube();
+  }, [loadJobs, loadYouTube]);
 
   const handleSave = async () => {
     if (saving) return;
@@ -154,6 +182,92 @@ export function SettingsView() {
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  // ---------- YouTube connection handlers (Phase 4) ----------
+  const saveYtCredentials = async () => {
+    if (ytSaving) return;
+    setYtSaving(true);
+    try {
+      const res = await fetch("/api/youtube/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId: ytClientId.trim(),
+          clientSecret: ytClientSecret.trim(),
+          privacyStatus: yt?.privacyStatus ?? "unlisted",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Save failed");
+      setYtClientSecret("");
+      await loadYouTube();
+      toast({
+        title: "Credentials saved",
+        description: "Register the callback URL below in Google Cloud Console, then connect the channel.",
+      });
+    } catch (e) {
+      toast({
+        title: "Could not save YouTube credentials",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setYtSaving(false);
+    }
+  };
+
+  const startConnect = async () => {
+    if (ytConnecting) return;
+    setYtConnecting(true);
+    try {
+      // Server builds the consent URL + CSRF state; opens in a new tab.
+      const res = await fetch("/api/youtube/connect", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not start the connection");
+      window.open(data.authUrl, "_blank", "noopener,noreferrer");
+      toast({
+        title: "Consent page opened",
+        description: "Complete the Google consent in the new tab — the channel shows up here when you return.",
+      });
+      // Refresh state when the user likely returns from consent.
+      setTimeout(() => void loadYouTube(), 15_000);
+      setTimeout(() => void loadYouTube(), 45_000);
+    } catch (e) {
+      toast({
+        title: "Connection could not start",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setYtConnecting(false);
+    }
+  };
+
+  const disconnectYt = async () => {
+    try {
+      const res = await fetch("/api/youtube/disconnect", { method: "POST" });
+      if (!res.ok) throw new Error("Disconnect failed");
+      await loadYouTube();
+      toast({ title: "Channel disconnected", description: "Uploads are disabled until you reconnect." });
+    } catch (e) {
+      toast({
+        title: "Disconnect failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const copyCallbackUrl = async () => {
+    if (!yt?.callbackUrl) return;
+    try {
+      await navigator.clipboard.writeText(yt.callbackUrl);
+      setYtCopied(true);
+      setTimeout(() => setYtCopied(false), 1600);
+    } catch {
+      /* clipboard blocked — user can select manually */
     }
   };
 
@@ -224,6 +338,142 @@ export function SettingsView() {
             />
           </div>
         </div>
+      </Card>
+
+      {/* YouTube connection (Phase 4 — OAuth upload) */}
+      <Card className="glass rounded-2xl p-5 sm:p-6">
+        <div className="flex items-center gap-2.5 mb-1">
+          <div className="h-9 w-9 rounded-xl bg-red-600/90 flex items-center justify-center shrink-0 shadow-[0_0_18px_rgba(239,43,70,0.25)]">
+            <Youtube className="h-4.5 w-4.5 text-white" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="font-semibold leading-tight">YouTube Connection</h3>
+            <p className="text-xs text-muted-foreground">
+              One-click uploads — render, title, tags, thumbnail and all
+            </p>
+          </div>
+          {yt?.connected && yt.channelTitle && (
+            <Badge className="bg-red-500/15 text-red-200 border border-red-500/30 text-[11px] shrink-0">
+              <Check className="h-3 w-3 mr-1" />
+              {yt.channelTitle}
+            </Badge>
+          )}
+        </div>
+
+        {yt?.connected ? (
+          <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/6 p-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              {yt.channelThumb ? (
+                <img src={yt.channelThumb} alt="Channel avatar" className="h-10 w-10 rounded-full border border-white/15" />
+              ) : (
+                <div className="h-10 w-10 rounded-full bg-white/8 flex items-center justify-center">
+                  <Youtube className="h-4 w-4 text-red-200" />
+                </div>
+              )}
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">{yt.channelTitle ?? "Connected channel"}</p>
+                <p className="text-[11px] text-muted-foreground">
+                  Uploads publish as {yt.privacyStatus} · uploads from the video dialog
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={disconnectYt}
+              className="border-red-500/30 bg-red-500/8 text-red-200 hover:bg-red-500/15 h-7 text-xs"
+            >
+              Disconnect
+            </Button>
+          </div>
+        ) : (
+          <div className="mt-4 space-y-4">
+            <div className="grid sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>OAuth client ID</Label>
+                <Input
+                  value={ytClientId}
+                  onChange={(e) => setYtClientId(e.target.value)}
+                  placeholder="1234-abc.apps.googleusercontent.com"
+                  className="bg-white/5 border-white/10 text-xs"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Client secret</Label>
+                <Input
+                  value={ytClientSecret}
+                  onChange={(e) => setYtClientSecret(e.target.value)}
+                  placeholder={yt?.configured ? "saved — type to replace" : "GOCSPX-…"}
+                  type="password"
+                  className="bg-white/5 border-white/10 text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-white/3 p-3">
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                In <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer" className="text-foreground/80 hover:text-foreground underline underline-offset-2 inline-flex items-center gap-0.5">Google Cloud Console <ExternalLink className="h-2.5 w-2.5" /></a> create an OAuth client (Web application) and add this exact authorized redirect URI:
+              </p>
+              <div className="flex items-center gap-2 mt-2">
+                <code className="flex-1 min-w-0 truncate rounded-lg bg-black/40 border border-white/10 px-2.5 py-1.5 text-[11px] text-foreground/80">
+                  {yt?.callbackUrl ?? "…"}
+                </code>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={copyCallbackUrl}
+                  className="h-7 px-2.5 border-white/15 bg-white/4 shrink-0"
+                  title="Copy the redirect URI"
+                >
+                  {ytCopied ? <Check className="h-3 w-3 text-emerald-300" /> : <Copy className="h-3 w-3" />}
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                onClick={saveYtCredentials}
+                disabled={ytSaving || (!ytClientId.trim() && !ytClientSecret.trim())}
+                className="border-white/15 bg-white/6 hover:bg-white/10 font-medium h-8"
+                variant="outline"
+              >
+                {ytSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                Save credentials
+              </Button>
+              <Button
+                size="sm"
+                onClick={startConnect}
+                disabled={ytConnecting || !yt?.configured}
+                className="bg-brand-gradient hover:opacity-90 text-white font-medium h-8"
+                title={yt?.configured ? "Opens the Google consent page in a new tab" : "Save your client ID and secret first"}
+              >
+                {ytConnecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Youtube className="h-3.5 w-3.5" />}
+                Connect channel
+              </Button>
+              <Select
+                value={yt?.privacyStatus ?? "unlisted"}
+                onValueChange={async (v) => {
+                  await fetch("/api/youtube/config", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ privacyStatus: v }),
+                  });
+                  void loadYouTube();
+                }}
+              >
+                <SelectTrigger className="h-8 w-[130px] bg-white/5 border-white/10 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-popover border-white/10">
+                  <SelectItem value="unlisted">Upload as unlisted</SelectItem>
+                  <SelectItem value="public">Upload as public</SelectItem>
+                  <SelectItem value="private">Upload as private</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        )}
       </Card>
 
       <Card className="glass rounded-2xl p-5 sm:p-6">

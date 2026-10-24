@@ -181,6 +181,8 @@ export interface VideoDTO {
   videoDuration: number | null;
   videoUrl: string | null;
   previewUrl: string | null;
+  hasComments: boolean; // engagement kit generated (Phase 4)
+  youtubeUrl: string | null; // set after a successful OAuth upload (Phase 4)
   createdAt: string;
   updatedAt: string;
 }
@@ -345,4 +347,32 @@ export interface VerifyReportDTO {
   transcriptPreview: string;
   missingWords: string[];
   scenes?: { index: number; title: string; similarity: number }[];
+}
+
+// ---------- Phase 4: growth engine DTOs ----------
+
+/** One ready-to-post reply template for a viewer reaction archetype. */
+export interface CommentReplyDTO {
+  trigger: string; // the viewer reaction this reply answers
+  text: string; // the ready-to-paste reply
+}
+
+/** Engagement kit generated per video (POST/GET /api/videos/[id]/comments). */
+export interface CommentsKitDTO {
+  pinnedComment: string; // post as the channel's pinned comment
+  replies: CommentReplyDTO[]; // 4 templates for common viewer reactions
+  heartTargets: string[]; // comments to look for and heart early
+  strategy: string; // one-paragraph engagement playbook
+  generatedAt: string;
+}
+
+/** YouTube OAuth connection state (GET /api/youtube/status). */
+export interface YouTubeStatusDTO {
+  configured: boolean; // client id + secret present
+  connected: boolean; // refresh token present
+  channelTitle: string | null;
+  channelThumb: string | null;
+  privacyStatus: string; // public | unlisted | private
+  callbackUrl: string; // redirect URI to register in Google Cloud
+  clientId?: string | null; // echoed back for the settings edit form
 }

@@ -67,6 +67,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const body = await req.json().catch(() => ({}));
   const mode = body?.mode === "animated" ? "animated" : "kenburns";
   const subtitles = body?.subtitles !== false; // default: burn captions
+  const smartCaptions = body?.smartCaptions !== false; // default: ASR-synced cues (Phase 4)
   const music = body?.music !== false; // default: ambient bed
   const sceneLimitRaw = Number(body?.sceneLimit);
   const sceneLimit =
@@ -84,6 +85,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         scenes,
         mode,
         burnSubtitles: subtitles,
+        smartCaptions,
         music,
         sceneLimit,
         onProgress: (current, total, label) =>

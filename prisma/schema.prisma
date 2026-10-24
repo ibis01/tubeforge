@@ -67,6 +67,8 @@ model Video {
   characterId   String?
   character     Character? @relation(fields: [characterId], references: [id], onDelete: SetNull)
   verifyReport String? // JSON ASR narration-check report (Phase 3)
+  commentsKit  String? // JSON engagement kit: pinned comment + replies + strategy (Phase 4)
+  youtubeUrl   String? // https://youtu.be/<id> after a successful OAuth upload (Phase 4)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   activities    Activity[]

@@ -38,6 +38,7 @@ import {
   ChevronRight,
   KeyRound,
   Lightbulb,
+  Clapperboard,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -77,10 +78,16 @@ function volumeStyle(level: string): string {
 
 function IdeaCard({
   idea,
+  sessionId,
+  busyId,
   onCreate,
+  onGreenlight,
 }: {
   idea: ResearchIdea;
+  sessionId: string;
+  busyId: string | null;
   onCreate: (title: string) => void;
+  onGreenlight: (idea: ResearchIdea) => void;
 }) {
   const lengthLabel =
     idea.suggestedLength === "short"
@@ -144,16 +151,44 @@ function IdeaCard({
         {idea.why}
       </p>
 
-      <div className="mt-auto pt-1">
+      <div className="mt-auto pt-1 space-y-2">
         <Button
           size="sm"
-          onClick={() => onCreate(idea.title)}
+          disabled={Boolean(busyId)}
+          onClick={() => onGreenlight(idea)}
           className="w-full bg-brand-gradient hover:opacity-90 text-white font-medium"
+          title="One-click: weave this idea's angle + keywords into a scene-based story script"
         >
-          <Wand2 className="h-3.5 w-3.5" />
-          Create with Auto-Pilot
-          <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
+          {busyId === idea.id ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Writing scene story…
+            </>
+          ) : (
+            <>
+              <Clapperboard className="h-3.5 w-3.5" />
+              Greenlight as scene story
+            </>
+          )}
         </Button>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={Boolean(busyId)}
+            onClick={() => onCreate(idea.title)}
+            className="flex-1 border-white/15 bg-white/4 hover:bg-white/8 text-muted-foreground font-normal"
+            title="Send the topic to Create and configure it yourself"
+          >
+            <Wand2 className="h-3.5 w-3.5" />
+            Classic script
+            <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
+          </Button>
+        </div>
+        <p className="text-[10px] text-muted-foreground/70 text-center leading-snug">
+          Greenlight weaves this idea's angle &amp; SEO keywords straight into a
+          {idea.suggestedLength === "long" ? " long-form" : idea.suggestedLength === "short" ? " short" : ""} scene outline — then Auto-Pilot takes over.
+        </p>
       </div>
     </Card>
   );
@@ -181,6 +216,7 @@ export function ResearchView() {
   const { toast } = useToast();
   const setView = useAppStore((s) => s.setView);
   const setPrefillTopic = useAppStore((s) => s.setPrefillTopic);
+  const setFocusVideoId = useAppStore((s) => s.setFocusVideoId);
   const bumpRefresh = useAppStore((s) => s.bumpRefresh);
 
   const [niche, setNiche] = useState<string>("Motivation");
@@ -189,6 +225,7 @@ export function ResearchView() {
   const [sessions, setSessions] = useState<ResearchSessionDTO[]>([]);
   const [active, setActive] = useState<ResearchSessionDTO | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [greenlightId, setGreenlightId] = useState<string | null>(null);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -259,6 +296,36 @@ export function ResearchView() {
   const sendToCreate = (topic: string) => {
     setPrefillTopic(topic);
     setView("create");
+  };
+
+  // Phase 4 — one click from radar idea to a scripted scene story.
+  const greenlightIdea = async (idea: ResearchIdea) => {
+    if (!active || greenlightId) return;
+    setGreenlightId(idea.id);
+    try {
+      const res = await fetch(`/api/research/${active.id}/greenlight`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ideaId: idea.id, format: "story" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Greenlight failed");
+      bumpRefresh();
+      toast({
+        title: "Scene story greenlit",
+        description: `"${data.video.title ?? idea.title}" — ${data.video.sceneCount ?? 0} scenes written from the radar's angle & keywords.`,
+      });
+      setFocusVideoId(data.video.id); // library opens the detail dialog
+      setView("library");
+    } catch (e) {
+      toast({
+        title: "Greenlight failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setGreenlightId(null);
+    }
   };
 
   return (
@@ -422,7 +489,14 @@ export function ResearchView() {
 
             <div className="grid gap-4 sm:grid-cols-2">
               {active.ideas.map((idea) => (
-                <IdeaCard key={idea.id} idea={idea} onCreate={sendToCreate} />
+                <IdeaCard
+                  key={idea.id}
+                  idea={idea}
+                  sessionId={active.id}
+                  busyId={greenlightId}
+                  onCreate={sendToCreate}
+                  onGreenlight={greenlightIdea}
+                />
               ))}
             </div>
           </div>

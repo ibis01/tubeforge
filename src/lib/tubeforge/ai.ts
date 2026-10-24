@@ -46,12 +46,33 @@ export interface ScriptPackage {
   tags: string[];
 }
 
+/** Research intelligence attached to a greenlit idea (Phase 4 pipeline). */
+export interface ResearchBrief {
+  angle: string;
+  keywords: string[];
+  why: string;
+}
+
+/** Prompt block that steers GLM with Topic Radar findings. */
+export function researchBriefBlock(brief: ResearchBrief | null | undefined): string {
+  if (!brief) return "";
+  const lines = [
+    brief.angle ? `CONTENT ANGLE (research-approved): ${brief.angle}` : "",
+    brief.why ? `WHY VIEWERS CLICK: ${brief.why}` : "",
+    brief.keywords.length
+      ? `SEO KEYWORDS to weave naturally into the title, description and tags where they fit: ${brief.keywords.join(", ")}`
+      : "",
+  ].filter(Boolean);
+  return lines.length ? `\n${lines.join("\n")}\n` : "";
+}
+
 /** Stage 1 — GLM writes the full video package (title, script, description, tags). */
 export async function generateScriptPackage(opts: {
   topic: string;
   niche: string;
   tone: string;
   length: string;
+  brief?: ResearchBrief | null;
 }): Promise<ScriptPackage> {
   const words = LENGTHS.find((l) => l.id === opts.length)?.words ?? 450;
   const toneMap: Record<string, string> = {
@@ -79,7 +100,7 @@ Niche: ${opts.niche}
 Tone: ${toneDesc}
 Topic: "${opts.topic}"
 Target script length: about ${words} words.
-
+${researchBriefBlock(opts.brief)}
 Return JSON with exactly these keys:
 {
   "title": "click-worthy title under 70 characters, no clickbait lies",

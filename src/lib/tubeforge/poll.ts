@@ -2,7 +2,7 @@
 // Stage POSTs return 202 + start a server-side background job; the client
 // polls the video record until the artifact exists or an error is recorded.
 
-import type { VideoDTO, CharacterDTO, VerifyReportDTO } from "./types";
+import type { VideoDTO, CharacterDTO, VerifyReportDTO, CommentsKitDTO } from "./types";
 
 export interface GeneratingFlags {
   voiceover: boolean;
@@ -11,6 +11,8 @@ export interface GeneratingFlags {
   storyboard: boolean;
   render: boolean;
   verify: boolean;
+  comments: boolean;
+  upload: boolean;
 }
 
 export interface RenderStatus {
@@ -175,6 +177,16 @@ export async function pollRender(
   }
 }
 
+/** Poll until the YouTube upload lands (youtubeUrl set) or records an error. */
+export function pollUpload(videoId: string, opts?: PollOpts) {
+  return pollVideo(
+    videoId,
+    (v) => Boolean(v.youtubeUrl),
+    (v) => Boolean(v.error) && !v.youtubeUrl,
+    { ...opts, timeoutMs: opts?.timeoutMs ?? 20 * 60 * 1000 }
+  );
+}
+
 /** Poll a single-scene re-roll until its job flag clears. */
 export async function pollScene(
   videoId: string,
@@ -210,6 +222,42 @@ interface VerifyResponse {
   generating?: boolean;
   error?: string | null;
   report?: VerifyReportDTO | null;
+}
+
+interface CommentsResponse {
+  generating?: boolean;
+  error?: string | null;
+  kit?: CommentsKitDTO | null;
+}
+
+/** Poll the engagement-kit job until it finishes; resolves with the kit. */
+export async function pollComments(
+  videoId: string,
+  opts: PollOpts = {}
+): Promise<CommentsKitDTO | null> {
+  const interval = opts.intervalMs ?? 2500;
+  const timeout = opts.timeoutMs ?? 4 * 60 * 1000;
+  const deadline = Date.now() + timeout;
+
+  for (;;) {
+    const res = await fetch(`/api/videos/${videoId}/comments`, {
+      cache: "no-store",
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data: CommentsResponse = await res.json();
+
+    if (!data.generating) {
+      if (data.error) throw new Error(data.error);
+      return data.kit ?? null;
+    }
+
+    if (Date.now() > deadline)
+      throw new Error(
+        "Engagement kit is taking unusually long — it may still be running; check back shortly."
+      );
+
+    await sleep(interval);
+  }
 }
 
 /** Poll the narration check until its job finishes; resolves with the report. */

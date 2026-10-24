@@ -60,6 +60,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
       video.hasVideo && video.videoDuration
         ? `RENDERED VIDEO: final.mp4 (${Math.round(video.videoDuration)} seconds, ${video.renderMode})`
         : ``,
+      video.youtubeUrl ? `UPLOADED TO YOUTUBE: ${video.youtubeUrl}` : ``,
       ``,
       `DESCRIPTION:`,
       video.description ?? "—",
@@ -75,6 +76,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
             `3. Add the tags in YouTube Studio's tag field.`,
             `4. Upload thumbnail.png as the custom thumbnail.`,
             `5. subtitles.srt can be uploaded as the caption track.`,
+            `6. After publishing, post engagement-kit.txt's pinned comment and pin it.`,
           ].join("\n")
         : [
             `1. Combine the voiceover with visuals (use the thumbnail as cover art).`,
@@ -88,6 +90,36 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   add(`${base}/script.txt`, video.script);
   add(`${base}/description.txt`, video.description);
   add(`${base}/tags.csv`, tags.length ? "tag\n" + tags.join("\n") : null);
+
+  // Engagement kit (Phase 4) — paste into the comment section right after upload.
+  let kit: { pinnedComment?: string; replies?: { trigger: string; text: string }[]; heartTargets?: string[]; strategy?: string } | null = null;
+  try {
+    kit = video.commentsKit ? JSON.parse(video.commentsKit) : null;
+  } catch {
+    kit = null;
+  }
+  if (kit?.pinnedComment) {
+    add(
+      `${base}/engagement-kit.txt`,
+      [
+        `ENGAGEMENT KIT — post these in the first golden hour after upload.`,
+        ``,
+        `=== PINNED COMMENT (post this first, then pin it) ===`,
+        kit.pinnedComment,
+        ``,
+        `=== REPLY TEMPLATES ===`,
+        ...(kit.replies ?? []).map(
+          (r, i) => `${i + 1}) WHEN: ${r.trigger}\n   REPLY: ${r.text}`
+        ),
+        ``,
+        `=== HEART THESE EARLY COMMENTS ===`,
+        ...(kit.heartTargets ?? []).map((t) => `- ${t}`),
+        ``,
+        `=== PLAYBOOK ===`,
+        kit.strategy ?? "",
+      ].join("\n")
+    );
+  }
 
   add(
     `${base}/metadata.json`,

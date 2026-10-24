@@ -60,6 +60,8 @@ export function serializeVideo(
     videoDuration: v.videoDuration,
     videoUrl: hasFinal ? `/api/videos/${v.id}/mp4` : null,
     previewUrl: hasPreview ? `/api/videos/${v.id}/mp4?variant=preview` : null,
+    hasComments: Boolean(v.commentsKit),
+    youtubeUrl: v.youtubeUrl ?? null,
     createdAt: v.createdAt.toISOString(),
     updatedAt: v.updatedAt.toISOString(),
   };
