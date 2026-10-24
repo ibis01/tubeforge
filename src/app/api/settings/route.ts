@@ -10,6 +10,15 @@ const DEFAULTS: Record<string, string> = {
   defaultThumbStyle: "cinematic",
   autoVoiceover: "true",
   autoThumbnail: "true",
+  // Phase 3 — VLM quality gate
+  qualityGate: "thumbnails", // off | thumbnails | all (thumbnails + storyboard scenes)
+  qualityThreshold: "6", // 1-9 — below this the image is re-rolled once
+  // Phase 3 — global AI rate budget
+  aiBudgetEnabled: "true",
+  aiLlmPerMin: "30",
+  aiTtsPerMin: "12",
+  aiImagePerMin: "8",
+  aiVideoPerMin: "4",
 };
 
 export async function GET() {

@@ -314,3 +314,35 @@ export interface CharacterDTO {
   createdAt: string;
   updatedAt: string;
 }
+
+// ---------- Phase 3: robustness DTOs ----------
+
+export type JobStatusDTO = "running" | "done" | "failed" | "interrupted";
+
+/** One row in the Settings "Background Jobs" history panel. */
+export interface JobDTO {
+  id: string;
+  kind: string;
+  entityId: string;
+  status: JobStatusDTO;
+  progress: number | null;
+  label: string | null;
+  error: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  durationMs: number | null;
+  entityTitle: string | null;
+}
+
+/** ASR narration-check report (POST/GET /api/videos/[id]/verify). */
+export interface VerifyReportDTO {
+  ranAt: string;
+  format: "script" | "story";
+  similarity: number; // 0..1
+  scriptWords: number;
+  transcriptWords: number;
+  verdict: "excellent" | "good" | "needs-review";
+  transcriptPreview: string;
+  missingWords: string[];
+  scenes?: { index: number; title: string; similarity: number }[];
+}

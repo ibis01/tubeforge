@@ -41,7 +41,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
-  const started = startJob(id, "poses", async () => {
+  const started = await startJob(id, "poses", async () => {
     const result = await generateCharacterPoses({
       characterId: id,
       identityAnchor: character.identityAnchor,

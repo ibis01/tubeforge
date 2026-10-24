@@ -12,7 +12,8 @@ import path from "path";
 import { promisify } from "util";
 import type { Scene } from "./types";
 import { sceneImageFile, sceneWavFile, buildSrtFromSegments } from "./story";
-import { getZAI, withRetry, videoDir } from "./ai";
+import { getZAI, videoDir } from "./ai";
+import { aiCall } from "./budget";
 
 const execFileAsync = promisify(execFile);
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
@@ -122,7 +123,8 @@ async function ensureSceneClip(videoId: string, scene: Scene): Promise<string> {
   const imageB64 = fs.readFileSync(imagePath).toString("base64");
 
   const zai = await getZAI();
-  const clip = await withRetry(
+  const clip = await aiCall(
+    "video",
     `scene ${scene.index} i2v`,
     async () => {
       const submit = await zai.video.generations.create({
@@ -152,8 +154,7 @@ async function ensureSceneClip(videoId: string, scene: Scene): Promise<string> {
       }
       throw new Error(`i2v task timed out for scene ${scene.index}`);
     },
-    2, // one retry — these are long calls
-    8000
+    { attempts: 2, baseDelayMs: 8000 } // one retry — these are long calls
   );
 
   return clip;

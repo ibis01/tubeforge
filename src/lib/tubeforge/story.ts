@@ -5,7 +5,9 @@
 
 import fs from "fs";
 import path from "path";
-import { getZAI, withRetry, parseJsonLoose, videoDir, splitForTts } from "./ai";
+import { getZAI, parseJsonLoose, videoDir, splitForTts } from "./ai";
+import { aiCall } from "./budget";
+import { runQualityGate } from "./quality";
 import { mergeWavs } from "./wav";
 import { CAMERAS, SCENE_COUNTS, type Scene } from "./types";
 import { characterSceneFragment, readPortrait } from "./characters";
@@ -129,7 +131,7 @@ Write the narration in their voice. Mark scenes where they appear with "hostInSc
     : "";
 
   const zai = await getZAI();
-  const completion = await withRetry("scene script LLM", () =>
+  const completion = await aiCall("llm", "scene script LLM", () =>
     zai.chat.completions.create({
       messages: [
         {
@@ -225,47 +227,59 @@ export async function generateSceneImage(opts: {
       ? readPortrait(opts.character.id)
       : null;
 
-  let response;
-  if (opts.character && portrait) {
-    // Identity-locked: seed the edit with the cast portrait so the host keeps
-    // their exact likeness inside this scene.
-    response = await withRetry(
-      `scene ${scene.index} edit (host likeness)`,
-      () =>
-        zai.images.generations.edit({
-          prompt: `Place this exact person into the described scene, keeping their face, hairstyle, glasses, facial hair and signature outfit perfectly recognizable. Scene: ${artPrompt}`,
-          images: [{ url: `data:image/png;base64,${portrait.toString("base64")}` }],
-          size: "1344x768",
-        }),
-      4,
-      5000
-    );
-  } else {
-    const castFragment = scene.hostInScene
-      ? characterSceneFragment(opts.character ?? { name: "", identityAnchor: null, appearance: null })
-      : "";
-    response = await withRetry(
-      `scene ${scene.index} image`,
-      () =>
-        zai.images.generations.create({
-          prompt: castFragment ? `${artPrompt} ${castFragment}` : artPrompt,
-          size: "1344x768",
-        }),
-      4,
-      5000
-    );
-  }
+  const imagePath = path.join(videoDir(opts.videoId), sceneImageFile(scene.index));
 
-  const base64 = response.data[0]?.base64;
-  if (!base64) throw new Error(`Scene ${scene.index} returned no image data`);
-  const buffer = Buffer.from(base64, "base64");
-  if (buffer.length < 1000) throw new Error(`Scene ${scene.index} image is empty`);
+  const produce = async () => {
+    let response;
+    if (opts.character && portrait) {
+      // Identity-locked: seed the edit with the cast portrait so the host keeps
+      // their exact likeness inside this scene.
+      response = await aiCall(
+        "image",
+        `scene ${scene.index} edit (host likeness)`,
+        () =>
+          zai.images.generations.edit({
+            prompt: `Place this exact person into the described scene, keeping their face, hairstyle, glasses, facial hair and signature outfit perfectly recognizable. Scene: ${artPrompt}`,
+            images: [{ url: `data:image/png;base64,${portrait.toString("base64")}` }],
+            size: "1344x768",
+          }),
+        { attempts: 4, baseDelayMs: 5000 }
+      );
+    } else {
+      const castFragment = scene.hostInScene
+        ? characterSceneFragment(opts.character ?? { name: "", identityAnchor: null, appearance: null })
+        : "";
+      response = await aiCall(
+        "image",
+        `scene ${scene.index} image`,
+        () =>
+          zai.images.generations.create({
+            prompt: castFragment ? `${artPrompt} ${castFragment}` : artPrompt,
+            size: "1344x768",
+          }),
+        { attempts: 4, baseDelayMs: 5000 }
+      );
+    }
 
-  fs.writeFileSync(
-    path.join(videoDir(opts.videoId), sceneImageFile(scene.index)),
-    buffer
-  );
-  return { fileBytes: buffer.length };
+    const base64 = response.data[0]?.base64;
+    if (!base64) throw new Error(`Scene ${scene.index} returned no image data`);
+    const buffer = Buffer.from(base64, "base64");
+    if (buffer.length < 1000) throw new Error(`Scene ${scene.index} image is empty`);
+
+    fs.writeFileSync(imagePath, buffer);
+  };
+
+  // Phase 3: VLM quality gate (re-rolls badly deformed scene art once when
+  // qualityGate = "all"; disabled by default to keep storyboards fast).
+  await runQualityGate({
+    kind: "scene",
+    videoId: opts.videoId,
+    imagePath,
+    context: `storyboard scene ${scene.index} "${scene.title}" — should depict: ${scene.visual}`,
+    generate: produce,
+  });
+
+  return { fileBytes: fs.existsSync(imagePath) ? fs.statSync(imagePath).size : 0 };
 }
 
 /** Full storyboard — every scene image, paced to respect upstream burst limits. */
@@ -315,7 +329,8 @@ export async function generateSceneVoiceovers(opts: {
     const buffers: Buffer[] = [];
     for (const [j, chunk] of chunks.entries()) {
       if (j > 0) await sleep(2000); // pace chunks within a scene too
-      const response = await withRetry(
+      const response = await aiCall(
+        "tts",
         `scene ${scene.index} tts (${chunk.length} chars)`,
         () =>
           zai.audio.tts.create({
@@ -325,8 +340,7 @@ export async function generateSceneVoiceovers(opts: {
             response_format: "wav",
             stream: false,
           }),
-        5,
-        6000
+        { attempts: 5, baseDelayMs: 6000 }
       );
       const arrayBuffer = await response.arrayBuffer();
       const buffer = Buffer.from(new Uint8Array(arrayBuffer));

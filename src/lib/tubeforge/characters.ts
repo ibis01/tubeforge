@@ -7,7 +7,8 @@ import fs from "fs";
 import path from "path";
 import type { Character } from "@prisma/client";
 import { POSES, ART_STYLES } from "./types";
-import { getZAI, withRetry, parseJsonLoose } from "./ai";
+import { getZAI, parseJsonLoose } from "./ai";
+import { aiCall } from "./budget";
 import { characterJobSnapshot, lastJobError } from "./jobs";
 
 const CHARACTER_ROOT = path.join(process.cwd(), "uploads", "characters");
@@ -106,7 +107,8 @@ export async function generateCharacterBible(opts: {
   niche?: string;
 }): Promise<CharacterBible> {
   const zai = await getZAI();
-  const completion = await zai.chat.completions.create({
+  const completion = await aiCall("llm", "character bible LLM", () =>
+    zai.chat.completions.create({
     messages: [
       {
         role: "assistant",
@@ -132,7 +134,7 @@ Return JSON with exactly these keys:
       },
     ],
     thinking: { type: "disabled" },
-  });
+    }));
 
   const raw = completion.choices[0]?.message?.content ?? "";
   const parsed = parseJsonLoose(raw);
@@ -162,15 +164,15 @@ export async function generateCharacterPortrait(opts: {
   const style =
     ART_STYLES.find((s) => s.id === opts.artStyle)?.prompt ?? ART_STYLES[0].prompt;
 
-  const response = await withRetry(
+  const response = await aiCall(
+    "image",
     "character portrait",
     () =>
       zai.images.generations.create({
         prompt: `Official character reference portrait of "${opts.name}". ${anchor}. ${style}. Head-and-shoulders framing, facing camera, neutral studio backdrop, crisp detail, personality visible in the expression. Absolutely no text, no letters, no watermarks.`,
         size: "1024x1024",
       }),
-    4,
-    5000
+    { attempts: 4, baseDelayMs: 5000 }
   );
 
   const base64 = response.data[0]?.base64;
@@ -205,7 +207,8 @@ export async function generateCharacterPoses(opts: {
 
   for (const [i, pose] of POSES.entries()) {
     const dataUrl = `data:image/png;base64,${portrait.toString("base64")}`;
-    const response = await withRetry(
+    const response = await aiCall(
+      "image",
       `pose:${pose.id}`,
       () =>
         zai.images.generations.edit({
@@ -213,8 +216,7 @@ export async function generateCharacterPoses(opts: {
           images: [{ url: dataUrl }],
           size: "1024x1024",
         }),
-      4,
-      5000
+      { attempts: 4, baseDelayMs: 5000 }
     );
     const base64 = response.data[0]?.base64;
     if (!base64) throw new Error(`Pose "${pose.id}" returned no data`);

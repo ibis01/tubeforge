@@ -89,7 +89,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       return NextResponse.json({ error: `Scene ${sceneIndex} does not exist` }, { status: 400 });
 
     const jobKey = `${id}#scene${sceneIndex}`;
-    const accepted = startJob(jobKey, "scene", async () => {
+    const accepted = await startJob(jobKey, "scene", async () => {
       try {
         await generateSceneImage({ videoId: id, scene, character: castOpts });
         invalidateRenders(id);
@@ -120,6 +120,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
             message: `Scene ${sceneIndex} re-roll failed: ${message}`,
           },
         });
+        // Re-thrown so startJob records the failure for GET polling + history.
+        throw err;
       }
     });
 
@@ -130,7 +132,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
 
   // Full storyboard
-  const accepted = startJob(id, "storyboard", async () => {
+  const accepted = await startJob(id, "storyboard", async () => {
     try {
       await generateStoryboard({ videoId: id, scenes, character: castOpts });
 
@@ -168,6 +170,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           message: `Storyboard failed: ${message}`,
         },
       });
+      // Re-thrown so startJob records the failure for GET polling + history.
+      throw err;
     }
   });
 

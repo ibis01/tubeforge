@@ -66,6 +66,7 @@ model Video {
   channel       Channel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
   characterId   String?
   character     Character? @relation(fields: [characterId], references: [id], onDelete: SetNull)
+  verifyReport String? // JSON ASR narration-check report (Phase 3)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   activities    Activity[]
@@ -118,4 +119,25 @@ model Setting {
   key       String   @id
   value     String
   updatedAt DateTime @updatedAt
+}
+
+// Phase 3 — persistent job registry: survives server restarts so interrupted
+// stages can be detected ("running" rows from a dead process) and surfaced
+// to users instead of silently vanishing like the old in-memory maps.
+model Job {
+  id        String    @id @default(cuid())
+  kind      String // voiceover | thumbnail | variants | portrait | poses | storyboard | render | scene | verify
+  entityId  String // video id, character id, or "<videoId>#scene<N>"
+  status    String    @default("running") // running | done | failed | interrupted
+  progress  Float? // 0..1
+  label     String? // human progress label ("Rendering scene 3 of 6")
+  error     String?
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([entityId, kind])
+  @@index([status])
+  @@index([startedAt])
 }

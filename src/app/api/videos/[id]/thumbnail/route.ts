@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import path from "path";
 import { db } from "@/lib/db";
-import { generateThumbnail, readMedia } from "@/lib/tubeforge/ai";
+import { generateThumbnail, readMedia, videoDir } from "@/lib/tubeforge/ai";
+import { runQualityGate } from "@/lib/tubeforge/quality";
 import { deriveStatus } from "@/lib/tubeforge/status";
 import { startJob } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
@@ -30,14 +32,23 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
   // Clear any stale error from a previous failed attempt before polling starts.
   await db.video.update({ where: { id }, data: { error: null } });
 
-  startJob(id, "thumbnail", async () => {
+  await startJob(id, "thumbnail", async () => {
     try {
-      await generateThumbnail({
-        title: video.title,
-        topic: video.topic,
-        style: video.thumbStyle,
-        videoId: video.id,
-        character: video.character ?? null,
+      // Phase 3: VLM quality gate — inspect the thumbnail and re-roll once
+      // when it scores below the configured threshold (default mode: on).
+      await runQualityGate({
+        kind: "thumbnail",
+        videoId: id,
+        imagePath: path.join(videoDir(id), "thumbnail.png"),
+        context: `YouTube thumbnail (${video.thumbStyle} style) for the video "${video.title}" — topic: ${video.topic}`,
+        generate: () =>
+          generateThumbnail({
+            title: video.title,
+            topic: video.topic,
+            style: video.thumbStyle,
+            videoId: video.id,
+            character: video.character ?? null,
+          }),
       });
 
       const fresh = await db.video.findUnique({ where: { id } });
@@ -75,6 +86,8 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
           message: `Thumbnail failed: ${message}`,
         },
       });
+      // Re-thrown so startJob records the failure for GET polling + history.
+      throw err;
     }
   });
 

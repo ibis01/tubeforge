@@ -38,7 +38,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
   // Clear any stale error from a previous failed attempt before polling starts.
   await db.video.update({ where: { id }, data: { error: null } });
 
-  const accepted = startJob(id, "voiceover", async () => {
+  const accepted = await startJob(id, "voiceover", async () => {
     try {
       let durationSec: number;
 
@@ -111,6 +111,8 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
           message: `Voiceover failed: ${message}`,
         },
       });
+      // Re-thrown so startJob records the failure for GET polling + history.
+      throw err;
     }
   });
 

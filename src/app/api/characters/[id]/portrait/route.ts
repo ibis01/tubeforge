@@ -22,7 +22,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
-  const started = startJob(id, "portrait", async () => {
+  const started = await startJob(id, "portrait", async () => {
     const result = await generateCharacterPortrait({
       characterId: id,
       name: character.name,

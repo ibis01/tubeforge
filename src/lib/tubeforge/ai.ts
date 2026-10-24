@@ -5,6 +5,7 @@ import fs from "fs";
 import path from "path";
 import ZAI from "z-ai-web-dev-sdk";
 import { mergeWavs } from "./wav";
+import { aiCall } from "./budget";
 import { LENGTHS, THUMB_STYLES, type ResearchIdea } from "./types";
 
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
@@ -22,41 +23,6 @@ export async function getZAI() {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Retry an async AI call with exponential backoff.
- * The upstream GLM/TTS/CogView services occasionally return transient 500s
- * ("network error, please try again later") — one blip should never fail a stage.
- */
-export async function withRetry<T>(
-  label: string,
-  fn: () => Promise<T>,
-  attempts = 3,
-  baseDelayMs = 2000
-): Promise<T> {
-  let lastError: unknown;
-  for (let i = 1; i <= attempts; i++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastError = err;
-      if (i < attempts) {
-        const msg = err instanceof Error ? err.message : String(err);
-        // Rate limits (429) need much longer cool-downs than transient 500s.
-        const rateLimited = /429|too many requests/i.test(msg);
-        const delay = baseDelayMs * Math.pow(2, i - 1) * (rateLimited ? 4 : 1);
-        console.warn(
-          `[ai-retry] ${label} failed (attempt ${i}/${attempts}), retrying in ${delay}ms:`,
-          msg
-        );
-        await sleep(delay);
-      }
-    }
-  }
-  throw lastError instanceof Error
-    ? lastError
-    : new Error(`${label} failed after ${attempts} attempts`);
-}
 
 /** Extract JSON from an LLM response that may contain markdown fences or prose. */
 export function parseJsonLoose(raw: string): Record<string, unknown> {
@@ -98,7 +64,7 @@ export async function generateScriptPackage(opts: {
   const toneDesc = toneMap[opts.tone] ?? "clear and engaging";
 
   const zai = await getZAI();
-  const completion = await withRetry("script LLM", () =>
+  const completion = await aiCall("llm", "script LLM", () =>
     zai.chat.completions.create({
     messages: [
       {
@@ -203,7 +169,8 @@ export async function generateVoiceover(opts: {
   for (const [i, chunk] of chunks.entries()) {
     // Pace chunk requests — rapid back-to-back TTS calls trip upstream burst limits.
     if (i > 0) await sleep(2000);
-    const response = await withRetry(
+    const response = await aiCall(
+      "tts",
       `tts chunk (${chunk.length} chars)`,
       () =>
         zai.audio.tts.create({
@@ -213,8 +180,7 @@ export async function generateVoiceover(opts: {
           response_format: "wav",
           stream: false,
         }),
-      5, // 5 attempts — rate-limit windows need patience
-      6000 // 6s base → 6/12/24/48s backoff (x4 for 429s)
+      { attempts: 5, baseDelayMs: 6000 } // rate-limit windows need patience
     );
     const arrayBuffer = await response.arrayBuffer();
     const buffer = Buffer.from(new Uint8Array(arrayBuffer));
@@ -261,7 +227,8 @@ export async function generateThumbnail(opts: {
   const portrait =
     opts.character?.id ? readPortrait(opts.character.id) : null;
   if (opts.character && portrait) {
-    response = await withRetry(
+    response = await aiCall(
+      "image",
       "thumbnail edit (cast likeness)",
       () =>
         zai.images.generations.edit({
@@ -269,23 +236,22 @@ export async function generateThumbnail(opts: {
           images: [{ url: `data:image/png;base64,${portrait.toString("base64")}` }],
           size: "1344x768",
         }),
-      4,
-      5000
+      { attempts: 4, baseDelayMs: 5000 }
     );
   } else {
     const { characterSceneFragment } = await import("./characters");
     const castFragment = opts.character
       ? characterSceneFragment(opts.character)
       : "";
-    response = await withRetry(
+    response = await aiCall(
+      "image",
       "thumbnail image",
       () =>
         zai.images.generations.create({
           prompt: `${scenePrompt}${castFragment ? ` ${castFragment}` : ""}`,
           size: "1344x768",
         }),
-      4, // background job — room for rate-limit windows
-      5000 // 5/10/20s backoff (x4 for 429s)
+      { attempts: 4, baseDelayMs: 5000 } // background job — room for rate-limit windows
     );
   }
 
@@ -352,7 +318,7 @@ export async function generateTopicResearch(opts: {
   query: string;
 }): Promise<ResearchResult> {
   const zai = await getZAI();
-  const completion = await withRetry("research LLM", () =>
+  const completion = await aiCall("llm", "research LLM", () =>
     zai.chat.completions.create({
     messages: [
       {

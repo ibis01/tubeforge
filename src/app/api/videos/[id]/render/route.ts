@@ -77,7 +77,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // Clear any stale error before the job starts.
   await db.video.update({ where: { id }, data: { error: null } });
 
-  const accepted = startJob(id, "render", async () => {
+  const accepted = await startJob(id, "render", async () => {
     try {
       const result = await renderVideo({
         videoId: id,
@@ -125,6 +125,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           message: `Render failed: ${message}`,
         },
       });
+      // Re-thrown so startJob records the failure for GET polling + history.
+      throw err;
     }
   });
 

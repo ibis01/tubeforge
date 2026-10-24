@@ -2,7 +2,7 @@
 // Stage POSTs return 202 + start a server-side background job; the client
 // polls the video record until the artifact exists or an error is recorded.
 
-import type { VideoDTO, CharacterDTO } from "./types";
+import type { VideoDTO, CharacterDTO, VerifyReportDTO } from "./types";
 
 export interface GeneratingFlags {
   voiceover: boolean;
@@ -10,6 +10,7 @@ export interface GeneratingFlags {
   variants: boolean;
   storyboard: boolean;
   render: boolean;
+  verify: boolean;
 }
 
 export interface RenderStatus {
@@ -203,6 +204,42 @@ export async function pollScene(
 interface CharacterResponse {
   character?: CharacterDTO;
   error?: string;
+}
+
+interface VerifyResponse {
+  generating?: boolean;
+  error?: string | null;
+  report?: VerifyReportDTO | null;
+}
+
+/** Poll the narration check until its job finishes; resolves with the report. */
+export async function pollVerify(
+  videoId: string,
+  opts: PollOpts = {}
+): Promise<VerifyReportDTO | null> {
+  const interval = opts.intervalMs ?? 2500;
+  const timeout = opts.timeoutMs ?? 6 * 60 * 1000;
+  const deadline = Date.now() + timeout;
+
+  for (;;) {
+    const res = await fetch(`/api/videos/${videoId}/verify`, {
+      cache: "no-store",
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data: VerifyResponse = await res.json();
+
+    if (!data.generating) {
+      if (data.error) throw new Error(data.error);
+      return data.report ?? null;
+    }
+
+    if (Date.now() > deadline)
+      throw new Error(
+        "Narration check is taking unusually long — it may still be running; check back shortly."
+      );
+
+    await sleep(interval);
+  }
 }
 
 /**

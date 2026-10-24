@@ -24,6 +24,7 @@ import {
   pollStoryboard,
   pollRender,
   pollScene,
+  pollVerify,
 } from "@/lib/tubeforge/poll";
 import {
   VOICES,
@@ -32,6 +33,7 @@ import {
   type VideoDTO,
   type VariantDTO,
   type SceneDTO,
+  type VerifyReportDTO,
 } from "@/lib/tubeforge/types";
 import {
   Mic,
@@ -51,6 +53,7 @@ import {
   RefreshCw,
   Zap,
   Eye,
+  ScanText,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -90,6 +93,10 @@ export function VideoDetailDialog({
   const [music, setMusic] = useState(true);
   const [renderLabel, setRenderLabel] = useState<string | null>(null);
 
+  // Narration check state (Phase 3 — ASR proofreading)
+  const [verifyReport, setVerifyReport] = useState<VerifyReportDTO | null>(null);
+  const [verifyRunning, setVerifyRunning] = useState(false);
+
   const isStory = video?.format === "story";
 
   const reloadScenes = useCallback(async (videoId: string) => {
@@ -125,6 +132,14 @@ export function VideoDetailDialog({
     let cancelled = false;
     setRenderMode(video.renderMode ?? "kenburns");
     setRenderLabel(null);
+    setVerifyReport(null);
+    setVerifyRunning(false);
+    fetch(`/api/videos/${video.id}/verify`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d?.report) setVerifyReport(d.report);
+      })
+      .catch(() => {});
     fetch(`/api/videos/${video.id}/variants`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -201,6 +216,34 @@ export function VideoDetailDialog({
     setFocusVideoId(null);
     setView("calendar");
     onClose();
+  };
+
+  const runVerify = async () => {
+    if (verifyRunning || !video?.hasVoiceover) return;
+    setVerifyRunning(true);
+    try {
+      const res = await fetch(`/api/videos/${video.id}/verify`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not start the narration check");
+      const report = await pollVerify(video.id, { timeoutMs: 10 * 60 * 1000 });
+      setVerifyReport(report);
+      const pct = Math.round((report?.similarity ?? 0) * 100);
+      toast({
+        title: report?.verdict === "needs-review" ? "Narration needs review" : "Narration verified",
+        description: `${pct}% word match between the script and the spoken audio.`,
+        variant: report?.verdict === "needs-review" ? "destructive" : undefined,
+      });
+      bumpRefresh();
+    } catch (e) {
+      toast({
+        title: "Narration check failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+      await refreshVideo(video.id);
+    } finally {
+      setVerifyRunning(false);
+    }
   };
 
   const runStage = async (stage: "voiceover" | "thumbnail" | "publish") => {
@@ -635,6 +678,108 @@ export function VideoDetailDialog({
           <audio controls preload="metadata" src={`/api/videos/${video.id}/voiceover`} className="w-full" />
         ) : (
           <p className="text-sm text-muted-foreground">No narration yet.</p>
+        )}
+      </div>
+
+      {/* Narration check (Phase 3 — ASR proofreading) */}
+      <div className="mt-5">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
+            <ScanText className="h-3 w-3" /> Narration check
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!video.hasVoiceover || verifyRunning || Boolean(busy)}
+            onClick={runVerify}
+            className="border-white/15 bg-white/4 h-7 text-xs px-2.5"
+            title={
+              !video.hasVoiceover
+                ? "Generate the voiceover first"
+                : "Transcribe the voiceover with ASR and match it against the script"
+            }
+          >
+            {verifyRunning ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <ScanText className="h-3 w-3" />
+            )}
+            {verifyReport ? "Re-check" : "Run check"}
+          </Button>
+        </div>
+
+        {!video.hasVoiceover ? (
+          <p className="text-sm text-muted-foreground">
+            Generate the voiceover first — the check transcribes it back and
+            compares it with the script to catch TTS glitches.
+          </p>
+        ) : verifyReport ? (
+          <div className="rounded-xl border border-white/10 bg-white/3 p-3 space-y-2.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge
+                className={clsx(
+                  "border-none text-[10px]",
+                  verifyReport.verdict === "excellent"
+                    ? "bg-emerald-500/20 text-emerald-300"
+                    : verifyReport.verdict === "good"
+                      ? "bg-sky-500/20 text-sky-300"
+                      : "bg-red-500/20 text-red-300"
+                )}
+              >
+                {verifyReport.verdict === "excellent"
+                  ? "Excellent"
+                  : verifyReport.verdict === "good"
+                    ? "Good"
+                    : "Needs review"}
+              </Badge>
+              <span className="text-sm font-semibold tabular-nums">
+                {Math.round(verifyReport.similarity * 100)}% word match
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                {verifyReport.scriptWords} script words → {verifyReport.transcriptWords} spoken
+              </span>
+              <span className="text-[10px] text-muted-foreground ml-auto">
+                ran {timeAgo(verifyReport.ranAt)}
+              </span>
+            </div>
+
+            {verifyReport.scenes && verifyReport.scenes.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {verifyReport.scenes.map((s) => (
+                  <Badge
+                    key={s.index}
+                    variant="outline"
+                    className={clsx(
+                      "text-[9px] font-normal",
+                      s.similarity >= 0.95
+                        ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+                        : s.similarity >= 0.85
+                          ? "border-sky-500/25 bg-sky-500/10 text-sky-300"
+                          : "border-red-500/25 bg-red-500/10 text-red-300"
+                    )}
+                  >
+                    Scene {s.index}: {Math.round(s.similarity * 100)}%
+                  </Badge>
+                ))}
+              </div>
+            )}
+
+            {verifyReport.missingWords.length > 0 && (
+              <p className="text-[11px] text-muted-foreground">
+                <span className="text-foreground/70">Missing:</span>{" "}
+                {verifyReport.missingWords.join(", ")}
+              </p>
+            )}
+
+            <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-3 border-t border-white/8 pt-2 italic">
+              “{verifyReport.transcriptPreview}…”
+            </p>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Run an ASR check to prove the spoken audio matches the script —
+            {isStory ? " verified scene by scene" : " verified word by word"}.
+          </p>
         )}
       </div>
 

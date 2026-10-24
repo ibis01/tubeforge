@@ -48,7 +48,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
-  startJob(id, "variants", async () => {
+  await startJob(id, "variants", async () => {
     try {
       const styles = pickVariantStyles(video.thumbStyle, 3);
 
