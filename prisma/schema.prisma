@@ -1,0 +1,66 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Channel {
+  id          String   @id @default(cuid())
+  name        String
+  niche       String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  videos      Video[]
+}
+
+model Video {
+  id            String    @id @default(cuid())
+  title         String?
+  topic         String
+  niche         String
+  tone          String    @default("informative")
+  length        String    @default("medium")
+  script        String?
+  description   String?
+  tags          String?
+  status        String    @default("draft")
+  voice         String    @default("jam")
+  ttsSpeed      Float     @default(1.0)
+  thumbStyle    String    @default("cinematic")
+  hasVoiceover  Boolean   @default(false)
+  hasThumbnail  Boolean   @default(false)
+  audioDuration Float?
+  wordCount     Int?
+  error         String?
+  channelId     String?
+  channel       Channel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  activities    Activity[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Activity {
+  id        String   @id @default(cuid())
+  videoId   String?
+  video     Video?   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  stage     String
+  message   String
+  level     String   @default("info")
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}

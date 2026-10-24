@@ -1,0 +1,219 @@
+// AI pipeline services for TubeForge — LLM script generation, TTS voiceover, thumbnail art.
+// z-ai-web-dev-sdk is used server-side only.
+
+import fs from "fs";
+import path from "path";
+import ZAI from "z-ai-web-dev-sdk";
+import { mergeWavs } from "./wav";
+import { LENGTHS, THUMB_STYLES } from "./types";
+
+const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+
+export function videoDir(videoId: string) {
+  const dir = path.join(UPLOAD_ROOT, videoId);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null;
+async function getZAI() {
+  if (!zaiInstance) zaiInstance = await ZAI.create();
+  return zaiInstance;
+}
+
+/** Extract JSON from an LLM response that may contain markdown fences or prose. */
+function parseJsonLoose(raw: string): Record<string, unknown> {
+  const cleaned = raw
+    .replace(/```json/gi, "```")
+    .replace(/```/g, "")
+    .trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) return JSON.parse(match[0]);
+    throw new Error("Model did not return valid JSON");
+  }
+}
+
+export interface ScriptPackage {
+  title: string;
+  script: string;
+  description: string;
+  tags: string[];
+}
+
+/** Stage 1 — GLM writes the full video package (title, script, description, tags). */
+export async function generateScriptPackage(opts: {
+  topic: string;
+  niche: string;
+  tone: string;
+  length: string;
+}): Promise<ScriptPackage> {
+  const words = LENGTHS.find((l) => l.id === opts.length)?.words ?? 450;
+  const toneMap: Record<string, string> = {
+    informative: "clear, authoritative, fact-packed",
+    dramatic: "intense, suspenseful, cinematic",
+    humorous: "witty, playful, light-hearted",
+    mysterious: "eerie, curiosity-driven, enigmatic",
+    inspirational: "uplifting, emotional, motivational",
+  };
+  const toneDesc = toneMap[opts.tone] ?? "clear and engaging";
+
+  const zai = await getZAI();
+  const completion = await zai.chat.completions.create({
+    messages: [
+      {
+        role: "assistant",
+        content:
+          "You are an elite faceless-YouTube scriptwriter with 10M+ views per video. You write narration-first scripts optimized for retention (strong hook in the first 2 sentences, open loops, pattern interrupts, and a payoff). You always respond with STRICT JSON only — no markdown, no commentary.",
+      },
+      {
+        role: "user",
+        content: `Create a complete YouTube video package for a faceless channel.
+Niche: ${opts.niche}
+Tone: ${toneDesc}
+Topic: "${opts.topic}"
+Target script length: about ${words} words.
+
+Return JSON with exactly these keys:
+{
+  "title": "click-worthy title under 70 characters, no clickbait lies",
+  "script": "the full narration script. Start with a gripping hook, then the body in flowing spoken paragraphs separated by blank lines, end with a call-to-action asking viewers to subscribe. Pure narration text only — no scene directions, no camera notes, no speaker labels.",
+  "description": "engaging YouTube description (2-3 sentences) followed by a line of relevant hashtags",
+  "tags": ["array of 10 SEO tags relevant to the topic"]
+}`,
+      },
+    ],
+    thinking: { type: "disabled" },
+  });
+
+  const raw = completion.choices[0]?.message?.content ?? "";
+  const parsed = parseJsonLoose(raw);
+
+  const title = String(parsed.title ?? "").trim();
+  const script = String(parsed.script ?? "").trim();
+  const description = String(parsed.description ?? "").trim();
+  const tags = Array.isArray(parsed.tags)
+    ? parsed.tags.map(String).slice(0, 12)
+    : [];
+
+  if (!title || !script) throw new Error("Incomplete script package from model");
+  return { title, script, description, tags };
+}
+
+/** Clean a script for speech: strip markers, markdown and emoji noise. */
+function scriptToSpeech(script: string): string {
+  return script
+    .replace(/\[[^\]]*\]/g, " ") // [HOOK] style markers
+    .replace(/\*\*|__|~~|`/g, " ") // markdown decorations
+    .replace(
+      /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}]/gu,
+      " "
+    ) // emoji & arrows
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s*\n\s*\n\s*/g, ". ") // paragraph breaks become sentence gaps
+    .replace(/\s*\n\s*/g, " ")
+    .replace(/\.{2,}/g, ".")
+    .replace(/\s+([,.!?;:])/g, "$1")
+    .trim();
+}
+
+/** Split text into <=maxLen chunks at sentence boundaries (TTS limit: 1024 chars). */
+export function splitForTts(text: string, maxLen = 950): string[] {
+  const sentences = text.match(/[^.!?]+[.!?]+["')\]]*\s*/g) ?? [text];
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const sentence of sentences) {
+    // Handle pathological single sentences longer than maxLen
+    let s = sentence;
+    while (s.length > maxLen) {
+      const cutAt = s.lastIndexOf(",", maxLen) > maxLen * 0.5
+        ? s.lastIndexOf(",", maxLen)
+        : Math.floor(maxLen * 0.9);
+      chunks.push(s.slice(0, cutAt + 1).trim());
+      s = s.slice(cutAt + 1);
+    }
+    if ((current + s).length <= maxLen) {
+      current += s;
+    } else {
+      if (current.trim()) chunks.push(current.trim());
+      current = s;
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+  return chunks.filter(Boolean);
+}
+
+/** Stage 2 — TTS the script in chunks, merge into one WAV. Returns duration. */
+export async function generateVoiceover(opts: {
+  script: string;
+  voice: string;
+  speed: number;
+  videoId: string;
+}): Promise<{ durationSec: number; fileBytes: number }> {
+  const speech = scriptToSpeech(opts.script);
+  if (!speech) throw new Error("Script has no speakable content");
+
+  const chunks = splitForTts(speech);
+  if (chunks.length === 0) throw new Error("Nothing to speak");
+
+  const zai = await getZAI();
+  const buffers: Buffer[] = [];
+
+  for (const chunk of chunks) {
+    const response = await zai.audio.tts.create({
+      input: chunk,
+      voice: opts.voice,
+      speed: opts.speed,
+      response_format: "wav",
+      stream: false,
+    });
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(new Uint8Array(arrayBuffer));
+    if (buffer.length < 44) throw new Error("TTS returned empty audio");
+    buffers.push(buffer);
+  }
+
+  const { buffer: merged, durationSec } = mergeWavs(buffers);
+  const outPath = path.join(videoDir(opts.videoId), "voiceover.wav");
+  fs.writeFileSync(outPath, merged);
+
+  return { durationSec, fileBytes: merged.length };
+}
+
+/** Stage 3 — CogView generates the 16:9 thumbnail. */
+export async function generateThumbnail(opts: {
+  title: string;
+  topic: string;
+  style: string;
+  videoId: string;
+}): Promise<{ fileBytes: number }> {
+  const stylePrompt =
+    THUMB_STYLES.find((s) => s.id === opts.style)?.prompt ??
+    THUMB_STYLES[0].prompt;
+
+  const zai = await getZAI();
+  const response = await zai.images.generations.create({
+    prompt: `YouTube video thumbnail about "${opts.topic}". ${stylePrompt}. Wide 16:9 cinematic frame, extremely detailed, eye-catching composition built for high click-through rate, professional color grading. Absolutely no text, no letters, no words, no watermarks.`,
+    size: "1344x768",
+  });
+
+  const base64 = response.data[0]?.base64;
+  if (!base64) throw new Error("Image generation returned no data");
+
+  const buffer = Buffer.from(base64, "base64");
+  if (buffer.length < 1000) throw new Error("Generated image is empty");
+
+  const outPath = path.join(videoDir(opts.videoId), "thumbnail.png");
+  fs.writeFileSync(outPath, buffer);
+
+  return { fileBytes: buffer.length };
+}
+
+export function readMedia(videoId: string, kind: "voiceover.wav" | "thumbnail.png") {
+  const filePath = path.join(UPLOAD_ROOT, videoId, kind);
+  if (!fs.existsSync(filePath)) return null;
+  return fs.readFileSync(filePath);
+}
