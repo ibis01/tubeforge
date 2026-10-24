@@ -134,3 +134,62 @@ export interface StatsDTO {
   perDay: { day: string; count: number }[];
   recent: ActivityDTO[];
 }
+
+// ---------- Topic Radar (keyword research) ----------
+
+export interface ResearchIdea {
+  id: string;
+  title: string;
+  angle: string;
+  keywords: string[];
+  searchVolume: string;
+  competition: string;
+  viralScore: number;
+  suggestedLength: string;
+  why: string;
+}
+
+export interface ResearchSessionDTO {
+  id: string;
+  niche: string;
+  query: string;
+  nicheSummary: string;
+  ideas: ResearchIdea[];
+  createdAt: string;
+}
+
+// ---------- Publishing calendar ----------
+
+export const SLOT_TIMES = [
+  "07:00",
+  "09:00",
+  "12:00",
+  "15:00",
+  "18:00",
+  "21:00",
+] as const;
+
+export interface SlotDTO {
+  id: string;
+  videoId: string | null;
+  videoTitle: string | null;
+  videoStatus: VideoStatus | null;
+  hasThumbnail: boolean;
+  channelId: string | null;
+  channelName: string | null;
+  title: string;
+  slotDate: string; // ISO date (calendar day)
+  timeOfDay: string;
+  note: string | null;
+  done: boolean;
+  createdAt: string;
+}
+
+// ---------- Thumbnail A/B variants ----------
+
+export interface VariantDTO {
+  style: string;
+  label: string;
+  url: string;
+  isPrimary: boolean;
+}

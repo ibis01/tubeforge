@@ -3,8 +3,10 @@
 import { useAppStore, type ViewId } from "@/lib/store";
 import {
   LayoutDashboard,
+  Radar,
   Wand2,
   Library,
+  CalendarDays,
   Radio,
   Settings,
 } from "lucide-react";
@@ -16,8 +18,10 @@ export const NAV_ITEMS: {
   hint: string;
 }[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard, hint: "Mission control" },
+  { id: "research", label: "Topic Radar", icon: Radar, hint: "Keyword research" },
   { id: "create", label: "Create", icon: Wand2, hint: "Auto-pilot studio" },
   { id: "library", label: "Library", icon: Library, hint: "Video queue" },
+  { id: "calendar", label: "Calendar", icon: CalendarDays, hint: "Publishing schedule" },
   { id: "channels", label: "Channels", icon: Radio, hint: "Channel lineup" },
   { id: "settings", label: "Settings", icon: Settings, hint: "Preferences" },
 ];

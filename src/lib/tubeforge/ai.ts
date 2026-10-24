@@ -5,7 +5,7 @@ import fs from "fs";
 import path from "path";
 import ZAI from "z-ai-web-dev-sdk";
 import { mergeWavs } from "./wav";
-import { LENGTHS, THUMB_STYLES } from "./types";
+import { LENGTHS, THUMB_STYLES, type ResearchIdea } from "./types";
 
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
@@ -183,13 +183,15 @@ export async function generateVoiceover(opts: {
   return { durationSec, fileBytes: merged.length };
 }
 
-/** Stage 3 — CogView generates the 16:9 thumbnail. */
+/** Stage 3 — CogView generates the 16:9 thumbnail.
+ * `variant` targets an A/B variant file (variant-<style>.png) instead of the primary. */
 export async function generateThumbnail(opts: {
   title: string;
   topic: string;
   style: string;
   videoId: string;
-}): Promise<{ fileBytes: number }> {
+  variant?: boolean;
+}): Promise<{ fileBytes: number; fileName: string }> {
   const stylePrompt =
     THUMB_STYLES.find((s) => s.id === opts.style)?.prompt ??
     THUMB_STYLES[0].prompt;
@@ -206,14 +208,125 @@ export async function generateThumbnail(opts: {
   const buffer = Buffer.from(base64, "base64");
   if (buffer.length < 1000) throw new Error("Generated image is empty");
 
-  const outPath = path.join(videoDir(opts.videoId), "thumbnail.png");
-  fs.writeFileSync(outPath, buffer);
+  const fileName = opts.variant
+    ? `variant-${opts.style}.png`
+    : "thumbnail.png";
+  fs.writeFileSync(path.join(videoDir(opts.videoId), fileName), buffer);
 
-  return { fileBytes: buffer.length };
+  return { fileBytes: buffer.length, fileName };
 }
 
-export function readMedia(videoId: string, kind: "voiceover.wav" | "thumbnail.png") {
+/** Pick A/B variant styles: the video's chosen style plus up to `count-1` others. */
+export function pickVariantStyles(primaryStyle: string, count = 3): string[] {
+  const ids = THUMB_STYLES.map((s) => s.id);
+  const styles = [ids.includes(primaryStyle) ? primaryStyle : ids[0]];
+  for (const id of ids) {
+    if (styles.length >= count) break;
+    if (!styles.includes(id)) styles.push(id);
+  }
+  return styles;
+}
+
+export function readMedia(
+  videoId: string,
+  kind: "voiceover.wav" | "thumbnail.png" | `variant-${string}.png`
+) {
   const filePath = path.join(UPLOAD_ROOT, videoId, kind);
   if (!fs.existsSync(filePath)) return null;
   return fs.readFileSync(filePath);
+}
+
+/** List existing A/B thumbnail variants for a video. */
+export function listVariants(videoId: string): { style: string; fileName: string }[] {
+  const dir = path.join(UPLOAD_ROOT, videoId);
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir)
+    .filter((f) => /^variant-[\w-]+\.png$/.test(f))
+    .map((f) => ({ style: f.replace("variant-", "").replace(".png", ""), fileName: f }))
+    .sort((a, b) => a.style.localeCompare(b.style));
+}
+
+/** Promote a variant file to be the primary thumbnail.png. */
+export function promoteVariant(videoId: string, style: string) {
+  const variantPath = path.join(UPLOAD_ROOT, videoId, `variant-${style}.png`);
+  if (!fs.existsSync(variantPath)) throw new Error(`No variant for style "${style}"`);
+  fs.copyFileSync(variantPath, path.join(UPLOAD_ROOT, videoId, "thumbnail.png"));
+}
+
+export interface ResearchResult {
+  ideas: ResearchIdea[];
+  nicheSummary: string;
+}
+
+/** Topic Radar — GLM mines a niche for high-potential video topics with SEO metrics. */
+export async function generateTopicResearch(opts: {
+  niche: string;
+  query: string;
+}): Promise<ResearchResult> {
+  const zai = await getZAI();
+  const completion = await zai.chat.completions.create({
+    messages: [
+      {
+        role: "assistant",
+        content:
+          "You are a senior YouTube growth strategist who has scaled multiple faceless channels past 1M subscribers. You deeply understand search demand, CTR psychology, watch-time retention, and how faceless niches grow. You always respond with STRICT JSON only — no markdown, no commentary.",
+      },
+      {
+        role: "user",
+        content: `Research the "${opts.niche}" niche on YouTube${opts.query ? ` with a focus on "${opts.query}"` : ""}.
+
+Find 8 concrete, specific faceless-video topic ideas that are most likely to perform well right now. Favor evergreen topics with proven search demand and strong curiosity gaps that work without a host on camera.
+
+Return JSON with exactly these keys:
+{
+  "nicheSummary": "2-3 sentence analysis of this niche's current momentum and what kind of topics win in it",
+  "ideas": [
+    {
+      "title": "a ready-to-use YouTube video title under 70 characters",
+      "angle": "one sentence describing the exact content angle and structure",
+      "keywords": ["4-6 short SEO keywords or phrases people would search"],
+      "searchVolume": "one of: Very High, High, Medium, Low",
+      "competition": "one of: Low, Medium, High",
+      "viralScore": 0-100 integer estimating click + share potential,
+      "suggestedLength": "one of: short, medium, long",
+      "why": "one punchy sentence on why viewers will click and stay"
+    }
+  ]
+}`,
+      },
+    ],
+    thinking: { type: "disabled" },
+  });
+
+  const raw = completion.choices[0]?.message?.content ?? "";
+  const parsed = parseJsonLoose(raw);
+
+  const ideas = Array.isArray(parsed.ideas)
+    ? (parsed.ideas as Record<string, unknown>[]).map((idea, i) => ({
+        id: `idea-${i + 1}`,
+        title: String(idea.title ?? "").trim(),
+        angle: String(idea.angle ?? "").trim(),
+        keywords: Array.isArray(idea.keywords)
+          ? idea.keywords.map(String).slice(0, 8)
+          : [],
+        searchVolume: String(idea.searchVolume ?? "Medium").trim(),
+        competition: String(idea.competition ?? "Medium").trim(),
+        viralScore: Math.max(
+          1,
+          Math.min(100, Math.round(Number(idea.viralScore ?? 70) || 70))
+        ),
+        suggestedLength: String(idea.suggestedLength ?? "medium").trim(),
+        why: String(idea.why ?? "").trim(),
+      }))
+    : [];
+
+  const valid = ideas.filter((i: ResearchIdea) => i.title && i.angle);
+  if (valid.length === 0)
+    throw new Error("Research returned no usable ideas — try a different query");
+
+  return {
+    ideas: valid.slice(0, 8),
+    nicheSummary: String(parsed.nicheSummary ?? "").trim(),
+  };
 }

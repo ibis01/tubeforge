@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAppStore } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -15,7 +15,12 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { StatusBadge, formatDuration, timeAgo } from "@/components/tubeforge/shared";
-import { VOICES, LENGTHS, type VideoDTO } from "@/lib/tubeforge/types";
+import {
+  VOICES,
+  LENGTHS,
+  type VideoDTO,
+  type VariantDTO,
+} from "@/lib/tubeforge/types";
 import {
   Mic,
   ImageIcon,
@@ -24,7 +29,12 @@ import {
   Trash2,
   FileText,
   Tag,
+  Download,
+  CalendarPlus,
+  FlaskConical,
+  Check,
 } from "lucide-react";
+import { clsx } from "clsx";
 
 export function VideoDetailDialog({
   video,
@@ -39,9 +49,90 @@ export function VideoDetailDialog({
 }) {
   const { toast } = useToast();
   const bumpRefresh = useAppStore((s) => s.bumpRefresh);
+  const setView = useAppStore((s) => s.setView);
+  const setScheduleVideoId = useAppStore((s) => s.setScheduleVideoId);
+  const setFocusVideoId = useAppStore((s) => s.setFocusVideoId);
   const [busy, setBusy] = useState<string | null>(null);
+  const [variants, setVariants] = useState<VariantDTO[]>([]);
+
+  // Load A/B variants whenever the open video changes
+  useEffect(() => {
+    if (!video?.id) {
+      setVariants([]);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/videos/${video.id}/variants`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d?.variants) setVariants(d.variants);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [video?.id]);
 
   if (!video) return null;
+
+  const generateVariants = async () => {
+    if (busy) return;
+    setBusy("variants");
+    try {
+      const res = await fetch(`/api/videos/${video!.id}/variants`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Variant generation failed");
+      setVariants(data.variants);
+      toast({
+        title: "A/B thumbnail set ready",
+        description: `${data.variants.length} art directions to test — pick the one with the best CTR vibe.`,
+      });
+      bumpRefresh();
+    } catch (e) {
+      toast({
+        title: "A/B generation failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const promoteVariant = async (style: string) => {
+    if (busy) return;
+    setBusy(`variant-${style}`);
+    try {
+      const res = await fetch(`/api/videos/${video!.id}/variants`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ style }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not switch thumbnail");
+      setVariants(data.variants);
+      toast({ title: "Thumbnail switched", description: `“${style}” is now the primary artwork.` });
+      // Force <img> re-render with a fresh URL
+      bumpRefresh();
+    } catch (e) {
+      toast({
+        title: "Switch failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const sendToCalendar = () => {
+    setScheduleVideoId(video!.id);
+    setFocusVideoId(null);
+    setView("calendar");
+    onClose();
+  };
 
   const runStage = async (stage: "voiceover" | "thumbnail" | "publish") => {
     if (busy) return;
@@ -185,6 +276,76 @@ export function VideoDetailDialog({
             </div>
           )}
 
+          {/* Thumbnail A/B lab */}
+          <div className="mt-5">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
+                <FlaskConical className="h-3 w-3" /> Thumbnail A/B lab
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={Boolean(busy) || !video.title}
+                onClick={generateVariants}
+                className="border-white/15 bg-white/4 h-7 text-xs px-2.5"
+                title={video.title ? "Generate 3 art directions to A/B test" : "Generate the script first"}
+              >
+                {busy === "variants" ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <FlaskConical className="h-3 w-3" />
+                )}
+                {variants.length > 0 ? "Re-roll set" : "Generate A/B set"}
+              </Button>
+            </div>
+
+            {variants.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Generate 3 thumbnail art directions, preview them side by side, and
+                promote the strongest click-magnet.
+              </p>
+            ) : (
+              <div className="grid grid-cols-3 gap-2.5">
+                {variants.map((v) => (
+                  <button
+                    key={v.style}
+                    onClick={() =>
+                      v.isPrimary ? undefined : promoteVariant(v.style)
+                    }
+                    disabled={Boolean(busy)}
+                    className={clsx(
+                      "group relative rounded-xl overflow-hidden border transition-all",
+                      v.isPrimary
+                        ? "border-primary glow-red-soft"
+                        : "border-white/12 hover:border-white/30"
+                    )}
+                    title={v.isPrimary ? "Current primary thumbnail" : `Set “${v.label}” as primary`}
+                  >
+                    <img
+                      src={v.url}
+                      alt={`${v.label} thumbnail variant`}
+                      className="w-full aspect-video object-cover"
+                    />
+                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent px-2 py-1.5 flex items-center justify-between gap-1">
+                      <span className="text-[10px] font-medium truncate">{v.label}</span>
+                      {v.isPrimary ? (
+                        <Badge className="bg-primary/90 text-white border-none px-1.5 h-4 text-[9px] shrink-0">
+                          <Check className="h-2.5 w-2.5" /> Primary
+                        </Badge>
+                      ) : busy === `variant-${v.style}` ? (
+                        <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                      ) : (
+                        <span className="text-[9px] text-muted-foreground shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                          set primary
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <Separator className="my-5 bg-white/8" />
 
           {/* Script */}
@@ -226,6 +387,34 @@ export function VideoDetailDialog({
                   <ImageIcon className="h-3.5 w-3.5" />
                 )}
                 {video.hasThumbnail ? "Re-paint thumbnail" : "Generate thumbnail"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={Boolean(busy)}
+                onClick={sendToCalendar}
+                className="border-white/15 bg-white/4"
+                title="Schedule this video on the publishing calendar"
+              >
+                <CalendarPlus className="h-3.5 w-3.5" />
+                Schedule
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                asChild
+                disabled={Boolean(busy)}
+                className="border-white/15 bg-white/4"
+                title={
+                  video.hasVoiceover || video.hasThumbnail || video.script
+                    ? "Download script, metadata, voiceover and thumbnails as a ZIP"
+                    : "Run the pipeline first — nothing to export yet"
+                }
+              >
+                <a href={`/api/videos/${video.id}/export`} download>
+                  <Download className="h-3.5 w-3.5" />
+                  Export
+                </a>
               </Button>
             </div>
             <div className="flex flex-wrap gap-2">

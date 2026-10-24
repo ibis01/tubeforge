@@ -4,8 +4,10 @@ import { create } from "zustand";
 
 export type ViewId =
   | "dashboard"
+  | "research"
   | "create"
   | "library"
+  | "calendar"
   | "channels"
   | "settings";
 
@@ -24,6 +26,14 @@ interface AppState {
   /** Topic prefill when jumping from another view into Create */
   prefillTopic: string | null;
   setPrefillTopic: (t: string | null) => void;
+
+  /** Slot date prefill when jumping into Calendar */
+  prefillSlotDate: string | null;
+  setPrefillSlotDate: (d: string | null) => void;
+
+  /** Video to preselect in the Calendar "new slot" dialog */
+  scheduleVideoId: string | null;
+  setScheduleVideoId: (id: string | null) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -38,4 +48,10 @@ export const useAppStore = create<AppState>((set) => ({
 
   prefillTopic: null,
   setPrefillTopic: (t) => set({ prefillTopic: t }),
+
+  prefillSlotDate: null,
+  setPrefillSlotDate: (d) => set({ prefillSlotDate: d }),
+
+  scheduleVideoId: null,
+  setScheduleVideoId: (id) => set({ scheduleVideoId: id }),
 }));

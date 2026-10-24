@@ -4,8 +4,10 @@ import { useEffect, useState } from "react";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { AppSidebar, MOBILE_NAV_ITEMS, NAV_ITEMS } from "@/components/tubeforge/app-sidebar";
 import { DashboardView } from "@/components/tubeforge/views/dashboard-view";
+import { ResearchView } from "@/components/tubeforge/views/research-view";
 import { CreateView } from "@/components/tubeforge/views/create-view";
 import { LibraryView } from "@/components/tubeforge/views/library-view";
+import { CalendarView } from "@/components/tubeforge/views/calendar-view";
 import { ChannelsView } from "@/components/tubeforge/views/channels-view";
 import { SettingsView } from "@/components/tubeforge/views/settings-view";
 import { Button } from "@/components/ui/button";
@@ -17,6 +19,10 @@ const VIEW_META: Record<ViewId, { title: string; subtitle: string }> = {
     title: "Mission Control",
     subtitle: "Your faceless-channel factory at a glance",
   },
+  research: {
+    title: "Topic Radar",
+    subtitle: "AI keyword research — find what to make next",
+  },
   create: {
     title: "Auto-Pilot Studio",
     subtitle: "Topic in — finished video package out",
@@ -24,6 +30,10 @@ const VIEW_META: Record<ViewId, { title: string; subtitle: string }> = {
   library: {
     title: "Video Library",
     subtitle: "Every asset the pipeline has produced",
+  },
+  calendar: {
+    title: "Publishing Calendar",
+    subtitle: "Plan, schedule and ship uploads without gaps",
   },
   channels: {
     title: "Channels",
@@ -108,8 +118,10 @@ export default function Home() {
         {/* View content */}
         <main className="flex-1 px-4 sm:px-6 py-6 w-full max-w-[1400px] mx-auto">
           {view === "dashboard" && <DashboardView />}
+          {view === "research" && <ResearchView />}
           {view === "create" && <CreateView />}
           {view === "library" && <LibraryView />}
+          {view === "calendar" && <CalendarView />}
           {view === "channels" && <ChannelsView />}
           {view === "settings" && <SettingsView />}
         </main>

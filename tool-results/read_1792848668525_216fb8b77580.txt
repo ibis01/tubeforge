@@ -1,0 +1,750 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→import { useAppStore } from "@/lib/store";
+     5→import { useToast } from "@/hooks/use-toast";
+     6→import { Card } from "@/components/ui/card";
+     7→import { Button } from "@/components/ui/button";
+     8→import { Badge } from "@/components/ui/badge";
+     9→import { Input } from "@/components/ui/input";
+    10→import { Label } from "@/components/ui/label";
+    11→import { Skeleton } from "@/components/ui/skeleton";
+    12→import { Separator } from "@/components/ui/separator";
+    13→import {
+    14→  Dialog,
+    15→  DialogContent,
+    16→  DialogDescription,
+    17→  DialogFooter,
+    18→  DialogHeader,
+    19→  DialogTitle,
+    20→} from "@/components/ui/dialog";
+    21→import {
+    22→  Select,
+    23→  SelectContent,
+    24→  SelectItem,
+    25→  SelectTrigger,
+    26→  SelectValue,
+    27→} from "@/components/ui/select";
+    28→import {
+    29→  addMonths,
+    30→  eachDayOfInterval,
+    31→  endOfMonth,
+    32→  endOfWeek,
+    33→  format,
+    34→  isBefore,
+    35→  isSameMonth,
+    36→  startOfDay,
+    37→  startOfMonth,
+    38→  startOfWeek,
+    39→} from "date-fns";
+    40→import { EmptyState, StatusBadge } from "@/components/tubeforge/shared";
+    41→import {
+    42→  SLOT_TIMES,
+    43→  type SlotDTO,
+    44→  type VideoStatus,
+    45→} from "@/lib/tubeforge/types";
+    46→import {
+    47→  ChevronLeft,
+    48→  ChevronRight,
+    49→  CalendarDays,
+    50→  Plus,
+    51→  Trash2,
+    52→  Check,
+    53→  CheckCircle2,
+    54→  Video as VideoIcon,
+    55→  Clock,
+    56→  StickyNote,
+    57→  Loader2,
+    58→  CalendarPlus,
+    59→} from "lucide-react";
+    60→import { clsx } from "clsx";
+    61→
+    62→interface SchedulableVideo {
+    63→  id: string;
+    64→  title: string;
+    65→  status: VideoStatus;
+    66→  hasThumbnail: boolean;
+    67→  channelId: string | null;
+    68→}
+    69→
+    70→const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    71→const MONTH_FMT = "MMMM yyyy";
+    72→
+    73→function toDayString(d: Date): string {
+    74→  return format(d, "yyyy-MM-dd");
+    75→}
+    76→
+    77→function slotSlotClass(slot: SlotDTO): string {
+    78→  if (slot.done) return "bg-emerald-500/15 border-emerald-500/30 text-emerald-200";
+    79→  if (slot.videoStatus === "published")
+    80→    return "bg-red-500/15 border-red-500/30 text-red-200";
+    81→  if (slot.videoId)
+    82→    return "bg-sky-500/15 border-sky-500/30 text-sky-200 hover:bg-sky-500/25";
+    83→  return "bg-white/8 border-white/15 text-zinc-300 hover:bg-white/12";
+    84→}
+    85→
+    86→export function CalendarView() {
+    87→  const { toast } = useToast();
+    88→  const bumpRefresh = useAppStore((s) => s.bumpRefresh);
+    89→  const setView = useAppStore((s) => s.setView);
+    90→  const setFocusVideoId = useAppStore((s) => s.setFocusVideoId);
+    91→  const scheduleVideoId = useAppStore((s) => s.scheduleVideoId);
+    92→  const setScheduleVideoId = useAppStore((s) => s.setScheduleVideoId);
+    93→
+    94→  const [cursor, setCursor] = useState(() => startOfMonth(new Date()));
+    95→  const [slots, setSlots] = useState<SlotDTO[]>([]);
+    96→  const [schedulable, setSchedulable] = useState<SchedulableVideo[]>([]);
+    97→  const [loading, setLoading] = useState(true);
+    98→  const [slotBusy, setSlotBusy] = useState<string | null>(null);
+    99→
+   100→  // Create-slot dialog state
+   101→  const [createOpen, setCreateOpen] = useState(false);
+   102→  const [pickVideo, setPickVideo] = useState<string>("placeholder");
+   103→  const [customTitle, setCustomTitle] = useState("");
+   104→  const [slotDate, setSlotDate] = useState(toDayString(new Date()));
+   105→  const [slotTime, setSlotTime] = useState<string>("18:00");
+   106→  const [note, setNote] = useState("");
+   107→  const [creating, setCreating] = useState(false);
+   108→
+   109→  // Slot detail dialog state
+   110→  const [detail, setDetail] = useState<SlotDTO | null>(null);
+   111→
+   112→  const load = useCallback(async () => {
+   113→    setLoading(true);
+   114→    try {
+   115→      const from = format(startOfWeek(startOfMonth(cursor), { weekStartsOn: 1 }), "yyyy-MM-dd");
+   116→      const to = format(endOfWeek(endOfMonth(cursor), { weekStartsOn: 1 }), "yyyy-MM-dd");
+   117→      const res = await fetch(`/api/schedule?from=${from}&to=${to}`);
+   118→      const data = await res.json();
+   119→      if (res.ok) {
+   120→        setSlots(data.slots ?? []);
+   121→        setSchedulable(data.schedulable ?? []);
+   122→      }
+   123→    } catch {
+   124→      toast({
+   125→        title: "Could not load calendar",
+   126→        variant: "destructive",
+   127→      });
+   128→    } finally {
+   129→      setLoading(false);
+   130→    }
+   131→  }, [cursor]);
+   132→
+   133→  useEffect(() => {
+   134→    load();
+   135→  }, [load]);
+   136→
+   137→  // Open create dialog when arriving from another view with a video preselected
+   138→  useEffect(() => {
+   139→    if (scheduleVideoId) {
+   140→      setPickVideo(scheduleVideoId);
+   141→      setSlotDate(toDayString(new Date()));
+   142→      setCreateOpen(true);
+   143→      setScheduleVideoId(null);
+   144→    }
+   145→  }, [scheduleVideoId, setScheduleVideoId]);
+   146→
+   147→  const days = useMemo(() => {
+   148→    const start = startOfWeek(startOfMonth(cursor), { weekStartsOn: 1 });
+   149→    const end = endOfWeek(endOfMonth(cursor), { weekStartsOn: 1 });
+   150→    return eachDayOfInterval({ start, end });
+   151→  }, [cursor]);
+   152→
+   153→  const slotsByDay = useMemo(() => {
+   154→    const map = new Map<string, SlotDTO[]>();
+   155→    for (const slot of slots) {
+   156→      const key = slot.slotDate.slice(0, 10);
+   157→      const list = map.get(key) ?? [];
+   158→      list.push(slot);
+   159→      map.set(key, list);
+   160→    }
+   161→    for (const list of map.values()) list.sort((a, b) => a.timeOfDay.localeCompare(b.timeOfDay));
+   162→    return map;
+   163→  }, [slots]);
+   164→
+   165→  const monthSlots = slots.filter((s) =>
+   166→    isSameMonth(new Date(s.slotDate), cursor)
+   167→  );
+   168→  const readyVideos = schedulable.filter((v) => v.status === "ready");
+   169→
+   170→  const openCreate = (day: Date) => {
+   171→    setPickVideo("placeholder");
+   172→    setCustomTitle("");
+   173→    setSlotDate(toDayString(day));
+   174→    setSlotTime("18:00");
+   175→    setNote("");
+   176→    setCreateOpen(true);
+   177→  };
+   178→
+   179→  const openCreateForVideo = (video: SchedulableVideo) => {
+   180→    setPickVideo(video.id);
+   181→    setSlotDate(toDayString(new Date()));
+   182→    setSlotTime("18:00");
+   183→    setNote("");
+   184→    setCreateOpen(true);
+   185→  };
+   186→
+   187→  const createSlot = async () => {
+   188→    if (creating) return;
+   189→    setCreating(true);
+   190→    try {
+   191→      const body: Record<string, unknown> = {
+   192→        slotDate,
+   193→        timeOfDay: slotTime,
+   194→        note: note.trim() || undefined,
+   195→      };
+   196→      if (pickVideo === "placeholder") body.title = customTitle.trim();
+   197→      else body.videoId = pickVideo;
+   198→
+   199→      const res = await fetch("/api/schedule", {
+   200→        method: "POST",
+   201→        headers: { "Content-Type": "application/json" },
+   202→        body: JSON.stringify(body),
+   203→      });
+   204→      const data = await res.json();
+   205→      if (!res.ok) throw new Error(data.error ?? "Could not schedule");
+   206→      toast({
+   207→        title: "Scheduled",
+   208→        description: `${data.slot.title} → ${slotDate} at ${slotTime}.`,
+   209→      });
+   210→      setCreateOpen(false);
+   211→      bumpRefresh();
+   212→      await load();
+   213→    } catch (e) {
+   214→      toast({
+   215→        title: "Scheduling failed",
+   216→        description: e instanceof Error ? e.message : "Unknown error",
+   217→        variant: "destructive",
+   218→      });
+   219→    } finally {
+   220→      setCreating(false);
+   221→    }
+   222→  };
+   223→
+   224→  const patchSlot = async (
+   225→    slot: SlotDTO,
+   226→    body: Record<string, unknown>,
+   227→    successMsg: string
+   228→  ) => {
+   229→    if (slotBusy) return;
+   230→    setSlotBusy(slot.id);
+   231→    try {
+   232→      const res = await fetch(`/api/schedule/${slot.id}`, {
+   233→        method: "PATCH",
+   234→        headers: { "Content-Type": "application/json" },
+   235→        body: JSON.stringify(body),
+   236→      });
+   237→      const data = await res.json();
+   238→      if (!res.ok) throw new Error(data.error ?? "Update failed");
+   239→      toast({ title: successMsg });
+   240→      setDetail((d) => (d && d.id === slot.id ? data.slot : d));
+   241→      bumpRefresh();
+   242→      await load();
+   243→    } catch (e) {
+   244→      toast({
+   245→        title: "Update failed",
+   246→        description: e instanceof Error ? e.message : "Unknown error",
+   247→        variant: "destructive",
+   248→      });
+   249→    } finally {
+   250→      setSlotBusy(null);
+   251→    }
+   252→  };
+   253→
+   254→  const removeSlot = async (slot: SlotDTO) => {
+   255→    if (slotBusy) return;
+   256→    setSlotBusy(slot.id);
+   257→    try {
+   258→      const res = await fetch(`/api/schedule/${slot.id}`, { method: "DELETE" });
+   259→      if (!res.ok) throw new Error("Delete failed");
+   260→      toast({ title: "Slot removed" });
+   261→      setDetail(null);
+   262→      bumpRefresh();
+   263→      await load();
+   264→    } catch (e) {
+   265→      toast({
+   266→        title: "Delete failed",
+   267→        description: e instanceof Error ? e.message : "Unknown error",
+   268→        variant: "destructive",
+   269→      });
+   270→    } finally {
+   271→      setSlotBusy(null);
+   272→    }
+   273→  };
+   274→
+   275→  const selectedVideo = schedulable.find((v) => v.id === pickVideo);
+   276→  const canCreate =
+   277→    pickVideo === "placeholder" ? customTitle.trim().length > 0 : Boolean(selectedVideo);
+   278→
+   279→  return (
+   280→    <div className="flex flex-col lg:flex-row gap-6">
+   281→      {/* Calendar */}
+   282→      <div className="flex-1 min-w-0">
+   283→        {/* Header */}
+   284→        <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+   285→          <div className="flex items-center gap-2">
+   286→            <Button
+   287→              variant="outline"
+   288→              size="icon"
+   289→              onClick={() => setCursor((c) => addMonths(c, -1))}
+   290→              className="h-9 w-9 border-white/12 bg-white/4"
+   291→              aria-label="Previous month"
+   292→            >
+   293→              <ChevronLeft className="h-4 w-4" />
+   294→            </Button>
+   295→            <h2 className="text-lg font-semibold tracking-tight min-w-40 text-center">
+   296→              {format(cursor, MONTH_FMT)}
+   297→            </h2>
+   298→            <Button
+   299→              variant="outline"
+   300→              size="icon"
+   301→              onClick={() => setCursor((c) => addMonths(c, 1))}
+   302→              className="h-9 w-9 border-white/12 bg-white/4"
+   303→              aria-label="Next month"
+   304→            >
+   305→              <ChevronRight className="h-4 w-4" />
+   306→            </Button>
+   307→            <Button
+   308→              variant="ghost"
+   309→              size="sm"
+   310→              onClick={() => setCursor(startOfMonth(new Date()))}
+   311→              className="text-muted-foreground ml-1"
+   312→            >
+   313→              Today
+   314→            </Button>
+   315→          </div>
+   316→          <div className="flex items-center gap-2">
+   317→            <Badge variant="outline" className="border-white/15 bg-white/5 text-muted-foreground">
+   318→              {monthSlots.length} upload{monthSlots.length === 1 ? "" : "s"} this month
+   319→            </Badge>
+   320→            <Button
+   321→              size="sm"
+   322→              onClick={() => openCreate(new Date())}
+   323→              className="bg-brand-gradient hover:opacity-90 text-white font-semibold"
+   324→            >
+   325→              <CalendarPlus className="h-4 w-4" />
+   326→              <span className="hidden sm:inline">New slot</span>
+   327→              <span className="sm:hidden">Slot</span>
+   328→            </Button>
+   329→          </div>
+   330→        </div>
+   331→
+   332→        {/* Mobile: agenda list */}
+   333→        <div className="lg:hidden space-y-2">
+   334→          {loading ? (
+   335→            [0, 1, 2].map((i) => <Skeleton key={i} className="h-16 rounded-2xl" />)
+   336→          ) : slots.length === 0 ? (
+   337→            <EmptyState
+   338→              icon={CalendarDays}
+   339→              title="Nothing scheduled"
+   340→              hint="Pick a ready video on the right and give it an upload date."
+   341→            />
+   342→          ) : (
+   343→            slots.map((slot) => (
+   344→              <button
+   345→                key={slot.id}
+   346→                onClick={() => setDetail(slot)}
+   347→                className="w-full text-left"
+   348→              >
+   349→                <Card className="glass border-white/8 rounded-2xl p-3.5 flex items-center gap-3 hover:bg-white/4">
+   350→                  <div className="text-center shrink-0 bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5">
+   351→                    <p className="text-[10px] uppercase text-muted-foreground">
+   352→                      {format(new Date(slot.slotDate), "EEE")}
+   353→                    </p>
+   354→                    <p className="text-sm font-bold leading-none">
+   355→                      {format(new Date(slot.slotDate), "d MMM")}
+   356→                    </p>
+   357→                  </div>
+   358→                  <div className="min-w-0 flex-1">
+   359→                    <p className="text-sm font-medium truncate">{slot.title}</p>
+   360→                    <p className="text-xs text-muted-foreground">
+   361→                      {slot.timeOfDay}
+   362→                      {slot.channelName ? ` · ${slot.channelName}` : ""}
+   363→                      {slot.done ? " · done" : ""}
+   364→                    </p>
+   365→                  </div>
+   366→                  {slot.videoId && (
+   367→                    <VideoIcon className="h-4 w-4 text-primary shrink-0" />
+   368→                  )}
+   369→                </Card>
+   370→              </button>
+   371→            ))
+   372→          )}
+   373→        </div>
+   374→
+   375→        {/* Desktop: month grid */}
+   376→        <Card className="hidden lg:block glass border-white/8 rounded-2xl overflow-hidden">
+   377→          <div className="grid grid-cols-7 border-b border-white/8 bg-white/2">
+   378→            {WEEKDAYS.map((d) => (
+   379→              <div
+   380→                key={d}
+   381→                className="py-2.5 text-center text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
+   382→              >
+   383→                {d}
+   384→              </div>
+   385→            ))}
+   386→          </div>
+   387→          <div className="grid grid-cols-7">
+   388→            {days.map((day) => {
+   389→              const inMonth = isSameMonth(day, cursor);
+   390→              const dayKey = toDayString(day);
+   391→              const daySlots = slotsByDay.get(dayKey) ?? [];
+   392→              const isPast = isBefore(day, startOfDay(new Date()));
+   393→              const isToday = dayKey === toDayString(new Date());
+   394→
+   395→              return (
+   396→                <div
+   397→                  key={dayKey}
+   398→                  className={clsx(
+   399→                    "group relative min-h-28 border-b border-r border-white/5 p-1.5 transition-colors",
+   400→                    !inMonth && "opacity-35",
+   401→                    "hover:bg-white/3"
+   402→                  )}
+   403→                >
+   404→                  <div className="flex items-center justify-between">
+   405→                    <span
+   406→                      className={clsx(
+   407→                        "text-xs font-medium tabular-nums rounded-full px-1.5 py-0.5",
+   408→                        isToday
+   409→                          ? "bg-primary text-white font-bold"
+   410→                          : isPast
+   411→                            ? "text-muted-foreground/60"
+   412→                            : "text-foreground/85"
+   413→                      )}
+   414→                    >
+   415→                      {format(day, "d")}
+   416→                    </span>
+   417→                    <button
+   418→                      onClick={() => openCreate(day)}
+   419→                      className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-primary transition-all p-1"
+   420→                      aria-label={`Schedule on ${dayKey}`}
+   421→                    >
+   422→                      <Plus className="h-3.5 w-3.5" />
+   423→                    </button>
+   424→                  </div>
+   425→
+   426→                  <div className="mt-1 space-y-1">
+   427→                    {daySlots.slice(0, 3).map((slot) => (
+   428→                      <button
+   429→                        key={slot.id}
+   430→                        onClick={() => setDetail(slot)}
+   431→                        className={clsx(
+   432→                          "w-full text-left rounded-md border px-1.5 py-1 text-[11px] leading-tight transition-colors",
+   433→                          slotSlotClass(slot)
+   434→                        )}
+   435→                      >
+   436→                        <span className="font-medium tabular-nums">{slot.timeOfDay}</span>{" "}
+   437→                        <span className="truncate inline-block max-w-[85%] align-bottom">
+   438→                          {slot.title}
+   439→                        </span>
+   440→                      </button>
+   441→                    ))}
+   442→                    {daySlots.length > 3 && (
+   443→                      <p className="text-[10px] text-muted-foreground px-1.5">
+   444→                        +{daySlots.length - 3} more
+   445→                      </p>
+   446→                    )}
+   447→                  </div>
+   448→                </div>
+   449→              );
+   450→            })}
+   451→          </div>
+   452→        </Card>
+   453→      </div>
+   454→
+   455→      {/* Sidebar: ready to schedule */}
+   456→      <div className="lg:w-80 shrink-0">
+   457→        <Card className="glass border-white/8 rounded-2xl p-5">
+   458→          <div className="flex items-center justify-between mb-3">
+   459→            <p className="font-semibold text-sm">Ready to schedule</p>
+   460→            <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
+   461→              {readyVideos.length}
+   462→            </Badge>
+   463→          </div>
+   464→          {loading ? (
+   465→            <div className="space-y-2">
+   466→              {[0, 1, 2].map((i) => (
+   467→                <Skeleton key={i} className="h-14 rounded-xl" />
+   468→              ))}
+   469→            </div>
+   470→          ) : schedulable.length === 0 ? (
+   471→            <div className="text-center py-6">
+   472→              <p className="text-sm text-muted-foreground">
+   473→                No videos are ready yet.
+   474→              </p>
+   475→              <Button
+   476→                variant="outline"
+   477→                size="sm"
+   478→                className="mt-3 border-white/15 bg-white/4"
+   479→                onClick={() => setView("create")}
+   480→              >
+   481→                Open Auto-Pilot
+   482→              </Button>
+   483→            </div>
+   484→          ) : (
+   485→            <div className="space-y-2 max-h-[26rem] overflow-y-auto scroll-area-bar pr-1">
+   486→              {schedulable.map((v) => (
+   487→                <div
+   488→                  key={v.id}
+   489→                  className="rounded-xl border border-white/8 bg-white/3 p-3 flex items-center gap-3"
+   490→                >
+   491→                  {v.hasThumbnail ? (
+   492→                    <img
+   493→                      src={`/api/videos/${v.id}/thumbnail`}
+   494→                      alt=""
+   495→                      className="h-10 w-[70px] rounded-md object-cover border border-white/10 shrink-0"
+   496→                    />
+   497→                  ) : (
+   498→                    <div className="h-10 w-[70px] rounded-md bg-white/5 border border-white/10 flex items-center justify-center shrink-0">
+   499→                      <VideoIcon className="h-4 w-4 text-muted-foreground" />
+   500→                    </div>
+   501→                  )}
+   502→                  <div className="min-w-0 flex-1">
+   503→                    <p className="text-sm font-medium truncate">{v.title}</p>
+   504→                    <StatusBadge status={v.status} />
+   505→                  </div>
+   506→                  <Button
+   507→                    size="icon"
+   508→                    variant="ghost"
+   509→                    onClick={() => openCreateForVideo(v)}
+   510→                    className="h-8 w-8 text-primary hover:bg-primary/15 shrink-0"
+   511→                    aria-label={`Schedule ${v.title}`}
+   512→                  >
+   513→                    <Plus className="h-4 w-4" />
+   514→                  </Button>
+   515→                </div>
+   516→              ))}
+   517→            </div>
+   518→          )}
+   519→        </Card>
+   520→      </div>
+   521→
+   522→      {/* Create slot dialog */}
+   523→      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+   524→        <DialogContent className="max-w-md bg-card border-white/10">
+   525→          <DialogHeader className="text-left">
+   526→            <DialogTitle>Schedule an upload</DialogTitle>
+   527→            <DialogDescription>
+   528→              Drop a finished video (or a placeholder idea) onto a publish day.
+   529→            </DialogDescription>
+   530→          </DialogHeader>
+   531→
+   532→          <div className="space-y-4">
+   533→            <div>
+   534→              <Label className="text-xs text-muted-foreground">Video</Label>
+   535→              <Select
+   536→                value={pickVideo}
+   537→                onValueChange={(v) => {
+   538→                  setPickVideo(v);
+   539→                }}
+   540→              >
+   541→                <SelectTrigger className="mt-1.5 bg-white/4 border-white/12">
+   542→                  <SelectValue placeholder="Pick a video" />
+   543→                </SelectTrigger>
+   544→                <SelectContent className="bg-popover border-white/10 max-h-64">
+   545→                  <SelectItem value="placeholder">
+   546→                    ✦ Custom idea (no video yet)
+   547→                  </SelectItem>
+   548→                  {schedulable.map((v) => (
+   549→                    <SelectItem key={v.id} value={v.id}>
+   550→                      {v.title}
+   551→                    </SelectItem>
+   552→                  ))}
+   553→                </SelectContent>
+   554→              </Select>
+   555→            </div>
+   556→
+   557→            {pickVideo === "placeholder" && (
+   558→              <div>
+   559→                <Label className="text-xs text-muted-foreground">Title</Label>
+   560→                <Input
+   561→                  value={customTitle}
+   562→                  onChange={(e) => setCustomTitle(e.target.value)}
+   563→                  placeholder="e.g. Why the Bronze Age collapse happened"
+   564→                  className="mt-1.5 bg-white/4 border-white/12"
+   565→                />
+   566→              </div>
+   567→            )}
+   568→
+   569→            <div className="grid grid-cols-2 gap-3">
+   570→              <div>
+   571→                <Label className="text-xs text-muted-foreground">Day</Label>
+   572→                <Input
+   573→                  type="date"
+   574→                  value={slotDate}
+   575→                  onChange={(e) => setSlotDate(e.target.value)}
+   576→                  className="mt-1.5 bg-white/4 border-white/12 [color-scheme:dark]"
+   577→                />
+   578→              </div>
+   579→              <div>
+   580→                <Label className="text-xs text-muted-foreground">Time</Label>
+   581→                <Select value={slotTime} onValueChange={setSlotTime}>
+   582→                  <SelectTrigger className="mt-1.5 bg-white/4 border-white/12">
+   583→                    <SelectValue />
+   584→                  </SelectTrigger>
+   585→                  <SelectContent className="bg-popover border-white/10">
+   586→                    {SLOT_TIMES.map((t) => (
+   587→                      <SelectItem key={t} value={t}>
+   588→                        {t}
+   589→                      </SelectItem>
+   590→                    ))}
+   591→                  </SelectContent>
+   592→                </Select>
+   593→              </div>
+   594→            </div>
+   595→
+   596→            <div>
+   597→              <Label className="text-xs text-muted-foreground">
+   598→                Note (optional)
+   599→              </Label>
+   600→              <Input
+   601→                value={note}
+   602→                onChange={(e) => setNote(e.target.value)}
+   603→                placeholder="e.g. pair with community post"
+   604→                className="mt-1.5 bg-white/4 border-white/12"
+   605→              />
+   606→            </div>
+   607→          </div>
+   608→
+   609→          <DialogFooter className="mt-2">
+   610→            <Button
+   611→              variant="ghost"
+   612→              size="sm"
+   613→              onClick={() => setCreateOpen(false)}
+   614→              className="text-muted-foreground"
+   615→            >
+   616→              Cancel
+   617→            </Button>
+   618→            <Button
+   619→              onClick={createSlot}
+   620→              disabled={creating || !canCreate}
+   621→              size="sm"
+   622→              className="bg-brand-gradient hover:opacity-90 text-white font-semibold"
+   623→            >
+   624→              {creating ? (
+   625→                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   626→              ) : (
+   627→                <CalendarPlus className="h-3.5 w-3.5" />
+   628→              )}
+   629→              Schedule
+   630→            </Button>
+   631→          </DialogFooter>
+   632→        </DialogContent>
+   633→      </Dialog>
+   634→
+   635→      {/* Slot detail dialog */}
+   636→      <Dialog open={Boolean(detail)} onOpenChange={(o) => !o && setDetail(null)}>
+   637→        <DialogContent className="max-w-sm bg-card border-white/10">
+   638→          {detail && (
+   639→            <>
+   640→              <DialogHeader className="text-left">
+   641→                <DialogTitle className="text-base leading-snug">
+   642→                  {detail.title}
+   643→                </DialogTitle>
+   644→                <DialogDescription>
+   645→                  {format(new Date(detail.slotDate), "EEEE, d MMMM yyyy")} at {detail.timeOfDay}
+   646→                </DialogDescription>
+   647→              </DialogHeader>
+   648→
+   649→              <div className="space-y-2 text-sm">
+   650→                <p className="flex items-center gap-2 text-muted-foreground">
+   651→                  <Clock className="h-3.5 w-3.5" />
+   652→                  {detail.done
+   653→                    ? "Already uploaded"
+   654→                    : detail.videoStatus === "published"
+   655→                      ? "Video marked as published"
+   656→                      : detail.videoId
+   657→                        ? "Video linked — ready to go"
+   658→                        : "Placeholder — no video attached yet"}
+   659→                </p>
+   660→                {detail.channelName && (
+   661→                  <p className="flex items-center gap-2 text-muted-foreground">
+   662→                    <VideoIcon className="h-3.5 w-3.5" />
+   663→                    {detail.channelName}
+   664→                  </p>
+   665→                )}
+   666→                {detail.note && (
+   667→                  <p className="flex items-center gap-2 text-muted-foreground">
+   668→                    <StickyNote className="h-3.5 w-3.5" />
+   669→                    {detail.note}
+   670→                  </p>
+   671→                )}
+   672→              </div>
+   673→
+   674→              <Separator className="my-4 bg-white/8" />
+   675→
+   676→              <DialogFooter className="flex-row flex-wrap gap-2">
+   677→                <div className="flex flex-wrap gap-2 flex-1">
+   678→                  {detail.videoId && (
+   679→                    <Button
+   680→                      variant="outline"
+   681→                      size="sm"
+   682→                      className="border-white/15 bg-white/4"
+   683→                      onClick={() => {
+   684→                        setFocusVideoId(detail.videoId);
+   685→                        setDetail(null);
+   686→                        setView("library");
+   687→                      }}
+   688→                    >
+   689→                      <VideoIcon className="h-3.5 w-3.5" />
+   690→                      Open in library
+   691→                    </Button>
+   692→                  )}
+   693→                  {!detail.done && (
+   694→                    <Button
+   695→                      variant="outline"
+   696→                      size="sm"
+   697→                      disabled={slotBusy === detail.id}
+   698→                      className="border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+   699→                      onClick={() =>
+   700→                        patchSlot(
+   701→                          detail,
+   702→                          { done: true, markVideoPublished: true },
+   703→                          "Marked as uploaded"
+   704→                        )
+   705→                      }
+   706→                    >
+   707→                      {slotBusy === detail.id ? (
+   708→                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   709→                      ) : (
+   710→                        <CheckCircle2 className="h-3.5 w-3.5" />
+   711→                      )}
+   712→                      Mark uploaded
+   713→                    </Button>
+   714→                  )}
+   715→                  {detail.done && (
+   716→                    <Button
+   717→                      variant="outline"
+   718→                      size="sm"
+   719→                      disabled={slotBusy === detail.id}
+   720→                      className="border-white/15 bg-white/4"
+   721→                      onClick={() => patchSlot(detail, { done: false }, "Reopened")}
+   722→                    >
+   723→                      <Check className="h-3.5 w-3.5" />
+   724→                      Reopen
+   725→                    </Button>
+   726→                  )}
+   727→                </div>
+   728→                <Button
+   729→                  variant="ghost"
+   730→                  size="sm"
+   731→                  disabled={slotBusy === detail.id}
+   732→                  onClick={() => removeSlot(detail)}
+   733→                  className="text-red-300 hover:text-red-200 hover:bg-red-500/10"
+   734→                >
+   735→                  {slotBusy === detail.id ? (
+   736→                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   737→                  ) : (
+   738→                    <Trash2 className="h-3.5 w-3.5" />
+   739→                  )}
+   740→                  Remove
+   741→                </Button>
+   742→              </DialogFooter>
+   743→            </>
+   744→          )}
+   745→        </DialogContent>
+   746→      </Dialog>
+   747→    </div>
+   748→  );
+   749→}
+   750→
