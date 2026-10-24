@@ -42,6 +42,76 @@ export const THUMB_STYLES = [
   { id: "vibrant", label: "Vibrant Art", prompt: "vibrant digital illustration, painterly style, rich colors, dynamic composition" },
 ] as const;
 
+// ---------- Story engine (Phase 2) ----------
+
+export const FORMATS = [
+  { id: "script", label: "Narration script", desc: "Classic flowing narration + thumbnail package" },
+  { id: "story", label: "Scene-based story", desc: "Scene-by-scene script, storyboard art and a rendered MP4" },
+] as const;
+
+export type VideoFormat = (typeof FORMATS)[number]["id"];
+
+export const RENDER_MODES = [
+  {
+    id: "kenburns",
+    label: "Ken Burns",
+    icon: "Zap",
+    desc: "Cinematic pans & zooms over storyboard art — fast (~2 min)",
+    eta: "≈ 2 min",
+  },
+  {
+    id: "animated",
+    label: "Full AI animation",
+    icon: "Clapperboard",
+    desc: "Every scene animated via image-to-video — ~4 min per scene",
+    eta: "≈ 4 min / scene",
+  },
+] as const;
+
+export type RenderMode = (typeof RENDER_MODES)[number]["id"];
+
+export const CAMERAS = [
+  { id: "zoom-in", label: "Zoom in" },
+  { id: "zoom-out", label: "Zoom out" },
+  { id: "pan-left", label: "Pan left" },
+  { id: "pan-right", label: "Pan right" },
+  { id: "push-in", label: "Push in" },
+] as const;
+
+/** Scene count derived from script length — keeps narration density consistent. */
+export const SCENE_COUNTS: Record<string, number> = {
+  short: 4,
+  medium: 6,
+  long: 8,
+};
+
+/** A single story beat — narration drives TTS, visual drives storyboard art. */
+export interface Scene {
+  index: number; // 1-based
+  title: string;
+  narration: string;
+  visual: string; // image prompt (subject, setting, action, composition)
+  camera: string; // ken burns direction / i2v motion intent
+  mood: string; // color + lighting keywords
+  caption: string; // punchy on-screen subtitle (<= 45 chars)
+  hostInScene: boolean; // does the recurring host appear in this scene?
+}
+
+export interface SceneDTO {
+  index: number;
+  title: string;
+  narration: string;
+  visual: string;
+  camera: string;
+  cameraLabel: string;
+  mood: string;
+  caption: string;
+  hostInScene: boolean;
+  hasImage: boolean;
+  imageUrl: string | null;
+  generating: boolean; // single-scene re-roll in flight
+}
+
 export type VideoStatus =
   | "draft"
   | "scripted"
@@ -101,6 +171,16 @@ export interface VideoDTO {
   characterId: string | null;
   characterName?: string | null;
   characterPortraitUrl?: string | null;
+  // Story engine
+  format: string;
+  renderMode: string;
+  scenes?: Scene[] | null; // populated in detail/create responses only
+  sceneCount?: number;
+  hasStoryboard: boolean;
+  hasVideo: boolean;
+  videoDuration: number | null;
+  videoUrl: string | null;
+  previewUrl: string | null;
   createdAt: string;
   updatedAt: string;
 }

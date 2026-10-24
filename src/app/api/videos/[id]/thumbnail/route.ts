@@ -3,34 +3,9 @@ import { db } from "@/lib/db";
 import { generateThumbnail, readMedia } from "@/lib/tubeforge/ai";
 import { deriveStatus } from "@/lib/tubeforge/status";
 import { startJob } from "@/lib/tubeforge/jobs";
-import type { VideoDTO, VideoStatus } from "@/lib/tubeforge/types";
-import type { Video } from "@prisma/client";
+import { serializeVideo } from "@/lib/tubeforge/serialize";
 
 type Ctx = { params: Promise<{ id: string }> };
-
-const serialize = (v: Video): VideoDTO => ({
-  id: v.id,
-  title: v.title,
-  topic: v.topic,
-  niche: v.niche,
-  tone: v.tone,
-  length: v.length,
-  script: v.script,
-  description: v.description,
-  tags: v.tags,
-  status: v.status as VideoStatus,
-  voice: v.voice,
-  ttsSpeed: v.ttsSpeed,
-  thumbStyle: v.thumbStyle,
-  hasVoiceover: v.hasVoiceover,
-  hasThumbnail: v.hasThumbnail,
-  audioDuration: v.audioDuration,
-  wordCount: v.wordCount,
-  error: v.error,
-  channelId: v.channelId,
-  createdAt: v.createdAt.toISOString(),
-  updatedAt: v.updatedAt.toISOString(),
-});
 
 /** POST — kick off CogView thumbnail generation as a background job (returns 202 immediately). */
 export async function POST(_req: NextRequest, ctx: Ctx) {
@@ -39,7 +14,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     where: { id },
     include: {
       character: {
-        select: { id: true, name: true, identityAnchor: true, appearance: true },
+        select: { id: true, name: true, identityAnchor: true, appearance: true, hasPortrait: true },
       },
     },
   });
@@ -105,7 +80,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
 
   // 202 Accepted — job already running (dedupe) or just started.
   return NextResponse.json(
-    { video: serialize(video), accepted: true, generating: true },
+    { video: serializeVideo(video, null, { includeScenes: true }), accepted: true, generating: true },
     { status: 202 }
   );
 }

@@ -1,0 +1,753 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useRef, useState } from "react";
+     4→import { useAppStore } from "@/lib/store";
+     5→import { useToast } from "@/hooks/use-toast";
+     6→import { Card } from "@/components/ui/card";
+     7→import { Button } from "@/components/ui/button";
+     8→import { Input } from "@/components/ui/input";
+     9→import { Label } from "@/components/ui/label";
+    10→import { Textarea } from "@/components/ui/textarea";
+    11→import { Slider } from "@/components/ui/slider";
+    12→import { Skeleton } from "@/components/ui/skeleton";
+    13→import { Badge } from "@/components/ui/badge";
+    14→import {
+    15→  Select,
+    16→  SelectContent,
+    17→  SelectItem,
+    18→  SelectTrigger,
+    19→  SelectValue,
+    20→} from "@/components/ui/select";
+    21→import {
+    22→  VOICES,
+    23→  NICHES,
+    24→  TONES,
+    25→  LENGTHS,
+    26→  THUMB_STYLES,
+    27→  type VideoDTO,
+    28→} from "@/lib/tubeforge/types";
+    29→import { formatDuration } from "@/components/tubeforge/shared";
+    30→import { pollVoiceover, pollThumbnail } from "@/lib/tubeforge/poll";
+    31→import {
+    32→  Wand2,
+    33→  FileText,
+    34→  Mic,
+    35→  ImageIcon,
+    36→  Rocket,
+    37→  Check,
+    38→  Loader2,
+    39→  X,
+    40→  RefreshCw,
+    41→  Zap,
+    42→  Library,
+    43→  Play,
+    44→} from "lucide-react";
+    45→import { clsx } from "clsx";
+    46→
+    47→type Stage = "script" | "voiceover" | "thumbnail";
+    48→type StageState = "idle" | "running" | "done" | "error";
+    49→
+    50→const EXAMPLE_TOPICS = [
+    51→  "5 morning habits that rewired my brain in 30 days",
+    52→  "The forgotten empire that ruled the ancient seas",
+    53→  "Why compound interest is the closest thing to magic",
+    54→  "What Jupiter's moons whisper about alien life",
+    55→];
+    56→
+    57→const STAGES: { id: Stage; label: string; desc: string; icon: typeof FileText }[] = [
+    58→  { id: "script", label: "AI Script + Metadata", desc: "GLM writes title, script, description, tags", icon: FileText },
+    59→  { id: "voiceover", label: "Voiceover", desc: "TTS narration rendered to studio audio", icon: Mic },
+    60→  { id: "thumbnail", label: "Thumbnail", desc: "CogView paints a click-worthy 16:9 cover", icon: ImageIcon },
+    61→];
+    62→
+    63→async function api<T>(url: string, opts?: RequestInit): Promise<T> {
+    64→  const controller = new AbortController();
+    65→  const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+    66→  try {
+    67→    const res = await fetch(url, {
+    68→      ...opts,
+    69→      signal: controller.signal,
+    70→      headers: { "Content-Type": "application/json", ...(opts?.headers ?? {}) },
+    71→    });
+    72→    const data = await res.json().catch(() => ({}));
+    73→    if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+    74→    return data as T;
+    75→  } finally {
+    76→    clearTimeout(timer);
+    77→  }
+    78→}
+    79→
+    80→export function CreateView() {
+    81→  const { toast } = useToast();
+    82→  const bumpRefresh = useAppStore((s) => s.bumpRefresh);
+    83→  const setView = useAppStore((s) => s.setView);
+    84→  const prefillTopic = useAppStore((s) => s.prefillTopic);
+    85→  const setPrefillTopic = useAppStore((s) => s.setPrefillTopic);
+    86→
+    87→  const [settingsLoaded, setSettingsLoaded] = useState(false);
+    88→  const [topic, setTopic] = useState("");
+    89→  const [niche, setNiche] = useState<string>("Motivation");
+    90→  const [tone, setTone] = useState<string>("informative");
+    91→  const [length, setLength] = useState<string>("medium");
+    92→  const [voice, setVoice] = useState<string>("jam");
+    93→  const [speed, setSpeed] = useState(1.0);
+    94→  const [thumbStyle, setThumbStyle] = useState<string>("cinematic");
+    95→  const [channelId, setChannelId] = useState<string>("none");
+    96→  const [channels, setChannels] = useState<{ id: string; name: string }[]>([]);
+    97→  const [characterId, setCharacterId] = useState<string>("none");
+    98→  const [characters, setCharacters] = useState<{ id: string; name: string; voice: string; hasPortrait: boolean }[]>([]);
+    99→  const [autoVoice, setAutoVoice] = useState(true);
+   100→  const [autoThumb, setAutoThumb] = useState(true);
+   101→
+   102→  const [video, setVideo] = useState<VideoDTO | null>(null);
+   103→  const [stageState, setStageState] = useState<Record<Stage, StageState>>({
+   104→    script: "idle",
+   105→    voiceover: "idle",
+   106→    thumbnail: "idle",
+   107→  });
+   108→  const [error, setError] = useState<string | null>(null);
+   109→  const [anyRunning, setAnyRunning] = useState(false);
+   110→  const runningRef = useRef(false);
+   111→
+   112→  // Load defaults from settings + channel list
+   113→  useEffect(() => {
+   114→    fetch("/api/settings")
+   115→      .then((r) => r.json())
+   116→      .then((d) => {
+   117→        const s = d.settings ?? {};
+   118→        if (s.defaultNiche) setNiche(s.defaultNiche);
+   119→        if (s.defaultTone) setTone(s.defaultTone);
+   120→        if (s.defaultLength) setLength(s.defaultLength);
+   121→        if (s.defaultVoice) setVoice(s.defaultVoice);
+   122→        if (s.defaultSpeed) setSpeed(Number(s.defaultSpeed));
+   123→        if (s.defaultThumbStyle) setThumbStyle(s.defaultThumbStyle);
+   124→        setAutoVoice(s.autoVoiceover !== "false");
+   125→        setAutoThumb(s.autoThumbnail !== "false");
+   126→      })
+   127→      .catch(() => undefined)
+   128→      .finally(() => setSettingsLoaded(true));
+   129→    fetch("/api/channels")
+   130→      .then((r) => r.json())
+   131→      .then((d) => setChannels((d.channels ?? []).map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }))))
+   132→      .catch(() => undefined);
+   133→    fetch("/api/characters")
+   134→      .then((r) => r.json())
+   135→      .then((d) =>
+   136→        setCharacters(
+   137→          (d.characters ?? []).map((c: { id: string; name: string; voice: string; hasPortrait: boolean }) => ({
+   138→            id: c.id,
+   139→            name: c.name,
+   140→            voice: c.voice,
+   141→            hasPortrait: c.hasPortrait,
+   142→          }))
+   143→        )
+   144→      )
+   145→      .catch(() => undefined);
+   146→  }, []);
+   147→
+   148→  // Prefill topic from other views
+   149→  useEffect(() => {
+   150→    if (prefillTopic) {
+   151→      setTopic(prefillTopic);
+   152→      setPrefillTopic(null);
+   153→    }
+   154→  }, [prefillTopic, setPrefillTopic]);
+   155→
+   156→  const busy = anyRunning || runningRef.current;
+   157→
+   158→  // Casting a character adopts their voice so narration matches the persona.
+   159→  const castCharacter = characters.find((c) => c.id === characterId) ?? null;
+   160→  const applyCastVoice = (id: string) => {
+   161→    setCharacterId(id);
+   162→    const character = characters.find((c) => c.id === id);
+   163→    if (character) setVoice(character.voice);
+   164→  };
+   165→
+   166→  const runStage = useCallback(
+   167→    async (stage: Stage, fn: () => Promise<VideoDTO>) => {
+   168→      setStageState((s) => ({ ...s, [stage]: "running" }));
+   169→      setError(null);
+   170→      try {
+   171→        const v = await fn();
+   172→        setVideo(v);
+   173→        setStageState((s) => ({ ...s, [stage]: "done" }));
+   174→        return v;
+   175→      } catch (e) {
+   176→        const msg = e instanceof Error ? e.message : "Stage failed";
+   177→        setStageState((s) => ({ ...s, [stage]: "error" }));
+   178→        setError(msg);
+   179→        toast({
+   180→          title: `${STAGES.find((x) => x.id === stage)?.label ?? "Stage"} failed`,
+   181→          description: msg,
+   182→          variant: "destructive",
+   183→        });
+   184→        return null;
+   185→      }
+   186→    },
+   187→    [toast]
+   188→  );
+   189→
+   190→  const createVideo = useCallback(
+   191→    () =>
+   192→      api<{ video: VideoDTO }>("/api/videos", {
+   193→        method: "POST",
+   194→        body: JSON.stringify({
+   195→          topic,
+   196→          niche,
+   197→          tone,
+   198→          length,
+   199→          voice,
+   200→          ttsSpeed: speed,
+   201→          thumbStyle,
+   202→          channelId: channelId !== "none" ? channelId : null,
+   203→          characterId: characterId !== "none" ? characterId : null,
+   204→        }),
+   205→      }).then((d) => d.video),
+   206→    [topic, niche, tone, length, voice, speed, thumbStyle, channelId, characterId]
+   207→  );
+   208→
+   209→  const startVoiceover = useCallback(
+   210→    (id: string) =>
+   211→      // POST returns 202 + starts a server background job; poll for the artifact.
+   212→      api<{ video: VideoDTO }>(`/api/videos/${id}/voiceover`, { method: "POST" }).then(
+   213→        () => pollVoiceover(id)
+   214→      ),
+   215→    []
+   216→  );
+   217→
+   218→  const startThumbnail = useCallback(
+   219→    (id: string) =>
+   220→      api<{ video: VideoDTO }>(`/api/videos/${id}/thumbnail`, { method: "POST" }).then(
+   221→        () => pollThumbnail(id)
+   222→      ),
+   223→    []
+   224→  );
+   225→
+   226→  const handleGenerate = useCallback(
+   227→    async (autopilot: boolean) => {
+   228→      if (!topic.trim() || busy) return;
+   229→      runningRef.current = true;
+   230→      setAnyRunning(true);
+   231→      setVideo(null);
+   232→      setError(null);
+   233→      setStageState({ script: "idle", voiceover: "idle", thumbnail: "idle" });
+   234→
+   235→      try {
+   236→        const v = await runStage("script", createVideo);
+   237→        if (!v) return;
+   238→        bumpRefresh();
+   239→
+   240→        if (autopilot && autoVoice) {
+   241→          const voiced = await runStage("voiceover", () => startVoiceover(v.id));
+   242→          if (!voiced) return;
+   243→          if (autopilot && autoThumb) {
+   244→            await runStage("thumbnail", () => startThumbnail(voiced.id));
+   245→          }
+   246→        }
+   247→        if (autopilot) {
+   248→          toast({
+   249→            title: "Auto-Pilot complete",
+   250→            description: "Your video package is ready to review and publish.",
+   251→          });
+   252→        }
+   253→      } finally {
+   254→        runningRef.current = false;
+   255→        setAnyRunning(false);
+   256→        bumpRefresh();
+   257→      }
+   258→    },
+   259→    [topic, busy, runStage, createVideo, startVoiceover, startThumbnail, autoVoice, autoThumb, bumpRefresh, toast]
+   260→  );
+   261→
+   262→  const resumeStage = useCallback(
+   263→    async (stage: Stage) => {
+   264→      if (!video || busy) return;
+   265→      runningRef.current = true;
+   266→      setAnyRunning(true);
+   267→      try {
+   268→        if (stage === "voiceover") {
+   269→          const voiced = await runStage("voiceover", () => startVoiceover(video.id));
+   270→          if (voiced) bumpRefresh();
+   271→        } else if (stage === "thumbnail") {
+   272→          const thumbed = await runStage("thumbnail", () => startThumbnail(video.id));
+   273→          if (thumbed) bumpRefresh();
+   274→        }
+   275→      } finally {
+   276→        runningRef.current = false;
+   277→        setAnyRunning(false);
+   278→      }
+   279→    },
+   280→    [video, busy, runStage, startVoiceover, startThumbnail, bumpRefresh]
+   281→  );
+   282→
+   283→  const tags = video?.tags ? video.tags.split(",").map((t) => t.trim()).filter(Boolean) : [];
+   284→  const allDone =
+   285→    stageState.script === "done" &&
+   286→    (stageState.voiceover === "done" || !autoVoice || video?.hasVoiceover) &&
+   287→    (stageState.thumbnail === "done" || !autoThumb || video?.hasThumbnail);
+   288→
+   289→  return (
+   290→    <div className="grid lg:grid-cols-12 gap-5">
+   291→      {/* Left — configuration */}
+   292→      <Card className="glass rounded-2xl p-5 lg:col-span-5 h-fit lg:sticky lg:top-24">
+   293→        <div className="flex items-center gap-2 mb-5">
+   294→          <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center glow-red-soft shrink-0">
+   295→            <Wand2 className="h-4.5 w-4.5 text-white" />
+   296→          </div>
+   297→          <div>
+   298→            <h2 className="font-semibold leading-tight">Video Blueprint</h2>
+   299→            <p className="text-xs text-muted-foreground">One topic is all Auto-Pilot needs</p>
+   300→          </div>
+   301→        </div>
+   302→
+   303→        <div className="space-y-4">
+   304→          <div className="space-y-1.5">
+   305→            <Label htmlFor="topic">Video topic</Label>
+   306→            <Textarea
+   307→              id="topic"
+   308→              placeholder="e.g. The psychology trick that makes people trust you instantly"
+   309→              value={topic}
+   310→              onChange={(e) => setTopic(e.target.value)}
+   311→              rows={3}
+   312→              maxLength={300}
+   313→              disabled={busy}
+   314→              className="bg-white/5 resize-none"
+   315→            />
+   316→            <div className="flex flex-wrap gap-1.5 pt-1">
+   317→              {EXAMPLE_TOPICS.map((t) => (
+   318→                <button
+   319→                  key={t}
+   320→                  type="button"
+   321→                  onClick={() => setTopic(t)}
+   322→                  disabled={busy}
+   323→                  className="text-[11px] rounded-full border border-white/10 bg-white/4 px-2.5 py-1 text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors truncate"
+   324→                >
+   325→                  {t.length > 38 ? t.slice(0, 36) + "…" : t}
+   326→                </button>
+   327→              ))}
+   328→            </div>
+   329→          </div>
+   330→
+   331→          <div className="grid grid-cols-2 gap-3">
+   332→            <div className="space-y-1.5">
+   333→              <Label>Niche</Label>
+   334→              <Select value={niche} onValueChange={setNiche} disabled={busy}>
+   335→                <SelectTrigger className="bg-white/5">
+   336→                  <SelectValue />
+   337→                </SelectTrigger>
+   338→                <SelectContent>
+   339→                  {NICHES.map((n) => (
+   340→                    <SelectItem key={n} value={n}>
+   341→                      {n}
+   342→                    </SelectItem>
+   343→                  ))}
+   344→                </SelectContent>
+   345→              </Select>
+   346→            </div>
+   347→            <div className="space-y-1.5">
+   348→              <Label>Tone</Label>
+   349→              <Select value={tone} onValueChange={setTone} disabled={busy}>
+   350→                <SelectTrigger className="bg-white/5">
+   351→                  <SelectValue />
+   352→                </SelectTrigger>
+   353→                <SelectContent>
+   354→                  {TONES.map((t) => (
+   355→                    <SelectItem key={t.id} value={t.id}>
+   356→                      {t.label}
+   357→                    </SelectItem>
+   358→                  ))}
+   359→                </SelectContent>
+   360→              </Select>
+   361→            </div>
+   362→            <div className="space-y-1.5">
+   363→              <Label>Script length</Label>
+   364→              <Select value={length} onValueChange={setLength} disabled={busy}>
+   365→                <SelectTrigger className="bg-white/5">
+   366→                  <SelectValue />
+   367→                </SelectTrigger>
+   368→                <SelectContent>
+   369→                  {LENGTHS.map((l) => (
+   370→                    <SelectItem key={l.id} value={l.id}>
+   371→                      {l.label}
+   372→                    </SelectItem>
+   373→                  ))}
+   374→                </SelectContent>
+   375→              </Select>
+   376→            </div>
+   377→            <div className="space-y-1.5">
+   378→              <Label>Channel (optional)</Label>
+   379→              <Select value={channelId} onValueChange={setChannelId} disabled={busy}>
+   380→                <SelectTrigger className="bg-white/5">
+   381→                  <SelectValue placeholder="Unassigned" />
+   382→                </SelectTrigger>
+   383→                <SelectContent>
+   384→                  <SelectItem value="none">Unassigned</SelectItem>
+   385→                  {channels.map((c) => (
+   386→                    <SelectItem key={c.id} value={c.id}>
+   387→                      {c.name}
+   388→                    </SelectItem>
+   389→                  ))}
+   390→                </SelectContent>
+   391→              </Select>
+   392→            </div>
+   393→            <div className="space-y-1.5">
+   394→              <Label>Cast (optional)</Label>
+   395→              <Select value={characterId} onValueChange={applyCastVoice} disabled={busy}>
+   396→                <SelectTrigger className="bg-white/5">
+   397→                  <SelectValue placeholder="No recurring host" />
+   398→                </SelectTrigger>
+   399→                <SelectContent>
+   400→                  <SelectItem value="none">No recurring host</SelectItem>
+   401→                  {characters.map((c) => (
+   402→                    <SelectItem key={c.id} value={c.id}>
+   403→                      {c.name}{c.hasPortrait ? " ●" : ""}
+   404→                    </SelectItem>
+   405→                  ))}
+   406→                </SelectContent>
+   407→              </Select>
+   408→              {castCharacter && (
+   409→                <p className="text-[11px] text-emerald-300/90 leading-relaxed">
+   410→                  {castCharacter.name} hosts this video — identity is stamped into the
+   411→                  thumbnail and the voice defaults to their persona.
+   412→                </p>
+   413→              )}
+   414→            </div>
+   415→          </div>
+   416→
+   417→          <div className="space-y-1.5">
+   418→            <Label>Narrator voice</Label>
+   419→            <Select value={voice} onValueChange={setVoice} disabled={busy}>
+   420→              <SelectTrigger className="bg-white/5">
+   421→                <SelectValue />
+   422→              </SelectTrigger>
+   423→              <SelectContent>
+   424→                {VOICES.map((v) => (
+   425→                  <SelectItem key={v.id} value={v.id}>
+   426→                    {v.label}
+   427→                  </SelectItem>
+   428→                ))}
+   429→              </SelectContent>
+   430→            </Select>
+   431→          </div>
+   432→
+   433→          <div className="space-y-2">
+   434→            <div className="flex items-center justify-between">
+   435→              <Label>Speech speed</Label>
+   436→              <span className="text-xs font-medium tabular-nums text-primary">{speed.toFixed(1)}x</span>
+   437→            </div>
+   438→            <Slider
+   439→              value={[speed]}
+   440→              min={0.5}
+   441→              max={2}
+   442→              step={0.1}
+   443→              onValueChange={([v]) => setSpeed(v)}
+   444→              disabled={busy}
+   445→              aria-label="Speech speed"
+   446→            />
+   447→          </div>
+   448→
+   449→          <div className="space-y-1.5">
+   450→            <Label>Thumbnail style</Label>
+   451→            <Select value={thumbStyle} onValueChange={setThumbStyle} disabled={busy}>
+   452→              <SelectTrigger className="bg-white/5">
+   453→                <SelectValue />
+   454→              </SelectTrigger>
+   455→              <SelectContent>
+   456→                {THUMB_STYLES.map((t) => (
+   457→                  <SelectItem key={t.id} value={t.id}>
+   458→                    {t.label}
+   459→                  </SelectItem>
+   460→                ))}
+   461→              </SelectContent>
+   462→            </Select>
+   463→          </div>
+   464→
+   465→          <div className="pt-1.5 flex flex-col gap-2">
+   466→            <Button
+   467→              onClick={() => handleGenerate(true)}
+   468→              disabled={!topic.trim() || busy}
+   469→              className="bg-brand-gradient hover:opacity-90 font-semibold h-11 glow-red-soft"
+   470→              size="lg"
+   471→            >
+   472→              {busy ? (
+   473→                <Loader2 className="h-4.5 w-4.5 animate-spin" />
+   474→              ) : (
+   475→                <Zap className="h-4.5 w-4.5" />
+   476→              )}
+   477→              {busy ? "Auto-Pilot running…" : "Run Full Auto-Pilot"}
+   478→            </Button>
+   479→            <Button
+   480→              onClick={() => handleGenerate(false)}
+   481→              disabled={!topic.trim() || busy}
+   482→              variant="outline"
+   483→              className="border-white/15 bg-white/4 hover:bg-white/10 h-10"
+   484→            >
+   485→              <FileText className="h-4 w-4" />
+   486→              Script Only
+   487→            </Button>
+   488→            <p className="text-[11px] text-muted-foreground text-center leading-relaxed">
+   489→              Auto-Pilot runs: script → {autoVoice ? "voiceover → " : ""}
+   490→              {autoThumb ? "thumbnail → " : ""}ready (configure in Settings)
+   491→            </p>
+   492→          </div>
+   493→        </div>
+   494→      </Card>
+   495→
+   496→      {/* Right — pipeline & results */}
+   497→      <div className="lg:col-span-7 space-y-5">
+   498→        {/* Stepper */}
+   499→        <Card className="glass rounded-2xl p-5">
+   500→          <div className="flex items-center justify-between mb-5">
+   501→            <div>
+   502→              <h3 className="font-semibold">Production Line</h3>
+   503→              <p className="text-xs text-muted-foreground">
+   504→                {video
+   505→                  ? allDone
+   506→                    ? "Package complete — ready to upload"
+   507→                    : "Auto-Pilot is assembling your video"
+   508→                  : "Waiting for a topic…"}
+   509→              </p>
+   510→            </div>
+   511→            {video && (
+   512→              <Button
+   513→                variant="outline"
+   514→                size="sm"
+   515→                className="border-white/15 bg-white/4"
+   516→                onClick={() => {
+   517→                  setView("library");
+   518→                  useAppStore.getState().setFocusVideoId(video.id);
+   519→                }}
+   520→              >
+   521→                <Library className="h-3.5 w-3.5" />
+   522→                Open in Library
+   523→              </Button>
+   524→            )}
+   525→          </div>
+   526→
+   527→          <ol className="grid sm:grid-cols-3 gap-3">
+   528→            {STAGES.map((stage, i) => {
+   529→              const state = stageState[stage.id];
+   530→              return (
+   531→                <li
+   532→                  key={stage.id}
+   533→                  className={clsx(
+   534→                    "rounded-xl border p-3.5 transition-all duration-300",
+   535→                    state === "done" && "border-emerald-500/25 bg-emerald-500/6",
+   536→                    state === "running" && "border-primary/40 bg-primary/8 glow-red-soft",
+   537→                    state === "error" && "border-red-500/30 bg-red-500/6",
+   538→                    state === "idle" && "border-white/8 bg-white/3"
+   539→                  )}
+   540→                >
+   541→                  <div className="flex items-center justify-between">
+   542→                    <div
+   543→                      className={clsx(
+   544→                        "h-8 w-8 rounded-lg flex items-center justify-center shrink-0",
+   545→                        state === "done" && "bg-emerald-500/15 text-emerald-300",
+   546→                        state === "running" && "bg-primary/15 text-primary",
+   547→                        state === "error" && "bg-red-500/15 text-red-300",
+   548→                        state === "idle" && "bg-white/6 text-muted-foreground"
+   549→                      )}
+   550→                    >
+   551→                      {state === "running" ? (
+   552→                        <Loader2 className="h-4 w-4 animate-spin" />
+   553→                      ) : state === "done" ? (
+   554→                        <Check className="h-4 w-4" />
+   555→                      ) : state === "error" ? (
+   556→                        <X className="h-4 w-4" />
+   557→                      ) : (
+   558→                        <stage.icon className="h-4 w-4" />
+   559→                      )}
+   560→                    </div>
+   561→                    <span className="text-[10px] text-muted-foreground tabular-nums">
+   562→                      STEP {i + 1}
+   563→                    </span>
+   564→                  </div>
+   565→                  <p className="text-sm font-medium mt-2.5">{stage.label}</p>
+   566→                  <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">
+   567→                    {stage.desc}
+   568→                  </p>
+   569→                  {state === "error" && video && (
+   570→                    <Button
+   571→                      variant="ghost"
+   572→                      size="sm"
+   573→                      className="mt-2 h-7 text-xs text-red-300 hover:text-red-200 hover:bg-red-500/10 px-2"
+   574→                      onClick={() => resumeStage(stage.id)}
+   575→                    >
+   576→                      <RefreshCw className="h-3 w-3" />
+   577→                      Retry
+   578→                    </Button>
+   579→                  )}
+   580→                </li>
+   581→              );
+   582→            })}
+   583→          </ol>
+   584→          {error && (
+   585→            <p className="mt-3 text-xs text-red-300 bg-red-500/8 border border-red-500/20 rounded-lg px-3 py-2">
+   586→              {error}
+   587→            </p>
+   588→          )}
+   589→        </Card>
+   590→
+   591→        {/* Results */}
+   592→        {!video && !anyRunning && (
+   593→          <Card className="glass rounded-2xl p-8 flex flex-col items-center text-center">
+   594→            <div className="h-16 w-16 rounded-2xl bg-white/4 border border-white/10 flex items-center justify-center">
+   595→              <Play className="h-7 w-7 text-muted-foreground" />
+   596→            </div>
+   597→            <p className="mt-4 font-medium">No production run yet</p>
+   598→            <p className="text-sm text-muted-foreground mt-1.5 max-w-sm leading-relaxed">
+   599→              Configure the blueprint on the left and launch Auto-Pilot. Results will
+   600→              stream in here stage by stage.
+   601→            </p>
+   602→          </Card>
+   603→        )}
+   604→
+   605→        {anyRunning && !video && (
+   606→          <Card className="glass rounded-2xl p-5 space-y-3">
+   607→            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+   608→              <Loader2 className="h-4 w-4 animate-spin text-primary" />
+   609→              GLM is writing your script…
+   610→            </div>
+   611→            <Skeleton className="h-6 w-3/4 bg-white/5" />
+   612→            <Skeleton className="h-4 w-full bg-white/5" />
+   613→            <Skeleton className="h-4 w-5/6 bg-white/5" />
+   614→            <Skeleton className="h-4 w-2/3 bg-white/5" />
+   615→          </Card>
+   616→        )}
+   617→
+   618→        {video && (
+   619→          <>
+   620→            <Card className="glass rounded-2xl overflow-hidden">
+   621→              <div className="p-5 border-b border-white/6">
+   622→                <div className="flex flex-wrap items-start justify-between gap-3">
+   623→                  <div className="min-w-0">
+   624→                    <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
+   625→                      Generated Title
+   626→                    </p>
+   627→                    <h3 className="text-lg font-bold leading-snug mt-1">
+   628→                      {video.title ?? video.topic}
+   629→                    </h3>
+   630→                    <p className="text-xs text-muted-foreground mt-1.5">
+   631→                      {video.niche} · {video.wordCount ?? 0} words ·{" "}
+   632→                      {LENGTHS.find((l) => l.id === video.length)?.label ?? video.length}
+   633→                    </p>
+   634→                  </div>
+   635→                  {video.channelName && (
+   636→                    <Badge variant="outline" className="border-white/15 bg-white/5 text-muted-foreground">
+   637→                      {video.channelName}
+   638→                    </Badge>
+   639→                  )}
+   640→                </div>
+   641→              </div>
+   642→
+   643→              {video.hasThumbnail && (
+   644→                <div className="px-5 pt-5">
+   645→                  <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-2">
+   646→                    Thumbnail
+   647→                  </p>
+   648→                  <img
+   649→                    src={`/api/videos/${video.id}/thumbnail`}
+   650→                    alt={`Generated thumbnail for ${video.title ?? video.topic}`}
+   651→                    className="w-full rounded-xl border border-white/10 aspect-video object-cover"
+   652→                  />
+   653→                </div>
+   654→              )}
+   655→
+   656→              {video.hasVoiceover && (
+   657→                <div className="p-5">
+   658→                  <div className="flex items-center justify-between mb-2">
+   659→                    <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
+   660→                      Voiceover · {formatDuration(video.audioDuration)}
+   661→                    </p>
+   662→                    <span className="text-[11px] text-muted-foreground">
+   663→                      {VOICES.find((v) => v.id === video.voice)?.label ?? video.voice}
+   664→                    </span>
+   665→                  </div>
+   666→                  { }
+   667→                  <audio
+   668→                    controls
+   669→                    preload="metadata"
+   670→                    src={`/api/videos/${video.id}/voiceover`}
+   671→                    className="w-full"
+   672→                  >
+   673→                    Your browser does not support the audio element.
+   674→                  </audio>
+   675→                </div>
+   676→              )}
+   677→            </Card>
+   678→
+   679→            <Card className="glass rounded-2xl p-5">
+   680→              <div className="flex items-center justify-between mb-3">
+   681→                <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
+   682→                  Full Script
+   683→                </p>
+   684→                {video.description && (
+   685→                  <Badge variant="outline" className="border-white/15 bg-white/5 text-muted-foreground">
+   686→                    SEO description included
+   687→                  </Badge>
+   688→                )}
+   689→              </div>
+   690→              <div className="max-h-72 overflow-y-auto scroll-area-bar pr-3 text-sm leading-relaxed whitespace-pre-wrap text-foreground/90">
+   691→                {video.script}
+   692→              </div>
+   693→              {tags.length > 0 && (
+   694→                <div className="mt-4 pt-4 border-t border-white/6">
+   695→                  <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-2">
+   696→                    SEO Tags
+   697→                  </p>
+   698→                  <div className="flex flex-wrap gap-1.5">
+   699→                    {tags.map((t) => (
+   700→                      <Badge
+   701→                        key={t}
+   702→                        variant="secondary"
+   703→                        className="bg-white/6 text-muted-foreground border border-white/8 font-normal"
+   704→                      >
+   705→                        #{t}
+   706→                      </Badge>
+   707→                    ))}
+   708→                  </div>
+   709→                </div>
+   710→              )}
+   711→            </Card>
+   712→
+   713→            {(stageState.voiceover === "idle" || stageState.thumbnail === "idle") &&
+   714→              video.status !== "published" && (
+   715→                <Card className="glass rounded-2xl p-5">
+   716→                  <p className="text-sm font-medium mb-1">Continue the pipeline</p>
+   717→                  <p className="text-xs text-muted-foreground mb-3">
+   718→                    Finish the remaining stages to mark this package ready for upload.
+   719→                  </p>
+   720→                  <div className="flex flex-wrap gap-2">
+   721→                    {!video.hasVoiceover && (
+   722→                      <Button
+   723→                        size="sm"
+   724→                        disabled={busy}
+   725→                        onClick={() => resumeStage("voiceover")}
+   726→                        className="bg-brand-gradient hover:opacity-90 font-medium"
+   727→                      >
+   728→                        <Mic className="h-3.5 w-3.5" />
+   729→                        Generate Voiceover
+   730→                      </Button>
+   731→                    )}
+   732→                    {!video.hasThumbnail && (
+   733→                      <Button
+   734→                        size="sm"
+   735→                        disabled={busy}
+   736→                        onClick={() => resumeStage("thumbnail")}
+   737→                        variant="outline"
+   738→                        className="border-white/15 bg-white/4"
+   739→                      >
+   740→                        <ImageIcon className="h-3.5 w-3.5" />
+   741→                        Generate Thumbnail
+   742→                      </Button>
+   743→                    )}
+   744→                  </div>
+   745→                </Card>
+   746→              )}
+   747→          </>
+   748→        )}
+   749→      </div>
+   750→    </div>
+   751→  );
+   752→}
+   753→

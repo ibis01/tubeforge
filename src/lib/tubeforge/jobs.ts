@@ -7,10 +7,14 @@ export type JobKind =
   | "thumbnail"
   | "variants"
   | "portrait"
-  | "poses";
+  | "poses"
+  | "storyboard"
+  | "render"
+  | "scene"; // single storyboard scene re-roll
 
 const running = new Map<string, number>(); // key -> startedAt (ms)
 const lastErrors = new Map<string, string>(); // key -> last failure message
+const progress = new Map<string, { current: number; total: number; label: string }>();
 
 const key = (entityId: string, kind: JobKind) => `${entityId}:${kind}`;
 
@@ -24,6 +28,25 @@ export function jobStartedAt(entityId: string, kind: JobKind): number | null {
 
 export function lastJobError(entityId: string, kind: JobKind): string | null {
   return lastErrors.get(key(entityId, kind)) ?? null;
+}
+
+/** Report human-readable progress for a running job (render: scene 3 of 6). */
+export function setJobProgress(
+  entityId: string,
+  kind: JobKind,
+  current: number,
+  total: number,
+  label: string
+): void {
+  if (!running.has(key(entityId, kind))) return;
+  progress.set(key(entityId, kind), { current, total, label });
+}
+
+export function jobProgress(
+  entityId: string,
+  kind: JobKind
+): { current: number; total: number; label: string } | null {
+  return progress.get(key(entityId, kind)) ?? null;
 }
 
 /**
@@ -41,6 +64,7 @@ export function startJob(
   if (running.has(k)) return false;
 
   lastErrors.delete(k);
+  progress.delete(k);
   running.set(k, Date.now());
 
   void fn()
@@ -51,20 +75,26 @@ export function startJob(
     })
     .finally(() => {
       running.delete(k);
+      progress.delete(k);
     });
 
   return true;
 }
 
 /** Snapshot of all running jobs for a video — merged into GET video responses. */
-export function jobSnapshot(videoId: string): Record<
-  "voiceover" | "thumbnail" | "variants",
-  boolean
-> {
+export function jobSnapshot(videoId: string): {
+  voiceover: boolean;
+  thumbnail: boolean;
+  variants: boolean;
+  storyboard: boolean;
+  render: boolean;
+} {
   return {
     voiceover: isJobRunning(videoId, "voiceover"),
     thumbnail: isJobRunning(videoId, "thumbnail"),
     variants: isJobRunning(videoId, "variants"),
+    storyboard: isJobRunning(videoId, "storyboard"),
+    render: isJobRunning(videoId, "render"),
   };
 }
 

@@ -8,6 +8,17 @@ export interface GeneratingFlags {
   voiceover: boolean;
   thumbnail: boolean;
   variants: boolean;
+  storyboard: boolean;
+  render: boolean;
+}
+
+export interface RenderStatus {
+  rendering: boolean;
+  mode: string | null;
+  progress: { current: number; total: number; label: string } | null;
+  hasVideo: boolean;
+  videoDuration: number | null;
+  error: string | null;
 }
 
 interface VideoResponse {
@@ -118,6 +129,76 @@ export interface VariantListResponse {
 }
 
 // ---------- Character polling ----------
+
+/** Poll until the storyboard job finishes (watches the job flag so re-rolls work). */
+export function pollStoryboard(videoId: string, opts?: PollOpts) {
+  return pollVideo(
+    videoId,
+    (v) => v.hasStoryboard,
+    (v) => Boolean(v.error) && !v.hasStoryboard,
+    { ...opts, timeoutMs: opts?.timeoutMs ?? 15 * 60 * 1000 }
+  );
+}
+
+/**
+ * Poll the render endpoint until the job finishes. Resolves with the final
+ * status payload. Renders can take minutes (Ken Burns) to tens of minutes
+ * (full i2v animation), so pass a generous timeout for animated mode.
+ */
+export async function pollRender(
+  videoId: string,
+  onTick?: (status: RenderStatus) => void,
+  opts: PollOpts = {}
+): Promise<RenderStatus> {
+  const interval = opts.intervalMs ?? 5000;
+  const timeout = opts.timeoutMs ?? 50 * 60 * 1000; // animated: ~4 min/scene
+  const deadline = Date.now() + timeout;
+
+  for (;;) {
+    const res = await fetch(`/api/videos/${videoId}/render`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data: RenderStatus = await res.json();
+    onTick?.(data);
+
+    if (!data.rendering) {
+      if (data.error) throw new Error(data.error);
+      return data;
+    }
+
+    if (Date.now() > deadline)
+      throw new Error(
+        "Rendering is taking unusually long — it may still be running in the background; check back in a few minutes."
+      );
+
+    await sleep(interval);
+  }
+}
+
+/** Poll a single-scene re-roll until its job flag clears. */
+export async function pollScene(
+  videoId: string,
+  sceneIndex: number,
+  opts: PollOpts = {}
+): Promise<void> {
+  const interval = opts.intervalMs ?? 3000;
+  const timeout = opts.timeoutMs ?? 8 * 60 * 1000;
+  const deadline = Date.now() + timeout;
+
+  for (;;) {
+    const res = await fetch(`/api/videos/${videoId}/storyboard`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const scene = (data.scenes ?? []).find(
+      (s: { index: number; generating: boolean }) => s.index === sceneIndex
+    );
+    if (!scene || !scene.generating) return;
+
+    if (Date.now() > deadline)
+      throw new Error("Scene re-roll is taking unusually long — check back shortly.");
+
+    await sleep(interval);
+  }
+}
 
 interface CharacterResponse {
   character?: CharacterDTO;

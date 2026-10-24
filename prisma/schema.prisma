@@ -48,6 +48,15 @@ model Video {
   voice         String    @default("jam")
   ttsSpeed      Float     @default(1.0)
   thumbStyle    String    @default("cinematic")
+
+  // Story engine (Phase 2) — "script" = classic narration, "story" = scene-based
+  format        String    @default("script")
+  renderMode    String    @default("kenburns")
+  scenes        String?   // JSON array of Scene {title, narration, visual, camera, mood, caption, hostInScene}
+  hasStoryboard Boolean   @default(false)
+  hasVideo      Boolean   @default(false)
+  videoDuration Float?
+
   hasVoiceover  Boolean   @default(false)
   hasThumbnail  Boolean   @default(false)
   audioDuration Float?

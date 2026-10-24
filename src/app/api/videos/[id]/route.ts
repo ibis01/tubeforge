@@ -1,42 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { jobSnapshot } from "@/lib/tubeforge/jobs";
-import type { VideoDTO, VideoStatus } from "@/lib/tubeforge/types";
-import type { Video } from "@prisma/client";
-
-const serialize = (
-  v: Video & { character?: { name: string; hasPortrait: boolean } | null },
-  channelName?: string | null
-): VideoDTO => ({
-  id: v.id,
-  title: v.title,
-  topic: v.topic,
-  niche: v.niche,
-  tone: v.tone,
-  length: v.length,
-  script: v.script,
-  description: v.description,
-  tags: v.tags,
-  status: v.status as VideoStatus,
-  voice: v.voice,
-  ttsSpeed: v.ttsSpeed,
-  thumbStyle: v.thumbStyle,
-  hasVoiceover: v.hasVoiceover,
-  hasThumbnail: v.hasThumbnail,
-  audioDuration: v.audioDuration,
-  wordCount: v.wordCount,
-  error: v.error,
-  channelId: v.channelId,
-  channelName: channelName ?? null,
-  characterId: v.characterId,
-  characterName: v.character?.name ?? null,
-  characterPortraitUrl:
-    v.characterId && v.character?.hasPortrait
-      ? `/api/characters/${v.characterId}/portrait`
-      : null,
-  createdAt: v.createdAt.toISOString(),
-  updatedAt: v.updatedAt.toISOString(),
-});
+import { serializeVideo } from "@/lib/tubeforge/serialize";
+import { RENDER_MODES } from "@/lib/tubeforge/types";
 
 // Next.js 16: params is a Promise
 type Ctx = { params: Promise<{ id: string }> };
@@ -53,7 +19,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   if (!video)
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
   return NextResponse.json({
-    video: serialize(video, video.channel?.name),
+    video: serializeVideo(video, video.channel?.name, { includeScenes: true }),
     generating: jobSnapshot(id),
   });
 }
@@ -89,6 +55,8 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     }
     data.characterId = body.characterId;
   }
+  if (RENDER_MODES.some((m) => m.id === body.renderMode))
+    data.renderMode = String(body.renderMode);
 
   // Status transitions (publish / mark ready / retry)
   if (typeof body.status === "string") {
@@ -125,7 +93,9 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       character: { select: { name: true, hasPortrait: true } },
     },
   });
-  return NextResponse.json({ video: serialize(updated, updated.channel?.name) });
+  return NextResponse.json({
+    video: serializeVideo(updated, updated.channel?.name, { includeScenes: true }),
+  });
 }
 
 export async function DELETE(_req: NextRequest, ctx: Ctx) {

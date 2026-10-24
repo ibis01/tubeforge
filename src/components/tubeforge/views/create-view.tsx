@@ -24,10 +24,18 @@ import {
   TONES,
   LENGTHS,
   THUMB_STYLES,
+  FORMATS,
+  RENDER_MODES,
+  SCENE_COUNTS,
   type VideoDTO,
 } from "@/lib/tubeforge/types";
 import { formatDuration } from "@/components/tubeforge/shared";
-import { pollVoiceover, pollThumbnail } from "@/lib/tubeforge/poll";
+import {
+  pollVoiceover,
+  pollThumbnail,
+  pollStoryboard,
+  pollRender,
+} from "@/lib/tubeforge/poll";
 import {
   Wand2,
   FileText,
@@ -41,10 +49,12 @@ import {
   Zap,
   Library,
   Play,
+  LayoutGrid,
+  Clapperboard,
 } from "lucide-react";
 import { clsx } from "clsx";
 
-type Stage = "script" | "voiceover" | "thumbnail";
+type Stage = "script" | "storyboard" | "voiceover" | "thumbnail" | "render";
 type StageState = "idle" | "running" | "done" | "error";
 
 const EXAMPLE_TOPICS = [
@@ -54,11 +64,41 @@ const EXAMPLE_TOPICS = [
   "What Jupiter's moons whisper about alien life",
 ];
 
-const STAGES: { id: Stage; label: string; desc: string; icon: typeof FileText }[] = [
-  { id: "script", label: "AI Script + Metadata", desc: "GLM writes title, script, description, tags", icon: FileText },
-  { id: "voiceover", label: "Voiceover", desc: "TTS narration rendered to studio audio", icon: Mic },
-  { id: "thumbnail", label: "Thumbnail", desc: "CogView paints a click-worthy 16:9 cover", icon: ImageIcon },
-];
+const STAGE_DEFS: Record<
+  Stage,
+  { label: string; desc: string; icon: typeof FileText; storyDesc: string }
+> = {
+  script: {
+    label: "AI Script + Metadata",
+    desc: "GLM writes title, script, description, tags",
+    storyDesc: "GLM writes a scene-by-scene script with camera moves",
+    icon: FileText,
+  },
+  storyboard: {
+    label: "Storyboard",
+    desc: "",
+    storyDesc: "CogView paints every scene (host identity locked)",
+    icon: LayoutGrid,
+  },
+  voiceover: {
+    label: "Voiceover",
+    desc: "TTS narration rendered to studio audio",
+    storyDesc: "Scene-by-scene narration — timing maps 1:1 to scenes",
+    icon: Mic,
+  },
+  thumbnail: {
+    label: "Thumbnail",
+    desc: "CogView paints a click-worthy 16:9 cover",
+    storyDesc: "CogView paints a click-worthy 16:9 cover",
+    icon: ImageIcon,
+  },
+  render: {
+    label: "Render Video",
+    desc: "",
+    storyDesc: "ffmpeg composes art + narration + captions + music",
+    icon: Clapperboard,
+  },
+};
 
 async function api<T>(url: string, opts?: RequestInit): Promise<T> {
   const controller = new AbortController();
@@ -98,16 +138,24 @@ export function CreateView() {
   const [characters, setCharacters] = useState<{ id: string; name: string; voice: string; hasPortrait: boolean }[]>([]);
   const [autoVoice, setAutoVoice] = useState(true);
   const [autoThumb, setAutoThumb] = useState(true);
+  const [format, setFormat] = useState<string>("script");
+  const [renderMode, setRenderMode] = useState<string>("kenburns");
 
   const [video, setVideo] = useState<VideoDTO | null>(null);
   const [stageState, setStageState] = useState<Record<Stage, StageState>>({
     script: "idle",
+    storyboard: "idle",
     voiceover: "idle",
     thumbnail: "idle",
+    render: "idle",
   });
   const [error, setError] = useState<string | null>(null);
+  const [renderLabel, setRenderLabel] = useState<string | null>(null);
   const [anyRunning, setAnyRunning] = useState(false);
   const runningRef = useRef(false);
+
+  const isStory = format === "story";
+  const sceneCount = SCENE_COUNTS[length] ?? 6;
 
   // Load defaults from settings + channel list
   useEffect(() => {
@@ -164,12 +212,12 @@ export function CreateView() {
   };
 
   const runStage = useCallback(
-    async (stage: Stage, fn: () => Promise<VideoDTO>) => {
+    async (stage: Stage, fn: () => Promise<VideoDTO>): Promise<VideoDTO | null> => {
       setStageState((s) => ({ ...s, [stage]: "running" }));
       setError(null);
       try {
         const v = await fn();
-        setVideo(v);
+        if (v) setVideo(v);
         setStageState((s) => ({ ...s, [stage]: "done" }));
         return v;
       } catch (e) {
@@ -177,7 +225,7 @@ export function CreateView() {
         setStageState((s) => ({ ...s, [stage]: "error" }));
         setError(msg);
         toast({
-          title: `${STAGES.find((x) => x.id === stage)?.label ?? "Stage"} failed`,
+          title: `${STAGE_DEFS[stage].label} failed`,
           description: msg,
           variant: "destructive",
         });
@@ -201,27 +249,56 @@ export function CreateView() {
           thumbStyle,
           channelId: channelId !== "none" ? channelId : null,
           characterId: characterId !== "none" ? characterId : null,
+          format,
+          renderMode,
         }),
       }).then((d) => d.video),
-    [topic, niche, tone, length, voice, speed, thumbStyle, channelId, characterId]
+    [topic, niche, tone, length, voice, speed, thumbStyle, channelId, characterId, format, renderMode]
   );
 
   const startVoiceover = useCallback(
     (id: string) =>
-      // POST returns 202 + starts a server background job; poll for the artifact.
-      api<{ video: VideoDTO }>(`/api/videos/${id}/voiceover`, { method: "POST" }).then(
-        () => pollVoiceover(id)
+      api(`/api/videos/${id}/voiceover`, { method: "POST" }).then(() =>
+        pollVoiceover(id, { timeoutMs: isStory ? 15 * 60 * 1000 : 6 * 60 * 1000 })
       ),
-    []
+    [isStory]
   );
 
   const startThumbnail = useCallback(
     (id: string) =>
-      api<{ video: VideoDTO }>(`/api/videos/${id}/thumbnail`, { method: "POST" }).then(
-        () => pollThumbnail(id)
+      api(`/api/videos/${id}/thumbnail`, { method: "POST" }).then(() =>
+        pollThumbnail(id)
       ),
     []
   );
+
+  const startStoryboard = useCallback((id: string) => {
+    setRenderLabel("Painting the storyboard…");
+    return api(`/api/videos/${id}/storyboard`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }).then(() => pollStoryboard(id, { timeoutMs: 20 * 60 * 1000 }));
+  }, []);
+
+  const startRender = useCallback((id: string, mode: string) => {
+    setRenderLabel("Composing the video…");
+    return api(`/api/videos/${id}/render`, {
+      method: "POST",
+      body: JSON.stringify({ mode, subtitles: true, music: true }),
+    }).then(() =>
+      pollRender(
+        id,
+        (s) => s.progress && setRenderLabel(`${s.progress.label} (${s.progress.current}/${s.progress.total})`),
+        {
+          timeoutMs: mode === "animated" ? 60 * 60 * 1000 : 15 * 60 * 1000,
+        }
+      ).then(async () => {
+        // Refresh the video DTO to pick up videoUrl + videoDuration.
+        const d = await api<{ video: VideoDTO }>(`/api/videos/${id}`);
+        return d.video;
+      })
+    );
+  }, []);
 
   const handleGenerate = useCallback(
     async (autopilot: boolean) => {
@@ -230,33 +307,87 @@ export function CreateView() {
       setAnyRunning(true);
       setVideo(null);
       setError(null);
-      setStageState({ script: "idle", voiceover: "idle", thumbnail: "idle" });
+      setRenderLabel(null);
+      setStageState({
+        script: "idle",
+        storyboard: "idle",
+        voiceover: "idle",
+        thumbnail: "idle",
+        render: "idle",
+      });
 
       try {
         const v = await runStage("script", createVideo);
         if (!v) return;
         bumpRefresh();
 
-        if (autopilot && autoVoice) {
-          const voiced = await runStage("voiceover", () => startVoiceover(v.id));
-          if (!voiced) return;
-          if (autopilot && autoThumb) {
-            await runStage("thumbnail", () => startThumbnail(voiced.id));
+        if (autopilot && isStory) {
+          // Story pipeline: storyboard → voiceover → thumbnail → render
+          const boarded = await runStage("storyboard", () => startStoryboard(v.id));
+          if (!boarded) return;
+
+          if (autopilot && autoVoice) {
+            const voiced = await runStage("voiceover", () => startVoiceover(v.id));
+            if (!voiced) return;
+
+            if (autopilot && autoThumb) {
+              const thumbed = await runStage("thumbnail", () => startThumbnail(v.id));
+              if (!thumbed) return;
+
+              if (renderMode === "kenburns") {
+                await runStage("render", () => startRender(v.id, "kenburns"));
+              } else {
+                toast({
+                  title: "Storyboard package ready",
+                  description:
+                    "Full AI animation takes ~4 min per scene — launch it from the Library detail view whenever you're ready.",
+                });
+              }
+            }
+          }
+        } else {
+          // Classic pipeline: voiceover → thumbnail
+          if (autopilot && autoVoice) {
+            const voiced = await runStage("voiceover", () => startVoiceover(v.id));
+            if (!voiced) return;
+            if (autopilot && autoThumb) {
+              await runStage("thumbnail", () => startThumbnail(voiced.id));
+            }
           }
         }
+
         if (autopilot) {
           toast({
-            title: "Auto-Pilot complete",
-            description: "Your video package is ready to review and publish.",
+            title: isStory && renderMode === "kenburns" ? "Auto-Pilot complete" : "Auto-Pilot complete",
+            description:
+              isStory && renderMode === "kenburns"
+                ? "Your rendered video is ready to review and upload."
+                : "Your video package is ready to review and publish.",
           });
         }
       } finally {
         runningRef.current = false;
         setAnyRunning(false);
+        setRenderLabel(null);
         bumpRefresh();
       }
     },
-    [topic, busy, runStage, createVideo, startVoiceover, startThumbnail, autoVoice, autoThumb, bumpRefresh, toast]
+    [
+      topic,
+      busy,
+      isStory,
+      renderMode,
+      runStage,
+      createVideo,
+      startStoryboard,
+      startVoiceover,
+      startThumbnail,
+      startRender,
+      autoVoice,
+      autoThumb,
+      bumpRefresh,
+      toast,
+    ]
   );
 
   const resumeStage = useCallback(
@@ -265,26 +396,44 @@ export function CreateView() {
       runningRef.current = true;
       setAnyRunning(true);
       try {
-        if (stage === "voiceover") {
+        if (stage === "storyboard") {
+          const boarded = await runStage("storyboard", () => startStoryboard(video.id));
+          if (boarded) bumpRefresh();
+        } else if (stage === "voiceover") {
           const voiced = await runStage("voiceover", () => startVoiceover(video.id));
           if (voiced) bumpRefresh();
         } else if (stage === "thumbnail") {
           const thumbed = await runStage("thumbnail", () => startThumbnail(video.id));
           if (thumbed) bumpRefresh();
+        } else if (stage === "render") {
+          const rendered = await runStage("render", () =>
+            startRender(video.id, renderMode)
+          );
+          if (rendered) bumpRefresh();
         }
       } finally {
         runningRef.current = false;
         setAnyRunning(false);
       }
     },
-    [video, busy, runStage, startVoiceover, startThumbnail, bumpRefresh]
+    [video, busy, renderMode, runStage, startStoryboard, startVoiceover, startThumbnail, startRender, bumpRefresh]
   );
 
   const tags = video?.tags ? video.tags.split(",").map((t) => t.trim()).filter(Boolean) : [];
+  const stages: Stage[] = isStory
+    ? ["script", "storyboard", "voiceover", "thumbnail", "render"]
+    : ["script", "voiceover", "thumbnail"];
   const allDone =
     stageState.script === "done" &&
-    (stageState.voiceover === "done" || !autoVoice || video?.hasVoiceover) &&
-    (stageState.thumbnail === "done" || !autoThumb || video?.hasThumbnail);
+    stages
+      .filter((s) => s !== "script")
+      .every(
+        (s) =>
+          stageState[s] === "done" ||
+          (s === "voiceover" && (!autoVoice || video?.hasVoiceover)) ||
+          (s === "thumbnail" && (!autoThumb || video?.hasThumbnail)) ||
+          (s === "render" && (renderMode === "animated" || video?.hasVideo))
+      );
 
   return (
     <div className="grid lg:grid-cols-12 gap-5">
@@ -327,6 +476,80 @@ export function CreateView() {
               ))}
             </div>
           </div>
+
+          {/* Format — classic narration vs scene-based story */}
+          <div className="space-y-1.5">
+            <Label>Production format</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {FORMATS.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setFormat(f.id)}
+                  className={clsx(
+                    "rounded-xl border p-3 text-left transition-all",
+                    format === f.id
+                      ? "border-primary/50 bg-primary/8 glow-red-soft"
+                      : "border-white/10 bg-white/3 hover:border-white/25"
+                  )}
+                >
+                  <div className="flex items-center gap-1.5">
+                    {f.id === "story" ? (
+                      <Clapperboard className="h-3.5 w-3.5 text-primary" />
+                    ) : (
+                      <FileText className="h-3.5 w-3.5 text-primary" />
+                    )}
+                    <span className="text-sm font-medium">{f.label}</span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-1 leading-snug">{f.desc}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {isStory && (
+            <div className="space-y-1.5 rounded-xl border border-white/10 bg-white/3 p-3">
+              <div className="flex items-center justify-between">
+                <Label>Render mode</Label>
+                <Badge variant="outline" className="border-white/15 bg-white/5 text-muted-foreground text-[10px]">
+                  {sceneCount} scenes · {LENGTHS.find((l) => l.id === length)?.label ?? length}
+                </Badge>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {RENDER_MODES.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setRenderMode(m.id)}
+                    className={clsx(
+                      "rounded-lg border p-2.5 text-left transition-all",
+                      renderMode === m.id
+                        ? "border-primary/50 bg-primary/8"
+                        : "border-white/10 bg-white/3 hover:border-white/25"
+                    )}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      {m.id === "kenburns" ? (
+                        <Zap className="h-3.5 w-3.5 text-amber-300" />
+                      ) : (
+                        <Clapperboard className="h-3.5 w-3.5 text-sky-300" />
+                      )}
+                      <span className="text-[13px] font-medium">{m.label}</span>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground mt-1 leading-snug">{m.desc}</p>
+                  </button>
+                ))}
+              </div>
+              {renderMode === "animated" && (
+                <p className="text-[11px] text-sky-300/90 leading-relaxed">
+                  Full animation renders on demand from the Library — Auto-Pilot
+                  stops at the storyboard package.
+                </p>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
@@ -408,7 +631,7 @@ export function CreateView() {
               {castCharacter && (
                 <p className="text-[11px] text-emerald-300/90 leading-relaxed">
                   {castCharacter.name} hosts this video — identity is stamped into the
-                  thumbnail and the voice defaults to their persona.
+                  storyboard and thumbnail, and the voice defaults to their persona.
                 </p>
               )}
             </div>
@@ -465,7 +688,7 @@ export function CreateView() {
           <div className="pt-1.5 flex flex-col gap-2">
             <Button
               onClick={() => handleGenerate(true)}
-              disabled={!topic.trim() || busy}
+              disabled={!topic.trim() || busy || !settingsLoaded}
               className="bg-brand-gradient hover:opacity-90 font-semibold h-11 glow-red-soft"
               size="lg"
             >
@@ -486,8 +709,9 @@ export function CreateView() {
               Script Only
             </Button>
             <p className="text-[11px] text-muted-foreground text-center leading-relaxed">
-              Auto-Pilot runs: script → {autoVoice ? "voiceover → " : ""}
-              {autoThumb ? "thumbnail → " : ""}ready (configure in Settings)
+              {isStory
+                ? `Auto-Pilot runs: scene script → storyboard → ${autoVoice ? "voiceover → " : ""}${autoThumb ? "thumbnail → " : ""}${renderMode === "kenburns" ? "render MP4" : "ready"}`
+                : `Auto-Pilot runs: script → ${autoVoice ? "voiceover → " : ""}${autoThumb ? "thumbnail → " : ""}ready (configure in Settings)`}
             </p>
           </div>
         </div>
@@ -503,7 +727,9 @@ export function CreateView() {
               <p className="text-xs text-muted-foreground">
                 {video
                   ? allDone
-                    ? "Package complete — ready to upload"
+                    ? isStory && renderMode === "kenburns"
+                      ? "Video rendered — ready to upload"
+                      : "Package complete — ready to upload"
                     : "Auto-Pilot is assembling your video"
                   : "Waiting for a topic…"}
               </p>
@@ -524,12 +750,13 @@ export function CreateView() {
             )}
           </div>
 
-          <ol className="grid sm:grid-cols-3 gap-3">
-            {STAGES.map((stage, i) => {
-              const state = stageState[stage.id];
+          <ol className={clsx("grid gap-3", stages.length > 3 ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5" : "sm:grid-cols-3")}>
+            {stages.map((stage, i) => {
+              const state = stageState[stage];
+              const def = STAGE_DEFS[stage];
               return (
                 <li
-                  key={stage.id}
+                  key={stage}
                   className={clsx(
                     "rounded-xl border p-3.5 transition-all duration-300",
                     state === "done" && "border-emerald-500/25 bg-emerald-500/6",
@@ -555,23 +782,23 @@ export function CreateView() {
                       ) : state === "error" ? (
                         <X className="h-4 w-4" />
                       ) : (
-                        <stage.icon className="h-4 w-4" />
+                        <def.icon className="h-4 w-4" />
                       )}
                     </div>
                     <span className="text-[10px] text-muted-foreground tabular-nums">
                       STEP {i + 1}
                     </span>
                   </div>
-                  <p className="text-sm font-medium mt-2.5">{stage.label}</p>
+                  <p className="text-sm font-medium mt-2.5">{def.label}</p>
                   <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">
-                    {stage.desc}
+                    {isStory ? def.storyDesc : def.desc}
                   </p>
                   {state === "error" && video && (
                     <Button
                       variant="ghost"
                       size="sm"
                       className="mt-2 h-7 text-xs text-red-300 hover:text-red-200 hover:bg-red-500/10 px-2"
-                      onClick={() => resumeStage(stage.id)}
+                      onClick={() => resumeStage(stage)}
                     >
                       <RefreshCw className="h-3 w-3" />
                       Retry
@@ -581,6 +808,12 @@ export function CreateView() {
               );
             })}
           </ol>
+          {renderLabel && (
+            <p className="mt-3 text-xs text-primary/90 flex items-center gap-1.5">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              {renderLabel}
+            </p>
+          )}
           {error && (
             <p className="mt-3 text-xs text-red-300 bg-red-500/8 border border-red-500/20 rounded-lg px-3 py-2">
               {error}
@@ -629,7 +862,9 @@ export function CreateView() {
                     </h3>
                     <p className="text-xs text-muted-foreground mt-1.5">
                       {video.niche} · {video.wordCount ?? 0} words ·{" "}
-                      {LENGTHS.find((l) => l.id === video.length)?.label ?? video.length}
+                      {isStory
+                        ? `${video.sceneCount ?? 0} scenes · ${video.renderMode === "animated" ? "AI animation" : "Ken Burns"}`
+                        : LENGTHS.find((l) => l.id === video.length)?.label ?? video.length}
                     </p>
                   </div>
                   {video.channelName && (
@@ -639,6 +874,58 @@ export function CreateView() {
                   )}
                 </div>
               </div>
+
+              {video.hasVideo && video.videoUrl && (
+                <div className="p-5 border-b border-white/6">
+                  <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-2">
+                    Rendered video · {formatDuration(video.videoDuration)}
+                  </p>
+                  <video
+                    controls
+                    preload="metadata"
+                    src={video.videoUrl}
+                    className="w-full rounded-xl border border-white/10 aspect-video bg-black"
+                  >
+                    Your browser does not support the video element.
+                  </video>
+                </div>
+              )}
+
+              {isStory && (video.scenes ?? []).length > 0 && (
+                <div className="p-5 border-b border-white/6">
+                  <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-2">
+                    Storyboard · {video.sceneCount} scenes
+                  </p>
+                  <div className="flex gap-2 overflow-x-auto scroll-area-bar pb-2">
+                    {(video.scenes ?? []).map((s) => (
+                      <div
+                        key={s.index}
+                        className="shrink-0 w-40 rounded-xl overflow-hidden border border-white/10 bg-white/3"
+                      >
+                        {video.hasStoryboard ? (
+                          <img
+                            src={`/api/videos/${video.id}/storyboard/${s.index}`}
+                            alt={`Scene ${s.index}: ${s.title}`}
+                            className="w-full aspect-video object-cover"
+                          />
+                        ) : (
+                          <div className="w-full aspect-video bg-white/4 flex items-center justify-center">
+                            {stageState.storyboard === "running" ? (
+                              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                            ) : (
+                              <LayoutGrid className="h-5 w-5 text-muted-foreground" />
+                            )}
+                          </div>
+                        )}
+                        <div className="p-2">
+                          <p className="text-[11px] font-medium truncate">{s.title}</p>
+                          <p className="text-[10px] text-muted-foreground truncate">{s.caption || s.mood}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {video.hasThumbnail && (
                 <div className="px-5 pt-5">
@@ -679,7 +966,7 @@ export function CreateView() {
             <Card className="glass rounded-2xl p-5">
               <div className="flex items-center justify-between mb-3">
                 <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
-                  Full Script
+                  {isStory ? "Scene Narration" : "Full Script"}
                 </p>
                 {video.description && (
                   <Badge variant="outline" className="border-white/15 bg-white/5 text-muted-foreground">
@@ -710,20 +997,39 @@ export function CreateView() {
               )}
             </Card>
 
-            {(stageState.voiceover === "idle" || stageState.thumbnail === "idle") &&
+            {stages.some(
+              (s) =>
+                stageState[s] === "idle" &&
+                ((s === "storyboard" && !video.hasStoryboard) ||
+                  (s === "voiceover" && !video.hasVoiceover) ||
+                  (s === "thumbnail" && !video.hasThumbnail) ||
+                  (s === "render" && !video.hasVideo && renderMode === "kenburns"))
+            ) &&
               video.status !== "published" && (
                 <Card className="glass rounded-2xl p-5">
                   <p className="text-sm font-medium mb-1">Continue the pipeline</p>
                   <p className="text-xs text-muted-foreground mb-3">
-                    Finish the remaining stages to mark this package ready for upload.
+                    Finish the remaining stages to complete this video.
                   </p>
                   <div className="flex flex-wrap gap-2">
+                    {isStory && !video.hasStoryboard && (
+                      <Button
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => resumeStage("storyboard")}
+                        className="bg-brand-gradient hover:opacity-90 font-medium"
+                      >
+                        <LayoutGrid className="h-3.5 w-3.5" />
+                        Generate Storyboard
+                      </Button>
+                    )}
                     {!video.hasVoiceover && (
                       <Button
                         size="sm"
                         disabled={busy}
                         onClick={() => resumeStage("voiceover")}
-                        className="bg-brand-gradient hover:opacity-90 font-medium"
+                        className={clsx(isStory && video.hasStoryboard ? "bg-brand-gradient hover:opacity-90 font-medium" : "border-white/15 bg-white/4")}
+                        variant={isStory && video.hasStoryboard ? "default" : "outline"}
                       >
                         <Mic className="h-3.5 w-3.5" />
                         Generate Voiceover
@@ -739,6 +1045,18 @@ export function CreateView() {
                       >
                         <ImageIcon className="h-3.5 w-3.5" />
                         Generate Thumbnail
+                      </Button>
+                    )}
+                    {isStory && !video.hasVideo && video.hasStoryboard && video.hasVoiceover && (
+                      <Button
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => resumeStage("render")}
+                        variant="outline"
+                        className="border-white/15 bg-white/4"
+                      >
+                        <Clapperboard className="h-3.5 w-3.5" />
+                        Render Video
                       </Button>
                     )}
                   </div>

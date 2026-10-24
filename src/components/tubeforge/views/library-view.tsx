@@ -14,6 +14,7 @@ import {
   Wand2,
   AudioLines,
   Trash2,
+  Clapperboard,
   Library as LibraryIcon,
 } from "lucide-react";
 
@@ -150,6 +151,12 @@ export function LibraryView() {
                   <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
                   <div className="absolute bottom-2.5 left-3 right-3 flex items-center gap-2 flex-wrap">
                     <StatusBadge status={v.status} />
+                    {v.hasVideo && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/80 backdrop-blur px-2 py-0.5 text-[11px] text-white font-medium">
+                        <Clapperboard className="h-3 w-3" />
+                        MP4
+                      </span>
+                    )}
                     {v.hasVoiceover && (
                       <span className="inline-flex items-center gap-1 rounded-full bg-black/60 backdrop-blur px-2 py-0.5 text-[11px] text-white/85">
                         <AudioLines className="h-3 w-3" />

@@ -1,42 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { generateScriptPackage } from "@/lib/tubeforge/ai";
-import type { VideoDTO, VideoStatus } from "@/lib/tubeforge/types";
-import type { Video } from "@prisma/client";
-
-const serialize = (
-  v: Video & { character?: { name: string; hasPortrait: boolean } | null },
-  channelName?: string | null
-): VideoDTO => ({
-  id: v.id,
-  title: v.title,
-  topic: v.topic,
-  niche: v.niche,
-  tone: v.tone,
-  length: v.length,
-  script: v.script,
-  description: v.description,
-  tags: v.tags,
-  status: v.status as VideoStatus,
-  voice: v.voice,
-  ttsSpeed: v.ttsSpeed,
-  thumbStyle: v.thumbStyle,
-  hasVoiceover: v.hasVoiceover,
-  hasThumbnail: v.hasThumbnail,
-  audioDuration: v.audioDuration,
-  wordCount: v.wordCount,
-  error: v.error,
-  channelId: v.channelId,
-  channelName: channelName ?? null,
-  characterId: v.characterId,
-  characterName: v.character?.name ?? null,
-  characterPortraitUrl:
-    v.characterId && v.character?.hasPortrait
-      ? `/api/characters/${v.characterId}/portrait`
-      : null,
-  createdAt: v.createdAt.toISOString(),
-  updatedAt: v.updatedAt.toISOString(),
-});
+import { generateSceneScriptPackage } from "@/lib/tubeforge/story";
+import { serializeVideo } from "@/lib/tubeforge/serialize";
+import { FORMATS, RENDER_MODES, type VideoDTO } from "@/lib/tubeforge/types";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -55,7 +22,7 @@ export async function GET(req: NextRequest) {
   });
 
   return NextResponse.json({
-    videos: videos.map((v) => serialize(v, v.channel?.name)),
+    videos: videos.map((v) => serializeVideo(v, v.channel?.name)),
   });
 }
 
@@ -76,13 +43,19 @@ export async function POST(req: NextRequest) {
     const thumbStyle = String(body.thumbStyle ?? "cinematic");
     const channelId = body.channelId ? String(body.channelId) : null;
     const characterId = body.characterId ? String(body.characterId) : null;
+    const format = FORMATS.some((f) => f.id === body.format)
+      ? String(body.format)
+      : "script";
+    const renderMode = RENDER_MODES.some((m) => m.id === body.renderMode)
+      ? String(body.renderMode)
+      : "kenburns";
 
     // Validate the character exists (avoids dangling FK on SQLite)
-    if (characterId) {
-      const character = await db.character.findUnique({ where: { id: characterId } });
-      if (!character)
-        return NextResponse.json({ error: "Character not found" }, { status: 400 });
-    }
+    const character = characterId
+      ? await db.character.findUnique({ where: { id: characterId } })
+      : null;
+    if (characterId && !character)
+      return NextResponse.json({ error: "Character not found" }, { status: 400 });
 
     // Create the video record first (draft)
     const video = await db.video.create({
@@ -96,6 +69,8 @@ export async function POST(req: NextRequest) {
         thumbStyle,
         channelId,
         characterId,
+        format,
+        renderMode,
         status: "draft",
       },
       include: {
@@ -108,14 +83,64 @@ export async function POST(req: NextRequest) {
       data: {
         videoId: video.id,
         stage: "create",
-        message: `New video queued: "${topic}" (${niche})`,
+        message: `New video queued: "${topic}" (${niche})${format === "story" ? " · scene-based story" : ""}`,
       },
     });
 
-    // Stage 1 — AI script generation
+    // Stage 1 — AI script generation (classic narration OR scene-based story)
     try {
+      const wordCount = (text: string) =>
+        text.split(/\s+/).filter(Boolean).length;
+
+      if (format === "story") {
+        const pkg = await generateSceneScriptPackage({
+          topic,
+          niche,
+          tone,
+          length,
+          character: character
+            ? {
+                name: character.name,
+                personality: character.personality,
+                identityAnchor: character.identityAnchor,
+              }
+            : null,
+        });
+
+        const updated = await db.video.update({
+          where: { id: video.id },
+          data: {
+            title: pkg.title,
+            script: pkg.script,
+            description: pkg.description,
+            tags: pkg.tags.join(", "),
+            scenes: JSON.stringify(pkg.scenes),
+            wordCount: wordCount(pkg.script),
+            status: "scripted",
+            error: null,
+          },
+          include: {
+            channel: { select: { name: true } },
+            character: { select: { name: true, hasPortrait: true } },
+          },
+        });
+
+        await db.activity.create({
+          data: {
+            videoId: video.id,
+            stage: "script",
+            message: `Scene script written — "${pkg.title}" (${pkg.scenes.length} scenes, ${wordCount(pkg.script)} words)`,
+          },
+        });
+
+        return NextResponse.json({
+          video: serializeVideo(updated, updated.channel?.name, {
+            includeScenes: true,
+          }) as VideoDTO,
+        });
+      }
+
       const pkg = await generateScriptPackage({ topic, niche, tone, length });
-      const wordCount = pkg.script.split(/\s+/).filter(Boolean).length;
 
       const updated = await db.video.update({
         where: { id: video.id },
@@ -124,7 +149,7 @@ export async function POST(req: NextRequest) {
           script: pkg.script,
           description: pkg.description,
           tags: pkg.tags.join(", "),
-          wordCount,
+          wordCount: wordCount(pkg.script),
           status: "scripted",
           error: null,
         },
@@ -138,11 +163,15 @@ export async function POST(req: NextRequest) {
         data: {
           videoId: video.id,
           stage: "script",
-          message: `Script written by GLM — "${pkg.title}" (${wordCount} words)`,
+          message: `Script written by GLM — "${pkg.title}" (${wordCount(pkg.script)} words)`,
         },
       });
 
-      return NextResponse.json({ video: serialize(updated, updated.channel?.name) });
+      return NextResponse.json({
+        video: serializeVideo(updated, updated.channel?.name, {
+          includeScenes: true,
+        }),
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Script generation failed";
       const failed = await db.video.update({
@@ -162,7 +191,7 @@ export async function POST(req: NextRequest) {
         },
       });
       return NextResponse.json(
-        { error: message, video: serialize(failed, failed.channel?.name) },
+        { error: message, video: serializeVideo(failed, failed.channel?.name) },
         { status: 500 }
       );
     }

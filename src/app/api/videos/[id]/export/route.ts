@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
+import fs from "fs";
+import path from "path";
 import { db } from "@/lib/db";
 import { buildZip, safeZipName } from "@/lib/tubeforge/zip";
 import { readMedia, listVariants } from "@/lib/tubeforge/ai";
+import { parseScenes, sceneImageFile } from "@/lib/tubeforge/story";
 import { LENGTHS, TONES, VOICES } from "@/lib/tubeforge/types";
 
 type Ctx = { params: Promise<{ id: string }> };
+
+const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
 /** GET — download the full upload-ready package as a ZIP. */
 export async function GET(_req: NextRequest, ctx: Ctx) {
@@ -27,8 +32,13 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
       });
     }
   };
+  const readFile = (rel: string): Buffer | null => {
+    const p = path.join(UPLOAD_ROOT, video.id, rel);
+    return fs.existsSync(p) ? fs.readFileSync(p) : null;
+  };
 
   const base = safeZipName(video.title ?? video.topic) || "video-package";
+  const scenes = video.format === "story" ? parseScenes(video.scenes) : [];
 
   // Core metadata for manual YouTube upload
   const tags = video.tags ? video.tags.split(",").map((t) => t.trim()).filter(Boolean) : [];
@@ -42,10 +52,14 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
       `CHANNEL: ${video.channel?.name ?? "—"}${video.channel ? ` (${video.channel.niche})` : ""}`,
       `TONE: ${TONES.find((t) => t.id === video.tone)?.label ?? video.tone}`,
       `LENGTH: ${LENGTHS.find((l) => l.id === video.length)?.label ?? video.length}`,
+      `FORMAT: ${video.format === "story" ? `Scene-based story (${scenes.length} scenes)` : "Narration script"}`,
       `VOICE: ${VOICES.find((v) => v.id === video.voice)?.label ?? video.voice}`,
       `CAST: ${video.character ? `${video.character.name} — ${video.character.role ?? "recurring host"}` : "—"}`,
       `WORD COUNT: ${video.wordCount ?? "—"}`,
       `AUDIO DURATION: ${video.audioDuration ? `${Math.round(video.audioDuration)} seconds` : "—"}`,
+      video.hasVideo && video.videoDuration
+        ? `RENDERED VIDEO: final.mp4 (${Math.round(video.videoDuration)} seconds, ${video.renderMode})`
+        : ``,
       ``,
       `DESCRIPTION:`,
       video.description ?? "—",
@@ -54,10 +68,20 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
       tags.join(", ") || "—",
       ``,
       `HOW TO UPLOAD:`,
-      `1. Combine the voiceover with visuals (use the thumbnail as cover art).`,
-      `2. Paste the description from this file into the YouTube upload form.`,
-      `3. Add the tags in YouTube Studio's tag field.`,
-      `4. Upload thumbnail.png as the custom thumbnail.`,
+      video.hasVideo
+        ? [
+            `1. Upload final.mp4 as the video file.`,
+            `2. Paste the description from this file into the YouTube upload form.`,
+            `3. Add the tags in YouTube Studio's tag field.`,
+            `4. Upload thumbnail.png as the custom thumbnail.`,
+            `5. subtitles.srt can be uploaded as the caption track.`,
+          ].join("\n")
+        : [
+            `1. Combine the voiceover with visuals (use the thumbnail as cover art).`,
+            `2. Paste the description from this file into the YouTube upload form.`,
+            `3. Add the tags in YouTube Studio's tag field.`,
+            `4. Upload thumbnail.png as the custom thumbnail.`,
+          ].join("\n"),
     ].join("\n")
   );
 
@@ -76,6 +100,18 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
         length: video.length,
         voice: video.voice,
         thumbnailStyle: video.thumbStyle,
+        format: video.format,
+        renderMode: video.renderMode,
+        scenes: scenes.length
+          ? scenes.map((s) => ({
+              index: s.index,
+              title: s.title,
+              narration: s.narration,
+              camera: s.camera,
+              mood: s.mood,
+              caption: s.caption,
+            }))
+          : undefined,
         cast: video.character
           ? {
               name: video.character.name,
@@ -85,6 +121,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
           : null,
         wordCount: video.wordCount,
         audioDurationSec: video.audioDuration,
+        videoDurationSec: video.hasVideo ? video.videoDuration : undefined,
         description: video.description,
         tags,
         channel: video.channel
@@ -108,6 +145,13 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   for (const v of listVariants(video.id)) {
     add(`${base}/thumbnail-variants/${v.style}.png`, readMedia(video.id, v.fileName));
   }
+
+  // Story engine artifacts — storyboard art, captions, rendered video
+  for (const scene of scenes) {
+    add(`${base}/storyboard/scene-${String(scene.index).padStart(2, "0")}.png`, readFile(sceneImageFile(scene.index)));
+  }
+  add(`${base}/subtitles.srt`, readFile("subtitles.srt"));
+  add(`${base}/final.mp4`, readFile("final.mp4"));
 
   if (files.length === 0)
     return NextResponse.json(
