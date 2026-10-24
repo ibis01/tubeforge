@@ -21,6 +21,40 @@ async function getZAI() {
   return zaiInstance;
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Retry an async AI call with exponential backoff.
+ * The upstream GLM/TTS/CogView services occasionally return transient 500s
+ * ("network error, please try again later") — one blip should never fail a stage.
+ */
+async function withRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  attempts = 3,
+  baseDelayMs = 2000
+): Promise<T> {
+  let lastError: unknown;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (i < attempts) {
+        const delay = baseDelayMs * Math.pow(2, i - 1);
+        console.warn(
+          `[ai-retry] ${label} failed (attempt ${i}/${attempts}), retrying in ${delay}ms:`,
+          err instanceof Error ? err.message : err
+        );
+        await sleep(delay);
+      }
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`${label} failed after ${attempts} attempts`);
+}
+
 /** Extract JSON from an LLM response that may contain markdown fences or prose. */
 function parseJsonLoose(raw: string): Record<string, unknown> {
   const cleaned = raw
@@ -61,7 +95,8 @@ export async function generateScriptPackage(opts: {
   const toneDesc = toneMap[opts.tone] ?? "clear and engaging";
 
   const zai = await getZAI();
-  const completion = await zai.chat.completions.create({
+  const completion = await withRetry("script LLM", () =>
+    zai.chat.completions.create({
     messages: [
       {
         role: "assistant",
@@ -86,7 +121,7 @@ Return JSON with exactly these keys:
       },
     ],
     thinking: { type: "disabled" },
-  });
+  }));
 
   const raw = completion.choices[0]?.message?.content ?? "";
   const parsed = parseJsonLoose(raw);
@@ -163,13 +198,17 @@ export async function generateVoiceover(opts: {
   const buffers: Buffer[] = [];
 
   for (const chunk of chunks) {
-    const response = await zai.audio.tts.create({
-      input: chunk,
-      voice: opts.voice,
-      speed: opts.speed,
-      response_format: "wav",
-      stream: false,
-    });
+    const response = await withRetry(
+      `tts chunk (${chunk.length} chars)`,
+      () =>
+        zai.audio.tts.create({
+          input: chunk,
+          voice: opts.voice,
+          speed: opts.speed,
+          response_format: "wav",
+          stream: false,
+        })
+    );
     const arrayBuffer = await response.arrayBuffer();
     const buffer = Buffer.from(new Uint8Array(arrayBuffer));
     if (buffer.length < 44) throw new Error("TTS returned empty audio");
@@ -197,10 +236,12 @@ export async function generateThumbnail(opts: {
     THUMB_STYLES[0].prompt;
 
   const zai = await getZAI();
-  const response = await zai.images.generations.create({
-    prompt: `YouTube video thumbnail about "${opts.topic}". ${stylePrompt}. Wide 16:9 cinematic frame, extremely detailed, eye-catching composition built for high click-through rate, professional color grading. Absolutely no text, no letters, no words, no watermarks.`,
-    size: "1344x768",
-  });
+  const response = await withRetry("thumbnail image", () =>
+    zai.images.generations.create({
+      prompt: `YouTube video thumbnail about "${opts.topic}". ${stylePrompt}. Wide 16:9 cinematic frame, extremely detailed, eye-catching composition built for high click-through rate, professional color grading. Absolutely no text, no letters, no words, no watermarks.`,
+      size: "1344x768",
+    })
+  );
 
   const base64 = response.data[0]?.base64;
   if (!base64) throw new Error("Image generation returned no data");
@@ -265,7 +306,8 @@ export async function generateTopicResearch(opts: {
   query: string;
 }): Promise<ResearchResult> {
   const zai = await getZAI();
-  const completion = await zai.chat.completions.create({
+  const completion = await withRetry("research LLM", () =>
+    zai.chat.completions.create({
     messages: [
       {
         role: "assistant",
@@ -297,7 +339,7 @@ Return JSON with exactly these keys:
       },
     ],
     thinking: { type: "disabled" },
-  });
+  }));
 
   const raw = completion.choices[0]?.message?.content ?? "";
   const parsed = parseJsonLoose(raw);

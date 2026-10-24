@@ -53,3 +53,18 @@ Stage Summary:
 - TubeForge now ships 7 views (added Topic Radar + Publishing Calendar) with full research→create→schedule→export loop: niche scan → idea → Auto-Pilot package → A/B thumbnail test → calendar slot → ZIP export for manual YouTube upload.
 - Key artifacts: src/lib/tubeforge/{zip,research,schedule}.ts, src/app/api/{research,schedule,videos/[id]/{variants,export}}/routes, src/components/tubeforge/views/{research,calendar}-view.tsx.
 - All flows verified desktop + mobile, lint clean, no page errors. Real YouTube Data API v3 OAuth upload remains the only future step (needs user credentials; ZIP export bridges the gap today).
+
+---
+Task ID: 3
+Agent: main (Z.ai)
+Task: Fix "voiceover and thumbnail not working" — diagnose + repair + harden pipeline.
+
+Work Log:
+- Diagnosed via dev.log + DB: video cmvmjupoy0001ritgx1m4aytm hit transient upstream TTS 500 ("network error, please retry later"); voiceover.wav was actually saved on the first pass, but a subsequent call failed and marked the video "failed", blocking the thumbnail stage. No retry logic existed — one blip killed the stage.
+- Verified upstream health directly with SDK sandbox script (scripts/test-ai-services.mjs): TTS OK (1.6s), image OK (27s) — outage was transient and had recovered.
+- Hardened src/lib/tubeforge/ai.ts with withRetry() helper (3 attempts, exponential backoff 2s/4s, console.warn logging) wrapping all 4 AI call sites: script LLM, TTS chunks, CogView thumbnail, research LLM.
+- Repaired the failed video via API: regenerated thumbnail (146KB PNG), status → ready, error cleared; re-ran voiceover through the new retry path (200 in 73s, 151.1s audio) to prove the hardening works.
+- Verified both media streaming endpoints return 200 with correct content-type/size.
+
+Stage Summary:
+- Root cause: transient upstream AI service 500, amplified by zero-retry code. Fixed with withRetry() across the pipeline; affected video fully repaired and confirmed "ready" with playable audio + visible thumbnail. All 4 library videos now ready.
