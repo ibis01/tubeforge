@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { jobSnapshot } from "@/lib/tubeforge/jobs";
 import type { VideoDTO, VideoStatus } from "@/lib/tubeforge/types";
 import type { Video } from "@prisma/client";
 
@@ -39,7 +40,10 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   });
   if (!video)
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
-  return NextResponse.json({ video: serialize(video, video.channel?.name) });
+  return NextResponse.json({
+    video: serialize(video, video.channel?.name),
+    generating: jobSnapshot(id),
+  });
 }
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {

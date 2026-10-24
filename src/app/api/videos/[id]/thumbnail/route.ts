@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { generateThumbnail, readMedia } from "@/lib/tubeforge/ai";
 import { deriveStatus } from "@/lib/tubeforge/status";
+import { startJob } from "@/lib/tubeforge/jobs";
 import type { VideoDTO, VideoStatus } from "@/lib/tubeforge/types";
 import type { Video } from "@prisma/client";
 
@@ -31,7 +32,7 @@ const serialize = (v: Video): VideoDTO => ({
   updatedAt: v.updatedAt.toISOString(),
 });
 
-/** POST — generate a thumbnail with CogView. */
+/** POST — kick off CogView thumbnail generation as a background job (returns 202 immediately). */
 export async function POST(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
@@ -44,49 +45,59 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
-  try {
-    await generateThumbnail({
-      title: video.title,
-      topic: video.topic,
-      style: video.thumbStyle,
-      videoId: video.id,
-    });
+  // Clear any stale error from a previous failed attempt before polling starts.
+  await db.video.update({ where: { id }, data: { error: null } });
 
-    const nextStatus = deriveStatus(video, { hasThumbnail: true });
+  startJob(id, "thumbnail", async () => {
+    try {
+      await generateThumbnail({
+        title: video.title,
+        topic: video.topic,
+        style: video.thumbStyle,
+        videoId: video.id,
+      });
 
-    const updated = await db.video.update({
-      where: { id },
-      data: { hasThumbnail: true, status: nextStatus, error: null },
-    });
+      const fresh = await db.video.findUnique({ where: { id } });
+      const nextStatus = deriveStatus(video, {
+        hasThumbnail: true,
+        hasVoiceover: fresh?.hasVoiceover ?? video.hasVoiceover,
+      });
 
-    await db.activity.create({
-      data: {
-        videoId: id,
-        stage: "thumbnail",
-        message: `Thumbnail generated (${video.thumbStyle} style) for "${video.title}"`,
-      },
-    });
+      await db.video.update({
+        where: { id },
+        data: { hasThumbnail: true, status: nextStatus, error: null },
+      });
 
-    return NextResponse.json({ video: serialize(updated) });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Thumbnail failed";
-    const failed = await db.video.update({
-      where: { id },
-      data: { status: "failed", error: message },
-    });
-    await db.activity.create({
-      data: {
-        videoId: id,
-        stage: "thumbnail",
-        level: "error",
-        message: `Thumbnail failed: ${message}`,
-      },
-    });
-    return NextResponse.json(
-      { error: message, video: serialize(failed) },
-      { status: 500 }
-    );
-  }
+      await db.activity.create({
+        data: {
+          videoId: id,
+          stage: "thumbnail",
+          message: `Thumbnail generated (${video.thumbStyle} style) for "${video.title}"`,
+        },
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Thumbnail failed";
+      await db.video.update({
+        where: { id },
+        data: { status: "failed", error: message },
+      });
+      await db.activity.create({
+        data: {
+          videoId: id,
+          stage: "thumbnail",
+          level: "error",
+          message: `Thumbnail failed: ${message}`,
+        },
+      });
+    }
+  });
+
+  // 202 Accepted — job already running (dedupe) or just started.
+  return NextResponse.json(
+    { video: serialize(video), accepted: true, generating: true },
+    { status: 202 }
+  );
 }
 
 /** GET — stream the thumbnail PNG. */

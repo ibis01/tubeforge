@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { StatusBadge, formatDuration, timeAgo } from "@/components/tubeforge/shared";
+import { pollVoiceover, pollThumbnail, pollVariants } from "@/lib/tubeforge/poll";
 import {
   VOICES,
   LENGTHS,
@@ -79,11 +80,10 @@ export function VideoDetailDialog({
     if (busy) return;
     setBusy("variants");
     try {
-      const res = await fetch(`/api/videos/${video!.id}/variants`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Variant generation failed");
+      // POST returns 202 + starts a server background job; poll the variants
+      // list until the job reports done (avoids gateway 502 on long requests).
+      await fetch(`/api/videos/${video!.id}/variants`, { method: "POST" });
+      const data = await pollVariants(video!.id);
       setVariants(data.variants);
       toast({
         title: "A/B thumbnail set ready",
@@ -149,13 +149,17 @@ export function VideoDetailDialog({
         onChanged(data.video);
         toast({ title: "Marked as published", description: `${data.video.title} added to the upload queue.` });
       } else {
-        const res = await fetch(`/api/videos/${video.id}/${stage}`, { method: "POST" });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? `${stage} failed`);
-        onChanged(data.video);
+        // POST returns 202 + starts a server background job; poll until the
+        // artifact exists (keeps the request short so gateways never 502).
+        await fetch(`/api/videos/${video.id}/${stage}`, { method: "POST" });
+        const done =
+          stage === "voiceover"
+            ? await pollVoiceover(video.id)
+            : await pollThumbnail(video.id);
+        onChanged(done);
         toast({
           title: stage === "voiceover" ? "Voiceover regenerated" : "Thumbnail regenerated",
-          description: stage === "voiceover" ? `${formatDuration(data.video.audioDuration)} of audio.` : "New artwork is ready.",
+          description: stage === "voiceover" ? `${formatDuration(done.audioDuration)} of audio.` : "New artwork is ready.",
         });
       }
       bumpRefresh();

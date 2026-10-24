@@ -68,3 +68,21 @@ Work Log:
 
 Stage Summary:
 - Root cause: transient upstream AI service 500, amplified by zero-retry code. Fixed with withRetry() across the pipeline; affected video fully repaired and confirmed "ready" with playable audio + visible thumbnail. All 4 library videos now ready.
+
+---
+Task ID: 4
+Agent: main (Z.ai)
+Task: Fix HTTP 502 on Generate Voiceover/Thumbnail — gateway kills long-running requests.
+
+Work Log:
+- Root cause chain: user clicks Generate → TTS/image API returns 429 rate-limit → retry backoff stretches request past gateway timeout → preview proxy returns 502 to browser while server keeps processing. dev.log confirmed server-side 200-in-72s/53s responses that the gateway swallowed as 502s.
+- Architecture fix (async job pattern):
+  - NEW src/lib/tubeforge/jobs.ts — in-memory job registry (running map + lastError map, dedupe via startJob(), jobSnapshot() for GETs).
+  - voiceover/thumbnail/variants POST routes now clear stale errors, start a background job via startJob(), return 202 in <100ms; job updates DB (hasVoiceover/hasThumbnail/status/error + activity) in-process, immune to client/proxy disconnects.
+  - variants GET now returns {variants, generating, error}; videos/[id] GET returns {video, generating:{voiceover,thumbnail,variants}} so spinners survive reloads.
+  - NEW src/lib/tubeforge/poll.ts — client pollers (pollVoiceover/pollThumbnail 2.5s interval + 6min cap; pollVariants on GET flags).
+  - Clients: create-view startVoiceover/startThumbnail and detail-dialog runStage/generateVariants now POST (fast) then poll; 429-aware backoff upgraded in withRetry (x4 multiplier on 429; TTS 5 attempts/6s base, image 4 attempts/5s base).
+- Verification: E2E async test (202 in 19-90ms → poll → ready), both user-stuck videos repaired concurrently via the async API (32s/65s incl. one silent 429 retry), eslint clean, browser check: library renders 6 videos, repaired video detail dialog shows thumbnail + Ready + 2m57s audio player, zero console errors.
+
+Stage Summary:
+- Stage generation is now gateway-proof: POSTs return 202 instantly, work continues server-side, clients poll to completion. Upstream 429/500 bursts self-heal with escalated backoff. All 6 library videos ready; A/B variants route also converted (same 502 risk). Research (10-20s) intentionally left synchronous — under gateway timeout.

@@ -41,10 +41,13 @@ async function withRetry<T>(
     } catch (err) {
       lastError = err;
       if (i < attempts) {
-        const delay = baseDelayMs * Math.pow(2, i - 1);
+        const msg = err instanceof Error ? err.message : String(err);
+        // Rate limits (429) need much longer cool-downs than transient 500s.
+        const rateLimited = /429|too many requests/i.test(msg);
+        const delay = baseDelayMs * Math.pow(2, i - 1) * (rateLimited ? 4 : 1);
         console.warn(
           `[ai-retry] ${label} failed (attempt ${i}/${attempts}), retrying in ${delay}ms:`,
-          err instanceof Error ? err.message : err
+          msg
         );
         await sleep(delay);
       }
@@ -207,7 +210,9 @@ export async function generateVoiceover(opts: {
           speed: opts.speed,
           response_format: "wav",
           stream: false,
-        })
+        }),
+      5, // 5 attempts — rate-limit windows need patience
+      6000 // 6s base → 6/12/24/48s backoff (x4 for 429s)
     );
     const arrayBuffer = await response.arrayBuffer();
     const buffer = Buffer.from(new Uint8Array(arrayBuffer));
@@ -236,11 +241,15 @@ export async function generateThumbnail(opts: {
     THUMB_STYLES[0].prompt;
 
   const zai = await getZAI();
-  const response = await withRetry("thumbnail image", () =>
-    zai.images.generations.create({
-      prompt: `YouTube video thumbnail about "${opts.topic}". ${stylePrompt}. Wide 16:9 cinematic frame, extremely detailed, eye-catching composition built for high click-through rate, professional color grading. Absolutely no text, no letters, no words, no watermarks.`,
-      size: "1344x768",
-    })
+  const response = await withRetry(
+    "thumbnail image",
+    () =>
+      zai.images.generations.create({
+        prompt: `YouTube video thumbnail about "${opts.topic}". ${stylePrompt}. Wide 16:9 cinematic frame, extremely detailed, eye-catching composition built for high click-through rate, professional color grading. Absolutely no text, no letters, no words, no watermarks.`,
+        size: "1344x768",
+      }),
+    4, // background job — room for rate-limit windows
+    5000 // 5/10/20s backoff (x4 for 429s)
   );
 
   const base64 = response.data[0]?.base64;

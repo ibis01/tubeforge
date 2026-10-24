@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { generateVoiceover, readMedia } from "@/lib/tubeforge/ai";
 import { deriveStatus } from "@/lib/tubeforge/status";
+import { isJobRunning, startJob } from "@/lib/tubeforge/jobs";
 import type { VideoDTO, VideoStatus } from "@/lib/tubeforge/types";
 import type { Video } from "@prisma/client";
 
@@ -31,7 +32,9 @@ const serialize = (v: Video): VideoDTO => ({
   updatedAt: v.updatedAt.toISOString(),
 });
 
-/** POST — generate the TTS voiceover for this video. */
+/** POST — kick off TTS voiceover generation as a background job (returns 202 immediately).
+ * Long synchronous requests were killed by the gateway with 502; the job runs
+ * in-process and the client polls GET /api/videos/[id] for completion. */
 export async function POST(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
@@ -44,54 +47,64 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
-  try {
-    const { durationSec } = await generateVoiceover({
-      script: video.script,
-      voice: video.voice,
-      speed: video.ttsSpeed,
-      videoId: video.id,
-    });
+  // Clear any stale error from a previous failed attempt before polling starts.
+  await db.video.update({ where: { id }, data: { error: null } });
 
-    const nextStatus = deriveStatus(video, { hasVoiceover: true });
+  const accepted = startJob(id, "voiceover", async () => {
+    try {
+      const { durationSec } = await generateVoiceover({
+        script: video.script,
+        voice: video.voice,
+        speed: video.ttsSpeed,
+        videoId: video.id,
+      });
 
-    const updated = await db.video.update({
-      where: { id },
-      data: {
+      const fresh = await db.video.findUnique({ where: { id } });
+      const nextStatus = deriveStatus(video, {
         hasVoiceover: true,
-        audioDuration: Math.round(durationSec * 10) / 10,
-        status: nextStatus,
-        error: null,
-      },
-    });
+        hasThumbnail: fresh?.hasThumbnail ?? video.hasThumbnail,
+      });
 
-    await db.activity.create({
-      data: {
-        videoId: id,
-        stage: "voiceover",
-        message: `Voiceover rendered (${video.voice}, ${video.ttsSpeed}x) — ${Math.round(durationSec)}s of audio`,
-      },
-    });
+      await db.video.update({
+        where: { id },
+        data: {
+          hasVoiceover: true,
+          audioDuration: Math.round(durationSec * 10) / 10,
+          status: nextStatus,
+          error: null,
+        },
+      });
 
-    return NextResponse.json({ video: serialize(updated) });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Voiceover failed";
-    const failed = await db.video.update({
-      where: { id },
-      data: { status: "failed", error: message },
-    });
-    await db.activity.create({
-      data: {
-        videoId: id,
-        stage: "voiceover",
-        level: "error",
-        message: `Voiceover failed: ${message}`,
-      },
-    });
-    return NextResponse.json(
-      { error: message, video: serialize(failed) },
-      { status: 500 }
-    );
-  }
+      await db.activity.create({
+        data: {
+          videoId: id,
+          stage: "voiceover",
+          message: `Voiceover rendered (${video.voice}, ${video.ttsSpeed}x) — ${Math.round(durationSec)}s of audio`,
+        },
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Voiceover failed";
+      await db.video.update({
+        where: { id },
+        data: { status: "failed", error: message },
+      });
+      await db.activity.create({
+        data: {
+          videoId: id,
+          stage: "voiceover",
+          level: "error",
+          message: `Voiceover failed: ${message}`,
+        },
+      });
+    }
+  });
+
+  // 202 Accepted — job already running (dedupe) or just started.
+  return NextResponse.json(
+    { video: serialize(video), accepted: true, generating: true },
+    { status: 202 }
+  );
 }
 
 /** GET — stream the voiceover WAV file. */

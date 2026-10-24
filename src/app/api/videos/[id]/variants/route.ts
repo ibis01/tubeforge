@@ -8,6 +8,7 @@ import {
   readMedia,
 } from "@/lib/tubeforge/ai";
 import { deriveStatus } from "@/lib/tubeforge/status";
+import { isJobRunning, lastJobError, startJob } from "@/lib/tubeforge/jobs";
 import { THUMB_STYLES, type VariantDTO } from "@/lib/tubeforge/types";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -23,15 +24,20 @@ function variantDTOs(videoId: string, primaryStyle: string): VariantDTO[] {
   }));
 }
 
-/** GET — list A/B thumbnail variants. */
+/** GET — list A/B thumbnail variants (+ job state for polling). */
 export async function GET(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id }, select: { thumbStyle: true } });
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
-  return NextResponse.json({ variants: variantDTOs(id, video.thumbStyle) });
+  const generating = isJobRunning(id, "variants");
+  return NextResponse.json({
+    variants: variantDTOs(id, video.thumbStyle),
+    generating,
+    error: generating ? null : lastJobError(id, "variants"),
+  });
 }
 
-/** POST — generate an A/B variant set (3 styles: the current one + 2 others). */
+/** POST — kick off A/B variant set generation as a background job (returns 202 immediately). */
 export async function POST(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
@@ -42,53 +48,53 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
-  try {
-    const styles = pickVariantStyles(video.thumbStyle, 3);
+  startJob(id, "variants", async () => {
+    try {
+      const styles = pickVariantStyles(video.thumbStyle, 3);
 
-    for (const style of styles) {
-      await generateThumbnail({
-        title: video.title,
-        topic: video.topic,
-        style,
-        videoId: video.id,
-        variant: true,
-      });
-      // Ensure a primary thumbnail exists — promote the first variant
-      if (!readMedia(video.id, "thumbnail.png")) {
-        promoteVariant(video.id, style);
+      for (const style of styles) {
+        await generateThumbnail({
+          title: video.title,
+          topic: video.topic,
+          style,
+          videoId: video.id,
+          variant: true,
+        });
+        // Ensure a primary thumbnail exists — promote the first variant
+        if (!readMedia(video.id, "thumbnail.png")) {
+          promoteVariant(video.id, style);
+        }
       }
+
+      const nextStatus = deriveStatus(video, { hasThumbnail: true });
+      await db.video.update({
+        where: { id },
+        data: { hasThumbnail: true, status: nextStatus, error: null },
+      });
+
+      await db.activity.create({
+        data: {
+          videoId: id,
+          stage: "thumbnail",
+          message: `A/B thumbnail set generated for "${video.title}" (${styles.length} styles)`,
+        },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Variant generation failed";
+      await db.activity.create({
+        data: {
+          videoId: id,
+          stage: "thumbnail",
+          level: "error",
+          message: `A/B thumbnail set failed: ${message}`,
+        },
+      });
+      // Re-thrown so startJob records it in the registry for GET polling.
+      throw err;
     }
+  });
 
-    const nextStatus = deriveStatus(video, { hasThumbnail: true });
-    const updated = await db.video.update({
-      where: { id },
-      data: { hasThumbnail: true, status: nextStatus, error: null },
-    });
-
-    await db.activity.create({
-      data: {
-        videoId: id,
-        stage: "thumbnail",
-        message: `A/B thumbnail set generated for "${video.title}" (${styles.length} styles)`,
-      },
-    });
-
-    return NextResponse.json({
-      variants: variantDTOs(id, updated.thumbStyle),
-      styles,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Variant generation failed";
-    await db.activity.create({
-      data: {
-        videoId: id,
-        stage: "thumbnail",
-        level: "error",
-        message: `A/B thumbnail set failed: ${message}`,
-      },
-    });
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+  return NextResponse.json({ accepted: true, generating: true }, { status: 202 });
 }
 
 /** PATCH — promote a variant to be the primary thumbnail. */

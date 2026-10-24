@@ -27,6 +27,7 @@ import {
   type VideoDTO,
 } from "@/lib/tubeforge/types";
 import { formatDuration } from "@/components/tubeforge/shared";
+import { pollVoiceover, pollThumbnail } from "@/lib/tubeforge/poll";
 import {
   Wand2,
   FileText,
@@ -183,8 +184,9 @@ export function CreateView() {
 
   const startVoiceover = useCallback(
     (id: string) =>
+      // POST returns 202 + starts a server background job; poll for the artifact.
       api<{ video: VideoDTO }>(`/api/videos/${id}/voiceover`, { method: "POST" }).then(
-        (d) => d.video
+        () => pollVoiceover(id)
       ),
     []
   );
@@ -192,7 +194,7 @@ export function CreateView() {
   const startThumbnail = useCallback(
     (id: string) =>
       api<{ video: VideoDTO }>(`/api/videos/${id}/thumbnail`, { method: "POST" }).then(
-        (d) => d.video
+        () => pollThumbnail(id)
       ),
     []
   );
