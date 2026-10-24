@@ -100,3 +100,18 @@ Work Log:
 
 Stage Summary:
 - No regression existed; TTS quota had recovered. Pipeline now paces TTS requests (2s gaps) on top of async jobs + escalated backoff. Complete Auto-Pilot run verified green end-to-end (56s total).
+
+---
+Task ID: 6
+Agent: main (Z.ai)
+Task: Package TubeForge for local machine deployment + setup guide.
+
+Work Log:
+- Inspected runtime deps: Node >=20 (SDK requirement), npm/bun install, Prisma/SQLite (file-based), .env DATABASE_URL (was absolute sandbox path -> .env.example uses relative file:../db/custom.db).
+- SDK auth research: z-ai-web-dev-sdk reads .z-ai-config JSON (baseUrl, apiKey, chatId, token, userId) from project dir -> home dir -> /etc; sandbox copy at /etc/.z-ai-config. Credentials NOT included in package (sensitive); .z-ai-config.example template + instructions provided instead.
+- Wrote LOCAL-SETUP.md: prerequisites, install, env, db push, credential setup, run (dev/prod), first-run checklist, troubleshooting table (incl. 429 + stuck-job guidance).
+- Built download/tubeforge-local.zip (249KB, 144 files): src, prisma, public, scripts (tests, no screenshots), configs, bun.lock, .env.example, .z-ai-config.example, LOCAL-SETUP.md, .gitkeep placeholders; excluded node_modules/.next/db/uploads/skills/examples/worklog.
+- Cleaned scripts/test-clip.mp4 (9.8MB test artifact).
+
+Stage Summary:
+- Deliverable: download/tubeforge-local.zip + LOCAL-SETUP.md. Local run needs: npm install -> cp .env.example .env -> db:generate + db:push -> cp .z-ai-config.example .z-ai-config (fill credentials) -> npm run dev. App works without credentials for UI; AI stages need valid Z.ai config values.

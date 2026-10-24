@@ -1,0 +1,7 @@
+{
+  "baseUrl": "REPLACE_WITH_YOUR_ZAI_ENDPOINT",
+  "apiKey": "REPLACE_WITH_YOUR_KEY",
+  "chatId": "REPLACE_WITH_YOUR_CHAT_ID",
+  "token": "REPLACE_WITH_YOUR_TOKEN",
+  "userId": "REPLACE_WITH_YOUR_USER_ID"
+}
