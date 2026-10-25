@@ -290,3 +290,23 @@ Stage Summary:
 - Key artifacts: src/lib/tubeforge/voice.ts, voiceover route 3-mode rewrite, dialog voice panel + create hint, schema voiceSource/voiceLabel, scripts/test-byov.mjs, scripts/package-local.mjs, LOCAL-SETUP.md, download/tubeforge-local.zip (228 files).
 - Local run: unzip → npm install → cp .env.example .env → npx prisma generate+db push → cp .z-ai-config.example .z-ai-config (fill creds) → npm run dev. ffmpeg required for render/BYOV/ASR.
 - Next candidates: per-scene voice files (upload one audio per scene), voice cloning provider integration, Shorts auto-upload, multi-channel OAuth switching.
+
+---
+Task ID: 7
+Agent: main
+Task: Answer "how do i get all this" — the .z-ai-config placeholder fields (baseUrl/apiKey/chatId/token/userId) in LOCAL-SETUP.md
+
+Work Log:
+- Traced the JSON to .z-ai-config.example referenced by LOCAL-SETUP.md §4
+- Read node_modules/z-ai-web-dev-sdk/dist/index.js: only baseUrl+apiKey are required (loadConfig gate); chatId/userId/token are optional X-* headers; routes are {baseUrl}/chat/completions, /audio/tts, /audio/asr, /images/generations, /video/generation, /async-result?id=, /functions/invoke
+- Confirmed sandbox uses platform-managed /etc/.z-ai-config (read-only, session-scoped, baseUrl https://internal-api.z.ai/v1) — not portable to user's PC
+- Rewrote .z-ai-config.example to the minimal 2-field shape
+- Added scripts/verify-config.mjs (config shape check + live chat test; --all adds tts/image/video task tests)
+- Rewrote LOCAL-SETUP.md §4 (field table, where to get key, sandbox-credentials caveat, verify step) + troubleshooting row for 401/403
+- Tested verify-config.mjs live: chat replied pong, exit 0
+- Rebuilt download/tubeforge-local.zip (includes updated template, guide, verify script)
+
+Stage Summary:
+- User needs exactly 2 values from their own Z.ai API account: baseUrl + apiKey; other 3 fields optional/removable
+- tubeforge-local.zip refreshed at download/tubeforge-local.zip
+- If user's public key can't serve /audio/tts or /video/generation routes, next step is provider adapters (alternative TTS/video APIs)

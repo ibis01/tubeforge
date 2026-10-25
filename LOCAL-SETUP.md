@@ -63,16 +63,43 @@ which reads a `.z-ai-config` JSON file. A template is included:
 cp .z-ai-config.example .z-ai-config
 ```
 
-Then fill in your real values:
+**Only two fields are required.** The SDK checks `baseUrl` + `apiKey` and
+ignores everything else (`chatId` / `userId` / `token` are optional passthrough
+headers used inside the hosted workspace — you can simply delete those lines,
+or leave them as empty strings `""`):
+
+| Field | Required | What it is |
+|---|---|---|
+| `baseUrl` | ✅ | API endpoint of your Z.ai-compatible gateway, including the version prefix (e.g. `https://api.z.ai/api/paas/v4`) |
+| `apiKey` | ✅ | Your API key — sent as `Authorization: Bearer <apiKey>` |
+| `chatId` | — | optional, sent as `X-Chat-Id` header |
+| `userId` | — | optional, sent as `X-User-Id` header |
+| `token` | — | optional, sent as `X-Token` header |
+
+So a minimal `.z-ai-config` is just:
 
 ```json
 {
-  "baseUrl": "REPLACE_WITH_YOUR_ZAI_ENDPOINT",
-  "apiKey": "REPLACE_WITH_YOUR_KEY",
-  "chatId": "REPLACE_WITH_YOUR_CHAT_ID",
-  "token": "REPLACE_WITH_YOUR_TOKEN",
-  "userId": "REPLACE_WITH_YOUR_USER_ID"
+  "baseUrl": "https://api.z.ai/api/paas/v4",
+  "apiKey": "your-key-here"
 }
+```
+
+**Where the two values come from:** your own Z.ai API account. Sign up on the
+Z.ai developer platform (z.ai — or open.bigmodel.cn in China), open the
+**API keys** page in its console, create a key, and take the matching **base
+URL** from the same API docs page. One honest caveat: the credentials inside
+the hosted TubeForge workspace are auto-provisioned by the platform for that
+session only — they can't be copied to your PC and they stop working when the
+session ends. That's exactly why the template asks for *your* key.
+
+**Check before you start** — this tests your config and reports exactly which
+stages your key can serve (chat by default; the other stages use a little
+quota):
+
+```bash
+node scripts/verify-config.mjs         # config + chat (scripts, storyboards…)
+node scripts/verify-config.mjs --all   # also TTS, image, video task creation
 ```
 
 The app starts fine **without** credentials — you can browse the UI and the
@@ -118,7 +145,7 @@ replaces it (and "Switch to AI voice" in the footer flips back).
 | `ffmpeg failed` / render errors | Install ffmpeg + ffprobe and reopen the terminal (`ffmpeg -version` must work). |
 | 429 "Too many requests" during voiceover/thumbnails | Upstream rate limiting. TubeForge paces and retries for ~16 min; if it still fails, wait a few minutes and hit the stage's retry button. |
 | Video stuck "generating" after a crash | Reopen the app — interrupted jobs are detected and explained in Settings → Background Jobs; re-run the stage. |
-| AI stages say "not configured" | `.z-ai-config` missing or contains placeholder values. |
+| "Configuration file not found" / 401 / 403 on AI stages | `.z-ai-config` missing, still contains template placeholders, or the key is wrong. Run `node scripts/verify-config.mjs --all` to see exactly which stage fails. |
 | `Unknown argument voiceSource` (or similar) | Prisma client is stale: `npx prisma generate && npx prisma db push`, restart. |
 | Upload-to-YouTube fails | Settings → YouTube Connection needs a Google Cloud OAuth client (Data API v3 enabled) and the exact redirect URI shown there. |
 | Port 3000 busy | `PORT=3001 npm run dev` |
