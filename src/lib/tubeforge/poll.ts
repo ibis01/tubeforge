@@ -14,6 +14,7 @@ export interface GeneratingFlags {
   comments: boolean;
   upload: boolean;
   short: boolean;
+  convert: boolean;
 }
 
 export interface RenderStatus {
@@ -195,6 +196,16 @@ export function pollShort(videoId: string, opts?: PollOpts) {
     (v) => v.hasShort,
     (v) => Boolean(v.error) && !v.hasShort,
     { ...opts, timeoutMs: opts?.timeoutMs ?? 10 * 60 * 1000 }
+  );
+}
+
+/** Poll until the classic→scene conversion flips the format to "story". */
+export function pollConvert(videoId: string, opts?: PollOpts) {
+  return pollVideo(
+    videoId,
+    (v) => v.format === "story",
+    (v) => Boolean(v.error) && v.format !== "story",
+    { ...opts, timeoutMs: opts?.timeoutMs ?? 6 * 60 * 1000 }
   );
 }
 

@@ -138,7 +138,7 @@ export function CreateView() {
   const [characters, setCharacters] = useState<{ id: string; name: string; voice: string; hasPortrait: boolean }[]>([]);
   const [autoVoice, setAutoVoice] = useState(true);
   const [autoThumb, setAutoThumb] = useState(true);
-  const [format, setFormat] = useState<string>("script");
+  const [format, setFormat] = useState<string>("story");
   const [renderMode, setRenderMode] = useState<string>("kenburns");
 
   const [video, setVideo] = useState<VideoDTO | null>(null);
@@ -337,11 +337,9 @@ export function CreateView() {
               if (renderMode === "kenburns") {
                 await runStage("render", () => startRender(v.id, "kenburns"));
               } else {
-                toast({
-                  title: "Storyboard package ready",
-                  description:
-                    "Full AI animation takes ~4 min per scene — launch it from the Library detail view whenever you're ready.",
-                });
+                // Full AI animation — runs end-to-end now (background render
+                // job, ~4 min per scene). The stepper tracks live progress.
+                await runStage("render", () => startRender(v.id, "animated"));
               }
             }
           }
@@ -358,9 +356,9 @@ export function CreateView() {
 
         if (autopilot) {
           toast({
-            title: isStory && renderMode === "kenburns" ? "Auto-Pilot complete" : "Auto-Pilot complete",
+            title: "Auto-Pilot complete",
             description:
-              isStory && renderMode === "kenburns"
+              isStory && (renderMode === "kenburns" || renderMode === "animated")
                 ? "Your rendered video is ready to review and upload."
                 : "Your video package is ready to review and publish.",
           });
@@ -544,8 +542,8 @@ export function CreateView() {
               </div>
               {renderMode === "animated" && (
                 <p className="text-[11px] text-sky-300/90 leading-relaxed">
-                  Full animation renders on demand from the Library — Auto-Pilot
-                  stops at the storyboard package.
+                  Auto-Pilot renders the full animated video — every scene is
+                  animated via image-to-video (~4 min per scene, tracked live).
                 </p>
               )}
             </div>
@@ -710,7 +708,7 @@ export function CreateView() {
             </Button>
             <p className="text-[11px] text-muted-foreground text-center leading-relaxed">
               {isStory
-                ? `Auto-Pilot runs: scene script → storyboard → ${autoVoice ? "voiceover → " : ""}${autoThumb ? "thumbnail → " : ""}${renderMode === "kenburns" ? "render MP4" : "ready"}`
+                ? `Auto-Pilot runs: scene script → storyboard → ${autoVoice ? "voiceover → " : ""}${autoThumb ? "thumbnail → " : ""}render ${renderMode === "kenburns" ? "MP4" : "full AI animation"}`
                 : `Auto-Pilot runs: script → ${autoVoice ? "voiceover → " : ""}${autoThumb ? "thumbnail → " : ""}ready (configure in Settings)`}
             </p>
           </div>

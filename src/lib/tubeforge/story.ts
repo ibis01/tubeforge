@@ -341,7 +341,7 @@ export async function generateSceneVoiceovers(opts: {
             response_format: "wav",
             stream: false,
           }),
-        { attempts: 5, baseDelayMs: 6000 }
+        { attempts: 6, baseDelayMs: 8000 } // outlast rate-limit storms (≈16 min of patience)
       );
       const arrayBuffer = await response.arrayBuffer();
       const buffer = Buffer.from(new Uint8Array(arrayBuffer));

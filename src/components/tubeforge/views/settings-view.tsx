@@ -35,6 +35,7 @@ import {
   LayoutGrid,
   ScanText,
   Youtube,
+  Clapperboard,
   ExternalLink,
   Copy,
   Check,
@@ -52,6 +53,7 @@ const KIND_META: Record<string, { label: string; icon: typeof Mic }> = {
   verify: { label: "Narration check", icon: ScanText },
   comments: { label: "Engagement kit", icon: History },
   upload: { label: "YT upload", icon: Youtube },
+  convert: { label: "Scene conversion", icon: Clapperboard },
 };
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {

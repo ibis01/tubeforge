@@ -28,6 +28,7 @@ import {
   pollComments,
   pollUpload,
   pollShort,
+  pollConvert,
 } from "@/lib/tubeforge/poll";
 import {
   VOICES,
@@ -538,6 +539,36 @@ export function VideoDetailDialog({
     }
   };
 
+  const startConvert = async () => {
+    if (busy) return;
+    setBusy("convert");
+    setRenderLabel("Splitting the script into scenes…");
+    try {
+      const res = await fetch(`/api/videos/${video.id}/convert`, { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Conversion failed");
+      await pollConvert(video.id);
+      await reloadScenes(video.id);
+      await refreshVideo(video.id);
+      toast({
+        title: "Scene video ready to paint",
+        description:
+          "The script is now split into scenes and your existing voiceover was preserved. Open the Storyboard tab, paint the art, then render Ken Burns or full AI animation.",
+      });
+      bumpRefresh();
+    } catch (e) {
+      toast({
+        title: "Scene conversion failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+      await refreshVideo(video.id);
+    } finally {
+      setRenderLabel(null);
+      setBusy(null);
+    }
+  };
+
   const handleDelete = async () => {
     if (busy) return;
     setBusy("delete");
@@ -933,6 +964,49 @@ export function VideoDetailDialog({
   // ---------- Package tab (existing content) ----------
   const packageTab = (
     <>
+      {/* Classic → Scene upgrade (Fix: "it doesn't generate videos") —
+          narration-script videos have no render path; this unlocks one. */}
+      {!isStory && (
+        <div className="mt-1 rounded-xl border border-sky-400/25 bg-sky-500/6 p-4 space-y-2.5">
+          <div className="flex items-center gap-2">
+            <Clapperboard className="h-4 w-4 text-sky-300" />
+            <p className="text-sm font-semibold">Want the animated video?</p>
+            <Badge variant="outline" className="ml-auto border-sky-400/30 bg-sky-500/10 text-sky-200 text-[9px]">
+              Unlocks Storyboard + Video
+            </Badge>
+          </div>
+          <p className="text-[12px] text-muted-foreground leading-relaxed">
+            This narration package has no scenes yet, so there is nothing to
+            render. Convert it once: TubeForge splits your script into scenes
+            (words kept verbatim) and cuts your existing voiceover to match —
+            no new voice generation. Then paint the storyboard and render Ken
+            Burns motion or full AI animation.
+          </p>
+          <Button
+            size="sm"
+            disabled={Boolean(busy) || !video.script}
+            onClick={startConvert}
+            className="bg-brand-gradient hover:opacity-90 font-medium"
+            title={video.script ? "Split into scenes + cut the voiceover (about a minute)" : "Generate the script first"}
+          >
+            {busy === "convert" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Clapperboard className="h-3.5 w-3.5" />
+            )}
+            {busy === "convert" ? "Converting…" : "Make it a scene video"}
+          </Button>
+          {busy === "convert" && renderLabel && (
+            <p className="text-xs text-primary/90">{renderLabel}</p>
+          )}
+          {video.error && (
+            <p className="text-xs text-red-300 bg-red-500/8 border border-red-500/20 rounded-lg px-3 py-2">
+              {video.error}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Audio */}
       <div className="mt-1">
         <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-2">

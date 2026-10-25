@@ -241,3 +241,29 @@ Stage Summary:
 - Every rendered story video can be recycled into a Shorts-ready 9:16 vertical (punch-in, karaoke captions, fades, ≤45s) from the detail dialog with auto or pinned scene selection.
 - Key artifacts: src/lib/tubeforge/{analytics,shorts}.ts, youtube.ts stats section, api/{analytics,analytics/rescore,youtube/sync,videos/[id]/short}, serialize/poll/jobs updates, views/analytics-view.tsx, detail-dialog Shorts panel, research badges, scripts/test-phase5.mjs.
 - Seeded demo state: 3 videos published with fake youtu.be urls + 2 stat rounds each so the Analytics view demos populated; fresh radar scan carries 7 boosted ideas. Remaining Phase 5 candidates for a future phase: multi-channel OAuth account switching, team/batch greenlight queue, Shorts auto-upload.
+
+---
+Task ID: 12
+Agent: main (Z.ai)
+Task: TubeForge — "IT STILL DOESN'T GENERATE VIDEOS" triage + fix: make animated MP4 generation the default path, un-block classic videos, harden TTS.
+
+Work Log:
+- User reported videos still not generating ("LIKE ANimated video not just a thumbnail") with screenshots: voiceover failing 429 / HTTP 502. Live probes showed LLM (574ms) + TTS (2-4s) healthy NOW — the 429/502 toasts were upstream rate-limit storms from earlier.
+- Root cause found in the product flow, not the services: (1) Create view defaulted to format "script" (classic) — classic videos have NO render path at all (script + voiceover + thumbnail only); (2) Auto-Pilot explicitly skipped the animated render (toast: "launch it from the Library"); (3) TTS retries gave up after ~6 min of 429s.
+- NEW src/lib/tubeforge/convert.ts — classic→scene upgrade: splitScriptIntoScenes (GLM copies narration VERBATIM into N scenes + art direction; mechanical sentence-split fallback with word-coverage check ≥60%), cutVoiceoverIntoScenes (ffprobe duration → silencedetect -35dB/0.30s speech runs → cumulative word-fraction cut points snapped to nearest silence gap ±2.5s → ffmpeg per-scene pcm cuts; monotonic + ≥2s guards), convertClassicToScenes orchestrator (flips format to story, resets storyboard/video flags, preserves voiceover, clears stale render artifacts). Zero TTS calls — the voice the user already has is kept.
+- NEW api/videos/[id]/convert (POST 202 job + GET status) with 400 guardrails (already story / no script).
+- jobs.ts: JobKind += "convert", STAGE_LABEL, jobSnapshot.convert flag, crash-recovery guard (artifact-landed = format === "story").
+- poll.ts: GeneratingFlags.convert + pollConvert (format === "story" predicate, 6-min timeout).
+- video-detail-dialog.tsx: classic videos now show a "Want the animated video?" upgrade card at the top of the Package tab (Make it a scene video → POST → pollConvert → reloadScenes → refreshVideo; after conversion the 3-tab layout with Storyboard + Video tabs appears automatically since defaultValue="video").
+- create-view.tsx: DEFAULT FORMAT NOW "story"; Auto-Pilot runs the animated render end-to-end (removed the skip toast; 60-min poll, live progress via stepper); hint texts updated.
+- ai.ts + story.ts: TTS patience raised attempts 5→6, base 6000→8000ms (≈16 min of backoff per chunk) to outlast rate-limit storms.
+- settings-view: KIND_META += convert.
+- E2E scripts/test-phase6-fix.mjs on "The 5 Morning Habits That Rewire Your Brain" (classic, 260w, voiced): convert 202 → 6 scenes, 100% narration coverage (265/265 words verbatim), all 6 scene WAVs cut with 0.0% duration drift (151.6s ≈ 151.6s), re-convert 400 → storyboard 202 → ANIMATED render (CogVideoX i2v, sceneLimit=1) 202 → finished 202s → preview.mp4 h264 1920x1080 13.2s + aac 6.5MB. ALL PASS (continuation script scripts/test-phase6-render.mjs; note: Bash-tool background jobs get reaped — run E2E foreground or via setsid).
+- Browser verified: Create view defaults to "Scene-based story" (primary highlight); classic video dialog shows the upgrade card; converted video shows 3-tab layout with 6 painted scene cards (The Experiment / Cold Exposure / 20-20-20 Rule / Brain Dumping…) + Video tab render controls + PREVIEW (SCENE 1) player; settings jobs panel renders; zero page errors; 375px scrollWidth 375. Screenshot: scripts/fix-storyboard-tab.png.
+- Fixed transient self-inflicted compile error (settings-view Clapperboard import race during edits).
+
+Stage Summary:
+- Every video can now become an animated MP4: new videos default to scene format and Auto-Pilot renders full AI animation end-to-end; existing classic videos get a one-click upgrade that splits the script verbatim and reuses the existing voiceover (no TTS re-spend, 0.0% drift); TTS survives ~16-min rate-limit storms.
+- Key artifacts: src/lib/tubeforge/convert.ts, api/videos/[id]/convert, dialog upgrade card, create-view story-default + animated Auto-Pilot, patient TTS retries.
+- Demo state: "The 5 Morning Habits That Rewire Your Brain" converted (6 scenes, storyboard painted) with an animated 13.2s scene-1 preview rendered via CogVideoX.
+- Next: full animated render of the remaining 5 scenes on request (~4 min/scene), or Phase 6 candidates (Shorts auto-upload, multi-channel switching, batch greenlight queue).
