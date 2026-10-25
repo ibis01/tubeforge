@@ -649,6 +649,11 @@ export function CreateView() {
                 ))}
               </SelectContent>
             </Select>
+            <p className="text-[10px] text-muted-foreground leading-relaxed">
+              Not feeling these voices? After creating, open the video&apos;s
+              Package tab → <span className="text-foreground/80">Change the voice</span> to
+              upload your own audio or paste a voice link from the internet.
+            </p>
           </div>
 
           <div className="space-y-2">

@@ -49,6 +49,11 @@ model Video {
   ttsSpeed      Float     @default(1.0)
   thumbStyle    String    @default("cinematic")
 
+  // Bring-your-own-voice — "tts" = built-in AI voices, "custom" = user-provided
+  // audio (uploaded file or downloaded from an internet URL)
+  voiceSource   String    @default("tts")
+  voiceLabel    String? // display name of the custom voice (file name / URL)
+
   // Story engine (Phase 2) — "script" = classic narration, "story" = scene-based
   format        String    @default("script")
   renderMode    String    @default("kenburns")

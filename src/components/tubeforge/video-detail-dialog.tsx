@@ -16,6 +16,14 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { StatusBadge, formatDuration, timeAgo } from "@/components/tubeforge/shared";
 import {
   pollVoiceover,
@@ -66,6 +74,11 @@ import {
   ExternalLink,
   Captions,
   Smartphone,
+  Upload,
+  Link2,
+  AudioLines,
+  Bot,
+  ChevronDown,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -118,6 +131,17 @@ export function VideoDetailDialog({
   // YouTube upload state (Phase 4 — OAuth upload)
   const [ytStatus, setYtStatus] = useState<YouTubeStatusDTO | null>(null);
   const [uploading, setUploading] = useState(false);
+
+  // Bring-your-own-voice state — swap TTS voices for uploaded / internet audio
+  const [voicePanelOpen, setVoicePanelOpen] = useState(false);
+  const [voiceMode, setVoiceMode] = useState<"tts" | "upload" | "url">("tts");
+  const [voiceUrl, setVoiceUrl] = useState("");
+  const [voiceFile, setVoiceFile] = useState<File | null>(null);
+  const [pickedVoice, setPickedVoice] = useState<string>(video?.voice ?? "jam");
+
+  useEffect(() => {
+    if (video) setPickedVoice(video.voice);
+  }, [video?.id, video?.voice]);
 
   // Auto-Short state (Phase 5 — 9:16 vertical cut)
   const [shortScenePick, setShortScenePick] = useState<number | "auto">("auto");
@@ -400,6 +424,85 @@ export function VideoDetailDialog({
     } catch (e) {
       toast({
         title: "Stage failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+      await refreshVideo(video.id);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // ---------- Bring-your-own-voice: apply AI voice / upload / internet URL ----------
+  const applyVoice = async () => {
+    if (busy || !video) return;
+    setBusy("voice");
+    try {
+      if (voiceMode === "tts") {
+        // Persist the voice choice first, then re-run the TTS stage.
+        if (pickedVoice !== video.voice) {
+          const patch = await fetch(`/api/videos/${video.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ voice: pickedVoice }),
+          });
+          if (!patch.ok) throw new Error("Could not save the voice choice");
+        }
+        const res = await fetch(`/api/videos/${video.id}/voiceover`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "tts" }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          throw new Error(d.error ?? "Could not start the voiceover");
+        }
+        const done = await pollVoiceover(video.id, {
+          timeoutMs: video.format === "story" ? 15 * 60 * 1000 : 6 * 60 * 1000,
+        });
+        onChanged(done);
+        toast({
+          title: "AI voice applied",
+          description: `${VOICES.find((v) => v.id === pickedVoice)?.label ?? pickedVoice} — ${formatDuration(done.audioDuration)} of audio.`,
+        });
+      } else {
+        let res: Response;
+        if (voiceMode === "upload") {
+          if (!voiceFile) throw new Error("Choose an audio file first");
+          const fd = new FormData();
+          fd.append("file", voiceFile);
+          res = await fetch(`/api/videos/${video.id}/voiceover`, {
+            method: "POST",
+            body: fd,
+          });
+        } else {
+          if (!voiceUrl.trim()) throw new Error("Paste an audio link first");
+          res = await fetch(`/api/videos/${video.id}/voiceover`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: "url", url: voiceUrl.trim() }),
+          });
+        }
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          throw new Error(d.error ?? "Could not attach the custom voice");
+        }
+        const done = await pollVoiceover(video.id, { timeoutMs: 10 * 60 * 1000 });
+        onChanged(done);
+        toast({
+          title: "Your voice is in",
+          description: `${done.voiceLabel ?? "Custom audio"} — ${formatDuration(done.audioDuration)}${
+            done.format === "story" ? ", auto-cut across scenes" : ""
+          }. Re-render the video to hear it in the MP4.`,
+        });
+      }
+      setVoicePanelOpen(false);
+      setVoiceFile(null);
+      setVoiceUrl("");
+      bumpRefresh();
+    } catch (e) {
+      toast({
+        title: "Voice change failed",
         description: e instanceof Error ? e.message : "Unknown error",
         variant: "destructive",
       });
@@ -1007,16 +1110,173 @@ export function VideoDetailDialog({
         </div>
       )}
 
-      {/* Audio */}
+      {/* Audio + bring-your-own-voice */}
       <div className="mt-1">
-        <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-2">
-          Voiceover {video.hasVoiceover ? `· ${formatDuration(video.audioDuration)}` : "· not generated"}
-        </p>
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
+            Voiceover {video.hasVoiceover ? `· ${formatDuration(video.audioDuration)}` : "· not generated"}
+          </p>
+          {video.voiceSource === "custom" ? (
+            <Badge
+              variant="outline"
+              className="border-fuchsia-400/30 bg-fuchsia-500/10 text-fuchsia-200 text-[9px] max-w-[55%]"
+            >
+              <AudioLines className="h-3 w-3 mr-1 shrink-0" />
+              <span className="truncate">{video.voiceLabel ?? "Custom voice"}</span>
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="border-white/15 bg-white/5 text-zinc-300 text-[9px] shrink-0">
+              <Bot className="h-3 w-3 mr-1" />
+              {VOICES.find((v) => v.id === video.voice)?.label ?? video.voice}
+            </Badge>
+          )}
+        </div>
         {video.hasVoiceover ? (
           <audio controls preload="metadata" src={`/api/videos/${video.id}/voiceover`} className="w-full" />
         ) : (
-          <p className="text-sm text-muted-foreground">No narration yet.</p>
+          <p className="text-sm text-muted-foreground">No narration yet — pick an AI voice below, or bring your own audio.</p>
         )}
+
+        <div className="mt-3 rounded-xl border border-white/10 bg-white/3 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setVoicePanelOpen((o) => !o)}
+            className="w-full flex items-center gap-2 px-3 py-2.5 text-left hover:bg-white/4 transition-colors"
+          >
+            <Mic className="h-3.5 w-3.5 text-primary" />
+            <span className="text-xs font-medium">Change the voice</span>
+            <span className="text-[10px] text-muted-foreground hidden sm:inline">
+              AI voices, your own file, or any audio from the internet
+            </span>
+            <ChevronDown
+              className={clsx(
+                "h-3.5 w-3.5 ml-auto text-muted-foreground transition-transform",
+                voicePanelOpen && "rotate-180"
+              )}
+            />
+          </button>
+
+          {voicePanelOpen && (
+            <div className="px-3 pb-3 space-y-2.5 border-t border-white/8 pt-3">
+              <div className="grid grid-cols-3 gap-1.5">
+                {([
+                  { id: "tts", label: "AI voices", icon: Bot },
+                  { id: "upload", label: "Upload", icon: Upload },
+                  { id: "url", label: "From URL", icon: Link2 },
+                ] as const).map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    disabled={busy === "voice"}
+                    onClick={() => setVoiceMode(m.id)}
+                    className={clsx(
+                      "flex items-center justify-center gap-1.5 rounded-lg border px-2 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-50",
+                      voiceMode === m.id
+                        ? "border-primary/50 bg-primary/15 text-primary"
+                        : "border-white/10 bg-white/3 text-muted-foreground hover:bg-white/6"
+                    )}
+                  >
+                    <m.icon className="h-3.5 w-3.5" />
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+
+              {voiceMode === "tts" && (
+                <div className="space-y-2">
+                  <Select value={pickedVoice} onValueChange={setPickedVoice} disabled={busy === "voice"}>
+                    <SelectTrigger className="bg-white/5 h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {VOICES.map((v) => (
+                        <SelectItem key={v.id} value={v.id} className="text-xs">
+                          {v.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    size="sm"
+                    className="w-full bg-brand-gradient hover:opacity-90 font-medium"
+                    disabled={busy === "voice" || !video.script}
+                    onClick={applyVoice}
+                    title={!video.script ? "Write the script first — TTS reads the narration" : "Regenerate the voiceover with this voice"}
+                  >
+                    {busy === "voice" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mic className="h-3.5 w-3.5" />}
+                    {busy === "voice" ? "Rendering…" : video.hasVoiceover ? "Regenerate with this voice" : "Generate voice"}
+                  </Button>
+                </div>
+              )}
+
+              {voiceMode === "upload" && (
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 rounded-lg border border-dashed border-white/15 bg-white/3 px-3 py-2.5 cursor-pointer hover:bg-white/6 transition-colors">
+                    <Upload className="h-3.5 w-3.5 text-primary shrink-0" />
+                    <span className="text-xs text-muted-foreground truncate">
+                      {voiceFile ? voiceFile.name : "Choose an audio file (mp3, wav, m4a, ogg…)"}
+                    </span>
+                    <input
+                      type="file"
+                      accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.oga,.opus,.flac,.webm,.mp4"
+                      className="sr-only"
+                      disabled={busy === "voice"}
+                      onChange={(e) => setVoiceFile(e.target.files?.[0] ?? null)}
+                    />
+                  </label>
+                  <Button
+                    size="sm"
+                    className="w-full bg-brand-gradient hover:opacity-90 font-medium"
+                    disabled={busy === "voice" || !voiceFile}
+                    onClick={applyVoice}
+                  >
+                    {busy === "voice" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <AudioLines className="h-3.5 w-3.5" />}
+                    {busy === "voice" ? "Attaching…" : "Use this recording"}
+                  </Button>
+                </div>
+              )}
+
+              {voiceMode === "url" && (
+                <div className="space-y-2">
+                  <Input
+                    value={voiceUrl}
+                    onChange={(e) => setVoiceUrl(e.target.value)}
+                    placeholder="https://…/my-voice.mp3"
+                    className="bg-white/5 h-9 text-xs"
+                    disabled={busy === "voice"}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        applyVoice();
+                      }
+                    }}
+                  />
+                  <p className="text-[10px] text-muted-foreground leading-relaxed">
+                    Paste a DIRECT link to an audio file — any mp3 / wav / m4a on the
+                    internet. TubeForge downloads it, converts it to studio audio and
+                    swaps it in.
+                  </p>
+                  <Button
+                    size="sm"
+                    className="w-full bg-brand-gradient hover:opacity-90 font-medium"
+                    disabled={busy === "voice" || !voiceUrl.trim()}
+                    onClick={applyVoice}
+                  >
+                    {busy === "voice" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
+                    {busy === "voice" ? "Downloading…" : "Fetch voice from URL"}
+                  </Button>
+                </div>
+              )}
+
+              {video.format === "story" && (
+                <p className="text-[10px] text-muted-foreground leading-relaxed">
+                  Scene videos: whatever voice you attach is auto-cut across the scenes
+                  so the timeline still maps 1:1 — then re-render the video.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Narration check (Phase 3 — ASR proofreading) */}
@@ -1373,13 +1633,22 @@ export function VideoDetailDialog({
           disabled={Boolean(busy) || !video.script}
           onClick={() => runStage("voiceover")}
           className="border-white/15 bg-white/4"
+          title={
+            video.voiceSource === "custom"
+              ? "Replace the attached custom audio with built-in TTS narration"
+              : "Regenerate the TTS voiceover with the current voice + speed"
+          }
         >
           {busy === "voiceover" ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
             <Mic className="h-3.5 w-3.5" />
           )}
-          {video.hasVoiceover ? "Re-render voice" : "Generate voice"}
+          {video.voiceSource === "custom"
+            ? "Switch to AI voice"
+            : video.hasVoiceover
+              ? "Re-render voice"
+              : "Generate voice"}
         </Button>
         <Button
           variant="outline"
@@ -1555,7 +1824,9 @@ export function VideoDetailDialog({
             <DialogDescription>
               {video.wordCount ?? 0} words ·{" "}
               {LENGTHS.find((l) => l.id === video.length)?.label ?? video.length} ·{" "}
-              {VOICES.find((v) => v.id === video.voice)?.label ?? video.voice}
+              {video.voiceSource === "custom"
+                ? `Custom voice — ${video.voiceLabel ?? "own audio"}`
+                : VOICES.find((v) => v.id === video.voice)?.label ?? video.voice}
               {video.channelName ? ` · ${video.channelName}` : ""}
             </DialogDescription>
           </DialogHeader>

@@ -161,6 +161,8 @@ export interface VideoDTO {
   voice: string;
   ttsSpeed: number;
   thumbStyle: string;
+  voiceSource: string; // "tts" = built-in voices | "custom" = user-provided audio
+  voiceLabel: string | null; // display name of the custom voice (file / URL)
   hasVoiceover: boolean;
   hasThumbnail: boolean;
   audioDuration: number | null;

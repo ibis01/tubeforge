@@ -44,6 +44,8 @@ export function serializeVideo(
     voice: v.voice,
     ttsSpeed: v.ttsSpeed,
     thumbStyle: v.thumbStyle,
+    voiceSource: v.voiceSource,
+    voiceLabel: v.voiceLabel,
     hasVoiceover: v.hasVoiceover,
     hasThumbnail: v.hasThumbnail,
     audioDuration: v.audioDuration,
