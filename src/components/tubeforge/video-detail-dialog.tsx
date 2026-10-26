@@ -37,6 +37,7 @@ import {
   pollUpload,
   pollShort,
   pollConvert,
+  pollScript,
 } from "@/lib/tubeforge/poll";
 import {
   VOICES,
@@ -79,6 +80,7 @@ import {
   AudioLines,
   Bot,
   ChevronDown,
+  Wand2,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -221,6 +223,25 @@ export function VideoDetailDialog({
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!cancelled && d?.variants) setVariants(d.variants);
+      })
+      .catch(() => {});
+    // Adopt a script (re)generation already in flight (survives dialog re-opens).
+    fetch(`/api/videos/${video.id}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then(async (d) => {
+        if (cancelled || !d?.generating?.script) return;
+        setBusy("script");
+        try {
+          const done = await pollScript(video.id, { timeoutMs: 10 * 60 * 1000 });
+          if (!cancelled) {
+            onChanged(done);
+            if (done.format === "story") reloadScenes(done.id);
+          }
+        } catch {
+          if (!cancelled) await refreshVideo(video.id).catch(() => {});
+        } finally {
+          if (!cancelled) setBusy(null);
+        }
       })
       .catch(() => {});
     if (video.format === "story") {
@@ -433,6 +454,40 @@ export function VideoDetailDialog({
     } catch (e) {
       toast({
         title: "Stage failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+      await refreshVideo(video.id);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // ---------- Script (re)generation — retry after a failed first attempt,
+  // or re-roll an existing script with a fresh AI take ----------
+  const regenScript = async () => {
+    if (busy || !video) return;
+    setBusy("script");
+    try {
+      const res = await fetch(`/api/videos/${video.id}/script`, {
+        method: "POST",
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok)
+        throw new Error(body.error ?? "Could not start the script generation");
+      const done = await pollScript(video.id, { timeoutMs: 10 * 60 * 1000 });
+      onChanged(done);
+      toast({
+        title: done.format === "story" ? "Scene script ready" : "Script ready",
+        description: `“${done.title}” — ${done.wordCount ?? 0} words${
+          done.format === "story" ? ` across ${done.sceneCount ?? 0} scenes` : ""
+        }. Next: generate the voiceover.`,
+      });
+      if (done.format === "story") reloadScenes(done.id);
+      bumpRefresh();
+    } catch (e) {
+      toast({
+        title: "Script generation failed",
         description: e instanceof Error ? e.message : "Unknown error",
         variant: "destructive",
       });
@@ -726,9 +781,25 @@ export function VideoDetailDialog({
       </div>
 
       {scenes.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          The scene script has no scenes — regenerate it from the Create view.
-        </p>
+        <div className="rounded-xl border border-dashed border-white/12 bg-white/3 px-4 py-6 text-center space-y-3">
+          <p className="text-sm text-muted-foreground">
+            No scenes yet — write the scene script first, then paint the
+            storyboard.
+          </p>
+          <Button
+            size="sm"
+            disabled={Boolean(busy)}
+            onClick={regenScript}
+            className="bg-brand-gradient hover:opacity-90 font-medium"
+          >
+            {busy === "script" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Wand2 className="h-3.5 w-3.5" />
+            )}
+            {busy === "script" ? "Writing the scene script…" : "Generate scene script"}
+          </Button>
+        </div>
       ) : (
         <div className="grid sm:grid-cols-2 gap-3">
           {scenes.map((s) => (
@@ -1111,7 +1182,7 @@ export function VideoDetailDialog({
           {busy === "convert" && renderLabel && (
             <p className="text-xs text-primary/90">{renderLabel}</p>
           )}
-          {video.error && (
+          {video.error && video.script && (
             <p className="text-xs text-red-300 bg-red-500/8 border border-red-500/20 rounded-lg px-3 py-2">
               {video.error}
             </p>
@@ -1621,14 +1692,72 @@ export function VideoDetailDialog({
 
       <Separator className="my-5 bg-white/8" />
 
-      {/* Script */}
+      {/* Script — (re)generation lives here so a failed create is recoverable
+          without re-entering the topic in the Create view */}
       <div>
-        <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-2 flex items-center gap-1.5">
-          <FileText className="h-3 w-3" /> {isStory ? "Scene narration" : "Script"}
-        </p>
-        <div className="max-h-56 overflow-y-auto scroll-area-bar pr-3 text-sm leading-relaxed whitespace-pre-wrap text-foreground/85">
-          {video.script ?? "No script yet."}
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
+            <FileText className="h-3 w-3" /> {isStory ? "Scene narration" : "Script"}
+          </p>
+          <Button
+            variant={video.script ? "outline" : "default"}
+            size="sm"
+            disabled={Boolean(busy)}
+            onClick={regenScript}
+            className={
+              video.script
+                ? "border-white/15 bg-white/4 h-7 text-xs px-2.5"
+                : "bg-brand-gradient hover:opacity-90 font-medium h-7 text-xs px-2.5"
+            }
+            title={
+              video.script
+                ? "Discard this script and write a fresh take from the same topic"
+                : `Write the ${isStory ? "scene script" : "script"} from the topic “${video.topic}”`
+            }
+          >
+            {busy === "script" ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Wand2 className="h-3 w-3" />
+            )}
+            {busy === "script"
+              ? "Writing…"
+              : video.script
+                ? "Re-generate script"
+                : "Generate script"}
+          </Button>
         </div>
+        {video.error && !video.script && (
+          <p className="mb-2 text-xs text-red-300 bg-red-500/8 border border-red-500/20 rounded-lg px-3 py-2 leading-relaxed">
+            {video.error}
+          </p>
+        )}
+        {video.script ? (
+          <div className="max-h-56 overflow-y-auto scroll-area-bar pr-3 text-sm leading-relaxed whitespace-pre-wrap text-foreground/85">
+            {video.script}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-white/12 bg-white/3 px-4 py-5 text-center">
+            <p className="text-sm text-muted-foreground">No script yet.</p>
+            <p className="text-[11px] text-muted-foreground/70 mt-1 mb-3">
+              One click writes a fresh {isStory ? "scene script" : "script"} from
+              your topic: “{video.topic}”.
+            </p>
+            <Button
+              size="sm"
+              disabled={Boolean(busy)}
+              onClick={regenScript}
+              className="bg-brand-gradient hover:opacity-90 font-medium"
+            >
+              {busy === "script" ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Wand2 className="h-3.5 w-3.5" />
+              )}
+              {busy === "script" ? "Writing the script…" : "Generate script"}
+            </Button>
+          </div>
+        )}
       </div>
     </>
   );
@@ -1636,6 +1765,23 @@ export function VideoDetailDialog({
   const footer = (
     <DialogFooter className="mt-6 flex-row flex-wrap gap-2 sm:justify-between">
       <div className="flex flex-wrap gap-2">
+        {!video.script && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={Boolean(busy)}
+            onClick={regenScript}
+            className="border-white/15 bg-white/4"
+            title={`Write the script from “${video.topic}” — the last generation failed or never ran`}
+          >
+            {busy === "script" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Wand2 className="h-3.5 w-3.5" />
+            )}
+            {busy === "script" ? "Writing…" : "Generate script"}
+          </Button>
+        )}
         <Button
           variant="outline"
           size="sm"

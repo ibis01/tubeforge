@@ -355,3 +355,26 @@ Stage Summary:
 - TubeForge is now provider-agnostic per task: scripts on any of Z.ai/OpenAI-compatible/Anthropic/Gemini, voice on Z.ai/OpenAI, art on Z.ai/OpenAI (edits: CogView or gpt-image-1), video Z.ai-only with Ken Burns as the no-AI fallback. Free end-to-end possible: GLM-4.5-Flash scripts + Gemini free tier / BYOV custom voices / Ken Burns renders.
 - Z.ai path byte-identical to before (same SDK calls); every non-zai adapter wire format verified against a capture stub (55 checks).
 - Deliverable: download/tubeforge-local.zip — unzip, npm install, npm run dev, Settings → AI Providers.
+
+---
+Task ID: generate-script-retry-button
+Agent: main
+Task: User request — "add a 'generate script' button in case it fails to generate" (video detail dialog, like the Failed 'the battle of hud' video in the screenshot)
+
+Work Log:
+- Read POST /api/videos (failed create → status "failed", error saved, no script) + video-detail-dialog structure + jobs/poll patterns
+- jobs.ts: added "script" job kind (union, STAGE_LABEL, boot-recovery artifact check `Boolean(video.script)`, jobSnapshot flag)
+- NEW src/app/api/videos/[id]/script/route.ts — POST (re)generates the script package as a 202 background job following the voiceover pattern: story format → generateSceneScriptPackage + reset scene-bound media (scene-NN.{wav,png,mp4}, voiceover.wav, final/preview/short.mp4, subtitles.srt, short-thumb.png) + hasStoryboard/hasVideo/hasShort=false; classic → generateScriptPackage, artifacts kept non-destructively; status via deriveStatus; failed FIRST attempt → status failed (matches create flow), failed re-roll → error only, old script + status preserved; 409 dedupe while running; clears stale error + failed→draft on start
+- poll.ts: `script` added to GeneratingFlags + pollScript() watching the job flag (works for first-gen AND re-rolls)
+- video-detail-dialog.tsx: regenScript handler (POST → pollScript → toast + reloadScenes for story); in-flight job adoption on dialog open; Script section rebuilt — header "Generate script"/"Re-generate script" button, error box when error && !script, rich empty state ("No script yet… One click writes a fresh scene script from your topic" + CTA); conditional footer "Generate script" button when !video.script; Storyboard tab empty state now has "Generate scene script" button (was a dead-end message pointing at Create view); convert-card error display split to error && script (no duplication with the new script-section box)
+- Tests: NEW scripts/test-script-regen.mjs — simulates the exact user scenario through the live app: broken provider → failed create (500, status failed, no script) → retry via new endpoint with still-broken provider (job records failure, stays failed) → provider fixed → retry (202 + 409 dedupe + script lands, status scripted, 4 scenes, error cleared) → re-roll (fresh take) → cleanup + settings restore. 25/25 PASS (live zai gateway was 429-storming — environmental, proven identical via raw-SDK verify-config — so the success path ran through a local OpenAI-compatible stub, exercising the same provider-agnostic job/DB wiring)
+- Browser (agent-browser): created a real failed video ("the battle of hud"), opened its dialog — Package tab shows error box + "No script yet" empty state + Generate script button in 3 places (section header, empty-state CTA, footer); clicked it → spinner → script landed (title/status/script/voice-button all updated); Storyboard tab shows 4 scenes + Generate storyboard; Re-generate script → fresh v2 take; zero console/page errors. Screenshots: scripts/regen-{1..6}-*.png
+- tsc: zero errors in all changed files (pre-existing errors elsewhere untouched)
+- Cleanup: test video deleted, stub stopped, chat provider restored to zai/glm-4.5-flash (verified via GET)
+- Repackaged via scripts/package-local.sh → download/tubeforge-local.zip (415 KB, 243 files — new route + updated jobs/poll/dialog + test script included)
+
+Stage Summary:
+- Script generation failures are now recoverable in one click from the video detail dialog (no re-entering the topic in Create), and existing scripts can be re-rolled with a fresh AI take
+- Story re-rolls reset scene-bound media honestly (voiceover/storyboard/renders invalidated by new scene boundaries); classic re-rolls keep old artifacts until the user re-runs them
+- The button appears in 3 places for scriptless videos: script-section header, empty-state CTA, footer; in-flight jobs are adopted when the dialog re-opens
+- Deliverable: download/tubeforge-local.zip refreshed

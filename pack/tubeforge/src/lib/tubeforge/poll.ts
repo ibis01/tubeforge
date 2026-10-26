@@ -15,6 +15,7 @@ export interface GeneratingFlags {
   upload: boolean;
   short: boolean;
   convert: boolean;
+  script: boolean;
 }
 
 export interface RenderStatus {
@@ -207,6 +208,37 @@ export function pollConvert(videoId: string, opts?: PollOpts) {
     (v) => Boolean(v.error) && v.format !== "story",
     { ...opts, timeoutMs: opts?.timeoutMs ?? 6 * 60 * 1000 }
   );
+}
+
+/**
+ * Poll until the script (re)generation job finishes. Watches the job flag
+ * (not the artifact) so it works for BOTH first-time generation (retry after
+ * a failed create) and re-rolls of an existing script.
+ */
+export async function pollScript(
+  videoId: string,
+  opts: PollOpts = {}
+): Promise<VideoDTO> {
+  const interval = opts.intervalMs ?? 2500;
+  const timeout = opts.timeoutMs ?? 10 * 60 * 1000;
+  const deadline = Date.now() + timeout;
+
+  for (;;) {
+    const data = await fetchVideo(videoId);
+    if (!data.video) throw new Error(data.error ?? "Video not found");
+
+    if (!data.generating?.script) {
+      if (data.video.error) throw new Error(data.video.error);
+      return data.video;
+    }
+
+    if (Date.now() > deadline)
+      throw new Error(
+        "Script generation is taking unusually long — it may still be running; check back shortly."
+      );
+
+    await sleep(interval);
+  }
 }
 
 /** Poll a single-scene re-roll until its job flag clears. */
