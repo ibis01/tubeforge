@@ -8,6 +8,7 @@
 
 import { db } from "@/lib/db";
 import { getZAI, parseJsonLoose } from "./ai";
+import { getChatModel } from "./zai-config";
 import { aiCall } from "./budget";
 import type { CommentsKitDTO } from "./types";
 
@@ -36,8 +37,10 @@ export async function generateEngagementKit(
   const voice = toneMap[opts.tone] ?? "clear and engaging";
 
   const zai = await getZAI();
+  const model = await getChatModel();
   const completion = await aiCall("llm", "engagement kit LLM", () =>
     zai.chat.completions.create({
+      model,
       messages: [
         {
           role: "assistant",

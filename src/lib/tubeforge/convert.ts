@@ -19,6 +19,7 @@ import fs from "fs";
 import path from "path";
 import { db } from "@/lib/db";
 import { getZAI, parseJsonLoose, videoDir } from "./ai";
+import { getChatModel } from "./zai-config";
 import { aiCall } from "./budget";
 import { sceneWavFile } from "./story";
 import { CAMERAS, SCENE_COUNTS, type Scene } from "./types";
@@ -92,8 +93,10 @@ export async function splitScriptIntoScenes(opts: {
   topic: string;
 }): Promise<Scene[]> {
   const zai = await getZAI();
+  const model = await getChatModel();
   const completion = await aiCall("llm", "scene split LLM", () =>
     zai.chat.completions.create({
+      model,
       messages: [
         {
           role: "assistant",

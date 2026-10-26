@@ -8,6 +8,7 @@ import path from "path";
 import type { Character } from "@prisma/client";
 import { POSES, ART_STYLES } from "./types";
 import { getZAI, parseJsonLoose } from "./ai";
+import { getChatModel } from "./zai-config";
 import { aiCall } from "./budget";
 import { characterJobSnapshot, lastJobError } from "./jobs";
 
@@ -107,8 +108,10 @@ export async function generateCharacterBible(opts: {
   niche?: string;
 }): Promise<CharacterBible> {
   const zai = await getZAI();
+  const model = await getChatModel();
   const completion = await aiCall("llm", "character bible LLM", () =>
     zai.chat.completions.create({
+      model,
     messages: [
       {
         role: "assistant",

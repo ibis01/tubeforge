@@ -6,6 +6,7 @@
 import fs from "fs";
 import path from "path";
 import { getZAI, parseJsonLoose, videoDir, splitForTts, researchBriefBlock, type ResearchBrief } from "./ai";
+import { getChatModel } from "./zai-config";
 import { aiCall } from "./budget";
 import { runQualityGate } from "./quality";
 import { mergeWavs } from "./wav";
@@ -132,8 +133,10 @@ Write the narration in their voice. Mark scenes where they appear with "hostInSc
     : "";
 
   const zai = await getZAI();
+  const model = await getChatModel();
   const completion = await aiCall("llm", "scene script LLM", () =>
     zai.chat.completions.create({
+      model,
       messages: [
         {
           role: "assistant",

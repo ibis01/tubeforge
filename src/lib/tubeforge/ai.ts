@@ -7,6 +7,7 @@ import ZAI from "z-ai-web-dev-sdk";
 import { mergeWavs } from "./wav";
 import { aiCall } from "./budget";
 import { LENGTHS, THUMB_STYLES, type ResearchIdea } from "./types";
+import { getChatModel, syncZaiConfigFile } from "./zai-config";
 
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
@@ -18,8 +19,18 @@ export function videoDir(videoId: string) {
 
 let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null;
 export async function getZAI() {
-  if (!zaiInstance) zaiInstance = await ZAI.create();
+  if (!zaiInstance) {
+    // Settings stored in the UI (API key / base URL) win over any existing
+    // config file — materialize them before the SDK reads the file.
+    await syncZaiConfigFile();
+    zaiInstance = await ZAI.create();
+  }
   return zaiInstance;
+}
+
+/** Drop the cached SDK client so the next getZAI() picks up fresh settings. */
+export function resetZAIClient() {
+  zaiInstance = null;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -85,8 +96,10 @@ export async function generateScriptPackage(opts: {
   const toneDesc = toneMap[opts.tone] ?? "clear and engaging";
 
   const zai = await getZAI();
+  const model = await getChatModel();
   const completion = await aiCall("llm", "script LLM", () =>
     zai.chat.completions.create({
+      model,
     messages: [
       {
         role: "assistant",
@@ -344,8 +357,10 @@ export async function generateTopicResearch(opts: {
   const performanceBrief = await performanceBriefBlock();
 
   const zai = await getZAI();
+  const model = await getChatModel();
   const completion = await aiCall("llm", "research LLM", () =>
     zai.chat.completions.create({
+      model,
     messages: [
       {
         role: "assistant",

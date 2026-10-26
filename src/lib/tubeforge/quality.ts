@@ -12,6 +12,7 @@
 import fs from "fs";
 import { db } from "@/lib/db";
 import { getZAI, parseJsonLoose } from "./ai";
+import { getVisionModel } from "./zai-config";
 import { aiCall } from "./budget";
 
 export type GateKind = "thumbnail" | "scene";
@@ -52,9 +53,14 @@ async function inspectImage(
 ): Promise<{ score: number; issues: string[]; summary: string }> {
   const zai = await getZAI();
   const dataUrl = `data:image/png;base64,${fs.readFileSync(imagePath).toString("base64")}`;
+  const model = await getVisionModel();
 
   const completion = await aiCall("llm", "quality gate VLM", () =>
+    // The SDK type marks `model` as required, but the gateway injects its
+    // default vision model when omitted — keep that behavior when no override
+    // is stored, hence the cast.
     zai.chat.completions.createVision({
+      ...(model ? { model } : {}),
       messages: [
         {
           role: "user",
@@ -77,7 +83,7 @@ Respond with STRICT JSON only:
         },
       ],
       thinking: { type: "disabled" },
-    })
+    } as Parameters<typeof zai.chat.completions.createVision>[0])
   );
 
   const raw = completion.choices[0]?.message?.content ?? "";

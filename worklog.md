@@ -310,3 +310,24 @@ Stage Summary:
 - User needs exactly 2 values from their own Z.ai API account: baseUrl + apiKey; other 3 fields optional/removable
 - tubeforge-local.zip refreshed at download/tubeforge-local.zip
 - If user's public key can't serve /audio/tts or /video/generation routes, next step is provider adapters (alternative TTS/video APIs)
+
+---
+Task ID: free-model-settings-ui
+Agent: main
+Task: Default to free GLM flash models + make API key/baseURL/model editable from the Settings UI
+
+Work Log:
+- (Note: environment partially reset between turns — pack/, download/, worklog rolled back; source code + dev server survived)
+- types.ts: added CHAT_MODELS registry, DEFAULT_CHAT_MODEL=glm-4.5-flash (free), DEFAULT_ZAI_BASE_URL
+- NEW src/lib/tubeforge/zai-config.ts: Setting-table keys (zai.baseUrl/apiKey/chatModel/visionModel), syncZaiConfigFile() materializes .z-ai-config from DB (SDK create() takes no params, only reads the file), getChatModel/getVisionModel, createZaiForTest
+- ai.ts: getZAI() syncs config file before first create; added resetZAIClient()
+- Wired model into all 7 chat call sites (ai.ts x2, story, convert, comments, characters = text; quality.ts = conditional vision model with cast to preserve gateway-default behavior)
+- NEW /api/settings/ai: GET (masked key, never full), PUT (save + sync file + reset client), POST (test connection with overrides; finally-block re-syncs so tests never poison the live client)
+- settings-view.tsx: new "AI Provider (Z.ai)" card — base URL, masked API key, chat model select (free default), optional vision model, Save & apply + Test connection buttons, link to get a free key
+- Verified: tsc clean for all new code (pre-existing errors elsewhere only), GET/PUT/POST endpoints 200, dev server compiles clean
+- Rebuilt portable package via NEW scripts/package-local.sh (persistent one-command rebuild): download/tubeforge-local.zip (383KB, 227 files) with SETUP.md documenting the Settings UI flow
+
+Stage Summary:
+- Script writing now defaults to FREE glm-4.5-flash — $0 on a fresh Z.ai key
+- Users change API key/endpoint/model from Settings → AI Provider without touching files; changes apply to the very next AI call
+- Deliverable: download/tubeforge-local.zip refreshed; packaging recipe persisted at scripts/package-local.sh

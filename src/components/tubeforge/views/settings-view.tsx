@@ -19,7 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { VOICES, NICHES, TONES, LENGTHS, THUMB_STYLES, type JobDTO, type YouTubeStatusDTO } from "@/lib/tubeforge/types";
+import { VOICES, NICHES, TONES, LENGTHS, THUMB_STYLES, CHAT_MODELS, DEFAULT_CHAT_MODEL, DEFAULT_ZAI_BASE_URL, type JobDTO, type YouTubeStatusDTO } from "@/lib/tubeforge/types";
 import {
   Save,
   Loader2,
@@ -39,6 +39,9 @@ import {
   ExternalLink,
   Copy,
   Check,
+  Bot,
+  KeyRound,
+  FlaskConical,
 } from "lucide-react";
 
 const KIND_META: Record<string, { label: string; icon: typeof Mic }> = {
@@ -104,6 +107,19 @@ export function SettingsView() {
   const [ytConnecting, setYtConnecting] = useState(false);
   const [ytCopied, setYtCopied] = useState(false);
 
+  // AI provider (Z.ai) — key, base URL and model picked right from the UI
+  const [ai, setAi] = useState({
+    baseUrl: DEFAULT_ZAI_BASE_URL,
+    apiKey: "",
+    chatModel: DEFAULT_CHAT_MODEL,
+    visionModel: "",
+    hasKey: false,
+    maskedKey: "",
+  });
+  const [aiSaving, setAiSaving] = useState(false);
+  const [aiTesting, setAiTesting] = useState(false);
+  const [aiTest, setAiTest] = useState<{ ok: boolean; text: string } | null>(null);
+
   const loadYouTube = useCallback(async () => {
     try {
       const res = await fetch("/api/youtube/status", { cache: "no-store" });
@@ -111,6 +127,25 @@ export function SettingsView() {
       const data = await res.json();
       setYt(data.status ?? null);
       setYtClientId(data.status?.clientId ?? "");
+    } catch {
+      /* non-critical */
+    }
+  }, []);
+
+  const loadAi = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings/ai", { cache: "no-store" });
+      if (!res.ok) return;
+      const d = await res.json();
+      setAi((f) => ({
+        ...f,
+        baseUrl: d.baseUrl ?? DEFAULT_ZAI_BASE_URL,
+        chatModel: d.chatModel ?? DEFAULT_CHAT_MODEL,
+        visionModel: d.visionModel ?? "",
+        hasKey: Boolean(d.hasKey),
+        maskedKey: d.maskedKey ?? "",
+        apiKey: "",
+      }));
     } catch {
       /* non-critical */
     }
@@ -158,7 +193,8 @@ export function SettingsView() {
       .finally(() => setLoaded(true));
     void loadJobs();
     void loadYouTube();
-  }, [loadJobs, loadYouTube]);
+    void loadAi();
+  }, [loadJobs, loadYouTube, loadAi]);
 
   const handleSave = async () => {
     if (saving) return;
@@ -273,6 +309,67 @@ export function SettingsView() {
     }
   };
 
+  // ---------- AI provider handlers ----------
+  const saveAi = async () => {
+    if (aiSaving) return;
+    setAiSaving(true);
+    setAiTest(null);
+    try {
+      const res = await fetch("/api/settings/ai", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          baseUrl: ai.baseUrl.trim(),
+          apiKey: ai.apiKey.trim(),
+          chatModel: ai.chatModel,
+          visionModel: ai.visionModel.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Save failed");
+      setAi((f) => ({ ...f, apiKey: "", hasKey: data.hasKey ?? f.hasKey, maskedKey: data.maskedKey ?? f.maskedKey }));
+      toast({
+        title: "AI provider updated",
+        description: "The very next script uses the new settings.",
+      });
+    } catch (e) {
+      toast({
+        title: "Could not save AI settings",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setAiSaving(false);
+    }
+  };
+
+  const testAi = async () => {
+    if (aiTesting) return;
+    setAiTesting(true);
+    setAiTest(null);
+    try {
+      const res = await fetch("/api/settings/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          baseUrl: ai.baseUrl.trim() || undefined,
+          apiKey: ai.apiKey.trim() || undefined,
+          chatModel: ai.chatModel,
+        }),
+      });
+      const d = await res.json();
+      if (d.ok) {
+        setAiTest({ ok: true, text: `Connected — ${d.model} replied "${(d.reply ?? "").trim().slice(0, 24)}" in ${d.latencyMs} ms` });
+      } else {
+        setAiTest({ ok: false, text: d.error ?? "Connection failed" });
+      }
+    } catch {
+      setAiTest({ ok: false, text: "Could not reach the server" });
+    } finally {
+      setAiTesting(false);
+    }
+  };
+
   if (!loaded) {
     return (
       <div className="max-w-2xl space-y-4">
@@ -338,6 +435,129 @@ export function SettingsView() {
               onCheckedChange={(v) => setForm((f) => ({ ...f, autoThumbnail: v }))}
               aria-label="Toggle automatic thumbnail"
             />
+          </div>
+        </div>
+      </Card>
+
+      {/* AI provider — swap API key / endpoint / model without touching files */}
+      <Card className="glass rounded-2xl p-5 sm:p-6">
+        <div className="flex items-center gap-2.5 mb-1">
+          <div className="h-9 w-9 rounded-xl bg-indigo-500/90 flex items-center justify-center shrink-0 shadow-[0_0_18px_rgba(99,102,241,0.25)]">
+            <Bot className="h-4.5 w-4.5 text-white" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="font-semibold leading-tight">AI Provider (Z.ai)</h3>
+            <p className="text-xs text-muted-foreground">
+              Your API key, endpoint and model — scripts use these on the very next run
+            </p>
+          </div>
+          {ai.hasKey && (
+            <Badge className="bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[11px] shrink-0">
+              <KeyRound className="h-3 w-3 mr-1" />
+              {ai.maskedKey}
+            </Badge>
+          )}
+        </div>
+
+        <div className="mt-4 space-y-4">
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label>API base URL</Label>
+              <Input
+                value={ai.baseUrl}
+                onChange={(e) => setAi((f) => ({ ...f, baseUrl: e.target.value }))}
+                placeholder={DEFAULT_ZAI_BASE_URL}
+                className="bg-white/5 border-white/10 text-xs font-mono"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>API key</Label>
+              <Input
+                value={ai.apiKey}
+                onChange={(e) => setAi((f) => ({ ...f, apiKey: e.target.value }))}
+                placeholder={ai.hasKey ? `saved (${ai.maskedKey}) — type to replace` : "Paste your Z.ai key"}
+                type="password"
+                className="bg-white/5 border-white/10 text-xs font-mono"
+              />
+            </div>
+          </div>
+
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label>Script / chat model</Label>
+              <Select value={ai.chatModel} onValueChange={(v) => setAi((f) => ({ ...f, chatModel: v }))}>
+                <SelectTrigger className="bg-white/5 border-white/10 text-xs h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CHAT_MODELS.map((m) => (
+                    <SelectItem key={m.id} value={m.id} className="text-xs">
+                      <span className="font-medium">{m.label}</span>
+                      <span className="text-muted-foreground ml-1.5">{m.hint}</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                Flash tiers are free — paid tiers need credit on your account.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Vision model (optional)</Label>
+              <Input
+                value={ai.visionModel}
+                onChange={(e) => setAi((f) => ({ ...f, visionModel: e.target.value }))}
+                placeholder="gateway default (e.g. glm-4.6v-flash)"
+                className="bg-white/5 border-white/10 text-xs font-mono"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Used by the artwork quality gate. Try <code>glm-4.6v-flash</code> (free) if your key needs an explicit model.
+              </p>
+            </div>
+          </div>
+
+          {aiTest && (
+            <div
+              className={`rounded-lg border px-3 py-2 text-xs leading-relaxed ${
+                aiTest.ok
+                  ? "border-emerald-500/25 bg-emerald-500/8 text-emerald-200"
+                  : "border-red-500/25 bg-red-500/8 text-red-200"
+              }`}
+            >
+              {aiTest.ok ? "✓ " : "✗ "}
+              {aiTest.text}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              onClick={saveAi}
+              disabled={aiSaving}
+              className="border-white/15 bg-white/6 hover:bg-white/10 font-medium h-8"
+              variant="outline"
+            >
+              {aiSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              Save & apply
+            </Button>
+            <Button
+              size="sm"
+              onClick={testAi}
+              disabled={aiTesting}
+              className="bg-brand-gradient hover:opacity-90 text-white font-medium h-8"
+              title="Send a tiny test prompt through your key"
+            >
+              {aiTesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FlaskConical className="h-3.5 w-3.5" />}
+              Test connection
+            </Button>
+            <a
+              href="https://z.ai/model-api"
+              target="_blank"
+              rel="noreferrer"
+              className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2 inline-flex items-center gap-0.5"
+            >
+              Get a free API key <ExternalLink className="h-2.5 w-2.5" />
+            </a>
           </div>
         </div>
       </Card>

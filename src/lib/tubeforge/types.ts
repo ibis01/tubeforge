@@ -112,6 +112,37 @@ export interface SceneDTO {
   generating: boolean; // single-scene re-roll in flight
 }
 
+/**
+ * Chat models selectable in Settings → AI Provider. Defaults to the FREE flash
+ * tier so a fresh API key can write scripts at $0. Paid tiers render higher
+ * quality but need credit on the account.
+ */
+export const CHAT_MODELS = [
+  {
+    id: "glm-4.5-flash",
+    label: "GLM-4.5 Flash",
+    hint: "Free — $0 per token, fast, great for scripts",
+  },
+  {
+    id: "glm-4.7-flash",
+    label: "GLM-4.7 Flash",
+    hint: "Free — newest free generation",
+  },
+  {
+    id: "glm-4.6",
+    label: "GLM-4.6",
+    hint: "Paid — deepest quality, needs credit",
+  },
+  {
+    id: "glm-4.5",
+    label: "GLM-4.5",
+    hint: "Paid — long-context flagship",
+  },
+] as const;
+
+export const DEFAULT_CHAT_MODEL = "glm-4.5-flash";
+export const DEFAULT_ZAI_BASE_URL = "https://api.z.ai/api/paas/v4";
+
 export type VideoStatus =
   | "draft"
   | "scripted"
