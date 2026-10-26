@@ -5,14 +5,16 @@
 
 import fs from "fs";
 import path from "path";
-import { getZAI, parseJsonLoose, videoDir, splitForTts, researchBriefBlock, type ResearchBrief } from "./ai";
-import { getChatModel } from "./zai-config";
+import { parseJsonLoose, videoDir, splitForTts, researchBriefBlock, type ResearchBrief } from "./ai";
 import { aiCall } from "./budget";
 import { runQualityGate } from "./quality";
 import { mergeWavs } from "./wav";
 import { CAMERAS, SCENE_COUNTS, type Scene } from "./types";
 import { characterSceneFragment, readPortrait } from "./characters";
 import { isJobRunning } from "./jobs";
+import { chatComplete } from "./providers/chat";
+import { ttsSynthesize } from "./providers/tts";
+import { imageEdit, imageGenerate, imageEditSupported } from "./providers/image";
 
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -132,20 +134,11 @@ ${opts.character.personality ? `Personality: ${opts.character.personality}` : ""
 Write the narration in their voice. Mark scenes where they appear with "hostInScene": true. In those scenes' visual prompts, describe WHERE and HOW the host appears so the art stays consistent.`
     : "";
 
-  const zai = await getZAI();
-  const model = await getChatModel();
-  const completion = await aiCall("llm", "scene script LLM", () =>
-    zai.chat.completions.create({
-      model,
-      messages: [
-        {
-          role: "assistant",
-          content:
-            "You are an elite faceless-YouTube storyteller and storyboard director. You structure videos as a sequence of visual scenes, each with tight narration and a concrete image prompt that an AI artist could paint. You always respond with STRICT JSON only — no markdown, no commentary.",
-        },
-        {
-          role: "user",
-          content: `Create a scene-based YouTube video package.
+  const raw = await aiCall("llm", "scene script LLM", () =>
+    chatComplete({
+      system:
+        "You are an elite faceless-YouTube storyteller and storyboard director. You structure videos as a sequence of visual scenes, each with tight narration and a concrete image prompt that an AI artist could paint. You always respond with STRICT JSON only — no markdown, no commentary.",
+      user: `Create a scene-based YouTube video package.
 Niche: ${opts.niche}
 Tone: ${toneDesc}
 Topic: "${opts.topic}"
@@ -169,13 +162,8 @@ Return JSON with exactly these keys:
     }
   ]
 }`,
-        },
-      ],
-      thinking: { type: "disabled" },
     })
   );
-
-  const raw = completion.choices[0]?.message?.content ?? "";
   const parsed = parseJsonLoose(raw);
 
   const title = String(parsed.title ?? "").trim();
@@ -222,7 +210,6 @@ export async function generateSceneImage(opts: {
     appearance: string | null;
   } | null;
 }): Promise<{ fileBytes: number }> {
-  const zai = await getZAI();
   const { scene } = opts;
   const artPrompt = `${scene.visual}. ${scene.mood}. Wide 16:9 cinematic frame, highly detailed, professional color grading, storytelling composition. Absolutely no text, no letters, no watermarks.`;
 
@@ -232,32 +219,39 @@ export async function generateSceneImage(opts: {
       : null;
 
   const imagePath = path.join(videoDir(opts.videoId), sceneImageFile(scene.index));
+  const canEdit = await imageEditSupported();
 
   const produce = async () => {
-    let response;
-    if (opts.character && portrait) {
+    let buffer: Buffer | null = null;
+    if (opts.character && portrait && canEdit) {
       // Identity-locked: seed the edit with the cast portrait so the host keeps
-      // their exact likeness inside this scene.
-      response = await aiCall(
+      // their exact likeness inside this scene. Real failures fall through to
+      // the prompt-seeded generation below.
+      buffer = await aiCall(
         "image",
         `scene ${scene.index} edit (host likeness)`,
         () =>
-          zai.images.generations.edit({
+          imageEdit({
             prompt: `Place this exact person into the described scene, keeping their face, hairstyle, glasses, facial hair and signature outfit perfectly recognizable. Scene: ${artPrompt}`,
-            images: [{ url: `data:image/png;base64,${portrait.toString("base64")}` }],
+            imagePngBase64: portrait.toString("base64"),
             size: "1344x768",
+          }).then((b) => {
+            if (!b) throw new Error("Image edit returned no data");
+            return b;
           }),
         { attempts: 4, baseDelayMs: 5000 }
-      );
-    } else {
+      ).catch(() => null);
+    }
+
+    if (!buffer) {
       const castFragment = scene.hostInScene
         ? characterSceneFragment(opts.character ?? { name: "", identityAnchor: null, appearance: null })
         : "";
-      response = await aiCall(
+      buffer = await aiCall(
         "image",
         `scene ${scene.index} image`,
         () =>
-          zai.images.generations.create({
+          imageGenerate({
             prompt: castFragment ? `${artPrompt} ${castFragment}` : artPrompt,
             size: "1344x768",
           }),
@@ -265,11 +259,7 @@ export async function generateSceneImage(opts: {
       );
     }
 
-    const base64 = response.data[0]?.base64;
-    if (!base64) throw new Error(`Scene ${scene.index} returned no image data`);
-    const buffer = Buffer.from(base64, "base64");
     if (buffer.length < 1000) throw new Error(`Scene ${scene.index} image is empty`);
-
     fs.writeFileSync(imagePath, buffer);
   };
 
@@ -318,7 +308,6 @@ export async function generateSceneVoiceovers(opts: {
   voice: string;
   speed: number;
 }): Promise<{ durationSec: number; sceneDurations: number[] }> {
-  const zai = await getZAI();
   const dir = videoDir(opts.videoId);
   const allBuffers: Buffer[] = [];
   const sceneDurations: number[] = [];
@@ -333,21 +322,12 @@ export async function generateSceneVoiceovers(opts: {
     const buffers: Buffer[] = [];
     for (const [j, chunk] of chunks.entries()) {
       if (j > 0) await sleep(2000); // pace chunks within a scene too
-      const response = await aiCall(
+      const buffer = await aiCall(
         "tts",
         `scene ${scene.index} tts (${chunk.length} chars)`,
-        () =>
-          zai.audio.tts.create({
-            input: chunk,
-            voice: opts.voice,
-            speed: opts.speed,
-            response_format: "wav",
-            stream: false,
-          }),
+        () => ttsSynthesize({ input: chunk, voice: opts.voice, speed: opts.speed }),
         { attempts: 6, baseDelayMs: 8000 } // outlast rate-limit storms (≈16 min of patience)
       );
-      const arrayBuffer = await response.arrayBuffer();
-      const buffer = Buffer.from(new Uint8Array(arrayBuffer));
       if (buffer.length < 44) throw new Error(`Scene ${scene.index} TTS returned empty audio`);
       buffers.push(buffer);
     }

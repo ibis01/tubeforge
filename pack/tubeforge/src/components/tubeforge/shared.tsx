@@ -1,9 +1,36 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
-import { STATUS_META, type VideoStatus } from "@/lib/tubeforge/types";
+import { STATUS_META, VOICES, type VideoStatus } from "@/lib/tubeforge/types";
 import type { LucideIcon } from "lucide-react";
 import { clsx } from "clsx";
+
+/** Voice catalog of the ACTIVE voiceover provider (Z.ai or OpenAI-compatible).
+ *  Falls back to the built-in Z.ai list until the endpoint answers. */
+export function useVoices() {
+  const [voices, setVoices] = useState<{ id: string; label: string }[]>(() =>
+    VOICES.map((v) => ({ id: v.id, label: v.label }))
+  );
+  const [provider, setProvider] = useState("zai");
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/settings/voices", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d?.voices?.length) return;
+        setVoices(d.voices);
+        setProvider(d.provider ?? "zai");
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return { voices, provider };
+}
 
 export function StatusBadge({
   status,

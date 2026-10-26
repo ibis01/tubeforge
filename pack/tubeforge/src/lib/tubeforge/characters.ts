@@ -7,10 +7,13 @@ import fs from "fs";
 import path from "path";
 import type { Character } from "@prisma/client";
 import { POSES, ART_STYLES } from "./types";
-import { getZAI, parseJsonLoose } from "./ai";
-import { getChatModel } from "./zai-config";
+import { parseJsonLoose } from "./ai";
 import { aiCall } from "./budget";
 import { characterJobSnapshot, lastJobError } from "./jobs";
+import { chatComplete } from "./providers/chat";
+import { imageEdit, imageGenerate, imageEditSupported } from "./providers/image";
+import { getCapability } from "./providers/settings";
+import { voiceCatalog } from "./providers/tts";
 
 const CHARACTER_ROOT = path.join(process.cwd(), "uploads", "characters");
 
@@ -107,20 +110,16 @@ export async function generateCharacterBible(opts: {
   concept: string;
   niche?: string;
 }): Promise<CharacterBible> {
-  const zai = await getZAI();
-  const model = await getChatModel();
-  const completion = await aiCall("llm", "character bible LLM", () =>
-    zai.chat.completions.create({
-      model,
-    messages: [
-      {
-        role: "assistant",
-        content:
-          "You are a character designer for faceless YouTube channels. You invent memorable recurring hosts/personas that stay visually consistent across hundreds of videos and speak in ways that keep retention high. You always respond with STRICT JSON only — no markdown, no commentary.",
-      },
-      {
-        role: "user",
-        content: `Design a recurring on-screen persona for a faceless YouTube channel${opts.niche ? ` in the "${opts.niche}" niche` : ""}.
+  // Voice ids come from the ACTIVE voiceover provider so the bible never
+  // recommends a voice the TTS engine can't speak.
+  const ttsConfig = await getCapability("tts");
+  const voiceIds = voiceCatalog(ttsConfig.provider, ttsConfig.model).map((v) => v.id);
+
+  const raw = await aiCall("llm", "character bible LLM", () =>
+    chatComplete({
+      system:
+        "You are a character designer for faceless YouTube channels. You invent memorable recurring hosts/personas that stay visually consistent across hundreds of videos and speak in ways that keep retention high. You always respond with STRICT JSON only — no markdown, no commentary.",
+      user: `Design a recurring on-screen persona for a faceless YouTube channel${opts.niche ? ` in the "${opts.niche}" niche` : ""}.
 
 Name: ${opts.name}
 Concept/notes: ${opts.concept || "(designer's choice — invent something compelling)"}
@@ -131,15 +130,11 @@ Return JSON with exactly these keys:
   "personality": "2-3 sentences: on-screen energy, speech style, catchphrases or verbal tics, how they open and close videos",
   "appearance": "2-3 sentences of FIXED visual identity: age range, hair, face, glasses/accessories, signature outfit, body language. Specific enough that an artist could draw them identically every time",
   "identityAnchor": "ONE dense comma-separated visual prompt fragment (age, hair, facial hair, glasses, outfit colors, art style hints) describing ONLY the invariant visual traits. Max 60 words. No camera or lighting words.",
-  "voice": "one of: jam, kazi, xiaochen, tongtong, chuichui, douji, luodo — pick the TTS voice that matches the persona's energy",
+  "voice": "one of: ${voiceIds.join(", ")} — pick the TTS voice that matches the persona's energy",
   "artStyle": "one of: cinematic, stylized, anime, comic, noir — pick the portrait art style that fits"
 }`,
-      },
-    ],
-    thinking: { type: "disabled" },
-    }));
-
-  const raw = completion.choices[0]?.message?.content ?? "";
+    })
+  );
   const parsed = parseJsonLoose(raw);
 
   const bible: CharacterBible = {
@@ -162,25 +157,21 @@ export async function generateCharacterPortrait(opts: {
   identityAnchor: string | null;
   artStyle: string;
 }): Promise<{ fileBytes: number }> {
-  const zai = await getZAI();
   const anchor = opts.identityAnchor?.trim() || buildAnchorFallback(opts.appearance, opts.artStyle);
   const style =
     ART_STYLES.find((s) => s.id === opts.artStyle)?.prompt ?? ART_STYLES[0].prompt;
 
-  const response = await aiCall(
+  const buffer = await aiCall(
     "image",
     "character portrait",
     () =>
-      zai.images.generations.create({
+      imageGenerate({
         prompt: `Official character reference portrait of "${opts.name}". ${anchor}. ${style}. Head-and-shoulders framing, facing camera, neutral studio backdrop, crisp detail, personality visible in the expression. Absolutely no text, no letters, no watermarks.`,
         size: "1024x1024",
       }),
     { attempts: 4, baseDelayMs: 5000 }
   );
 
-  const base64 = response.data[0]?.base64;
-  if (!base64) throw new Error("Portrait generation returned no data");
-  const buffer = Buffer.from(base64, "base64");
   if (buffer.length < 1000) throw new Error("Generated portrait is empty");
 
   fs.writeFileSync(
@@ -199,31 +190,34 @@ export async function generateCharacterPoses(opts: {
   characterId: string;
   identityAnchor: string | null;
 }): Promise<{ generated: string[] }> {
-  const zai = await getZAI();
   const portrait = readPortrait(opts.characterId);
   if (!portrait)
     throw new Error("Generate the reference portrait first — poses are derived from it");
+
+  if (!(await imageEditSupported()))
+    throw new Error(
+      "Pose sheets need an image provider that supports edits — Z.ai CogView or OpenAI gpt-image-1 (Settings → AI Providers)"
+    );
 
   const anchor = opts.identityAnchor?.trim();
   const dir = characterDir(opts.characterId);
   const generated: string[] = [];
 
   for (const [i, pose] of POSES.entries()) {
-    const dataUrl = `data:image/png;base64,${portrait.toString("base64")}`;
-    const response = await aiCall(
+    const buffer = await aiCall(
       "image",
       `pose:${pose.id}`,
       () =>
-        zai.images.generations.edit({
+        imageEdit({
           prompt: `Exact same character, identical face, hair, glasses, outfit and art style as the reference image. ${anchor ? `Visual identity: ${anchor}.` : ""} New pose: ${pose.desc}. Identical lighting and backdrop as the reference. Absolutely no text, no letters, no watermarks.`,
-          images: [{ url: dataUrl }],
+          imagePngBase64: portrait.toString("base64"),
           size: "1024x1024",
+        }).then((b) => {
+          if (!b) throw new Error(`Pose "${pose.id}" returned no data`);
+          return b;
         }),
       { attempts: 4, baseDelayMs: 5000 }
     );
-    const base64 = response.data[0]?.base64;
-    if (!base64) throw new Error(`Pose "${pose.id}" returned no data`);
-    const buffer = Buffer.from(base64, "base64");
     if (buffer.length < 1000) throw new Error(`Pose "${pose.id}" image is empty`);
     fs.writeFileSync(path.join(dir, `pose-${pose.id}.png`), buffer);
     generated.push(pose.id);

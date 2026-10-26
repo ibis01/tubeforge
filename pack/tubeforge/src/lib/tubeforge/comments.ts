@@ -7,9 +7,9 @@
 // creator can paste-and-go right after upload.
 
 import { db } from "@/lib/db";
-import { getZAI, parseJsonLoose } from "./ai";
-import { getChatModel } from "./zai-config";
+import { parseJsonLoose } from "./ai";
 import { aiCall } from "./budget";
+import { chatComplete } from "./providers/chat";
 import type { CommentsKitDTO } from "./types";
 
 export interface EngagementKitInput {
@@ -36,20 +36,11 @@ export async function generateEngagementKit(
   };
   const voice = toneMap[opts.tone] ?? "clear and engaging";
 
-  const zai = await getZAI();
-  const model = await getChatModel();
-  const completion = await aiCall("llm", "engagement kit LLM", () =>
-    zai.chat.completions.create({
-      model,
-      messages: [
-        {
-          role: "assistant",
-          content:
-            "You are a YouTube community strategist who has managed comment sections for channels above 5M subscribers. You know exactly which pinned comments extend session time, which replies convert lurkers into commenters, and how to seed discussion without ever sounding like marketing. You always respond with STRICT JSON only — no markdown, no commentary.",
-        },
-        {
-          role: "user",
-          content: `Write the launch-day engagement kit for this video.
+  const raw = await aiCall("llm", "engagement kit LLM", () =>
+    chatComplete({
+      system:
+        "You are a YouTube community strategist who has managed comment sections for channels above 5M subscribers. You know exactly which pinned comments extend session time, which replies convert lurkers into commenters, and how to seed discussion without ever sounding like marketing. You always respond with STRICT JSON only — no markdown, no commentary.",
+      user: `Write the launch-day engagement kit for this video.
 
 CHANNEL: ${opts.channelName ?? "an independent faceless channel"}
 ${opts.characterName ? `HOST CHARACTER: ${opts.characterName} (the channel's recurring on-screen persona)` : ""}
@@ -76,13 +67,8 @@ Return JSON with exactly these keys:
   "heartTargets": ["3-4 short descriptions of early comment types to heart within the first hour, e.g. 'comments quoting their favorite scene moment'"],
   "strategy": "one paragraph (60-90 words) playbook: when to post the pinned comment, how fast to answer the first comments, what to pin later if the pinned one underperforms, and one metric to watch. Plain sentences, no bullets."
 }`,
-        },
-      ],
-      thinking: { type: "disabled" },
     })
   );
-
-  const raw = completion.choices[0]?.message?.content ?? "";
   const parsed = parseJsonLoose(raw);
 
   const pinnedComment = String(parsed.pinnedComment ?? "").trim();

@@ -7,7 +7,10 @@ import ZAI from "z-ai-web-dev-sdk";
 import { mergeWavs } from "./wav";
 import { aiCall } from "./budget";
 import { LENGTHS, THUMB_STYLES, type ResearchIdea } from "./types";
-import { getChatModel, syncZaiConfigFile } from "./zai-config";
+import { syncZaiConfigFile } from "./zai-config";
+import { chatComplete } from "./providers/chat";
+import { ttsSynthesize } from "./providers/tts";
+import { imageEdit, imageGenerate, imageEditSupported } from "./providers/image";
 
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
@@ -95,20 +98,11 @@ export async function generateScriptPackage(opts: {
   };
   const toneDesc = toneMap[opts.tone] ?? "clear and engaging";
 
-  const zai = await getZAI();
-  const model = await getChatModel();
-  const completion = await aiCall("llm", "script LLM", () =>
-    zai.chat.completions.create({
-      model,
-    messages: [
-      {
-        role: "assistant",
-        content:
-          "You are an elite faceless-YouTube scriptwriter with 10M+ views per video. You write narration-first scripts optimized for retention (strong hook in the first 2 sentences, open loops, pattern interrupts, and a payoff). You always respond with STRICT JSON only — no markdown, no commentary.",
-      },
-      {
-        role: "user",
-        content: `Create a complete YouTube video package for a faceless channel.
+  const raw = await aiCall("llm", "script LLM", () =>
+    chatComplete({
+      system:
+        "You are an elite faceless-YouTube scriptwriter with 10M+ views per video. You write narration-first scripts optimized for retention (strong hook in the first 2 sentences, open loops, pattern interrupts, and a payoff). You always respond with STRICT JSON only — no markdown, no commentary.",
+      user: `Create a complete YouTube video package for a faceless channel.
 Niche: ${opts.niche}
 Tone: ${toneDesc}
 Topic: "${opts.topic}"
@@ -121,12 +115,8 @@ Return JSON with exactly these keys:
   "description": "engaging YouTube description (2-3 sentences) followed by a line of relevant hashtags",
   "tags": ["array of 10 SEO tags relevant to the topic"]
 }`,
-      },
-    ],
-    thinking: { type: "disabled" },
-  }));
-
-  const raw = completion.choices[0]?.message?.content ?? "";
+    })
+  );
   const parsed = parseJsonLoose(raw);
 
   const title = String(parsed.title ?? "").trim();
@@ -197,27 +187,17 @@ export async function generateVoiceover(opts: {
   const chunks = splitForTts(speech);
   if (chunks.length === 0) throw new Error("Nothing to speak");
 
-  const zai = await getZAI();
   const buffers: Buffer[] = [];
 
   for (const [i, chunk] of chunks.entries()) {
     // Pace chunk requests — rapid back-to-back TTS calls trip upstream burst limits.
     if (i > 0) await sleep(2000);
-    const response = await aiCall(
+    const buffer = await aiCall(
       "tts",
       `tts chunk (${chunk.length} chars)`,
-      () =>
-        zai.audio.tts.create({
-          input: chunk,
-          voice: opts.voice,
-          speed: opts.speed,
-          response_format: "wav",
-          stream: false,
-        }),
+      () => ttsSynthesize({ input: chunk, voice: opts.voice, speed: opts.speed }),
       { attempts: 6, baseDelayMs: 8000 } // background job — outlast long rate-limit storms (≈16 min of patience)
     );
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(new Uint8Array(arrayBuffer));
     if (buffer.length < 44) throw new Error("TTS returned empty audio");
     buffers.push(buffer);
   }
@@ -252,36 +232,41 @@ export async function generateThumbnail(opts: {
 
   const scenePrompt = `YouTube video thumbnail about "${opts.topic}". ${stylePrompt}. Wide 16:9 cinematic frame, extremely detailed, eye-catching composition built for high click-through rate, professional color grading. The host character is the single focal point. Absolutely no text, no letters, no words, no watermarks.`;
 
-  let zai = await getZAI();
-  let response;
-
   // Preferred path — visually seed the generation with the character's portrait
   // so the host keeps their real likeness inside the scene.
-  const { readPortrait } = await import("./characters");
+  const { readPortrait, characterSceneFragment } = await import("./characters");
   const portrait =
     opts.character?.id ? readPortrait(opts.character.id) : null;
-  if (opts.character && portrait) {
-    response = await aiCall(
+
+  let buffer: Buffer | null = null;
+  if (opts.character && portrait && (await imageEditSupported())) {
+    // Identity-locked edit seeded with the cast portrait. Real failures
+    // (rate limits, server errors) fall through to the prompt-seeded path.
+    buffer = await aiCall(
       "image",
       "thumbnail edit (cast likeness)",
       () =>
-        zai.images.generations.edit({
+        imageEdit({
           prompt: `Place this exact person into a new scene — keep their face, hairstyle, glasses, facial hair and signature outfit perfectly recognizable. ${scenePrompt}`,
-          images: [{ url: `data:image/png;base64,${portrait.toString("base64")}` }],
+          imagePngBase64: portrait.toString("base64"),
           size: "1344x768",
+        }).then((b) => {
+          if (!b) throw new Error("Image edit returned no data");
+          return b;
         }),
       { attempts: 4, baseDelayMs: 5000 }
-    );
-  } else {
-    const { characterSceneFragment } = await import("./characters");
+    ).catch(() => null);
+  }
+
+  if (!buffer) {
     const castFragment = opts.character
       ? characterSceneFragment(opts.character)
       : "";
-    response = await aiCall(
+    buffer = await aiCall(
       "image",
       "thumbnail image",
       () =>
-        zai.images.generations.create({
+        imageGenerate({
           prompt: `${scenePrompt}${castFragment ? ` ${castFragment}` : ""}`,
           size: "1344x768",
         }),
@@ -289,10 +274,6 @@ export async function generateThumbnail(opts: {
     );
   }
 
-  const base64 = response.data[0]?.base64;
-  if (!base64) throw new Error("Image generation returned no data");
-
-  const buffer = Buffer.from(base64, "base64");
   if (buffer.length < 1000) throw new Error("Generated image is empty");
 
   const fileName = opts.variant
@@ -356,20 +337,11 @@ export async function generateTopicResearch(opts: {
   const { performanceBriefBlock } = await import("./analytics");
   const performanceBrief = await performanceBriefBlock();
 
-  const zai = await getZAI();
-  const model = await getChatModel();
-  const completion = await aiCall("llm", "research LLM", () =>
-    zai.chat.completions.create({
-      model,
-    messages: [
-      {
-        role: "assistant",
-        content:
-          "You are a senior YouTube growth strategist who has scaled multiple faceless channels past 1M subscribers. You deeply understand search demand, CTR psychology, watch-time retention, and how faceless niches grow. You always respond with STRICT JSON only — no markdown, no commentary.",
-      },
-      {
-        role: "user",
-        content: `Research the "${opts.niche}" niche on YouTube${opts.query ? ` with a focus on "${opts.query}"` : ""}.
+  const raw = await aiCall("llm", "research LLM", () =>
+    chatComplete({
+      system:
+        "You are a senior YouTube growth strategist who has scaled multiple faceless channels past 1M subscribers. You deeply understand search demand, CTR psychology, watch-time retention, and how faceless niches grow. You always respond with STRICT JSON only — no markdown, no commentary.",
+      user: `Research the "${opts.niche}" niche on YouTube${opts.query ? ` with a focus on "${opts.query}"` : ""}.
 ${performanceBrief}
 Find 8 concrete, specific faceless-video topic ideas that are most likely to perform well right now. Favor evergreen topics with proven search demand and strong curiosity gaps that work without a host on camera.
 
@@ -389,12 +361,8 @@ Return JSON with exactly these keys:
     }
   ]
 }`,
-      },
-    ],
-    thinking: { type: "disabled" },
-  }));
-
-  const raw = completion.choices[0]?.message?.content ?? "";
+    })
+  );
   const parsed = parseJsonLoose(raw);
 
   const ideas = Array.isArray(parsed.ideas)

@@ -25,7 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { EmptyState } from "@/components/tubeforge/shared";
+import { EmptyState, useVoices } from "@/components/tubeforge/shared";
 import {
   VOICES,
   ART_STYLES,
@@ -89,6 +89,7 @@ export function CastView() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState<CharacterForm>(EMPTY_FORM);
+  const { voices } = useVoices();
   const [creating, setCreating] = useState(false);
   const [bibleRunning, setBibleRunning] = useState(false);
 
@@ -338,7 +339,7 @@ export function CastView() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {VOICES.map((v) => (
+                    {voices.map((v) => (
                       <SelectItem key={v.id} value={v.id}>
                         {v.label}
                       </SelectItem>
@@ -481,6 +482,7 @@ function CharacterStudio({
   toast: ReturnType<typeof useToast>["toast"];
 }) {
   const [c, setC] = useState<CharacterDTO>(initial);
+  const { voices } = useVoices();
   const [form, setForm] = useState({
     name: initial.name,
     role: initial.role ?? "",
@@ -846,7 +848,7 @@ function CharacterStudio({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {VOICES.map((v) => (
+                    {voices.map((v) => (
                       <SelectItem key={v.id} value={v.id}>
                         {v.label}
                       </SelectItem>

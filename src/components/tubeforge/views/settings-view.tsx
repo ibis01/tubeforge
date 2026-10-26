@@ -42,7 +42,14 @@ import {
   Bot,
   KeyRound,
   FlaskConical,
+  PenLine,
 } from "lucide-react";
+import { useVoices } from "@/components/tubeforge/shared";
+import {
+  PROVIDERS_BY_CAPABILITY,
+  CAPABILITY_META,
+  type CapabilityId,
+} from "@/lib/tubeforge/providers/registry";
 
 const KIND_META: Record<string, { label: string; icon: typeof Mic }> = {
   voiceover: { label: "Voiceover", icon: Mic },
@@ -78,6 +85,7 @@ export function SettingsView() {
 
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+  const { voices } = useVoices();
   const [form, setForm] = useState({
     defaultNiche: "Motivation",
     defaultTone: "informative",
@@ -107,18 +115,30 @@ export function SettingsView() {
   const [ytConnecting, setYtConnecting] = useState(false);
   const [ytCopied, setYtCopied] = useState(false);
 
-  // AI provider (Z.ai) — key, base URL and model picked right from the UI
-  const [ai, setAi] = useState({
+  // AI providers — global Z.ai credentials + one provider per task capability
+  const [zaiCreds, setZaiCreds] = useState({
     baseUrl: DEFAULT_ZAI_BASE_URL,
     apiKey: "",
-    chatModel: DEFAULT_CHAT_MODEL,
-    visionModel: "",
     hasKey: false,
     maskedKey: "",
   });
-  const [aiSaving, setAiSaving] = useState(false);
-  const [aiTesting, setAiTesting] = useState(false);
-  const [aiTest, setAiTest] = useState<{ ok: boolean; text: string } | null>(null);
+  const [prov, setProv] = useState<Record<CapabilityId, {
+    provider: string;
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+    visionModel: string;
+    hasKey: boolean;
+    maskedKey: string;
+  }>>({
+    chat: { provider: "zai", baseUrl: "", apiKey: "", model: DEFAULT_CHAT_MODEL, visionModel: "", hasKey: false, maskedKey: "" },
+    tts: { provider: "zai", baseUrl: "", apiKey: "", model: "", visionModel: "", hasKey: false, maskedKey: "" },
+    image: { provider: "zai", baseUrl: "", apiKey: "", model: "", visionModel: "", hasKey: false, maskedKey: "" },
+    video: { provider: "zai", baseUrl: "", apiKey: "", model: "cogvideox-3", visionModel: "", hasKey: false, maskedKey: "" },
+  });
+  const [provSaving, setProvSaving] = useState(false);
+  const [provTesting, setProvTesting] = useState<string | null>(null);
+  const [provTests, setProvTests] = useState<Record<string, { ok: boolean; text: string; needsConfirm?: boolean } | undefined>>({});
 
   const loadYouTube = useCallback(async () => {
     try {
@@ -137,14 +157,17 @@ export function SettingsView() {
       const res = await fetch("/api/settings/ai", { cache: "no-store" });
       if (!res.ok) return;
       const d = await res.json();
-      setAi((f) => ({
-        ...f,
-        baseUrl: d.baseUrl ?? DEFAULT_ZAI_BASE_URL,
-        chatModel: d.chatModel ?? DEFAULT_CHAT_MODEL,
-        visionModel: d.visionModel ?? "",
-        hasKey: Boolean(d.hasKey),
-        maskedKey: d.maskedKey ?? "",
+      setZaiCreds({
+        baseUrl: d.zai?.baseUrl ?? DEFAULT_ZAI_BASE_URL,
         apiKey: "",
+        hasKey: Boolean(d.zai?.hasKey),
+        maskedKey: d.zai?.maskedKey ?? "",
+      });
+      setProv((f) => ({
+        chat: { ...f.chat, ...(d.capabilities?.chat ?? {}), apiKey: "" },
+        tts: { ...f.tts, ...(d.capabilities?.tts ?? {}), apiKey: "" },
+        image: { ...f.image, ...(d.capabilities?.image ?? {}), apiKey: "" },
+        video: { ...f.video, ...(d.capabilities?.video ?? {}), apiKey: "" },
       }));
     } catch {
       /* non-critical */
@@ -310,27 +333,53 @@ export function SettingsView() {
   };
 
   // ---------- AI provider handlers ----------
-  const saveAi = async () => {
-    if (aiSaving) return;
-    setAiSaving(true);
-    setAiTest(null);
+  const saveProviders = async () => {
+    if (provSaving) return;
+    setProvSaving(true);
     try {
-      const res = await fetch("/api/settings/ai", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          baseUrl: ai.baseUrl.trim(),
-          apiKey: ai.apiKey.trim(),
-          chatModel: ai.chatModel,
-          visionModel: ai.visionModel.trim(),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Save failed");
-      setAi((f) => ({ ...f, apiKey: "", hasKey: data.hasKey ?? f.hasKey, maskedKey: data.maskedKey ?? f.maskedKey }));
+      // 1) Global Z.ai credentials (only when the user typed something).
+      if (zaiCreds.apiKey.trim() || zaiCreds.baseUrl.trim()) {
+        const res = await fetch("/api/settings/ai", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scope: "zai",
+            baseUrl: zaiCreds.baseUrl.trim(),
+            apiKey: zaiCreds.apiKey.trim(),
+          }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          throw new Error(d.error ?? `Z.ai credentials: HTTP ${res.status}`);
+        }
+      }
+
+      // 2) Every capability's provider / model / endpoint.
+      for (const cap of ["chat", "tts", "image", "video"] as CapabilityId[]) {
+        const row = prov[cap];
+        const res = await fetch("/api/settings/ai", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scope: "capability",
+            capability: cap,
+            provider: row.provider,
+            model: row.model,
+            visionModel: cap === "chat" ? row.visionModel : undefined,
+            baseUrl: row.baseUrl.trim(),
+            apiKey: row.apiKey.trim(),
+          }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          throw new Error(d.error ?? `${CAPABILITY_META[cap].label}: HTTP ${res.status}`);
+        }
+      }
+
+      await loadAi();
       toast({
-        title: "AI provider updated",
-        description: "The very next script uses the new settings.",
+        title: "AI providers updated",
+        description: "The very next run uses the new providers.",
       });
     } catch (e) {
       toast({
@@ -339,34 +388,71 @@ export function SettingsView() {
         variant: "destructive",
       });
     } finally {
-      setAiSaving(false);
+      setProvSaving(false);
     }
   };
 
-  const testAi = async () => {
-    if (aiTesting) return;
-    setAiTesting(true);
-    setAiTest(null);
+  const testCapability = async (cap: CapabilityId, kind: string, confirmCost = false) => {
+    if (provTesting) return;
+    const row = prov[cap];
+    setProvTesting(cap);
+    setProvTests((t) => ({ ...t, [cap]: undefined }));
     try {
       const res = await fetch("/api/settings/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          baseUrl: ai.baseUrl.trim() || undefined,
-          apiKey: ai.apiKey.trim() || undefined,
-          chatModel: ai.chatModel,
+          capability: kind,
+          provider: row.provider,
+          baseUrl: row.baseUrl.trim() || undefined,
+          apiKey: row.apiKey.trim() || undefined,
+          model: row.model.trim() || undefined,
+          visionModel: row.visionModel?.trim() || undefined,
+          confirmCost,
         }),
       });
       const d = await res.json();
       if (d.ok) {
-        setAiTest({ ok: true, text: `Connected — ${d.model} replied "${(d.reply ?? "").trim().slice(0, 24)}" in ${d.latencyMs} ms` });
+        setProvTests((t) => ({
+          ...t,
+          [cap]: { ok: true, text: `${d.reply ?? "Connected"}${d.latencyMs ? ` · ${d.latencyMs} ms` : ""}` },
+        }));
+      } else if (d.needsConfirm) {
+        setProvTests((t) => ({ ...t, [cap]: { ok: false, needsConfirm: true, text: d.error ?? "Confirm to run the paid test" } }));
       } else {
-        setAiTest({ ok: false, text: d.error ?? "Connection failed" });
+        setProvTests((t) => ({ ...t, [cap]: { ok: false, text: d.error ?? "Connection failed" } }));
       }
     } catch {
-      setAiTest({ ok: false, text: "Could not reach the server" });
+      setProvTests((t) => ({ ...t, [cap]: { ok: false, text: "Could not reach the server" } }));
     } finally {
-      setAiTesting(false);
+      setProvTesting(null);
+    }
+  };
+
+  /** Server-side: adopt the chat provider's saved account for this task. */
+  const copyChatAccount = async (cap: CapabilityId) => {
+    try {
+      const res = await fetch("/api/settings/ai", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scope: "capability",
+          capability: cap,
+          copyCredsFrom: "chat",
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await loadAi();
+      toast({
+        title: `${CAPABILITY_META[cap].label} now shares the script provider's account`,
+        description: "Save & apply to make it permanent — or tweak it first.",
+      });
+    } catch {
+      toast({
+        title: "Could not copy the account",
+        description: "Save the script provider first, then try again.",
+        variant: "destructive",
+      });
     }
   };
 
@@ -439,126 +525,356 @@ export function SettingsView() {
         </div>
       </Card>
 
-      {/* AI provider — swap API key / endpoint / model without touching files */}
+      {/* AI providers — mix and match: one provider per task, Z.ai creds shared */}
       <Card className="glass rounded-2xl p-5 sm:p-6">
         <div className="flex items-center gap-2.5 mb-1">
           <div className="h-9 w-9 rounded-xl bg-indigo-500/90 flex items-center justify-center shrink-0 shadow-[0_0_18px_rgba(99,102,241,0.25)]">
             <Bot className="h-4.5 w-4.5 text-white" />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold leading-tight">AI Provider (Z.ai)</h3>
+            <h3 className="font-semibold leading-tight">AI Providers</h3>
             <p className="text-xs text-muted-foreground">
-              Your API key, endpoint and model — scripts use these on the very next run
+              Mix and match — point each task at the AI of your choice
             </p>
           </div>
-          {ai.hasKey && (
-            <Badge className="bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[11px] shrink-0">
-              <KeyRound className="h-3 w-3 mr-1" />
-              {ai.maskedKey}
-            </Badge>
-          )}
         </div>
 
-        <div className="mt-4 space-y-4">
-          <div className="grid sm:grid-cols-2 gap-4">
+        {/* Shared Z.ai credentials */}
+        <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="min-w-0">
+              <p className="text-sm font-medium flex items-center gap-1.5">
+                <KeyRound className="h-3.5 w-3.5 text-primary" />
+                Z.ai credentials
+                <Badge className="bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 text-[10px]">
+                  shared
+                </Badge>
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                One key powers every Z.ai task — GLM scripts, TTS voices, CogView art, CogVideoX clips
+              </p>
+            </div>
+            {zaiCreds.hasKey && (
+              <Badge className="bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[11px] shrink-0">
+                {zaiCreds.maskedKey}
+              </Badge>
+            )}
+          </div>
+          <div className="grid sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>API base URL</Label>
               <Input
-                value={ai.baseUrl}
-                onChange={(e) => setAi((f) => ({ ...f, baseUrl: e.target.value }))}
+                value={zaiCreds.baseUrl}
+                onChange={(e) => setZaiCreds((f) => ({ ...f, baseUrl: e.target.value }))}
                 placeholder={DEFAULT_ZAI_BASE_URL}
-                className="bg-white/5 border-white/10 text-xs font-mono"
+                className="bg-white/5 border-white/10 text-xs font-mono h-9"
               />
             </div>
             <div className="space-y-1.5">
               <Label>API key</Label>
               <Input
-                value={ai.apiKey}
-                onChange={(e) => setAi((f) => ({ ...f, apiKey: e.target.value }))}
-                placeholder={ai.hasKey ? `saved (${ai.maskedKey}) — type to replace` : "Paste your Z.ai key"}
+                value={zaiCreds.apiKey}
+                onChange={(e) => setZaiCreds((f) => ({ ...f, apiKey: e.target.value }))}
+                placeholder={zaiCreds.hasKey ? `saved (${zaiCreds.maskedKey}) — type to replace` : "Paste your Z.ai key"}
                 type="password"
-                className="bg-white/5 border-white/10 text-xs font-mono"
+                className="bg-white/5 border-white/10 text-xs font-mono h-9"
               />
             </div>
           </div>
+          <a
+            href="https://z.ai/model-api"
+            target="_blank"
+            rel="noreferrer"
+            className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2 inline-flex items-center gap-0.5"
+          >
+            Get a free Z.ai API key <ExternalLink className="h-2.5 w-2.5" />
+          </a>
+        </div>
 
-          <div className="grid sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label>Script / chat model</Label>
-              <Select value={ai.chatModel} onValueChange={(v) => setAi((f) => ({ ...f, chatModel: v }))}>
-                <SelectTrigger className="bg-white/5 border-white/10 text-xs h-9">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {CHAT_MODELS.map((m) => (
-                    <SelectItem key={m.id} value={m.id} className="text-xs">
-                      <span className="font-medium">{m.label}</span>
-                      <span className="text-muted-foreground ml-1.5">{m.hint}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-[11px] text-muted-foreground">
-                Flash tiers are free — paid tiers need credit on your account.
-              </p>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Vision model (optional)</Label>
-              <Input
-                value={ai.visionModel}
-                onChange={(e) => setAi((f) => ({ ...f, visionModel: e.target.value }))}
-                placeholder="gateway default (e.g. glm-4.6v-flash)"
-                className="bg-white/5 border-white/10 text-xs font-mono"
-              />
-              <p className="text-[11px] text-muted-foreground">
-                Used by the artwork quality gate. Try <code>glm-4.6v-flash</code> (free) if your key needs an explicit model.
-              </p>
-            </div>
-          </div>
+        {/* Per-task provider rows */}
+        <div className="mt-4 space-y-3">
+          {(["chat", "tts", "image", "video"] as CapabilityId[]).map((cap) => {
+            const row = prov[cap];
+            const meta = CAPABILITY_META[cap];
+            const providers = PROVIDERS_BY_CAPABILITY[cap];
+            const active = providers.find((p) => p.id === row.provider) ?? providers[0];
+            const shortLabel = active.label.split(" (")[0];
+            const CapIcon = cap === "chat" ? PenLine : cap === "tts" ? Mic : cap === "image" ? ImageIcon : Clapperboard;
+            const test = provTests[cap];
+            const chatRow = prov.chat;
+            const canCopyChat =
+              cap !== "chat" &&
+              row.provider !== "zai" &&
+              chatRow.provider === row.provider &&
+              chatRow.hasKey;
 
-          {aiTest && (
-            <div
-              className={`rounded-lg border px-3 py-2 text-xs leading-relaxed ${
-                aiTest.ok
-                  ? "border-emerald-500/25 bg-emerald-500/8 text-emerald-200"
-                  : "border-red-500/25 bg-red-500/8 text-red-200"
-              }`}
-            >
-              {aiTest.ok ? "✓ " : "✗ "}
-              {aiTest.text}
-            </div>
-          )}
+            return (
+              <div key={cap} className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="h-7 w-7 rounded-lg bg-white/6 flex items-center justify-center shrink-0">
+                      <CapIcon className="h-3.5 w-3.5 text-primary" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">{meta.label}</p>
+                      <p className="text-[11px] text-muted-foreground truncate">{meta.desc}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {row.provider !== "zai" && row.hasKey && (
+                      <Badge className="bg-white/6 text-zinc-300 border border-white/10 text-[10px] shrink-0">
+                        {shortLabel} · {row.maskedKey}
+                      </Badge>
+                    )}
+                    <Select
+                      value={row.provider}
+                      onValueChange={(v) =>
+                        setProv((f) => {
+                          const p = providers.find((x) => x.id === v);
+                          const fallbackModel =
+                            v === "zai"
+                              ? cap === "chat"
+                                ? DEFAULT_CHAT_MODEL
+                                : cap === "video"
+                                  ? "cogvideox-3"
+                                  : ""
+                              : (p?.models[0]?.id ?? "");
+                          return {
+                            ...f,
+                            [cap]: {
+                              ...f[cap],
+                              provider: v,
+                              model: f[cap].provider === v ? f[cap].model : fallbackModel,
+                              baseUrl: "",
+                              apiKey: "",
+                              hasKey: false,
+                              maskedKey: "",
+                            },
+                          };
+                        })
+                      }
+                    >
+                      <SelectTrigger className="bg-white/5 border-white/10 text-xs h-9 w-[230px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {providers.map((p) => (
+                          <SelectItem key={p.id} value={p.id} className="text-xs">
+                            {p.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              size="sm"
-              onClick={saveAi}
-              disabled={aiSaving}
-              className="border-white/15 bg-white/6 hover:bg-white/10 font-medium h-8"
-              variant="outline"
-            >
-              {aiSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-              Save & apply
-            </Button>
-            <Button
-              size="sm"
-              onClick={testAi}
-              disabled={aiTesting}
-              className="bg-brand-gradient hover:opacity-90 text-white font-medium h-8"
-              title="Send a tiny test prompt through your key"
-            >
-              {aiTesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FlaskConical className="h-3.5 w-3.5" />}
-              Test connection
-            </Button>
-            <a
-              href="https://z.ai/model-api"
-              target="_blank"
-              rel="noreferrer"
-              className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2 inline-flex items-center gap-0.5"
-            >
-              Get a free API key <ExternalLink className="h-2.5 w-2.5" />
-            </a>
-          </div>
+                {row.provider === "zai" ? (
+                  cap === "chat" ? (
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label>Model</Label>
+                        <Select
+                          value={row.model}
+                          onValueChange={(v) => setProv((f) => ({ ...f, chat: { ...f.chat, model: v } }))}
+                        >
+                          <SelectTrigger className="bg-white/5 border-white/10 text-xs h-9">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {CHAT_MODELS.map((m) => (
+                              <SelectItem key={m.id} value={m.id} className="text-xs">
+                                <span className="font-medium">{m.label}</span>
+                                <span className="text-muted-foreground ml-1.5">{m.hint}</span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Vision model (optional)</Label>
+                        <Input
+                          value={row.visionModel}
+                          onChange={(e) =>
+                            setProv((f) => ({ ...f, chat: { ...f.chat, visionModel: e.target.value } }))
+                          }
+                          placeholder="gateway default (e.g. glm-4.6v-flash)"
+                          className="bg-white/5 border-white/10 text-xs font-mono h-9"
+                        />
+                      </div>
+                    </div>
+                  ) : cap === "video" ? (
+                    <div className="space-y-1.5">
+                      <Label>Video model</Label>
+                      <Input
+                        value={row.model}
+                        onChange={(e) => setProv((f) => ({ ...f, video: { ...f.video, model: e.target.value } }))}
+                        placeholder="cogvideox-3"
+                        className="bg-white/5 border-white/10 text-xs font-mono h-9 max-w-xs"
+                      />
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground">
+                      Uses the shared Z.ai key above
+                      {cap === "tts" ? " · 7 studio voices" : " · CogView art with identity-locked edits"}
+                    </p>
+                  )
+                ) : (
+                  <div className="space-y-3">
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label>API base URL</Label>
+                        <Input
+                          value={row.baseUrl}
+                          onChange={(e) =>
+                            setProv((f) => ({ ...f, [cap]: { ...f[cap], baseUrl: e.target.value } }))
+                          }
+                          placeholder={active.defaultBaseUrl}
+                          className="bg-white/5 border-white/10 text-xs font-mono h-9"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>API key</Label>
+                        <Input
+                          value={row.apiKey}
+                          onChange={(e) =>
+                            setProv((f) => ({ ...f, [cap]: { ...f[cap], apiKey: e.target.value } }))
+                          }
+                          placeholder={row.hasKey ? `saved (${row.maskedKey}) — type to replace` : `Paste your ${shortLabel} key`}
+                          type="password"
+                          className="bg-white/5 border-white/10 text-xs font-mono h-9"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Model</Label>
+                      <Input
+                        value={row.model}
+                        onChange={(e) =>
+                          setProv((f) => ({ ...f, [cap]: { ...f[cap], model: e.target.value } }))
+                        }
+                        placeholder={active.models[0]?.id ?? "model id"}
+                        className="bg-white/5 border-white/10 text-xs font-mono h-9 max-w-xs"
+                      />
+                      {active.models.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          {active.models.slice(0, 5).map((m) => (
+                            <button
+                              key={m.id}
+                              type="button"
+                              onClick={() =>
+                                setProv((f) => ({ ...f, [cap]: { ...f[cap], model: m.id } }))
+                              }
+                              className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                                row.model === m.id
+                                  ? "border-primary/50 bg-primary/15 text-primary"
+                                  : "border-white/10 bg-white/4 text-muted-foreground hover:text-foreground"
+                              }`}
+                              title={m.hint ?? m.id}
+                            >
+                              {m.id}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {cap === "chat" && (
+                        <div className="space-y-1.5 pt-1">
+                          <Label className="text-[11px]">Vision model (optional — quality gate)</Label>
+                          <Input
+                            value={row.visionModel}
+                            onChange={(e) =>
+                              setProv((f) => ({ ...f, chat: { ...f.chat, visionModel: e.target.value } }))
+                            }
+                            placeholder={row.model || "defaults to the script model"}
+                            className="bg-white/5 border-white/10 text-xs font-mono h-9 max-w-xs"
+                          />
+                        </div>
+                      )}
+                      <p className="text-[10px] text-muted-foreground leading-relaxed">
+                        {active.note}{" "}
+                        <a
+                          href={active.keyUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline underline-offset-2 hover:text-foreground inline-flex items-center gap-0.5"
+                        >
+                          Get a key <ExternalLink className="h-2.5 w-2.5" />
+                        </a>
+                      </p>
+                    </div>
+                    {canCopyChat && (
+                      <button
+                        type="button"
+                        onClick={() => copyChatAccount(cap)}
+                        className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2 inline-flex items-center gap-1"
+                      >
+                        <Copy className="h-3 w-3" />
+                        Use the same account as Script writing
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {cap !== "video" && (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={provTesting === cap}
+                      onClick={() => {
+                        if (test?.needsConfirm) testCapability(cap, cap, true);
+                        else testCapability(cap, cap);
+                      }}
+                      className="border-white/15 bg-white/6 hover:bg-white/10 h-7 text-[11px]"
+                      title={cap === "image" ? "Generates a small real image — may cost a few cents" : "Send a tiny test request"}
+                    >
+                      {provTesting === cap ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <FlaskConical className="h-3 w-3" />
+                      )}
+                      {test?.needsConfirm ? "Confirm — runs a paid test" : "Test"}
+                    </Button>
+                    <span className="text-[10px] text-muted-foreground">
+                      {cap === "chat"
+                        ? "pings the model with a tiny prompt"
+                        : cap === "tts"
+                          ? "speaks one short sentence"
+                          : "generates one small image (real cost)"}
+                    </span>
+                  </div>
+                )}
+
+                {test && (
+                  <div
+                    className={`rounded-lg border px-3 py-2 text-xs leading-relaxed ${
+                      test.ok
+                        ? "border-emerald-500/25 bg-emerald-500/8 text-emerald-200"
+                        : "border-red-500/25 bg-red-500/8 text-red-200"
+                    }`}
+                  >
+                    {test.ok ? "✓ " : "✗ "}
+                    {test.text}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            onClick={saveProviders}
+            disabled={provSaving}
+            className="border-white/15 bg-white/6 hover:bg-white/10 font-medium h-8"
+            variant="outline"
+          >
+            {provSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            Save &amp; apply
+          </Button>
+          <span className="text-[11px] text-muted-foreground">
+            Applies to the very next AI call — no restart needed
+          </span>
         </div>
       </Card>
 
@@ -769,7 +1085,7 @@ export function SettingsView() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {VOICES.map((v) => (
+                {voices.map((v) => (
                   <SelectItem key={v.id} value={v.id}>
                     {v.label}
                   </SelectItem>

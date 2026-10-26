@@ -18,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useVoices } from "@/components/tubeforge/shared";
 import {
   VOICES,
   NICHES,
@@ -130,6 +131,7 @@ export function CreateView() {
   const [tone, setTone] = useState<string>("informative");
   const [length, setLength] = useState<string>("medium");
   const [voice, setVoice] = useState<string>("jam");
+  const { voices } = useVoices();
   const [speed, setSpeed] = useState(1.0);
   const [thumbStyle, setThumbStyle] = useState<string>("cinematic");
   const [channelId, setChannelId] = useState<string>("none");
@@ -642,7 +644,7 @@ export function CreateView() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {VOICES.map((v) => (
+                {voices.map((v) => (
                   <SelectItem key={v.id} value={v.id}>
                     {v.label}
                   </SelectItem>
@@ -950,7 +952,7 @@ export function CreateView() {
                       Voiceover · {formatDuration(video.audioDuration)}
                     </p>
                     <span className="text-[11px] text-muted-foreground">
-                      {VOICES.find((v) => v.id === video.voice)?.label ?? video.voice}
+                      {voices.find((v) => v.id === video.voice)?.label ?? VOICES.find((v) => v.id === video.voice)?.label ?? video.voice}
                     </span>
                   </div>
                   { }

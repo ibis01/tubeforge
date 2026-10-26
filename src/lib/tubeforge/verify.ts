@@ -14,7 +14,6 @@ import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { db } from "@/lib/db";
-import { getZAI } from "./ai";
 import { aiCall } from "./budget";
 import { parseScenes } from "./story";
 
@@ -103,14 +102,9 @@ async function probeDurationSec(filePath: string): Promise<number> {
 
 /** One raw ASR call (file must be ≤ 30s — upstream hard limit). */
 async function asrOnce(filePath: string): Promise<string> {
-  const zai = await getZAI();
-  const base64 = fs.readFileSync(filePath).toString("base64");
-  const response = await aiCall("llm", "narration ASR", () =>
-    zai.audio.asr.create({ file_base64: base64 })
-  );
-  const text = (response.text ?? "").trim();
-  if (!text) throw new Error("ASR returned an empty transcript");
-  return text;
+  const { asrTranscribe } = await import("./providers/asr");
+  const buffer = fs.readFileSync(filePath);
+  return aiCall("llm", "narration ASR", () => asrTranscribe(buffer));
 }
 
 /** Above this, audio is split into chunks (ASR caps files at 30s). */

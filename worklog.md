@@ -331,3 +331,27 @@ Stage Summary:
 - Script writing now defaults to FREE glm-4.5-flash — $0 on a fresh Z.ai key
 - Users change API key/endpoint/model from Settings → AI Provider without touching files; changes apply to the very next AI call
 - Deliverable: download/tubeforge-local.zip refreshed; packaging recipe persisted at scripts/package-local.sh
+
+---
+Task ID: multi-provider-adapters
+Agent: main
+Task: "switch to any ai of my choice if capable of doing the task" — capability-based multi-provider system (Z.ai + OpenAI-compatible + Anthropic + Gemini)
+
+Work Log:
+- Read all 13 AI call sites (ai.ts ×4, story ×3, convert, comments, characters ×3, quality, render, verify) + settings route/UI + voice pickers.
+- NEW src/lib/tubeforge/providers/: registry.ts (provider metadata per capability, model suggestions, key URLs, OpenAI voice catalog), settings.ts (ai.chat/tts/image/video JSON rows in Setting table + read-time migration from legacy zai.chatModel/visionModel + zai creds never stored per-capability), http.ts (timeout/readable-error fetch), chat.ts (zai SDK unchanged shape | openai /chat/completions WITHOUT the zai-only `thinking` field | anthropic /v1/messages x-api-key+max_tokens+system | gemini :generateContent x-goog-api-key+systemInstruction+responseMimeType json), vision.ts (all 4 providers; quality gate fails open as before), tts.ts (zai 7 voices | openai /audio/speech response_format wav, voice sanitization + classic-6 rule for tts-1), asr.ts (zai file_base64 | openai whisper multipart), image.ts (zai CogView create+edit | openai generations with size mapping 1344x768→1792x1024 dall-e-3 / 1536x1024 gpt-image-1, b64_json handling, multipart /images/edits for gpt-image-1 only; imageEditSupported() so dall-e-3/pose-sheet callers fall back or error clearly).
+- Rewired all call sites through chatComplete/visionComplete/ttsSynthesize/imageGenerate/imageEdit/asrTranscribe; aiCall budget retry unchanged (wraps adapters identically). characters.ts bible prompt now lists the ACTIVE provider's voice ids. render.ts uses video capability model (default cogvideox-3) + actionable error when video provider ≠ zai.
+- zai-config.ts slimmed to global-creds + syncZaiConfigFile + createZaiForTest (SDK edit body `images` cast: .d.ts wrongly says `image`, runtime posts body verbatim — proven live before).
+- API: /api/settings/ai v2 (GET: zai creds + 4 capability configs masked + provider registry; PUT scope zai|capability + copyCredsFrom:"chat" account sharing; POST test per capability incl. hidden vision/imageEdit kinds + confirmCost guard for image tests) + NEW /api/settings/voices (catalog for active tts provider).
+- UI: settings-view AI Provider card rebuilt → "AI Providers" (shared Z.ai credentials block + 4 capability rows: provider select, per-provider fields, model suggestions chips, vision model, per-row Test with paid-test confirm, copy-account button); useVoices() hook in shared.tsx wired into create-view, video-detail-dialog (with voice re-sanitize effect), cast-view ×2, settings default voice.
+- Tests: NEW scripts/test-providers.mjs — local stub HTTP server captures exact wire format through the real app endpoint: 55/55 PASS (openai no-thinking + roles, anthropic headers/system/max_tokens, gemini headers/JSON mode, all 3 vision formats, tts /audio/speech body, image size mapping per model, multipart edits, dall-e-3 edit→graceful-unsupported, cost guard, anthropic /v1 no-double-prefix). Run against BOTH dev (3000) and fresh-boot packaged app (3011): 55/55 both.
+- Live zai chat check hit a persistent internal-gateway 429 storm; proved environmental via OLD sdk-direct scripts/verify-config.mjs failing with the IDENTICAL 429 (behavioral equivalence — same request, same response).
+- Browser verified: provider switch to OpenAI-compatible reveals endpoint/key/model+suggestions/vision fields, model auto-prefill; zero console/page errors; scrollWidth 375 at 375px (screenshots scripts/providers-ui-final.png, providers-ui-mobile.png).
+- Cleanup: test videos + test keys scrubbed from db (zai provider rows strip creds by design); PUT/GET roundtrip + copyCredsFrom verified live; all capabilities restored to zai defaults.
+- Docs: LOCAL-SETUP.md §4 rewritten (provider matrix, key sources, UI-wins-over-file note, checklist step 2) + scripts/SETUP-local.md (provider table, mix-and-match flow).
+- Repackaged via scripts/package-local.sh → download/tubeforge-local.zip (406 KB, 239 files; providers/, voices route, test-providers.mjs included; db verified clean inside zip; packaged app boot-tested on :3011 — settings/voices/library all 200).
+
+Stage Summary:
+- TubeForge is now provider-agnostic per task: scripts on any of Z.ai/OpenAI-compatible/Anthropic/Gemini, voice on Z.ai/OpenAI, art on Z.ai/OpenAI (edits: CogView or gpt-image-1), video Z.ai-only with Ken Burns as the no-AI fallback. Free end-to-end possible: GLM-4.5-Flash scripts + Gemini free tier / BYOV custom voices / Ken Burns renders.
+- Z.ai path byte-identical to before (same SDK calls); every non-zai adapter wire format verified against a capture stub (55 checks).
+- Deliverable: download/tubeforge-local.zip — unzip, npm install, npm run dev, Settings → AI Providers.

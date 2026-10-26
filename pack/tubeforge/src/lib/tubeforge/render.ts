@@ -15,6 +15,7 @@ import { sceneImageFile, sceneWavFile, buildSrtFromSegments } from "./story";
 import { buildSmartSrt } from "./captions";
 import { getZAI, videoDir } from "./ai";
 import { aiCall } from "./budget";
+import { getCapability, VIDEO_DEFAULT_MODEL } from "./providers/settings";
 
 const execFileAsync = promisify(execFile);
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
@@ -124,13 +125,24 @@ async function ensureSceneClip(videoId: string, scene: Scene): Promise<string> {
   const imagePath = path.join(UPLOAD_ROOT, videoId, sceneImageFile(scene.index));
   const imageB64 = fs.readFileSync(imagePath).toString("base64");
 
+  // Video generation is Z.ai CogVideoX — validate the provider up front so
+  // misconfigured installs fail with a actionable message instead of an
+  // opaque SDK error deep inside the render.
+  const videoConfig = await getCapability("video");
+  if (videoConfig.provider !== "zai") {
+    throw new Error(
+      "Scene animation only supports Z.ai CogVideoX — fix it in Settings → AI Providers, or render with Ken Burns mode (no AI video needed)"
+    );
+  }
+  const videoModel = videoConfig.model?.trim() || VIDEO_DEFAULT_MODEL;
+
   const zai = await getZAI();
   const clip = await aiCall(
     "video",
     `scene ${scene.index} i2v`,
     async () => {
       const submit = await zai.video.generations.create({
-        model: "cogvideox-3",
+        model: videoModel,
         prompt: motionPrompt(scene),
         image_url: `data:image/png;base64,${imageB64}`,
         quality: "speed",

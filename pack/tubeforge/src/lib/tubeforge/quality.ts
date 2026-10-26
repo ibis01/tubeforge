@@ -11,9 +11,9 @@
 
 import fs from "fs";
 import { db } from "@/lib/db";
-import { getZAI, parseJsonLoose } from "./ai";
-import { getVisionModel } from "./zai-config";
+import { parseJsonLoose } from "./ai";
 import { aiCall } from "./budget";
+import { visionComplete } from "./providers/vision";
 
 export type GateKind = "thumbnail" | "scene";
 
@@ -51,23 +51,13 @@ async function inspectImage(
   imagePath: string,
   context: string
 ): Promise<{ score: number; issues: string[]; summary: string }> {
-  const zai = await getZAI();
-  const dataUrl = `data:image/png;base64,${fs.readFileSync(imagePath).toString("base64")}`;
-  const model = await getVisionModel();
+  const imagePngBase64 = fs.readFileSync(imagePath).toString("base64");
 
-  const completion = await aiCall("llm", "quality gate VLM", () =>
-    // The SDK type marks `model` as required, but the gateway injects its
-    // default vision model when omitted — keep that behavior when no override
-    // is stored, hence the cast.
-    zai.chat.completions.createVision({
-      ...(model ? { model } : {}),
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: `You are a strict quality inspector for AI-generated YouTube artwork. Context: ${context}.
+  const raw = await aiCall("llm", "quality gate VLM", () =>
+    visionComplete({
+      system:
+        "You are a strict quality inspector for AI-generated YouTube artwork. You always respond with STRICT JSON only — no markdown, no commentary.",
+      user: `Context: ${context}.
 
 Rate this image 0-10 for upload readiness. Deduct heavily for:
 - garbled text, random letters, or nonsense words baked into the art
@@ -77,16 +67,10 @@ Rate this image 0-10 for upload readiness. Deduct heavily for:
 
 Respond with STRICT JSON only:
 {"score": <integer 0-10>, "issues": [<short strings, empty if perfect>], "summary": "<one sentence>"}`,
-            },
-            { type: "image_url", image_url: { url: dataUrl } },
-          ],
-        },
-      ],
-      thinking: { type: "disabled" },
-    } as Parameters<typeof zai.chat.completions.createVision>[0])
+      imagePngBase64,
+    })
   );
-
-  const raw = completion.choices[0]?.message?.content ?? "";
+  if (!raw) throw new Error("Vision inspection unsupported by the chat provider");
   const parsed = parseJsonLoose(raw);
   const score = Number(parsed.score);
   if (!Number.isFinite(score))

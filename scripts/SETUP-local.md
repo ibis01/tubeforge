@@ -39,12 +39,24 @@ npm install
 npm run dev
 ```
 
-4. Open **http://localhost:3000** → go to **Settings → AI Provider (Z.ai)**:
+4. Open **http://localhost:3000** → go to **Settings → AI Providers**:
 
-   - paste your **API key**
-   - base URL is pre-filled (`https://api.z.ai/api/paas/v4`)
-   - pick the **Script / chat model** (GLM-4.5 Flash = free default)
-   - click **Save & apply**, then **Test connection** — it should reply in green.
+   You can mix providers per task — e.g. free Gemini for scripts, OpenAI for
+   voice and art, Z.ai for video. The simplest start is one Z.ai key:
+
+   - **Z.ai credentials** card — paste your **API key** (base URL is pre-filled,
+     `https://api.z.ai/api/paas/v4`). This one key powers every Z.ai task.
+   - **Script writing** row — pick the model (GLM-4.5 Flash = free default).
+   - click **Save & apply**, then hit **Test** on the row — it should go green.
+
+   Other providers (each with their own key + model, per task):
+
+   | Task | Providers |
+   |---|---|
+   | Script writing | Z.ai (GLM) · OpenAI-compatible (OpenAI / OpenRouter / Groq / DeepSeek / Ollama…) · Anthropic Claude · Google Gemini |
+   | Voiceover | Z.ai TTS · OpenAI-compatible (`/audio/speech`, 10 voices) |
+   | Artwork | Z.ai CogView · OpenAI-compatible (DALL·E 3 / gpt-image-1) |
+   | Scene animation | Z.ai CogVideoX (only option — Ken Burns render needs no AI video) |
 
 That's it — no config files to edit by hand. The database ships preloaded with
 your videos, channels, characters and settings, so the Library looks exactly
@@ -56,8 +68,9 @@ To let other devices on your Wi-Fi reach it: `npm run dev:lan`.
 
 ## 3. Optional: config file instead of the UI
 
-The AI SDK reads a `.z-ai-config` JSON file (project dir → home dir → `/etc`).
-The Settings UI writes this file for you. If you prefer doing it manually:
+The Z.ai SDK reads a `.z-ai-config` JSON file (project dir → home dir → `/etc`).
+The Settings UI writes this file for you (UI wins over the file). If you prefer
+doing it manually:
 
 ```bash
 cp .z-ai-config.example .z-ai-config

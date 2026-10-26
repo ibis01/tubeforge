@@ -54,29 +54,33 @@ npx prisma generate          # or: bun run db:generate
 npx prisma db push           # or: bun run db:push
 ```
 
-## 4. Z.ai credentials (for the AI stages)
+## 4. AI providers (pick any — mix and match)
 
-TubeForge talks to GLM / TTS / CogView / CogVideoX through `z-ai-web-dev-sdk`,
-which reads a `.z-ai-config` JSON file. A template is included:
+Open **Settings → AI Providers** in the app and point each task at the AI of
+your choice. Nothing to edit on disk — changes apply to the very next run:
+
+| Task | Providers | Notes |
+|---|---|---|
+| **Script writing** | Z.ai (GLM) · OpenAI-compatible · Anthropic (Claude) · Google (Gemini) | OpenAI-compatible covers OpenAI, OpenRouter, Groq, DeepSeek, Together, Ollama, LM Studio… |
+| **Voiceover** | Z.ai TTS · OpenAI-compatible (`/audio/speech`) | Z.ai has 7 studio voices; OpenAI has 10 (tts-1 / tts-1-hd / gpt-4o-mini-tts) |
+| **Artwork** | Z.ai CogView · OpenAI-compatible (DALL·E 3 / gpt-image-1) | Identity-locked edits need CogView or gpt-image-1 (DALL·E 3 falls back to fresh art) |
+| **Scene animation** | Z.ai CogVideoX (only option) | Ken Burns render mode needs no AI video at all |
+
+**Z.ai credentials are shared** across every Z.ai task (one key), while the
+other providers carry their own key per task — with a one-click *"Use the same
+account as Script writing"* shortcut.
+
+### Still want the config file?
+
+The bundled SDK reads a `.z-ai-config` JSON file for its Z.ai credentials.
+A template is included:
 
 ```bash
 cp .z-ai-config.example .z-ai-config
 ```
 
-**Only two fields are required.** The SDK checks `baseUrl` + `apiKey` and
-ignores everything else (`chatId` / `userId` / `token` are optional passthrough
-headers used inside the hosted workspace — you can simply delete those lines,
-or leave them as empty strings `""`):
-
-| Field | Required | What it is |
-|---|---|---|
-| `baseUrl` | ✅ | API endpoint of your Z.ai-compatible gateway, including the version prefix (e.g. `https://api.z.ai/api/paas/v4`) |
-| `apiKey` | ✅ | Your API key — sent as `Authorization: Bearer <apiKey>` |
-| `chatId` | — | optional, sent as `X-Chat-Id` header |
-| `userId` | — | optional, sent as `X-User-Id` header |
-| `token` | — | optional, sent as `X-Token` header |
-
-So a minimal `.z-ai-config` is just:
+But note: **anything you save in the Settings UI wins over the file** (the app
+rewrites the file from what you saved). A minimal file is just:
 
 ```json
 {
@@ -85,26 +89,28 @@ So a minimal `.z-ai-config` is just:
 }
 ```
 
-**Where the two values come from:** your own Z.ai API account. Sign up on the
-Z.ai developer platform (z.ai — or open.bigmodel.cn in China), open the
-**API keys** page in its console, create a key, and take the matching **base
-URL** from the same API docs page. One honest caveat: the credentials inside
-the hosted TubeForge workspace are auto-provisioned by the platform for that
-session only — they can't be copied to your PC and they stop working when the
-session ends. That's exactly why the template asks for *your* key.
+| Field | Required | What it is |
+|---|---|---|
+| `baseUrl` | ✅ | API endpoint of your Z.ai-compatible gateway, including the version prefix (e.g. `https://api.z.ai/api/paas/v4`) |
+| `apiKey` | ✅ | Your API key — sent as `Authorization: Bearer <apiKey>` |
+| `chatId` / `userId` / `token` | — | optional passthrough headers from the hosted workspace — delete them |
 
-**Check before you start** — this tests your config and reports exactly which
-stages your key can serve (chat by default; the other stages use a little
-quota):
+**Where to get keys:** Z.ai — z.ai/model-api (GLM-4.5-Flash is **free**, so
+scripts cost $0) · OpenAI — platform.openai.com/api-keys · Anthropic —
+console.anthropic.com · Gemini — aistudio.google.com/apikey (free quota) ·
+OpenRouter — openrouter.ai/keys (hundreds of models behind one key).
+
+**Check before you start** — the Test button on each provider row sends a tiny
+live request; or from a terminal:
 
 ```bash
-node scripts/verify-config.mjs         # config + chat (scripts, storyboards…)
+node scripts/verify-config.mjs         # Z.ai config + chat (scripts, storyboards…)
 node scripts/verify-config.mjs --all   # also TTS, image, video task creation
 ```
 
-The app starts fine **without** credentials — you can browse the UI and the
+The app starts fine **without any credentials** — you can browse the UI and the
 library. Every AI stage (script, storyboard, TTS, thumbnails, video render,
-narration check) needs valid credentials.
+narration check) needs at least one working provider.
 
 ## 5. Run
 
@@ -117,12 +123,15 @@ npm run build && npm start
 ## 6. First-run checklist
 
 1. Open `http://localhost:3000` — the dashboard loads.
-2. **Settings** → the pipeline defaults (voice, budget, quality gate) live here.
+2. **Settings → AI Providers** — paste at least one API key (Z.ai free tier is
+   enough for scripts) and hit **Test**, then **Save & apply**.
 3. **Create** → pick a topic (or greenlight an idea from **Topic Radar**).
    *Format* defaults to **Scene-based story** — that's what makes real MP4s.
 4. **Render mode**:
-   - *Ken Burns* — fast cinematic motion over painted scenes.
-   - *Full AI animation* — CogVideoX animates every scene (~4 min/scene).
+   - *Ken Burns* — fast cinematic motion over painted scenes (works with any
+     artwork provider, no AI video account needed).
+   - *Full AI animation* — CogVideoX animates every scene (~4 min/scene, needs
+     Z.ai).
 5. Auto-Pilot runs the whole line end-to-end; watch the stepper.
 
 ## Using your own voice (no TTS)

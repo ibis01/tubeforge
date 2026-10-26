@@ -24,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { StatusBadge, formatDuration, timeAgo } from "@/components/tubeforge/shared";
+import { StatusBadge, formatDuration, timeAgo, useVoices } from "@/components/tubeforge/shared";
 import {
   pollVoiceover,
   pollThumbnail,
@@ -138,6 +138,15 @@ export function VideoDetailDialog({
   const [voiceUrl, setVoiceUrl] = useState("");
   const [voiceFile, setVoiceFile] = useState<File | null>(null);
   const [pickedVoice, setPickedVoice] = useState<string>(video?.voice ?? "jam");
+  const { voices } = useVoices();
+
+  // Keep the picked voice inside the ACTIVE provider's catalog (switching the
+  // voiceover provider in Settings can invalidate the stored voice).
+  useEffect(() => {
+    if (voices.length && !voices.some((v) => v.id === pickedVoice)) {
+      setPickedVoice(voices[0].id);
+    }
+  }, [voices, pickedVoice]);
 
   useEffect(() => {
     if (video) setPickedVoice(video.voice);
@@ -463,7 +472,7 @@ export function VideoDetailDialog({
         onChanged(done);
         toast({
           title: "AI voice applied",
-          description: `${VOICES.find((v) => v.id === pickedVoice)?.label ?? pickedVoice} — ${formatDuration(done.audioDuration)} of audio.`,
+          description: `${voices.find((v) => v.id === pickedVoice)?.label ?? VOICES.find((v) => v.id === pickedVoice)?.label ?? pickedVoice} — ${formatDuration(done.audioDuration)} of audio.`,
         });
       } else {
         let res: Response;
@@ -1127,7 +1136,7 @@ export function VideoDetailDialog({
           ) : (
             <Badge variant="outline" className="border-white/15 bg-white/5 text-zinc-300 text-[9px] shrink-0">
               <Bot className="h-3 w-3 mr-1" />
-              {VOICES.find((v) => v.id === video.voice)?.label ?? video.voice}
+              {voices.find((v) => v.id === video.voice)?.label ?? VOICES.find((v) => v.id === video.voice)?.label ?? video.voice}
             </Badge>
           )}
         </div>
@@ -1189,7 +1198,7 @@ export function VideoDetailDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {VOICES.map((v) => (
+                      {voices.map((v) => (
                         <SelectItem key={v.id} value={v.id} className="text-xs">
                           {v.label}
                         </SelectItem>

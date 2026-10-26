@@ -18,9 +18,9 @@
 import fs from "fs";
 import path from "path";
 import { db } from "@/lib/db";
-import { getZAI, parseJsonLoose, videoDir } from "./ai";
-import { getChatModel } from "./zai-config";
+import { parseJsonLoose, videoDir } from "./ai";
 import { aiCall } from "./budget";
+import { chatComplete } from "./providers/chat";
 import { sceneWavFile } from "./story";
 import { CAMERAS, SCENE_COUNTS, type Scene } from "./types";
 
@@ -92,20 +92,11 @@ export async function splitScriptIntoScenes(opts: {
   tone: string;
   topic: string;
 }): Promise<Scene[]> {
-  const zai = await getZAI();
-  const model = await getChatModel();
-  const completion = await aiCall("llm", "scene split LLM", () =>
-    zai.chat.completions.create({
-      model,
-      messages: [
-        {
-          role: "assistant",
-          content:
-            "You are a precise video editor who splits finished narration scripts into visual scenes. You NEVER rewrite or paraphrase narration — you only partition it and add art direction. You always respond with STRICT JSON only — no markdown, no commentary.",
-        },
-        {
-          role: "user",
-          content: `Split the narration script below into exactly ${opts.sceneCount} consecutive scenes for the video "${opts.topic}" (${opts.niche} niche, ${opts.tone} tone).
+  const raw = await aiCall("llm", "scene split LLM", () =>
+    chatComplete({
+      system:
+        "You are a precise video editor who splits finished narration scripts into visual scenes. You NEVER rewrite or paraphrase narration — you only partition it and add art direction. You always respond with STRICT JSON only — no markdown, no commentary.",
+      user: `Split the narration script below into exactly ${opts.sceneCount} consecutive scenes for the video "${opts.topic}" (${opts.niche} niche, ${opts.tone} tone).
 
 STRICT RULES for "narration":
 - Copy the script text VERBATIM — word for word, in order. No rewriting, no summarizing, no skipping.
@@ -124,13 +115,8 @@ Return JSON: { "scenes": [ { "title", "narration", "visual", "camera", "mood", "
 
 SCRIPT:
 ${opts.script}`,
-        },
-      ],
-      thinking: { type: "disabled" },
     })
   );
-
-  const raw = completion.choices[0]?.message?.content ?? "";
   const parsed = parseJsonLoose(raw);
   const rawScenes = Array.isArray(parsed.scenes) ? parsed.scenes : [];
 
