@@ -378,3 +378,26 @@ Stage Summary:
 - Story re-rolls reset scene-bound media honestly (voiceover/storyboard/renders invalidated by new scene boundaries); classic re-rolls keep old artifacts until the user re-runs them
 - The button appears in 3 places for scriptless videos: script-section header, empty-state CTA, footer; in-flight jobs are adopted when the dialog re-opens
 - Deliverable: download/tubeforge-local.zip refreshed
+
+---
+Task ID: voice-preview-audition
+Agent: main (Z.ai)
+Task: User request — "for voice one should be able to try and hear how it sounds while selecting it": per-voice preview/audition buttons in every voice picker
+
+Work Log:
+- Surveyed all 5 voice pickers (create-view Narrator voice, settings-view Default narrator, cast-view create+edit character Voice, video-detail-dialog AI-voices mode) — all Radix Select → shared component extracted to avoid 5x duplication
+- NEW src/lib/tubeforge/voice-preview.ts — VOICE_PREVIEW_TEXT (one neutral sample line), getVoicePreview(): memory Map (32 entries LRU) + disk cache under uploads/_voicepreviews keyed by provider|baseUrl|keyFingerprint|model|voice (everything that can change the sound — caught via test flake that an endpoint/key switch would have served a stale sample), synthesized through aiCall("tts") so previews get the same pacing/concurrency/shared-429-penalty treatment as pipeline TTS
+- NEW src/app/api/settings/voices/preview/route.ts — POST {voice} → WAV stream (Content-Type audio/wav); 400 unknown voice / no key for non-zai provider; 502 readable upstream errors
+- shared.tsx: NEW useVoicePreview() (useSyncExternalStore over a module-level pub/sub store + ONE singleton HTMLAudioElement + blob-URL + inflight-dedup caches — starting a new preview stops the previous across ALL pickers; stale-load guard so clicking voice B while A fetches plays only B) + NEW VoiceSelectWithPreview (raw Radix SelectPrimitive.Item — NOT shadcn SelectItem, which wraps ALL children in ItemText that Radix clones into the trigger; label-only ItemText asChild span keeps the trigger clean, play/stop button sits outside with pointerdown/pointerup/touchend/click stopPropagation so auditioning never selects/closes, per-item CheckIcon indicator preserved)
+- Rewired all 5 pickers to VoiceSelectWithPreview (+ "Tap the ▶ next to a voice to hear how it sounds" hints in create/settings/dialog)
+- Tests: NEW scripts/test-voice-preview.mjs — 36/36 PASS against the live app via ephemeral OpenAI-compatible stub: unknown-voice 400 readable, catalog flip classic-6, first click hits /audio/speech with exact wire body (model tts-1 default, voice, input=preview line, speed 1, response_format wav, Bearer key), repeat click = identical bytes with ZERO upstream re-hit (cache), new voice → new hit, model switch → new cache key + new hit, stub 500 → 502 readable (rode out ~11s of retry backoff then recovered), capability restored + catalog flip-back verified
+- Live zai path 429-storming all round (raw-SDK verify-config identical error — environmental, proven per established pattern); success path proven through the provider-agnostic stub like prior rounds
+- Browser (agent-browser) across Create/Settings/video-detail-dialog: dropdown shows ▶ per voice; clicking ▶ plays (Stop state), menu STAYS OPEN, voice NOT selected; switching ▶ to another voice stops the previous (shared singleton); Stop button toggles off; clicking the option row itself selects + closes; trigger shows the CLEAN label (SelectItemText fix); disk-cache second-session instant hits; mobile 375px scrollWidth 375 + Settings picker preview works; zero console/page errors. Screenshots: scripts/voice-preview-dropdown.png, voice-preview-settings-mobile.png, voice-preview-dialog.png
+- Fixed a transient swallowed click during verification (Fast-Refresh rebuild window) — re-verified deterministic across a fresh reload: pointerdown/up/click instrumentation confirmed events reach the button with target=polygon and toggle correctly
+- Cleanup: tts capability restored to zai (7 studio voices verified), stub killed, uploads/_voicepreviews test cache removed, browser closed
+- Repackaged via scripts/package-local.sh → download/tubeforge-local.zip (435 KB; voice-preview.ts, preview route, updated shared.tsx/views, test-voice-preview.mjs included; verified inside zip)
+
+Stage Summary:
+- Every voice picker in TubeForge is now a try-before-you-commit booth: tap ▶ next to any voice to hear a short sample while the menu stays open, audition several voices, then pick — works for Z.ai's 7 studio voices AND any OpenAI-compatible TTS provider (provider-correct catalog), with server-side caching so repeat auditions never re-spend TTS calls
+- Previews respect the AI rate budget (shared 429 cool-downs), survive dev-server restarts on disk, and invalidate honestly when the user switches provider/endpoint/key/model
+- Deliverable: download/tubeforge-local.zip refreshed — same local flow as before (unzip → npm install → npm run dev)

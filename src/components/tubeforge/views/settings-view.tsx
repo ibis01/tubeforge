@@ -44,7 +44,7 @@ import {
   FlaskConical,
   PenLine,
 } from "lucide-react";
-import { useVoices } from "@/components/tubeforge/shared";
+import { useVoices, VoiceSelectWithPreview } from "@/components/tubeforge/shared";
 import {
   PROVIDERS_BY_CAPABILITY,
   CAPABILITY_META,
@@ -1077,21 +1077,15 @@ export function SettingsView() {
           </div>
           <div className="space-y-1.5">
             <Label>Default narrator</Label>
-            <Select
+            <VoiceSelectWithPreview
               value={form.defaultVoice}
               onValueChange={(v) => setForm((f) => ({ ...f, defaultVoice: v }))}
-            >
-              <SelectTrigger className="bg-white/5">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {voices.map((v) => (
-                  <SelectItem key={v.id} value={v.id}>
-                    {v.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              voices={voices}
+            />
+            <p className="text-[10px] text-muted-foreground leading-relaxed">
+              Tap the <span className="text-primary">▶</span> next to a voice in the picker to hear
+              how it sounds.
+            </p>
           </div>
           <div className="space-y-2 sm:col-span-2">
             <div className="flex items-center justify-between">

@@ -25,7 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { EmptyState, useVoices } from "@/components/tubeforge/shared";
+import { EmptyState, useVoices, VoiceSelectWithPreview } from "@/components/tubeforge/shared";
 import {
   VOICES,
   ART_STYLES,
@@ -331,21 +331,11 @@ export function CastView() {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Voice</Label>
-                <Select
+                <VoiceSelectWithPreview
                   value={form.voice}
                   onValueChange={(v) => setForm((f) => ({ ...f, voice: v }))}
-                >
-                  <SelectTrigger className="bg-white/5">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {voices.map((v) => (
-                      <SelectItem key={v.id} value={v.id}>
-                        {v.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  voices={voices}
+                />
               </div>
               <div className="space-y-1.5">
                 <Label>Art style</Label>
@@ -840,21 +830,11 @@ function CharacterStudio({
                   <Mic className="h-3.5 w-3.5" />
                   Voice
                 </Label>
-                <Select
+                <VoiceSelectWithPreview
                   value={form.voice}
                   onValueChange={(v) => setForm((f) => ({ ...f, voice: v }))}
-                >
-                  <SelectTrigger className="bg-white/5">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {voices.map((v) => (
-                      <SelectItem key={v.id} value={v.id}>
-                        {v.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  voices={voices}
+                />
               </div>
               <div className="space-y-1.5">
                 <Label className="flex items-center gap-1.5">

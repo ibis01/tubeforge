@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useVoices } from "@/components/tubeforge/shared";
+import { useVoices, VoiceSelectWithPreview } from "@/components/tubeforge/shared";
 import {
   VOICES,
   NICHES,
@@ -639,20 +639,15 @@ export function CreateView() {
 
           <div className="space-y-1.5">
             <Label>Narrator voice</Label>
-            <Select value={voice} onValueChange={setVoice} disabled={busy}>
-              <SelectTrigger className="bg-white/5">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {voices.map((v) => (
-                  <SelectItem key={v.id} value={v.id}>
-                    {v.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <VoiceSelectWithPreview
+              value={voice}
+              onValueChange={setVoice}
+              voices={voices}
+              disabled={busy}
+            />
             <p className="text-[10px] text-muted-foreground leading-relaxed">
-              Not feeling these voices? After creating, open the video&apos;s
+              Tap the <span className="text-primary">▶</span> next to a voice to hear how it
+              sounds before picking. Not feeling these voices? After creating, open the video&apos;s
               Package tab → <span className="text-foreground/80">Change the voice</span> to
               upload your own audio or paste a voice link from the internet.
             </p>

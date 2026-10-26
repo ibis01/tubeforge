@@ -24,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { StatusBadge, formatDuration, timeAgo, useVoices } from "@/components/tubeforge/shared";
+import { StatusBadge, formatDuration, timeAgo, useVoices, VoiceSelectWithPreview } from "@/components/tubeforge/shared";
 import {
   pollVoiceover,
   pollThumbnail,
@@ -1264,18 +1264,18 @@ export function VideoDetailDialog({
 
               {voiceMode === "tts" && (
                 <div className="space-y-2">
-                  <Select value={pickedVoice} onValueChange={setPickedVoice} disabled={busy === "voice"}>
-                    <SelectTrigger className="bg-white/5 h-9 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {voices.map((v) => (
-                        <SelectItem key={v.id} value={v.id} className="text-xs">
-                          {v.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <VoiceSelectWithPreview
+                    value={pickedVoice}
+                    onValueChange={setPickedVoice}
+                    voices={voices}
+                    disabled={busy === "voice"}
+                    triggerClassName="h-9 text-xs"
+                    itemClassName="text-xs"
+                  />
+                  <p className="text-[10px] text-muted-foreground leading-relaxed">
+                    Tap the <span className="text-primary">▶</span> next to a voice to hear how it
+                    sounds before committing.
+                  </p>
                   <Button
                     size="sm"
                     className="w-full bg-brand-gradient hover:opacity-90 font-medium"
