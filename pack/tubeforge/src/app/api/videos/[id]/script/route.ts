@@ -13,6 +13,24 @@ type Ctx = { params: Promise<{ id: string }> };
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 const wordCount = (text: string) => text.split(/\s+/).filter(Boolean).length;
 
+/**
+ * A fresh script changes the story, so a previously generated cover can no
+ * longer be trusted to match it — drop the thumbnail + A/B variants and let
+ * the UI offer a fresh, script-matched one.
+ */
+async function invalidateThumbnail(videoId: string): Promise<void> {
+  const dir = path.join(UPLOAD_ROOT, videoId);
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      if (f === "thumbnail.png" || /^variant-[\w-]+\.png$/.test(f))
+        fs.rmSync(path.join(dir, f), { force: true });
+    }
+  } catch {
+    /* no media dir yet */
+  }
+  await db.video.update({ where: { id: videoId }, data: { hasThumbnail: false } });
+}
+
 /** POST — (re)generate the script package as a background job (202 + poll).
  *
  * Two entry points share one button in the detail dialog:
@@ -103,6 +121,9 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
           /* no media dir yet — nothing to clean */
         }
 
+        // The old cover depicted the old story — invalidate it.
+        if (hadScript) await invalidateThumbnail(id);
+
         await db.video.update({
           where: { id },
           data: {
@@ -135,7 +156,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
             stage: "script",
             message: `Scene script ${hadScript ? "re-written" : "written"} — "${pkg.title}" (${pkg.scenes.length} scenes, ${wordCount(pkg.script)} words)${
               hadScript
-                ? " · previous voiceover, storyboard and renders were reset"
+                ? " · previous voiceover, storyboard, renders and thumbnail were reset"
                 : ""
             }`,
           },
@@ -148,6 +169,9 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
           tone: video.tone,
           length: video.length,
         });
+
+        // Re-rolled script → the old cover no longer matches the story.
+        if (hadScript) await invalidateThumbnail(id);
 
         await db.video.update({
           where: { id },

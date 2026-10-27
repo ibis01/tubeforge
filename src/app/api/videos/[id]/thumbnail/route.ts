@@ -1,13 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import { db } from "@/lib/db";
-import { generateThumbnail, readMedia, videoDir } from "@/lib/tubeforge/ai";
+import { generateThumbnail, deriveThumbnailConcept, readMedia, videoDir } from "@/lib/tubeforge/ai";
+import { parseScenes } from "@/lib/tubeforge/story";
 import { runQualityGate } from "@/lib/tubeforge/quality";
 import { deriveStatus } from "@/lib/tubeforge/status";
 import { startJob } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
 
 type Ctx = { params: Promise<{ id: string }> };
+
+/**
+ * Concept for the cover art, derived from the CONTENT so the thumbnail always
+ * matches the story: scene videos paint their opening scene; classic videos
+ * distill the script's most striking moment via a cheap LLM call.
+ */
+async function conceptFor(video: {
+  format: string;
+  scenes: string | null;
+  script: string | null;
+  topic: string;
+}): Promise<string> {
+  if (video.format === "story") {
+    const first = parseScenes(video.scenes)[0];
+    if (first) return `${first.visual}. Mood: ${first.mood || "cinematic"}`;
+  }
+  return deriveThumbnailConcept({ topic: video.topic, script: video.script });
+}
 
 /** POST — kick off CogView thumbnail generation as a background job (returns 202 immediately). */
 export async function POST(_req: NextRequest, ctx: Ctx) {
@@ -28,25 +47,30 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       { error: "Video has no title yet — generate the script first" },
       { status: 400 }
     );
+  const title = video.title; // narrowed — safe to use inside the job closure
 
   // Clear any stale error from a previous failed attempt before polling starts.
   await db.video.update({ where: { id }, data: { error: null } });
 
   await startJob(id, "thumbnail", async () => {
     try {
+      // Script-derived concept keeps the cover matched to the story.
+      const concept = await conceptFor(video);
+
       // Phase 3: VLM quality gate — inspect the thumbnail and re-roll once
       // when it scores below the configured threshold (default mode: on).
       await runQualityGate({
         kind: "thumbnail",
         videoId: id,
         imagePath: path.join(videoDir(id), "thumbnail.png"),
-        context: `YouTube thumbnail (${video.thumbStyle} style) for the video "${video.title}" — topic: ${video.topic}`,
+        context: `YouTube thumbnail (${video.thumbStyle} style) for the video "${video.title}" — it should depict: ${concept}`,
         generate: () =>
           generateThumbnail({
-            title: video.title,
+            title,
             topic: video.topic,
             style: video.thumbStyle,
             videoId: video.id,
+            concept,
             character: video.character ?? null,
           }),
       });
@@ -66,7 +90,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
         data: {
           videoId: id,
           stage: "thumbnail",
-          message: `Thumbnail generated (${video.thumbStyle} style)${
+          message: `Thumbnail generated from the script content (${video.thumbStyle} style)${
             video.character ? ` featuring ${video.character.name}` : ""
           } for "${video.title}"`,
         },

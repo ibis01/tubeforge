@@ -9,7 +9,7 @@ import { parseJsonLoose, videoDir, splitForTts, researchBriefBlock, type Researc
 import { aiCall } from "./budget";
 import { runQualityGate } from "./quality";
 import { mergeWavs } from "./wav";
-import { CAMERAS, SCENE_COUNTS, type Scene } from "./types";
+import { CAMERAS, SCENE_COUNTS, SFX_KINDS, type Scene } from "./types";
 import { characterSceneFragment, readPortrait } from "./characters";
 import { isJobRunning } from "./jobs";
 import { chatComplete } from "./providers/chat";
@@ -44,6 +44,12 @@ export function parseScenes(json: string | null | undefined): Scene[] {
         mood: String(s.mood ?? "").trim(),
         caption: String(s.caption ?? "").trim().slice(0, 60),
         hostInScene: Boolean(s.hostInScene),
+        rehook: s.rehook != null ? Boolean(s.rehook) : i === 0, // legacy rows: scene 1 is the hook
+        sfx: (SFX_KINDS as readonly string[]).includes(String(s.sfx ?? ""))
+          ? String(s.sfx)
+          : s.rehook && s.sfx == null
+            ? "sting" // legacy rehook rows still get their attention reset
+            : "none",
       }))
       .filter((s: Scene) => s.narration && s.visual);
   } catch {
@@ -69,6 +75,8 @@ export function serializeScenes(
       mood: s.mood,
       caption: s.caption,
       hostInScene: s.hostInScene,
+      rehook: s.rehook,
+      sfx: s.sfx,
       hasImage,
       imageUrl: hasImage ? `/api/videos/${videoId}/storyboard/${s.index}` : null,
       generating: isJobRunning(`${videoId}#scene${s.index}`, "scene"),
@@ -91,6 +99,25 @@ export function readSceneImage(videoId: string, index: number): Buffer | null {
   const p = path.join(UPLOAD_ROOT, videoId, sceneImageFile(index));
   if (!fs.existsSync(p)) return null;
   return fs.readFileSync(p);
+}
+
+// ---------- Scene normalization ----------
+
+/** Coerce one raw LLM scene object into a valid Scene (shared by all writers). */
+export function normalizeScene(s: Record<string, unknown>, i: number): Scene {
+  const sfx = String(s.sfx ?? "none").trim().toLowerCase();
+  return {
+    index: i + 1,
+    title: String(s.title ?? `Scene ${i + 1}`).trim().slice(0, 60),
+    narration: String(s.narration ?? "").trim(),
+    visual: String(s.visual ?? "").trim(),
+    camera: CAMERAS.some((c) => c.id === s.camera) ? String(s.camera) : "zoom-in",
+    mood: String(s.mood ?? "").trim().slice(0, 200),
+    caption: String(s.caption ?? "").trim().slice(0, 60),
+    hostInScene: Boolean(s.hostInScene),
+    rehook: Boolean(s.rehook),
+    sfx: (SFX_KINDS as readonly string[]).includes(sfx) ? sfx : "none",
+  };
 }
 
 // ---------- Stage 1 — scene script ----------
@@ -128,6 +155,8 @@ export async function generateSceneScriptPackage(opts: {
   };
   const toneDesc = toneMap[opts.tone] ?? "clear and engaging";
 
+  const rehookEvery = Math.max(2, Math.round(sceneCount / 4)); // ≈ every 75 spoken words
+
   const castBlock = opts.character
     ? `RECURRING HOST: "${opts.character.name}" appears in most (not all) scenes.
 ${opts.character.personality ? `Personality: ${opts.character.personality}` : ""}
@@ -137,13 +166,19 @@ Write the narration in their voice. Mark scenes where they appear with "hostInSc
   const raw = await aiCall("llm", "scene script LLM", () =>
     chatComplete({
       system:
-        "You are an elite faceless-YouTube storyteller and storyboard director. You structure videos as a sequence of visual scenes, each with tight narration and a concrete image prompt that an AI artist could paint. You always respond with STRICT JSON only — no markdown, no commentary.",
+        "You are an elite faceless-YouTube storyteller and storyboard director whose videos hold 70%+ retention. You structure videos as a sequence of visual scenes, each with tight narration and a concrete image prompt that an AI artist could paint. You write with surgical concreteness: real names, numbers with units, specific places, sensory verbs. BANNED: generic openers ('Since the dawn of time', 'Throughout history', 'In a world where', 'Have you ever wondered', 'X was one of the most Y in history'), filler words, vague superlatives without specifics, corporate hedging. You always respond with STRICT JSON only — no markdown, no commentary.",
       user: `Create a scene-based YouTube video package.
 Niche: ${opts.niche}
 Tone: ${toneDesc}
 Topic: "${opts.topic}"
 Structure: exactly ${sceneCount} scenes, about ${wordsPerScene} words of narration per scene (total ≈ ${words} words).
 ${researchBriefBlock(opts.brief)}${castBlock}
+
+RETENTION RULES:
+- Scene 1 is the HOOK: open in mid-action, with a shocking number, or by dropping the viewer into the single most dramatic moment. Name something concrete in the first 5 words. The hook must create an open loop the video only closes at the end. NEVER open with background or context.
+- Mark ~1 in every ${rehookEvery} later scenes with "rehook": true — these open with a pattern interrupt: a reversal ('But then...'), a direct question, a counter-intuitive claim, or a shocking stat. This is the attention reset that stops viewers scrolling away.
+- Every scene ends on a sentence that pulls the viewer forward (cliffhanger, question, promise) except the final CTA scene.
+- "sfx": pick ONE sound cue per scene that matches its content: "whoosh" (transitions/speed), "boom" (reveals/impacts), "riser" (building tension before a payoff), "sting" (dramatic hits/plot twists), "pop" (small fun beats/light humor). Use "none" only when nothing fits.
 
 Return JSON with exactly these keys:
 {
@@ -153,12 +188,14 @@ Return JSON with exactly these keys:
   "scenes": [
     {
       "title": "short scene label (2-4 words)",
-      "narration": "the spoken narration for this scene (${wordsPerScene} words, gripping and rhythmic; scene 1 opens with a hook, the last scene closes with a call-to-action)",
+      "narration": "the spoken narration for this scene (${wordsPerScene} words, gripping and rhythmic; scene 1 opens with the hook, the last scene closes with a call-to-action)",
       "visual": "detailed image prompt for the scene art: main subject, setting, action, composition, time of day. NO camera or lighting words here",
       "camera": "one of: zoom-in, zoom-out, pan-left, pan-right, push-in",
       "mood": "color palette + lighting mood keywords, e.g. 'teal shadows, cold moonlight, volumetric haze'",
       "caption": "punchy on-screen subtitle under 45 characters (no quotes, no emojis)",
-      "hostInScene": ${opts.character ? "true/false — does the host appear in this scene?" : "false"}
+      "hostInScene": ${opts.character ? "true/false — does the host appear in this scene?" : "false"},
+      "rehook": true/false,
+      "sfx": "whoosh|boom|riser|sting|pop|none"
     }
   ]
 }`,
@@ -172,20 +209,17 @@ Return JSON with exactly these keys:
 
   const rawScenes = Array.isArray(parsed.scenes) ? parsed.scenes : [];
   const scenes: Scene[] = rawScenes
-    .map((s: Record<string, unknown>, i: number) => ({
-      index: i + 1,
-      title: String(s.title ?? `Scene ${i + 1}`).trim().slice(0, 60),
-      narration: String(s.narration ?? "").trim(),
-      visual: String(s.visual ?? "").trim(),
-      camera: CAMERAS.some((c) => c.id === s.camera) ? String(s.camera) : "zoom-in",
-      mood: String(s.mood ?? "").trim().slice(0, 200),
-      caption: String(s.caption ?? "").trim().slice(0, 60),
-      hostInScene: Boolean(s.hostInScene),
-    }))
+    .map((s: Record<string, unknown>, i: number) => normalizeScene(s, i))
     .filter((s: Scene) => s.narration && s.visual);
 
   if (!title || scenes.length < 2)
     throw new Error("Incomplete scene package from model");
+
+  // Scene 1 is the hook by construction — never let a model forget it.
+  scenes[0].rehook = true;
+  // Any scene the model flagged as a rehook but left without a sound cue gets
+  // a sting so the render can land the attention reset.
+  for (const s of scenes) if (s.rehook && s.sfx === "none") s.sfx = "sting";
 
   // Narration joined = the classic script field (drives word count + fallback TTS)
   const script = scenes.map((s) => s.narration).join("\n\n");

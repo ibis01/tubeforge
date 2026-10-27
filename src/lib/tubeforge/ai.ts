@@ -101,17 +101,22 @@ export async function generateScriptPackage(opts: {
   const raw = await aiCall("llm", "script LLM", () =>
     chatComplete({
       system:
-        "You are an elite faceless-YouTube scriptwriter with 10M+ views per video. You write narration-first scripts optimized for retention (strong hook in the first 2 sentences, open loops, pattern interrupts, and a payoff). You always respond with STRICT JSON only — no markdown, no commentary.",
+        "You are an elite faceless-YouTube scriptwriter with 10M+ views per video and 70%+ average retention. You write narration-first scripts with surgical concreteness: real names, numbers with units, specific places, sensory verbs. BANNED: generic openers ('Since the dawn of time', 'Throughout history', 'In a world where', 'Have you ever wondered', 'X was one of the most Y in history'), filler words, vague superlatives without specifics, corporate hedging. You always respond with STRICT JSON only — no markdown, no commentary.",
       user: `Create a complete YouTube video package for a faceless channel.
 Niche: ${opts.niche}
 Tone: ${toneDesc}
 Topic: "${opts.topic}"
 Target script length: about ${words} words.
 ${researchBriefBlock(opts.brief)}
+RETENTION RULES:
+- The FIRST sentence is the hook: open in mid-action, drop a shocking number, or start at the most dramatic moment. Name something concrete within the first 5 words. NEVER open with background, context or a dictionary-style definition. The hook must open a loop the script only closes near the end.
+- Insert a pattern interrupt every ~75 words: a reversal ('But then...'), a direct question, or a counter-intuitive fact.
+- Every paragraph ends on a line that pulls the viewer forward. The final paragraph is the call-to-action.
+
 Return JSON with exactly these keys:
 {
   "title": "click-worthy title under 70 characters, no clickbait lies",
-  "script": "the full narration script. Start with a gripping hook, then the body in flowing spoken paragraphs separated by blank lines, end with a call-to-action asking viewers to subscribe. Pure narration text only — no scene directions, no camera notes, no speaker labels.",
+  "script": "the full narration script. Start with the gripping hook, then the body in flowing spoken paragraphs separated by blank lines, end with a call-to-action asking viewers to subscribe. Pure narration text only — no scene directions, no camera notes, no speaker labels.",
   "description": "engaging YouTube description (2-3 sentences) followed by a line of relevant hashtags",
   "tags": ["array of 10 SEO tags relevant to the topic"]
 }`,
@@ -209,16 +214,60 @@ export async function generateVoiceover(opts: {
   return { durationSec, fileBytes: merged.length };
 }
 
+/**
+ * Derive a concrete thumbnail CONCEPT from the script itself, so the cover
+ * always shows what the video is actually about — never a generic topic card.
+ * Classic videos: a cheap flash-model call distills the script's single most
+ * striking visual moment. Falls back to the script's hook text on any failure.
+ */
+export async function deriveThumbnailConcept(opts: {
+  topic: string;
+  script: string | null;
+}): Promise<string> {
+  const fallback = (opts.script ?? "")
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?]) /)
+    .slice(0, 2)
+    .join(" ")
+    .slice(0, 300)
+    .trim();
+
+  if (!opts.script || opts.script.trim().length < 80) return fallback || opts.topic;
+  const script = opts.script; // capture so the closure below keeps the narrowing
+
+  try {
+    const raw = await aiCall("llm", "thumbnail concept LLM", () =>
+      chatComplete({
+        system:
+          "You are an art director who designs YouTube thumbnails. You answer with the visual concept ONLY — one vivid sentence, no preamble, no quotes.",
+        user: `Read this narration script and describe the SINGLE most striking, click-worthy visual moment it contains — the image a viewer must see to want the story. Concrete subject + action + setting + mood. Under 40 words. No text/letters in the image.
+
+Topic: "${opts.topic}"
+
+SCRIPT:
+${script.slice(0, 4000)}`,
+      })
+    );
+    const concept = raw.replace(/^["'\s]+|["'\s]+$/g, "").trim();
+    return concept.length > 10 ? concept.slice(0, 400) : fallback || opts.topic;
+  } catch {
+    return fallback || opts.topic;
+  }
+}
+
 /** Stage 3 — CogView generates the 16:9 thumbnail.
  * `variant` targets an A/B variant file (variant-<style>.png) instead of the primary.
  * `character` stamps the recurring host's identity onto the artwork — via visual
- * reference editing when a portrait exists, otherwise via the text identity anchor. */
+ * reference editing when a portrait exists, otherwise via the text identity anchor.
+ * `concept` is the script-derived visual concept — keeps the cover matched to
+ * the story instead of painting a generic topic card. */
 export async function generateThumbnail(opts: {
   title: string;
   topic: string;
   style: string;
   videoId: string;
   variant?: boolean;
+  concept?: string | null;
   character?: {
     id?: string;
     name: string;
@@ -230,7 +279,10 @@ export async function generateThumbnail(opts: {
     THUMB_STYLES.find((s) => s.id === opts.style)?.prompt ??
     THUMB_STYLES[0].prompt;
 
-  const scenePrompt = `YouTube video thumbnail about "${opts.topic}". ${stylePrompt}. Wide 16:9 cinematic frame, extremely detailed, eye-catching composition built for high click-through rate, professional color grading. The host character is the single focal point. Absolutely no text, no letters, no words, no watermarks.`;
+  const concept = (opts.concept ?? "").trim();
+  const scenePrompt = concept
+    ? `YouTube video thumbnail depicting this exact moment from the video's story: ${concept}. (Video title: "${opts.title}"). ${stylePrompt}. Wide 16:9 cinematic frame, extremely detailed, eye-catching composition built for high click-through rate, professional color grading, storytelling composition that teases the story's central conflict. Absolutely no text, no letters, no words, no watermarks.`
+    : `YouTube video thumbnail about "${opts.topic}". ${stylePrompt}. Wide 16:9 cinematic frame, extremely detailed, eye-catching composition built for high click-through rate, professional color grading. The host character is the single focal point. Absolutely no text, no letters, no words, no watermarks.`;
 
   // Preferred path — visually seed the generation with the character's portrait
   // so the host keeps their real likeness inside the scene.
@@ -286,8 +338,8 @@ export async function generateThumbnail(opts: {
 
 /** Pick A/B variant styles: the video's chosen style plus up to `count-1` others. */
 export function pickVariantStyles(primaryStyle: string, count = 3): string[] {
-  const ids = THUMB_STYLES.map((s) => s.id);
-  const styles = [ids.includes(primaryStyle) ? primaryStyle : ids[0]];
+  const ids: string[] = THUMB_STYLES.map((s) => s.id);
+  const styles: string[] = [ids.includes(primaryStyle) ? primaryStyle : ids[0]];
   for (const id of ids) {
     if (styles.length >= count) break;
     if (!styles.includes(id)) styles.push(id);

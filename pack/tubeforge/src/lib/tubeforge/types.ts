@@ -56,8 +56,8 @@ export const RENDER_MODES = [
     id: "kenburns",
     label: "Ken Burns",
     icon: "Zap",
-    desc: "Cinematic pans & zooms over storyboard art — fast (~2 min)",
-    eta: "≈ 2 min",
+    desc: "Cinematic multi-shot pans & zooms over storyboard art — camera cuts every ~3s, SFX and a ducked music bed included",
+    eta: "≈ 2–5 min",
   },
   {
     id: "animated",
@@ -78,12 +78,21 @@ export const CAMERAS = [
   { id: "push-in", label: "Push in" },
 ] as const;
 
-/** Scene count derived from script length — keeps narration density consistent. */
+/**
+ * Scene count per script length. Tuned for retention pacing: shorter scenes
+ * mean more visual changes, more hooks and tighter narration. The render
+ * engine additionally cuts every scene into ≤3s camera shots, so the on-screen
+ * view changes far more often than the scene count alone implies.
+ */
 export const SCENE_COUNTS: Record<string, number> = {
-  short: 4,
-  medium: 6,
-  long: 8,
+  short: 8,
+  medium: 12,
+  long: 16,
 };
+
+/** SFX cues the script LLM can attach to a scene (see sfx.ts for synthesis). */
+export const SFX_KINDS = ["whoosh", "boom", "riser", "sting", "pop"] as const;
+export type SfxKind = (typeof SFX_KINDS)[number];
 
 /** A single story beat — narration drives TTS, visual drives storyboard art. */
 export interface Scene {
@@ -95,6 +104,8 @@ export interface Scene {
   mood: string; // color + lighting keywords
   caption: string; // punchy on-screen subtitle (<= 45 chars)
   hostInScene: boolean; // does the recurring host appear in this scene?
+  rehook: boolean; // attention pivot — punch-zoom + sting at scene start
+  sfx: string; // one of SFX_KINDS or "none"
 }
 
 export interface SceneDTO {
@@ -107,6 +118,8 @@ export interface SceneDTO {
   mood: string;
   caption: string;
   hostInScene: boolean;
+  rehook: boolean;
+  sfx: string;
   hasImage: boolean;
   imageUrl: string | null;
   generating: boolean; // single-scene re-roll in flight

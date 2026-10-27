@@ -78,14 +78,19 @@ function startStub(port) {
       hits += 1;
       const version = hits === 1 ? "alpha" : "beta"; // 1st gen vs re-roll
       const content = JSON.stringify(scenePkg(version));
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          id: `stub-${hits}`,
-          choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
-          usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
-        })
-      );
+      const reply = () => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            id: `stub-${hits}`,
+            choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+          })
+        );
+      };
+      // Keep the job in-flight long enough for the 409-dedupe probe to land
+      // (a sub-millisecond stub can finish the whole job before the dup POST).
+      setTimeout(reply, 600);
     });
   });
   return new Promise((resolve) => server.listen(port, "127.0.0.1", () => resolve(server)));

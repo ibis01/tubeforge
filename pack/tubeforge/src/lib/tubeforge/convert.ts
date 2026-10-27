@@ -21,8 +21,8 @@ import { db } from "@/lib/db";
 import { parseJsonLoose, videoDir } from "./ai";
 import { aiCall } from "./budget";
 import { chatComplete } from "./providers/chat";
-import { sceneWavFile } from "./story";
-import { CAMERAS, SCENE_COUNTS, type Scene } from "./types";
+import { sceneWavFile, normalizeScene } from "./story";
+import { SCENE_COUNTS, type Scene } from "./types";
 
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
@@ -77,6 +77,8 @@ function mechanicalSplit(script: string, n: number): Scene[] {
     mood: "",
     caption: "",
     hostInScene: false,
+    rehook: i === 0,
+    sfx: i === 0 ? "sting" : "none",
   }));
 }
 
@@ -102,6 +104,7 @@ STRICT RULES for "narration":
 - Copy the script text VERBATIM — word for word, in order. No rewriting, no summarizing, no skipping.
 - Together your scenes must cover the ENTIRE script from first sentence to last.
 - Break at natural story beats; keep scenes roughly balanced in length.
+- Scene 1 is always "rehook": true (it opens the video). Mark 1-2 later scenes that begin with a reversal, question or shocking claim as "rehook": true too.
 
 For each scene also write art direction:
 - "title": short scene label (2-4 words)
@@ -110,8 +113,9 @@ For each scene also write art direction:
 - "mood": color palette + lighting keywords, e.g. "teal shadows, cold moonlight, volumetric haze"
 - "caption": punchy on-screen subtitle under 45 characters
 - "hostInScene": false
+- "sfx": one of "whoosh" (transitions), "boom" (reveals), "riser" (building tension), "sting" (dramatic hits), "pop" (light beats) — pick what matches the scene, or "none"
 
-Return JSON: { "scenes": [ { "title", "narration", "visual", "camera", "mood", "caption", "hostInScene" } ] }
+Return JSON: { "scenes": [ { "title", "narration", "visual", "camera", "mood", "caption", "hostInScene", "rehook", "sfx" } ] }
 
 SCRIPT:
 ${opts.script}`,
@@ -121,16 +125,7 @@ ${opts.script}`,
   const rawScenes = Array.isArray(parsed.scenes) ? parsed.scenes : [];
 
   return rawScenes
-    .map((s: Record<string, unknown>, i: number) => ({
-      index: i + 1,
-      title: String(s.title ?? `Scene ${i + 1}`).trim().slice(0, 60),
-      narration: String(s.narration ?? "").trim(),
-      visual: String(s.visual ?? "").trim(),
-      camera: CAMERAS.some((c) => c.id === s.camera) ? String(s.camera) : "zoom-in",
-      mood: String(s.mood ?? "").trim().slice(0, 200),
-      caption: String(s.caption ?? "").trim().slice(0, 60),
-      hostInScene: Boolean(s.hostInScene),
-    }))
+    .map((s: Record<string, unknown>, i: number) => normalizeScene(s, i))
     .filter((s: Scene) => s.narration);
 }
 

@@ -15,6 +15,7 @@ import { sceneImageFile, sceneWavFile, buildSrtFromSegments } from "./story";
 import { buildSmartSrt } from "./captions";
 import { getZAI, videoDir } from "./ai";
 import { aiCall } from "./budget";
+import { ensureSfx } from "./sfx";
 import { getCapability, VIDEO_DEFAULT_MODEL } from "./providers/settings";
 
 const execFileAsync = promisify(execFile);
@@ -24,8 +25,13 @@ const FPS = 30;
 const LEAD_SEC = 0.35; // silence before narration starts in each scene
 const TAIL_SEC = 0.85; // breathing room after narration ends
 const MIN_SEG_SEC = 2.0;
+const SHOT_SEC = 2.7; // target length of each Ken Burns shot — a visible
+// camera cut lands at least every ~3s (retention rule)
+const MAX_SHOTS = 12; // safety cap for pathologically long scenes
 const SUBTITLE_STYLE =
   "FontName=Noto Sans SC,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H64000000,BorderStyle=1,Outline=1.4,Shadow=0,Alignment=2,MarginV=30";
+/** Subtle finishing grade — a touch of contrast/saturation + soft vignette. */
+const GRADE = "eq=contrast=1.05:saturation=1.08,vignette=PI/5";
 
 export interface RenderOptions {
   videoId: string;
@@ -77,26 +83,123 @@ export async function probeDuration(file: string): Promise<number> {
   return d;
 }
 
-// ---------- Ken Burns ----------
+// ---------- Ken Burns (multi-shot) ----------
 
-/** Smooth zoompan expressions for each camera direction (N = total frames). */
-function kenBurnsFilter(camera: string, totalFrames: number): string {
+/**
+ * Per-shot camera moves. Every variant is tuned for SHORT shots (≤3s) so cuts
+ * feel like a real multi-cam edit: zooms are snappy, pans sweep a partial
+ * range, and each shot's framing deliberately JUMPS from the previous one.
+ */
+function kenBurnsFilter(variant: string, totalFrames: number, zStart: number): string {
   const last = Math.max(totalFrames - 1, 1); // avoid divide-by-zero
   const centeredX = "iw/2-(iw/zoom)/2";
   const centeredY = "ih/2-(ih/zoom)/2";
-  switch (camera) {
+  // Pans/tilts sweep 70% of the travel range (15% → 85%) — brisk at 2.7s
+  // instead of the glacial full-range drift a long scene used to get.
+  const panX = (fwd: boolean) =>
+    fwd ? "(iw-iw/zoom)*(0.15+0.7*on/" + last + ")" : "(iw-iw/zoom)*(0.85-0.7*on/" + last + ")";
+  const panY = (fwd: boolean) =>
+    fwd ? "(ih-ih/zoom)*(0.15+0.7*on/" + last + ")" : "(ih-ih/zoom)*(0.85-0.7*on/" + last + ")";
+  switch (variant) {
     case "zoom-out":
-      return `z='1.13-0.13*on/${last}':x='${centeredX}':y='${centeredY}'`;
+      return `z='1.12-0.12*on/${last}':x='${centeredX}':y='${centeredY}'`;
     case "pan-right":
-      return `z='1.10':x='(iw-iw/zoom)*on/${last}':y='${centeredY}'`;
+      return `z='${zStart.toFixed(2)}':x='${panX(true)}':y='${centeredY}'`;
     case "pan-left":
-      return `z='1.10':x='(iw-iw/zoom)*(1-on/${last})':y='${centeredY}'`;
+      return `z='${zStart.toFixed(2)}':x='${panX(false)}':y='${centeredY}'`;
+    case "tilt-down":
+      return `z='${zStart.toFixed(2)}':x='${centeredX}':y='${panY(true)}'`;
+    case "tilt-up":
+      return `z='${zStart.toFixed(2)}':x='${centeredX}':y='${panY(false)}'`;
     case "push-in":
-      return `z='1+0.22*on/${last}':x='${centeredX}':y='${centeredY}'`;
+      return `z='1.02+0.17*on/${last}':x='${centeredX}':y='${centeredY}'`;
+    case "punch": {
+      // Rehook opener — fast attack (1.16 → 1.06 over 0.45s) then a slow
+      // drift. Reads as an impact frame the instant the scene lands.
+      const f = Math.max(Math.round(0.45 * FPS), 2);
+      return `z='if(lte(on\\,${f})\\,1.16-0.10*on/${f}\\,1.06+0.05*(on-${f})/${Math.max(last - f, 1)})':x='${centeredX}':y='${centeredY}'`;
+    }
     case "zoom-in":
     default:
-      return `z='1+0.13*on/${last}':x='${centeredX}':y='${centeredY}'`;
+      return `z='1+0.12*on/${last}':x='${centeredX}':y='${centeredY}'`;
   }
+}
+
+/** End-state zoom of a variant (used to force a framing jump at the next cut). */
+function endZoomOf(variant: string, zStart: number): number {
+  switch (variant) {
+    case "zoom-in": return 1.12;
+    case "zoom-out": return 1.0;
+    case "push-in": return 1.19;
+    case "punch": return 1.11;
+    default: return zStart; // pans/tilts hold a constant zoom
+  }
+}
+
+/**
+ * Shot plan for one scene: the scene's own camera direction opens, then a
+ * rotating mix of moves that never repeats back-to-back. Pans/tilts get a
+ * start zoom OPPOSITE to the previous shot's end zoom (wide↔tight), so every
+ * cut shows a clearly visible reframe of the same artwork.
+ * Rehook scenes open with the punch move instead.
+ */
+function shotSequence(camera: string, shotCount: number, rehook: boolean): { id: string; zStart: number }[] {
+  const rotation = ["zoom-in", "pan-right", "zoom-out", "tilt-down", "push-in", "pan-left", "zoom-out", "tilt-up"];
+  const first = rehook && camera !== "punch" ? "punch" : camera;
+  // Pans/tilts need zoom > 1 to have travel room — a z=1.0 pan is frozen, so
+  // the opening shot starts tight enough to actually move.
+  const isPanOrTilt = ["pan-right", "pan-left", "tilt-down", "tilt-up"].includes(first);
+  const shots: { id: string; zStart: number }[] = [{ id: first, zStart: isPanOrTilt ? 1.1 : 1.0 }];
+  let i = 0;
+  while (shots.length < shotCount) {
+    const next = rotation[i++ % rotation.length];
+    if (next === shots[shots.length - 1].id) continue;
+    // Wide↔tight flip: start opposite to where the previous shot ended.
+    const prevEnd = endZoomOf(shots[shots.length - 1].id, shots[shots.length - 1].zStart);
+    shots.push({ id: next, zStart: prevEnd > 1.07 ? 1.04 : 1.14 });
+  }
+  return shots;
+}
+
+/**
+ * Build the multi-shot visual filter graph for one scene: the scene image is
+ * split into N sub-streams, each trimmed to its shot range and driven by its
+ * own zoompan move, then concat'd — hard camera cuts WITHOUT extra images.
+ * The finishing grade runs over the whole chain.
+ */
+function multiShotFilter(dur: number, scene: Scene): string {
+  const totalFrames = Math.max(Math.round(dur * FPS), 2);
+  const shotCount = Math.max(1, Math.min(MAX_SHOTS, Math.round(dur / SHOT_SEC)));
+  const variants = shotSequence(scene.camera, shotCount, scene.rehook);
+
+  // Frames per shot — the last shot absorbs the rounding remainder.
+  const per = Math.max(Math.floor(totalFrames / shotCount), 2);
+  const bounds: number[] = [];
+  for (let i = 1; i < shotCount; i++) bounds.push(Math.min(per * i, totalFrames - 1));
+
+  const parts: string[] = [
+    `[0:v]scale=3840:2160:force_original_aspect_ratio=increase,crop=3840:2160,split=${shotCount}${
+      variants.map((_, i) => `[s${i}]`).join("")
+    }`,
+  ];
+
+  let start = 0;
+  variants.forEach(({ id, zStart }, i) => {
+    const end = i < variants.length - 1 ? bounds[i] : totalFrames;
+    const frames = Math.max(end - start, 2);
+    const kb = kenBurnsFilter(id, frames, zStart);
+    parts.push(
+      `[s${i}]trim=start_frame=${start}:end_frame=${end},setpts=PTS-STARTPTS,` +
+        `zoompan=${kb}:d=1:s=1920x1080:fps=${FPS},format=yuv420p[v${i}]`
+    );
+    start = end;
+  });
+
+  parts.push(
+    `${variants.map((_, i) => `[v${i}]`).join("")}concat=n=${shotCount}:v=1:a=0[vc]`,
+    `[vc]${GRADE}[v]`
+  );
+  return parts.join(";");
 }
 
 // ---------- Animated (CogVideoX i2v) ----------
@@ -176,7 +279,7 @@ async function ensureSceneClip(videoId: string, scene: Scene): Promise<string> {
 
 // ---------- Segments & assembly ----------
 
-/** Build one scene segment: visual track of exactly `dur` + narration audio. */
+/** Build one scene segment: visual track of exactly `dur` + narration audio (+ SFX cue). */
 async function buildSegment(opts: {
   videoId: string;
   scene: Scene;
@@ -189,7 +292,6 @@ async function buildSegment(opts: {
   const wav = path.join(dir, sceneWavFile(scene.index));
   const leadMs = Math.round(LEAD_SEC * 1000);
 
-  const audioChain = `[1:a]adelay=${leadMs}:all=1,apad[a]`;
   const common = [
     "-map", "[v]", "-map", "[a]",
     "-t", dur.toFixed(3),
@@ -202,25 +304,52 @@ async function buildSegment(opts: {
 
   if (mode === "kenburns") {
     const img = path.join(dir, sceneImageFile(scene.index));
-    const totalFrames = Math.max(Math.round(dur * FPS), 2);
-    const kb = kenBurnsFilter(scene.camera, totalFrames);
+    const vChain = multiShotFilter(dur, scene);
+    const aChain = await sceneAudioChain(opts.videoId, scene, leadMs);
     await run("ffmpeg", [
       "-loop", "1", "-framerate", String(FPS), "-t", dur.toFixed(3), "-i", img,
       "-i", wav,
-      "-filter_complex",
-      `[0:v]scale=3840:2160:force_original_aspect_ratio=increase,crop=3840:2160,` +
-        `zoompan=${kb}:d=1:s=1920x1080:fps=${FPS},format=yuv420p[v];${audioChain}`,
+      ...(await sfxInputs(opts.videoId, scene)),
+      "-filter_complex", `${vChain};${aChain}`,
       ...common,
     ]);
   } else {
     const clip = await ensureSceneClip(opts.videoId, scene);
+    const aChain = await sceneAudioChain(opts.videoId, scene, leadMs);
     await run("ffmpeg", [
       "-stream_loop", "-1", "-t", dur.toFixed(3), "-i", clip,
       "-i", wav,
-      "-filter_complex", `[0:v]null[v];${audioChain}`,
+      ...(await sfxInputs(opts.videoId, scene)),
+      "-filter_complex", `[0:v]${GRADE}[v];${aChain}`,
       ...common,
     ]);
   }
+}
+
+/**
+ * Audio graph for one scene: narration delayed to its lead-in, optionally
+ * mixed with the scene's synthesized SFX cue fired right at the cut.
+ */
+async function sceneAudioChain(
+  videoId: string,
+  scene: Scene,
+  leadMs: number
+): Promise<string> {
+  const voice = `[1:a]adelay=${leadMs}:all=1,apad[voice]`;
+  const sfxPath = await ensureSfx(scene.sfx);
+  if (!sfxPath) return `${voice};[voice]anull[a]`;
+  // SFX lands 40 ms after the cut so the impact sits with the first frame,
+  // not in the file's leading edge; ride ~6 dB under the narration.
+  // normalize=0 keeps the weights as literal gains (default normalization
+  // would scale BOTH sources down by 1/(1+0.55) and bury the cue).
+  return `${voice};[2:a]adelay=40:all=1[sfx];` +
+    `[voice][sfx]amix=inputs=2:duration=first:normalize=0:weights='1 0.55'[a]`;
+}
+
+/** ffmpeg input args for the scene's SFX cue (empty when the scene has none). */
+async function sfxInputs(videoId: string, scene: Scene): Promise<string[]> {
+  const sfxPath = await ensureSfx(scene.sfx);
+  return sfxPath ? ["-i", sfxPath] : [];
 }
 
 /** Concat segment files (identical codecs) into one MP4. */
@@ -264,15 +393,18 @@ async function finalize(opts: {
     filters.push("[0:v]null[v]");
   }
 
-  // Warm ambient drone (A1 + detuned A2 + E3) under the narration.
+  // Warm ambient drone (A1 + detuned A2 + E3) under the narration, DUCKED by
+  // the voice itself via sidechain compression: the bed swells in narration
+  // gaps and drops hard while anyone is speaking (broadcast-style ducking).
   const drone =
     "aevalsrc=0.10*sin(2*PI*55*t)+0.07*sin(2*PI*110.4*t)+0.05*sin(2*PI*164.8*t):s=48000";
   if (music) {
     filters.push(
-      "[0:a]aformat=channel_layouts=stereo[voice]",
+      "[0:a]aformat=channel_layouts=stereo,asplit=2[voice][sc]",
       `[1:a]aformat=channel_layouts=stereo,afade=t=in:d=3,` +
         `afade=t=out:st=${Math.max(total - 4, 0).toFixed(2)}:d=4[music]`,
-      "[voice][music]amix=inputs=2:duration=first:weights='1 0.32',alimiter=limit=0.95[a]"
+      `[music][sc]sidechaincompress=threshold=0.03:ratio=9:attack=25:release=450[mduck]`,
+      "[voice][mduck]amix=inputs=2:duration=first:normalize=0:weights='1 0.85',alimiter=limit=0.95[a]"
     );
   } else {
     filters.push("[0:a]anull[a]");

@@ -832,6 +832,11 @@ export function VideoDetailDialog({
                     <UserRound className="h-2.5 w-2.5" /> HOST
                   </Badge>
                 )}
+                {s.rehook && (
+                  <Badge className="absolute bottom-2 right-2 bg-amber-500/85 text-black border-none text-[9px] px-1.5 h-5 gap-0.5">
+                    <Zap className="h-2.5 w-2.5" /> REHOOK
+                  </Badge>
+                )}
               </div>
               <div className="p-3 flex-1 flex flex-col gap-2">
                 <div>
@@ -844,6 +849,11 @@ export function VideoDetailDialog({
                   <Badge variant="outline" className="border-white/12 bg-white/4 text-muted-foreground text-[9px] font-normal">
                     {s.cameraLabel}
                   </Badge>
+                  {s.sfx && s.sfx !== "none" && (
+                    <Badge variant="outline" className="border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-200 text-[9px] font-normal uppercase">
+                      sfx: {s.sfx}
+                    </Badge>
+                  )}
                   {s.caption && (
                     <Badge variant="outline" className="border-sky-500/25 bg-sky-500/10 text-sky-200 text-[9px] font-normal">
                       “{s.caption}”
