@@ -49,8 +49,12 @@ function coverage(scriptWords: string[], sceneWords: string[]): number {
 
 /** Mechanical fallback: split sentences into N groups balanced by word count. */
 function mechanicalSplit(script: string, n: number): Scene[] {
+  // Same decimal guard as captions/TTS — never split "$6.5" across groups.
+  const DOT = "\u0001";
+  const guarded = script.replace(/(\d)\.(\d)/g, "$1" + DOT + "$2");
   const sentences =
-    script.match(/[^.!?]+[.!?]+["')\]]*\s*/g) ?? [script];
+    guarded.match(/[^.!?]+[.!?]+["')\]]*\s*/g) ?? [guarded];
+  const restore = (s: string) => s.replace(new RegExp(DOT, "g"), ".");
   const totalWords = wordsOf(script).length || 1;
   const target = totalWords / n;
 
@@ -68,18 +72,20 @@ function mechanicalSplit(script: string, n: number): Scene[] {
   }
   if (current.length) groups.push(current);
 
-  return groups.map((g, i) => ({
-    index: i + 1,
-    title: `Scene ${i + 1}`,
-    narration: g.join(" ").trim(),
-    visual: "",
-    camera: "zoom-in",
-    mood: "",
-    caption: "",
-    hostInScene: false,
-    rehook: isRehookPosition(i),
-    sfx: i === 0 ? "boom" : isRehookPosition(i) ? "sting" : "none",
-  }));
+  return applyRetentionRules(
+    groups.map((g, i) => ({
+      index: i + 1,
+      title: `Scene ${i + 1}`,
+      narration: restore(g.join(" ")).trim(),
+      visual: "",
+      camera: "zoom-in",
+      mood: "",
+      caption: "",
+      hostInScene: false,
+      rehook: isRehookPosition(i),
+      sfx: i === 0 ? "boom" : isRehookPosition(i) ? "sting" : "none",
+    }))
+  );
 }
 
 /**

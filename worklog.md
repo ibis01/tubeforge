@@ -426,3 +426,25 @@ Stage Summary:
 - Thumbnails are derived from the script itself — story videos paint their opening scene, classic videos paint the script's most striking moment — and a script re-roll invalidates the old cover automatically.
 - Scene density doubled-to-doubled-again (8/12/16 for short/medium/long) with per-scene SFX cues chosen by the script writer.
 - Deliverable: download/tubeforge-local.zip refreshed; verification persisted in scripts/test-shotchain.mjs (11/11) + scripts/test-quality-overhaul.mjs (38/38).
+
+---
+Task ID: regression-fix-final-worse
+Agent: main
+Task: "the video generated now is more worse" — forensics on upload/final.mp4 (video cmvqvgzau003er9v2xj7cdn8x, 121s short, rendered 16:23 after the quality-overhaul) + fixes.
+
+Work Log:
+- Forensics: 8-tile frame grid, scene-change detection, dense frame strips, frame-to-frame pixel diffs (scripts/measure-strobe.py), DB scene dump, thumbnail + subtitles.srt inspection, volumedetect on head/tail.
+- Ruled OUT (numeric evidence, not eyeballs): zoompan strobing (alternation ratio 0.94-0.97 = smooth; earlier strip reading was an illusion; select scene>0.02 bursts are threshold sensitivity on slow zoom), trailing black frame (grid tile was empty-cell filler; 121.4s/8 = 15.2 tiles).
+- Root causes confirmed: (1) caption chunker split decimals — "$6.5 million" → cue "$6." + "5 million each." on a numbers-dense script; (2) anti-slop prompt only banned OPENERS — body kept Einstein fake quote / latte / tree-proverb clichés; (3) formula notation in narration ("Compound interest = Principal × (1 + Rate)^Time") → unreadable TTS + broken captions; (4) visual prompts requested charts/formulas/aging-morphs → AI gibberish text in art (Σ=d=V0 galaxy, fake bar charts); (5) prompt asked for ONE sfx per scene → model filled 8/8 (synth cues every scene start); (6) rehookEvery = round(8/4)=2 produced "1 in every 2" → 4/8 scenes punch+sting.
+- captions.ts: protectNumbers() swaps decimal points before sentence regex; same guard added to ai.ts splitForTts (TTS chunk boundaries) and convert.ts mechanicalSplit.
+- story.ts: NEW shared exports — narrationToSpeech (% ^ × ÷ = → words), paintableVisual (chart/text-requesting visuals get a hard text-free clause), isRehookPosition (deterministic rehooks at 1,4,7,…), applyRetentionRules (forces the rehook map, strips sfx from non-rehooks, scene 1 = boom, speaks math, hardens visuals); system+user prompt rebuilt (cliché/fake-quote ban, spoken-language rule, paintable-moment visual rules, sfx reserved for rehooks, deterministic rehook scene list); scene artPrompt carries full no-text/no-numbers/no-charts negative.
+- ai.ts: classic script prompt gets the same banned-cliché/spoken-language rules; deriveThumbnailConcept + generateThumbnail prompts demand ONE dominant emotional focal subject + no charts/graphs/numbers/UI negatives.
+- convert.ts: both split paths route through applyRetentionRules; LLM split prompt aligned; rehook map + boom opener in mechanical fallback.
+- render.ts: SFX mix weight 0.55→0.35 (synth accents ~9dB under voice); music bed re-tuned 0.10/0.07/0.05 → 0.045/0.032/0.022 with a 0.07Hz breathing LFO + lowpass 900Hz (measured mean −28dB vs −21dB before — pad, not hum); ducking chain unchanged.
+- Tests: test-quality-overhaul.mjs updated + extended (stub now models an over-eager writer: scene-5 rehook gets demoted, stray sfx stripped, none-sfx rehook upgraded, formula/chart fixture) → 47/47 PASS live (scene counts 8/12/16, rehooks [1,4,7]/[1,4,7,10]/[1,4,7,10,13,16], notation spoken, visual hardening, thumbnail still paints the script moment + no-charts negative, cuts every ≤2.43s, 0 black frames, opener boom −10.2dB, limiter holds, re-roll invalidates thumbnail); NEW scripts/test-caption-decimals.ts (bun, real scene narrations → "$6.5 million each." stays whole).
+- Repackaged via scripts/package-local.sh → download/tubeforge-local.zip.
+
+Stage Summary:
+- The "worse" video was hurt by caption number-butchering + slop prompts + over-dense SFX/rehooks, NOT by the camera engine (multi-shot cuts verified smooth).
+- Retention pacing is now deterministic (rehooks 1,4,7,…; SFX reserved for those beats; opener boom), scripts/visuals/math are sanitized post-hoc so weak models can't leak slop past prompts, and the music bed is a quiet breathing pad.
+- Old videos keep their old scripts — to benefit, re-roll the script (regenerates scenes + invalidates the stale thumbnail), then storyboard → voiceover → render again.

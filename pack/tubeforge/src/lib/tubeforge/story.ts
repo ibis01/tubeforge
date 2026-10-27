@@ -130,6 +130,62 @@ export interface SceneScriptPackage {
   script: string; // narration joined by blank lines (compat + word count)
 }
 
+/**
+ * Convert leftover math notation into speakable words. The script prompt bans
+ * formulas, but this backstop keeps TTS from ever reading "^" or "×" aloud
+ * (glm-flash models still slip the odd formula past the prompt).
+ */
+export function narrationToSpeech(text: string): string {
+  return text
+    .replace(/(\d)\s*%/g, "$1 percent")
+    .replace(/\s*\^\s*/g, " to the power of ")
+    .replace(/\s*×\s*/g, " times ")
+    .replace(/\s*÷\s*/g, " divided by ")
+    .replace(/\s*=\s*/g, " equals ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/**
+ * Backstop for visual prompts that slipped chart/text/UI requests past the
+ * script prompt — AI image models render those as garbled nonsense
+ * ("Σ=d=V0" galaxies, fake bar charts), so they get a hard corrective clause.
+ */
+const UNPAINTABLE_RE =
+  /\b(chart|graph|diagram|formula|equation|numbers?|letters?|text|document|contract|spreadsheet|interface|screen)\b/i;
+
+export function paintableVisual(visual: string): string {
+  if (!UNPAINTABLE_RE.test(visual)) return visual;
+  const fix =
+    "Paint this as a physical, text-free moment: real objects and people only — no charts, no writing, no numbers, no screens with readable content anywhere in frame.";
+  return `${visual.replace(/[.\s]+$/, "")}. ${fix}`;
+}
+
+/**
+ * Deterministic attention map — rehooks land on scene 1, then every 3rd
+ * scene (1, 4, 7, …). The model cannot be trusted to pace these itself
+ * (it flagged half the scenes as rehooks when left to choose).
+ */
+export function isRehookPosition(sceneIndex0: number): boolean {
+  return sceneIndex0 % 3 === 0;
+}
+
+/**
+ * Shared post-processor: enforces the rehook map, keeps SFX reserved for
+ * rehook beats only (a synth cue on every scene boundary reads as cheap),
+ * speaks math notation, and hardens visual prompts. Mutates + returns scenes.
+ */
+export function applyRetentionRules(scenes: Scene[]): Scene[] {
+  return scenes.map((s, i) => {
+    const scene = { ...s };
+    scene.rehook = isRehookPosition(i);
+    scene.sfx = scene.rehook ? (i === 0 ? "boom" : scene.sfx === "none" ? "sting" : scene.sfx) : "none";
+    scene.narration = narrationToSpeech(scene.narration);
+    scene.visual = paintableVisual(scene.visual);
+    return scene;
+  });
+}
+
 /** GLM writes the video as N scenes with narration + visual + camera + mood per scene. */
 export async function generateSceneScriptPackage(opts: {
   topic: string;
@@ -155,7 +211,9 @@ export async function generateSceneScriptPackage(opts: {
   };
   const toneDesc = toneMap[opts.tone] ?? "clear and engaging";
 
-  const rehookEvery = Math.max(2, Math.round(sceneCount / 4)); // ≈ every 75 spoken words
+  const rehookList = Array.from({ length: sceneCount }, (_, i) => i + 1)
+    .filter((_, i) => isRehookPosition(i))
+    .join(", ");
 
   const castBlock = opts.character
     ? `RECURRING HOST: "${opts.character.name}" appears in most (not all) scenes.
@@ -166,7 +224,7 @@ Write the narration in their voice. Mark scenes where they appear with "hostInSc
   const raw = await aiCall("llm", "scene script LLM", () =>
     chatComplete({
       system:
-        "You are an elite faceless-YouTube storyteller and storyboard director whose videos hold 70%+ retention. You structure videos as a sequence of visual scenes, each with tight narration and a concrete image prompt that an AI artist could paint. You write with surgical concreteness: real names, numbers with units, specific places, sensory verbs. BANNED: generic openers ('Since the dawn of time', 'Throughout history', 'In a world where', 'Have you ever wondered', 'X was one of the most Y in history'), filler words, vague superlatives without specifics, corporate hedging. You always respond with STRICT JSON only — no markdown, no commentary.",
+        "You are an elite faceless-YouTube storyteller and storyboard director whose videos hold 70%+ retention. You structure videos as a sequence of visual scenes, each with tight narration and a concrete image prompt that an AI artist could paint. You write with surgical concreteness: real names, numbers with units, specific places, sensory verbs. BANNED everywhere in the video: generic openers ('Since the dawn of time', 'Throughout history', 'In a world where', 'Have you ever wondered', 'X was one of the most Y in history'), tired clichés ('the eighth wonder of the world', 'Einstein said...', 'skip the daily latte', 'the best time to plant a tree was', 'the power of X is real', 'whether you\'re a X or a Y'), apocryphal or unverifiable quotes attributed to famous people, filler words, vague superlatives without specifics, corporate hedging, math formulas or equations written as notation (speak them in words instead). You always respond with STRICT JSON only — no markdown, no commentary.",
       user: `Create a scene-based YouTube video package.
 Niche: ${opts.niche}
 Tone: ${toneDesc}
@@ -174,11 +232,22 @@ Topic: "${opts.topic}"
 Structure: exactly ${sceneCount} scenes, about ${wordsPerScene} words of narration per scene (total ≈ ${words} words).
 ${researchBriefBlock(opts.brief)}${castBlock}
 
+NARRATION RULES (spoken aloud by a text-to-speech voice):
+- Narration is SPOKEN language. Never write formulas, equations or notation — say them in words ("ten percent a year", not "10% APR"; "your money doubles roughly every seven years", not "(1+R)^T").
+- Numbers are allowed and encouraged ($10,000, 30 years) — just never inside a formula.
+- NEVER quote a famous person unless the quote is verifiable and short; apocryphal quotes ("Einstein called it the eighth wonder") are banned.
+- Use a specific real detail (a name, a place, a date, a dollar figure) in at least half the scenes.
+
+VISUAL RULES (each scene art is painted by an AI image model):
+- Describe ONE frozen paintable moment: concrete subject doing something, in a specific place, at a specific time of day.
+- NEVER ask for charts, graphs, formulas, floating numbers, letters, documents, contracts, UI screens or anything that contains writing — image models render those as garbled gibberish. Express the idea with physical objects and people instead (rising stacks of coins instead of a growth chart).
+- NEVER describe a transformation or morph ("aging from young to old", "dissolving into numbers") — pick the single most striking end-state and paint that.
+
 RETENTION RULES:
 - Scene 1 is the HOOK: open in mid-action, with a shocking number, or by dropping the viewer into the single most dramatic moment. Name something concrete in the first 5 words. The hook must create an open loop the video only closes at the end. NEVER open with background or context.
-- Mark ~1 in every ${rehookEvery} later scenes with "rehook": true — these open with a pattern interrupt: a reversal ('But then...'), a direct question, a counter-intuitive claim, or a shocking stat. This is the attention reset that stops viewers scrolling away.
+- Scenes ${rehookList} are REHOOK beats: they open with a pattern interrupt — a reversal ('But then...'), a direct question, a counter-intuitive claim, or a shocking stat — and are flagged "rehook": true. No other scene is a rehook.
 - Every scene ends on a sentence that pulls the viewer forward (cliffhanger, question, promise) except the final CTA scene.
-- "sfx": pick ONE sound cue per scene that matches its content: "whoosh" (transitions/speed), "boom" (reveals/impacts), "riser" (building tension before a payoff), "sting" (dramatic hits/plot twists), "pop" (small fun beats/light humor). Use "none" only when nothing fits.
+- "sfx": sound cues are RESERVED for the rehook scenes — set a fitting cue ("boom", "sting", "riser" or "whoosh") on those and "none" on every other scene.
 
 Return JSON with exactly these keys:
 {
@@ -215,16 +284,15 @@ Return JSON with exactly these keys:
   if (!title || scenes.length < 2)
     throw new Error("Incomplete scene package from model");
 
-  // Scene 1 is the hook by construction — never let a model forget it.
-  scenes[0].rehook = true;
-  // Any scene the model flagged as a rehook but left without a sound cue gets
-  // a sting so the render can land the attention reset.
-  for (const s of scenes) if (s.rehook && s.sfx === "none") s.sfx = "sting";
+  // Deterministic retention map — the model's own rehook/sfx choices are
+  // overridden (it over-flags both), narration math is spoken, visuals are
+  // hardened against image-model gibberish.
+  const finalScenes = applyRetentionRules(scenes);
 
   // Narration joined = the classic script field (drives word count + fallback TTS)
-  const script = scenes.map((s) => s.narration).join("\n\n");
+  const script = finalScenes.map((s) => s.narration).join("\n\n");
 
-  return { title, description, tags, scenes, script };
+  return { title, description, tags, scenes: finalScenes, script };
 }
 
 // ---------- Stage 2 — storyboard ----------
@@ -245,7 +313,7 @@ export async function generateSceneImage(opts: {
   } | null;
 }): Promise<{ fileBytes: number }> {
   const { scene } = opts;
-  const artPrompt = `${scene.visual}. ${scene.mood}. Wide 16:9 cinematic frame, highly detailed, professional color grading, storytelling composition. Absolutely no text, no letters, no watermarks.`;
+  const artPrompt = `${scene.visual}. ${scene.mood}. Wide 16:9 cinematic frame, highly detailed, professional color grading, storytelling composition. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
 
   const portrait =
     scene.hostInScene && opts.character?.id

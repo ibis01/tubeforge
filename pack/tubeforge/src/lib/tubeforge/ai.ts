@@ -101,7 +101,7 @@ export async function generateScriptPackage(opts: {
   const raw = await aiCall("llm", "script LLM", () =>
     chatComplete({
       system:
-        "You are an elite faceless-YouTube scriptwriter with 10M+ views per video and 70%+ average retention. You write narration-first scripts with surgical concreteness: real names, numbers with units, specific places, sensory verbs. BANNED: generic openers ('Since the dawn of time', 'Throughout history', 'In a world where', 'Have you ever wondered', 'X was one of the most Y in history'), filler words, vague superlatives without specifics, corporate hedging. You always respond with STRICT JSON only — no markdown, no commentary.",
+        "You are an elite faceless-YouTube scriptwriter with 10M+ views per video and 70%+ average retention. You write narration-first scripts with surgical concreteness: real names, numbers with units, specific places, sensory verbs. BANNED everywhere: generic openers ('Since the dawn of time', 'Throughout history', 'In a world where', 'Have you ever wondered', 'X was one of the most Y in history'), tired clichés ('the eighth wonder of the world', 'Einstein said...', 'skip the daily latte', 'the best time to plant a tree was', 'the power of X is real', 'whether you're a X or a Y'), apocryphal or unverifiable quotes attributed to famous people, filler words, vague superlatives without specifics, corporate hedging, math formulas or equations written as notation (speak them in words instead). You always respond with STRICT JSON only — no markdown, no commentary.",
       user: `Create a complete YouTube video package for a faceless channel.
 Niche: ${opts.niche}
 Tone: ${toneDesc}
@@ -111,6 +111,8 @@ ${researchBriefBlock(opts.brief)}
 RETENTION RULES:
 - The FIRST sentence is the hook: open in mid-action, drop a shocking number, or start at the most dramatic moment. Name something concrete within the first 5 words. NEVER open with background, context or a dictionary-style definition. The hook must open a loop the script only closes near the end.
 - Insert a pattern interrupt every ~75 words: a reversal ('But then...'), a direct question, or a counter-intuitive fact.
+- The script is SPOKEN aloud: write numbers and formulas in words ("ten percent a year", never "(1+R)^T"; "20 percent", never "20%"). No markdown, no stage directions.
+- The script is SPOKEN aloud: write formulas in words ("ten percent a year", never "(1+R)^T"; "20 percent", never "20%"). No markdown, no stage directions.
 - Every paragraph ends on a line that pulls the viewer forward. The final paragraph is the call-to-action.
 
 Return JSON with exactly these keys:
@@ -154,13 +156,18 @@ function scriptToSpeech(script: string): string {
 
 /** Split text into <=maxLen chunks at sentence boundaries (TTS limit: 1024 chars). */
 export function splitForTts(text: string, maxLen = 950): string[] {
-  const sentences = text.match(/[^.!?]+[.!?]+["')\]]*\s*/g) ?? [text];
+  // Guard decimal numbers first — "$6.5 million" must never be chunked at
+  // its decimal point (unnatural TTS pause + broken prosody mid-number).
+  const DOT = "\u0001";
+  const guarded = text.replace(/(\d)\.(\d)/g, "$1" + DOT + "$2");
+  const restore = (s: string) => s.replace(new RegExp(DOT, "g"), ".");
+  const sentences = guarded.match(/[^.!?]+[.!?]+["')\]]*\s*/g) ?? [guarded];
   const chunks: string[] = [];
   let current = "";
 
-  for (const sentence of sentences) {
+  for (const rawSentence of sentences) {
     // Handle pathological single sentences longer than maxLen
-    let s = sentence;
+    let s = restore(rawSentence);
     while (s.length > maxLen) {
       const cutAt = s.lastIndexOf(",", maxLen) > maxLen * 0.5
         ? s.lastIndexOf(",", maxLen)
@@ -240,7 +247,7 @@ export async function deriveThumbnailConcept(opts: {
       chatComplete({
         system:
           "You are an art director who designs YouTube thumbnails. You answer with the visual concept ONLY — one vivid sentence, no preamble, no quotes.",
-        user: `Read this narration script and describe the SINGLE most striking, click-worthy visual moment it contains — the image a viewer must see to want the story. Concrete subject + action + setting + mood. Under 40 words. No text/letters in the image.
+        user: `Read this narration script and describe the SINGLE most striking, click-worthy visual moment it contains — the image a viewer must see to want the story. Concrete subject + action + setting + mood. Under 40 words. One clear focal subject with strong emotion and contrast. NEVER describe charts, graphs, text, numbers or interfaces — image models render those as garbled gibberish; pick a physical human moment instead.
 
 Topic: "${opts.topic}"
 
@@ -281,8 +288,8 @@ export async function generateThumbnail(opts: {
 
   const concept = (opts.concept ?? "").trim();
   const scenePrompt = concept
-    ? `YouTube video thumbnail depicting this exact moment from the video's story: ${concept}. (Video title: "${opts.title}"). ${stylePrompt}. Wide 16:9 cinematic frame, extremely detailed, eye-catching composition built for high click-through rate, professional color grading, storytelling composition that teases the story's central conflict. Absolutely no text, no letters, no words, no watermarks.`
-    : `YouTube video thumbnail about "${opts.topic}". ${stylePrompt}. Wide 16:9 cinematic frame, extremely detailed, eye-catching composition built for high click-through rate, professional color grading. The host character is the single focal point. Absolutely no text, no letters, no words, no watermarks.`;
+    ? `YouTube video thumbnail depicting this exact moment from the video's story: ${concept}. (Video title: "${opts.title}"). ${stylePrompt}. Wide 16:9 cinematic frame, extremely detailed, ONE dominant focal subject filling the frame with strong emotion or tension, high contrast between subject and background, eye-catching composition built for high click-through rate, professional color grading, storytelling composition that teases the story's central conflict. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks.`
+    : `YouTube video thumbnail about "${opts.topic}". ${stylePrompt}. Wide 16:9 cinematic frame, extremely detailed, ONE dominant focal subject filling the frame with strong emotion or tension, high contrast between subject and background, eye-catching composition built for high click-through rate, professional color grading. The host character is the single focal point. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks.`;
 
   // Preferred path — visually seed the generation with the character's portrait
   // so the host keeps their real likeness inside the scene.

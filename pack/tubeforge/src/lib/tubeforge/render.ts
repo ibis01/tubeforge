@@ -339,11 +339,12 @@ async function sceneAudioChain(
   const sfxPath = await ensureSfx(scene.sfx);
   if (!sfxPath) return `${voice};[voice]anull[a]`;
   // SFX lands 40 ms after the cut so the impact sits with the first frame,
-  // not in the file's leading edge; ride ~6 dB under the narration.
-  // normalize=0 keeps the weights as literal gains (default normalization
-  // would scale BOTH sources down by 1/(1+0.55) and bury the cue).
+  // not in the file's leading edge; ride ~9 dB under the narration — these
+  // are synthesized accents, and mixing them hot makes the edit sound like a
+  // test bench instead of a film. normalize=0 keeps the weights as literal
+  // gains (default normalization would scale BOTH sources down by 1/(1+w)).
   return `${voice};[2:a]adelay=40:all=1[sfx];` +
-    `[voice][sfx]amix=inputs=2:duration=first:normalize=0:weights='1 0.55'[a]`;
+    `[voice][sfx]amix=inputs=2:duration=first:normalize=0:weights='1 0.35'[a]`;
 }
 
 /** ffmpeg input args for the scene's SFX cue (empty when the scene has none). */
@@ -396,12 +397,14 @@ async function finalize(opts: {
   // Warm ambient drone (A1 + detuned A2 + E3) under the narration, DUCKED by
   // the voice itself via sidechain compression: the bed swells in narration
   // gaps and drops hard while anyone is speaking (broadcast-style ducking).
+  // A slow LFO lets the bed breathe instead of sitting at one flat level,
+  // and the lowpass keeps it a soft pad rather than an audible hum.
   const drone =
-    "aevalsrc=0.10*sin(2*PI*55*t)+0.07*sin(2*PI*110.4*t)+0.05*sin(2*PI*164.8*t):s=48000";
+    "aevalsrc='(0.045*sin(2*PI*55*t)+0.032*sin(2*PI*110.4*t)+0.022*sin(2*PI*164.8*t))*(0.82+0.18*sin(2*PI*0.07*t))':s=48000";
   if (music) {
     filters.push(
       "[0:a]aformat=channel_layouts=stereo,asplit=2[voice][sc]",
-      `[1:a]aformat=channel_layouts=stereo,afade=t=in:d=3,` +
+      `[1:a]aformat=channel_layouts=stereo,lowpass=f=900,afade=t=in:d=3,` +
         `afade=t=out:st=${Math.max(total - 4, 0).toFixed(2)}:d=4[music]`,
       `[music][sc]sidechaincompress=threshold=0.03:ratio=9:attack=25:release=450[mduck]`,
       "[voice][mduck]amix=inputs=2:duration=first:normalize=0:weights='1 0.85',alimiter=limit=0.95[a]"

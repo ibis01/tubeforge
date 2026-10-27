@@ -66,8 +66,11 @@ const WAV_BYTES = fs.readFileSync(FIX_WAV);
 const SCENE1_VISUAL =
   "a cracked brass compass glowing on a rain-slicked map inside a lantern-lit study, ink pots tipped over";
 function scenePkg(count) {
-  // Scene 5 (index 4) is the mid-video rehook and deliberately leaves sfx at
-  // "none" — the script engine must upgrade it to a "sting" automatically.
+  // The stub deliberately models an over-eager writer: it flags scene 5 as a
+  // rehook (the engine must DEMOTE it — rehooks are deterministic 1,4,7,…),
+  // it sprinkles sfx on non-rehook scenes (engine must strip them to "none"),
+  // it leaves sfx="none" on a real rehook (index 3 → engine upgrades to sting),
+  // and it writes a formula + a chart request (engine must speak/harden them).
   const sfxCycle = ["whoosh", "none", "boom", "none", "none", "pop", "sting", "riser"];
   return {
     title: "The Compass That Pointed Backwards",
@@ -78,8 +81,15 @@ function scenePkg(count) {
       narration:
         i === 0
           ? "At 3:07 a.m. the compass spun backwards, and the cartographer knew the map was lying to him."
-          : `Beat ${i + 1}: the trail grows stranger — the compass needle now points at the map's edge where nothing is drawn, and the ink refuses to dry.`,
-      visual: i === 0 ? SCENE1_VISUAL : `a storm-lashed cliff path above a black sea, beat ${i + 1}, wide cinematic shot`,
+          : i === 1
+            ? "Beat 2: the gain read 20% at best, and the rule says growth equals P times (1+R)^T — yet the needle now points at the map's edge where nothing is drawn, and the ink refuses to dry."
+            : `Beat ${i + 1}: the trail grows stranger — the compass needle now points at the map's edge where nothing is drawn, and the ink refuses to dry.`,
+      visual:
+        i === 0
+          ? SCENE1_VISUAL
+          : i === 1
+            ? `a bar chart of the expedition's losses scratched into driftwood, beat 2, storm light`
+            : `a storm-lashed cliff path above a black sea, beat ${i + 1}, wide cinematic shot`,
       camera: i % 2 ? "pan-right" : "zoom-in",
       mood: "teal shadows, cold moonlight, volumetric haze",
       caption: `The compass lied ${i + 1}`,
@@ -205,24 +215,37 @@ async function main() {
     if (!id) { ok(false, `1. create ${length} video`); continue; }
     const v = await pollJob(id, "script");
     ok(v.scenes?.length === want, `1. ${length} → ${want} scenes (new SCENE_COUNTS)`, `got ${v.scenes?.length}`);
+    // Deterministic retention map — the stub's own over-eager flags must be
+    // overridden: rehooks at 1,4,7,… and SFX nowhere else.
+    const rehookIdx = v.scenes?.map((s, i) => (s.rehook ? i + 1 : 0)).filter(Boolean) ?? [];
+    const wantRehooks = Array.from({ length: want }, (_, i) => i + 1).filter((_, i) => i % 3 === 0);
     ok(
-      v.scenes?.[0]?.rehook === true,
-      `1. ${length} scene 1 is a rehook`,
-      `rehook=${v.scenes?.[0]?.rehook}`
+      JSON.stringify(rehookIdx) === JSON.stringify(wantRehooks),
+      `1. ${length} rehooks deterministic at 1,4,7,…`,
+      `got [${rehookIdx}] want [${wantRehooks}]`
+    );
+    ok(
+      v.scenes?.every((s, i) => (i % 3 === 0 ? true : s.sfx === "none")),
+      `1. ${length} sfx stripped from every non-rehook scene`
     );
     ok(
       v.scenes?.every((s) => ["whoosh", "boom", "riser", "sting", "pop", "none"].includes(s.sfx)),
       `1. ${length} all sfx values valid`
-    );
-    ok(
-      v.scenes?.some((s, i) => i > 0 && s.rehook),
-      `1. ${length} mid-video rehook present`
     );
     const midRehook = v.scenes?.find((s, i) => i > 0 && s.rehook);
     ok(
       midRehook?.sfx === "sting",
       `1. ${length} rehook with sfx=none auto-upgraded to sting`,
       `got "${midRehook?.sfx}"`
+    );
+    ok(
+      v.scenes?.[0]?.sfx === "boom",
+      `1. ${length} scene 1 opener forced to boom`
+    );
+    const joined = v.script ?? "";
+    ok(
+      joined.includes("20 percent") && joined.includes("to the power of") && !/[%^]/.test(joined),
+      `1. ${length} narration notation spoken (20%→20 percent, ^→to the power of)`
     );
   }
 
@@ -237,6 +260,14 @@ async function main() {
     imagePrompts.some((p) => p.includes(SCENE1_VISUAL.slice(0, 40))),
     "2b. storyboard image prompts carry the scene visuals"
   );
+  ok(
+    imagePrompts.some((p) => p.includes("no charts, no writing")),
+    "2g. chart-requesting visual hardened with the text-free clause"
+  );
+  ok(
+    imagePrompts.every((p) => p.includes("no letters, no numbers")),
+    "2h. every scene art prompt carries the no-text/no-numbers negative"
+  );
 
   await jfetch(`/api/videos/${vid}/voiceover`, { method: "POST" });
   const voiced = await pollJob(vid, "voiceover");
@@ -250,6 +281,10 @@ async function main() {
     imagePrompts.some((p) => p.includes("depicting this exact moment") && p.includes(SCENE1_VISUAL.slice(0, 40))),
     "2e. THUMBNAIL PAINTS THE SCRIPT — prompt contains scene-1 story moment",
     imagePrompts[0]?.slice(0, 90)
+  );
+  ok(
+    imagePrompts.some((p) => p.includes("depicting this exact moment") && p.includes("no charts, no graphs")),
+    "2i. thumbnail prompt carries the no-charts/no-graphs negative"
   );
   ok(fs.existsSync(path.join("/home/z/my-project/uploads", vid, "thumbnail.png")), "2f. thumbnail.png on disk");
 
@@ -278,7 +313,7 @@ async function main() {
 
   // 5. SFX on the rehook opener + mix hygiene
   const startPeak = await maxVol(previewPath, 0.05, 0.35);
-  ok(startPeak > -25, "5a. whoosh audible in scene 1 lead-in (punch + sfx)", `start peak ${startPeak} dB`);
+  ok(startPeak > -25, "5a. opener boom audible in scene 1 lead-in (punch + sfx)", `start peak ${startPeak} dB`);
   const overall = await maxVol(previewPath, 0, Math.min(dur, 12));
   ok(overall <= -0.05 && overall > -12, "5b. limiter holds / no silence", `overall peak ${overall} dB`);
 
