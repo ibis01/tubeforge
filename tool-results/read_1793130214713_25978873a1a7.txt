@@ -1,0 +1,175 @@
+   300→- Traced the JSON to .z-ai-config.example referenced by LOCAL-SETUP.md §4
+   301→- Read node_modules/z-ai-web-dev-sdk/dist/index.js: only baseUrl+apiKey are required (loadConfig gate); chatId/userId/token are optional X-* headers; routes are {baseUrl}/chat/completions, /audio/tts, /audio/asr, /images/generations, /video/generation, /async-result?id=, /functions/invoke
+   302→- Confirmed sandbox uses platform-managed /etc/.z-ai-config (read-only, session-scoped, baseUrl https://internal-api.z.ai/v1) — not portable to user's PC
+   303→- Rewrote .z-ai-config.example to the minimal 2-field shape
+   304→- Added scripts/verify-config.mjs (config shape check + live chat test; --all adds tts/image/video task tests)
+   305→- Rewrote LOCAL-SETUP.md §4 (field table, where to get key, sandbox-credentials caveat, verify step) + troubleshooting row for 401/403
+   306→- Tested verify-config.mjs live: chat replied pong, exit 0
+   307→- Rebuilt download/tubeforge-local.zip (includes updated template, guide, verify script)
+   308→
+   309→Stage Summary:
+   310→- User needs exactly 2 values from their own Z.ai API account: baseUrl + apiKey; other 3 fields optional/removable
+   311→- tubeforge-local.zip refreshed at download/tubeforge-local.zip
+   312→- If user's public key can't serve /audio/tts or /video/generation routes, next step is provider adapters (alternative TTS/video APIs)
+   313→
+   314→---
+   315→Task ID: free-model-settings-ui
+   316→Agent: main
+   317→Task: Default to free GLM flash models + make API key/baseURL/model editable from the Settings UI
+   318→
+   319→Work Log:
+   320→- (Note: environment partially reset between turns — pack/, download/, worklog rolled back; source code + dev server survived)
+   321→- types.ts: added CHAT_MODELS registry, DEFAULT_CHAT_MODEL=glm-4.5-flash (free), DEFAULT_ZAI_BASE_URL
+   322→- NEW src/lib/tubeforge/zai-config.ts: Setting-table keys (zai.baseUrl/apiKey/chatModel/visionModel), syncZaiConfigFile() materializes .z-ai-config from DB (SDK create() takes no params, only reads the file), getChatModel/getVisionModel, createZaiForTest
+   323→- ai.ts: getZAI() syncs config file before first create; added resetZAIClient()
+   324→- Wired model into all 7 chat call sites (ai.ts x2, story, convert, comments, characters = text; quality.ts = conditional vision model with cast to preserve gateway-default behavior)
+   325→- NEW /api/settings/ai: GET (masked key, never full), PUT (save + sync file + reset client), POST (test connection with overrides; finally-block re-syncs so tests never poison the live client)
+   326→- settings-view.tsx: new "AI Provider (Z.ai)" card — base URL, masked API key, chat model select (free default), optional vision model, Save & apply + Test connection buttons, link to get a free key
+   327→- Verified: tsc clean for all new code (pre-existing errors elsewhere only), GET/PUT/POST endpoints 200, dev server compiles clean
+   328→- Rebuilt portable package via NEW scripts/package-local.sh (persistent one-command rebuild): download/tubeforge-local.zip (383KB, 227 files) with SETUP.md documenting the Settings UI flow
+   329→
+   330→Stage Summary:
+   331→- Script writing now defaults to FREE glm-4.5-flash — $0 on a fresh Z.ai key
+   332→- Users change API key/endpoint/model from Settings → AI Provider without touching files; changes apply to the very next AI call
+   333→- Deliverable: download/tubeforge-local.zip refreshed; packaging recipe persisted at scripts/package-local.sh
+   334→
+   335→---
+   336→Task ID: multi-provider-adapters
+   337→Agent: main
+   338→Task: "switch to any ai of my choice if capable of doing the task" — capability-based multi-provider system (Z.ai + OpenAI-compatible + Anthropic + Gemini)
+   339→
+   340→Work Log:
+   341→- Read all 13 AI call sites (ai.ts ×4, story ×3, convert, comments, characters ×3, quality, render, verify) + settings route/UI + voice pickers.
+   342→- NEW src/lib/tubeforge/providers/: registry.ts (provider metadata per capability, model suggestions, key URLs, OpenAI voice catalog), settings.ts (ai.chat/tts/image/video JSON rows in Setting table + read-time migration from legacy zai.chatModel/visionModel + zai creds never stored per-capability), http.ts (timeout/readable-error fetch), chat.ts (zai SDK unchanged shape | openai /chat/completions WITHOUT the zai-only `thinking` field | anthropic /v1/messages x-api-key+max_tokens+system | gemini :generateContent x-goog-api-key+systemInstruction+responseMimeType json), vision.ts (all 4 providers; quality gate fails open as before), tts.ts (zai 7 voices | openai /audio/speech response_format wav, voice sanitization + classic-6 rule for tts-1), asr.ts (zai file_base64 | openai whisper multipart), image.ts (zai CogView create+edit | openai generations with size mapping 1344x768→1792x1024 dall-e-3 / 1536x1024 gpt-image-1, b64_json handling, multipart /images/edits for gpt-image-1 only; imageEditSupported() so dall-e-3/pose-sheet callers fall back or error clearly).
+   343→- Rewired all call sites through chatComplete/visionComplete/ttsSynthesize/imageGenerate/imageEdit/asrTranscribe; aiCall budget retry unchanged (wraps adapters identically). characters.ts bible prompt now lists the ACTIVE provider's voice ids. render.ts uses video capability model (default cogvideox-3) + actionable error when video provider ≠ zai.
+   344→- zai-config.ts slimmed to global-creds + syncZaiConfigFile + createZaiForTest (SDK edit body `images` cast: .d.ts wrongly says `image`, runtime posts body verbatim — proven live before).
+   345→- API: /api/settings/ai v2 (GET: zai creds + 4 capability configs masked + provider registry; PUT scope zai|capability + copyCredsFrom:"chat" account sharing; POST test per capability incl. hidden vision/imageEdit kinds + confirmCost guard for image tests) + NEW /api/settings/voices (catalog for active tts provider).
+   346→- UI: settings-view AI Provider card rebuilt → "AI Providers" (shared Z.ai credentials block + 4 capability rows: provider select, per-provider fields, model suggestions chips, vision model, per-row Test with paid-test confirm, copy-account button); useVoices() hook in shared.tsx wired into create-view, video-detail-dialog (with voice re-sanitize effect), cast-view ×2, settings default voice.
+   347→- Tests: NEW scripts/test-providers.mjs — local stub HTTP server captures exact wire format through the real app endpoint: 55/55 PASS (openai no-thinking + roles, anthropic headers/system/max_tokens, gemini headers/JSON mode, all 3 vision formats, tts /audio/speech body, image size mapping per model, multipart edits, dall-e-3 edit→graceful-unsupported, cost guard, anthropic /v1 no-double-prefix). Run against BOTH dev (3000) and fresh-boot packaged app (3011): 55/55 both.
+   348→- Live zai chat check hit a persistent internal-gateway 429 storm; proved environmental via OLD sdk-direct scripts/verify-config.mjs failing with the IDENTICAL 429 (behavioral equivalence — same request, same response).
+   349→- Browser verified: provider switch to OpenAI-compatible reveals endpoint/key/model+suggestions/vision fields, model auto-prefill; zero console/page errors; scrollWidth 375 at 375px (screenshots scripts/providers-ui-final.png, providers-ui-mobile.png).
+   350→- Cleanup: test videos + test keys scrubbed from db (zai provider rows strip creds by design); PUT/GET roundtrip + copyCredsFrom verified live; all capabilities restored to zai defaults.
+   351→- Docs: LOCAL-SETUP.md §4 rewritten (provider matrix, key sources, UI-wins-over-file note, checklist step 2) + scripts/SETUP-local.md (provider table, mix-and-match flow).
+   352→- Repackaged via scripts/package-local.sh → download/tubeforge-local.zip (406 KB, 239 files; providers/, voices route, test-providers.mjs included; db verified clean inside zip; packaged app boot-tested on :3011 — settings/voices/library all 200).
+   353→
+   354→Stage Summary:
+   355→- TubeForge is now provider-agnostic per task: scripts on any of Z.ai/OpenAI-compatible/Anthropic/Gemini, voice on Z.ai/OpenAI, art on Z.ai/OpenAI (edits: CogView or gpt-image-1), video Z.ai-only with Ken Burns as the no-AI fallback. Free end-to-end possible: GLM-4.5-Flash scripts + Gemini free tier / BYOV custom voices / Ken Burns renders.
+   356→- Z.ai path byte-identical to before (same SDK calls); every non-zai adapter wire format verified against a capture stub (55 checks).
+   357→- Deliverable: download/tubeforge-local.zip — unzip, npm install, npm run dev, Settings → AI Providers.
+   358→
+   359→---
+   360→Task ID: generate-script-retry-button
+   361→Agent: main
+   362→Task: User request — "add a 'generate script' button in case it fails to generate" (video detail dialog, like the Failed 'the battle of hud' video in the screenshot)
+   363→
+   364→Work Log:
+   365→- Read POST /api/videos (failed create → status "failed", error saved, no script) + video-detail-dialog structure + jobs/poll patterns
+   366→- jobs.ts: added "script" job kind (union, STAGE_LABEL, boot-recovery artifact check `Boolean(video.script)`, jobSnapshot flag)
+   367→- NEW src/app/api/videos/[id]/script/route.ts — POST (re)generates the script package as a 202 background job following the voiceover pattern: story format → generateSceneScriptPackage + reset scene-bound media (scene-NN.{wav,png,mp4}, voiceover.wav, final/preview/short.mp4, subtitles.srt, short-thumb.png) + hasStoryboard/hasVideo/hasShort=false; classic → generateScriptPackage, artifacts kept non-destructively; status via deriveStatus; failed FIRST attempt → status failed (matches create flow), failed re-roll → error only, old script + status preserved; 409 dedupe while running; clears stale error + failed→draft on start
+   368→- poll.ts: `script` added to GeneratingFlags + pollScript() watching the job flag (works for first-gen AND re-rolls)
+   369→- video-detail-dialog.tsx: regenScript handler (POST → pollScript → toast + reloadScenes for story); in-flight job adoption on dialog open; Script section rebuilt — header "Generate script"/"Re-generate script" button, error box when error && !script, rich empty state ("No script yet… One click writes a fresh scene script from your topic" + CTA); conditional footer "Generate script" button when !video.script; Storyboard tab empty state now has "Generate scene script" button (was a dead-end message pointing at Create view); convert-card error display split to error && script (no duplication with the new script-section box)
+   370→- Tests: NEW scripts/test-script-regen.mjs — simulates the exact user scenario through the live app: broken provider → failed create (500, status failed, no script) → retry via new endpoint with still-broken provider (job records failure, stays failed) → provider fixed → retry (202 + 409 dedupe + script lands, status scripted, 4 scenes, error cleared) → re-roll (fresh take) → cleanup + settings restore. 25/25 PASS (live zai gateway was 429-storming — environmental, proven identical via raw-SDK verify-config — so the success path ran through a local OpenAI-compatible stub, exercising the same provider-agnostic job/DB wiring)
+   371→- Browser (agent-browser): created a real failed video ("the battle of hud"), opened its dialog — Package tab shows error box + "No script yet" empty state + Generate script button in 3 places (section header, empty-state CTA, footer); clicked it → spinner → script landed (title/status/script/voice-button all updated); Storyboard tab shows 4 scenes + Generate storyboard; Re-generate script → fresh v2 take; zero console/page errors. Screenshots: scripts/regen-{1..6}-*.png
+   372→- tsc: zero errors in all changed files (pre-existing errors elsewhere untouched)
+   373→- Cleanup: test video deleted, stub stopped, chat provider restored to zai/glm-4.5-flash (verified via GET)
+   374→- Repackaged via scripts/package-local.sh → download/tubeforge-local.zip (415 KB, 243 files — new route + updated jobs/poll/dialog + test script included)
+   375→
+   376→Stage Summary:
+   377→- Script generation failures are now recoverable in one click from the video detail dialog (no re-entering the topic in Create), and existing scripts can be re-rolled with a fresh AI take
+   378→- Story re-rolls reset scene-bound media honestly (voiceover/storyboard/renders invalidated by new scene boundaries); classic re-rolls keep old artifacts until the user re-runs them
+   379→- The button appears in 3 places for scriptless videos: script-section header, empty-state CTA, footer; in-flight jobs are adopted when the dialog re-opens
+   380→- Deliverable: download/tubeforge-local.zip refreshed
+   381→
+   382→---
+   383→Task ID: voice-preview-audition
+   384→Agent: main (Z.ai)
+   385→Task: User request — "for voice one should be able to try and hear how it sounds while selecting it": per-voice preview/audition buttons in every voice picker
+   386→
+   387→Work Log:
+   388→- Surveyed all 5 voice pickers (create-view Narrator voice, settings-view Default narrator, cast-view create+edit character Voice, video-detail-dialog AI-voices mode) — all Radix Select → shared component extracted to avoid 5x duplication
+   389→- NEW src/lib/tubeforge/voice-preview.ts — VOICE_PREVIEW_TEXT (one neutral sample line), getVoicePreview(): memory Map (32 entries LRU) + disk cache under uploads/_voicepreviews keyed by provider|baseUrl|keyFingerprint|model|voice (everything that can change the sound — caught via test flake that an endpoint/key switch would have served a stale sample), synthesized through aiCall("tts") so previews get the same pacing/concurrency/shared-429-penalty treatment as pipeline TTS
+   390→- NEW src/app/api/settings/voices/preview/route.ts — POST {voice} → WAV stream (Content-Type audio/wav); 400 unknown voice / no key for non-zai provider; 502 readable upstream errors
+   391→- shared.tsx: NEW useVoicePreview() (useSyncExternalStore over a module-level pub/sub store + ONE singleton HTMLAudioElement + blob-URL + inflight-dedup caches — starting a new preview stops the previous across ALL pickers; stale-load guard so clicking voice B while A fetches plays only B) + NEW VoiceSelectWithPreview (raw Radix SelectPrimitive.Item — NOT shadcn SelectItem, which wraps ALL children in ItemText that Radix clones into the trigger; label-only ItemText asChild span keeps the trigger clean, play/stop button sits outside with pointerdown/pointerup/touchend/click stopPropagation so auditioning never selects/closes, per-item CheckIcon indicator preserved)
+   392→- Rewired all 5 pickers to VoiceSelectWithPreview (+ "Tap the ▶ next to a voice to hear how it sounds" hints in create/settings/dialog)
+   393→- Tests: NEW scripts/test-voice-preview.mjs — 36/36 PASS against the live app via ephemeral OpenAI-compatible stub: unknown-voice 400 readable, catalog flip classic-6, first click hits /audio/speech with exact wire body (model tts-1 default, voice, input=preview line, speed 1, response_format wav, Bearer key), repeat click = identical bytes with ZERO upstream re-hit (cache), new voice → new hit, model switch → new cache key + new hit, stub 500 → 502 readable (rode out ~11s of retry backoff then recovered), capability restored + catalog flip-back verified
+   394→- Live zai path 429-storming all round (raw-SDK verify-config identical error — environmental, proven per established pattern); success path proven through the provider-agnostic stub like prior rounds
+   395→- Browser (agent-browser) across Create/Settings/video-detail-dialog: dropdown shows ▶ per voice; clicking ▶ plays (Stop state), menu STAYS OPEN, voice NOT selected; switching ▶ to another voice stops the previous (shared singleton); Stop button toggles off; clicking the option row itself selects + closes; trigger shows the CLEAN label (SelectItemText fix); disk-cache second-session instant hits; mobile 375px scrollWidth 375 + Settings picker preview works; zero console/page errors. Screenshots: scripts/voice-preview-dropdown.png, voice-preview-settings-mobile.png, voice-preview-dialog.png
+   396→- Fixed a transient swallowed click during verification (Fast-Refresh rebuild window) — re-verified deterministic across a fresh reload: pointerdown/up/click instrumentation confirmed events reach the button with target=polygon and toggle correctly
+   397→- Cleanup: tts capability restored to zai (7 studio voices verified), stub killed, uploads/_voicepreviews test cache removed, browser closed
+   398→- Repackaged via scripts/package-local.sh → download/tubeforge-local.zip (435 KB; voice-preview.ts, preview route, updated shared.tsx/views, test-voice-preview.mjs included; verified inside zip)
+   399→
+   400→Stage Summary:
+   401→- Every voice picker in TubeForge is now a try-before-you-commit booth: tap ▶ next to any voice to hear a short sample while the menu stays open, audition several voices, then pick — works for Z.ai's 7 studio voices AND any OpenAI-compatible TTS provider (provider-correct catalog), with server-side caching so repeat auditions never re-spend TTS calls
+   402→- Previews respect the AI rate budget (shared 429 cool-downs), survive dev-server restarts on disk, and invalidate honestly when the user switches provider/endpoint/key/model
+   403→- Deliverable: download/tubeforge-local.zip refreshed — same local flow as before (unzip → npm install → npm run dev)
+   404→
+   405→---
+   406→Task ID: quality-overhaul-10of10
+   407→Agent: main
+   408→Task: "Make it 10/10, the thumbnail should always match the scripts and more scene for short, medium and long" — the 2/10 retention review six points (≤3s visual change, strong hooks, music ducking, SFX library, rehooks, anti-slop) + thumbnail-script matching + richer scene counts.
+   409→
+   410→Work Log:
+   411→- types.ts: SCENE_COUNTS short 4→8 / medium 6→12 / long 8→16 (tighter narration per scene); Scene + SceneDTO gain `rehook: boolean` and `sfx: string`; SFX_KINDS registry ("whoosh|boom|riser|sting|pop"); RENDER_MODES kenburns copy updated (multi-shot, SFX, ducked bed, ≈2–5 min).
+   412→- story.ts: scene-script prompt rebuilt — banned slop openers ("Since the dawn of time…", "X was one of history's most…"), hook must open mid-action/shocking number within 5 words, ~1 rehook per 4 scenes flagged, per-scene sfx cue with semantic guidance, every scene ends on a pull-forward line; normalizeScene() shared coercer; scene 1 force-rehooked + rehook-without-sfx upgraded to "sting"; parseScenes keeps legacy rows renderable (scene 1 rehook default).
+   413→- ai.ts: classic generateScriptPackage prompt gets the same anti-slop + pattern-interrupt-every-~75-words rules; NEW deriveThumbnailConcept() (flash LLM distills the script's most striking visual moment, falls back to hook sentences); generateThumbnail() accepts `concept` and paints "this exact moment from the video's story" instead of a generic topic card; fixed pre-existing tsc errors (pickVariantStyles typing).
+   414→- convert.ts: classic→scene split carries rehook/sfx (verbatim narration rule untouched); mechanical fallback marks scene 1 rehook+sting.
+   415→- NEW sfx.ts: royalty-free SFX library synthesized from raw oscillators/noise via ffmpeg (whoosh=flanged pink-noise swell, boom=pitch-drop 110→38Hz+crack transient, riser=sine glissando+noise crescendo, sting=dissonant 660/699Hz hit, pop=880Hz blip), cached at uploads/_sfx/<kind>.wav (48k stereo PCM16), synthesized once per machine.
+   416→- render.ts: multi-shot Ken Burns engine — each scene cut into ≤2.7s shots (single ffmpeg invocation: split→trim→per-shot zoompan→concat→grade), shot plan = scene camera first (rehook scenes open with "punch": 1.16→1.06 in 0.45s), rotation never repeats, pans/tilts get start-zoom OPPOSITE the previous shot's end zoom (visible reframe at every cut, z=1.10 floor so pans have travel room); finishing grade (eq contrast/sat + vignette) on both render modes; SFX mixed into scene starts via adelay(40ms)+amix normalize=0 weights '1 0.55'; music bed now DUCKED via sidechaincompress (threshold .03, ratio 9, attack 25ms, release 450ms) with asplit sidechain + amix normalize=0 weights '1 0.85' + limiter.
+   417→- Thumbnail matching: thumbnail + variants routes derive a concept per video (story → scene 1 visual+mood verbatim; classic → deriveThumbnailConcept) and pass it to generateThumbnail + the VLM quality-gate context; variants share ONE concept so A/B compares style not subject; script/route.ts re-rolls (both formats) now invalidateThumbnail() — deletes thumbnail.png + variant-*.png, hasThumbnail=false — so a stale cover can never outlive its story.
+   418→- UI: storyboard cards show amber ⚡ REHOOK badge (bottom-right) + fuchsia "sfx: <kind>" chip; verified live in the browser.
+   419→- Tests: NEW scripts/test-shotchain.mjs (standalone ffmpeg proof: 11/11 — cuts land exactly at shot boundaries 3.07s/6.13s, zero black frames, SFX +50.5dB over no-sfx control, bed ducks −33.9dB under speech vs −16.2dB in gaps, exact segment duration); NEW scripts/test-quality-overhaul.mjs (app E2E via OpenAI-compatible stub: 38/38 — scene counts 8/12/16 for short/medium/long, scene-1 rehook + rehook-sfx auto-upgrade, thumbnail prompt contains the scene-1 story moment, preview render 14.4s with cuts every ≤2.43s and 0 black frames, whoosh audible at the opener, limiter holds, re-roll deletes the stale thumbnail + resets the flag); test-script-regen.mjs re-run 25/25 after giving its stub a 600ms pace (sub-ms stub finished the job before the 409-probe — test race, not a regression).
+   420→- Bug found by tests & fixed: opening a scene with its own pan camera at z=1.0 froze the pan (zero travel range) and made the first internal cut invisible → pan/tilt openers now start at z=1.10; amix default normalize was burying SFX by 1/(1+w) → normalize=0 everywhere weights are used.
+   421→- Housekeeping: fixed pre-existing tsc errors in touched routes (video.title narrowing into closures, THUMB_STYLES literal union); test videos + settings restored/cleaned (db verified: 16 demo videos, 0 test rows, zai defaults); _sfx cache persisted.
+   422→- Repackaged via scripts/package-local.sh → download/tubeforge-local.zip (includes sfx.ts, updated render/story/convert/ai, routes, tests; db inside verified clean of test rows).
+   423→
+   424→Stage Summary:
+   425→- Every render now changes framing at least every ~2.7s (hard camera cuts at verified boundaries), opens on a punch-zoom hook with a whoosh, resets attention with sting-punctuated rehooks every ~4 scenes, keeps a broadcast-style ducked music bed, and never shows a black frame.
+   426→- Thumbnails are derived from the script itself — story videos paint their opening scene, classic videos paint the script's most striking moment — and a script re-roll invalidates the old cover automatically.
+   427→- Scene density doubled-to-doubled-again (8/12/16 for short/medium/long) with per-scene SFX cues chosen by the script writer.
+   428→- Deliverable: download/tubeforge-local.zip refreshed; verification persisted in scripts/test-shotchain.mjs (11/11) + scripts/test-quality-overhaul.mjs (38/38).
+   429→
+   430→---
+   431→Task ID: regression-fix-final-worse
+   432→Agent: main
+   433→Task: "the video generated now is more worse" — forensics on upload/final.mp4 (video cmvqvgzau003er9v2xj7cdn8x, 121s short, rendered 16:23 after the quality-overhaul) + fixes.
+   434→
+   435→Work Log:
+   436→- Forensics: 8-tile frame grid, scene-change detection, dense frame strips, frame-to-frame pixel diffs (scripts/measure-strobe.py), DB scene dump, thumbnail + subtitles.srt inspection, volumedetect on head/tail.
+   437→- Ruled OUT (numeric evidence, not eyeballs): zoompan strobing (alternation ratio 0.94-0.97 = smooth; earlier strip reading was an illusion; select scene>0.02 bursts are threshold sensitivity on slow zoom), trailing black frame (grid tile was empty-cell filler; 121.4s/8 = 15.2 tiles).
+   438→- Root causes confirmed: (1) caption chunker split decimals — "$6.5 million" → cue "$6." + "5 million each." on a numbers-dense script; (2) anti-slop prompt only banned OPENERS — body kept Einstein fake quote / latte / tree-proverb clichés; (3) formula notation in narration ("Compound interest = Principal × (1 + Rate)^Time") → unreadable TTS + broken captions; (4) visual prompts requested charts/formulas/aging-morphs → AI gibberish text in art (Σ=d=V0 galaxy, fake bar charts); (5) prompt asked for ONE sfx per scene → model filled 8/8 (synth cues every scene start); (6) rehookEvery = round(8/4)=2 produced "1 in every 2" → 4/8 scenes punch+sting.
+   439→- captions.ts: protectNumbers() swaps decimal points before sentence regex; same guard added to ai.ts splitForTts (TTS chunk boundaries) and convert.ts mechanicalSplit.
+   440→- story.ts: NEW shared exports — narrationToSpeech (% ^ × ÷ = → words), paintableVisual (chart/text-requesting visuals get a hard text-free clause), isRehookPosition (deterministic rehooks at 1,4,7,…), applyRetentionRules (forces the rehook map, strips sfx from non-rehooks, scene 1 = boom, speaks math, hardens visuals); system+user prompt rebuilt (cliché/fake-quote ban, spoken-language rule, paintable-moment visual rules, sfx reserved for rehooks, deterministic rehook scene list); scene artPrompt carries full no-text/no-numbers/no-charts negative.
+   441→- ai.ts: classic script prompt gets the same banned-cliché/spoken-language rules; deriveThumbnailConcept + generateThumbnail prompts demand ONE dominant emotional focal subject + no charts/graphs/numbers/UI negatives.
+   442→- convert.ts: both split paths route through applyRetentionRules; LLM split prompt aligned; rehook map + boom opener in mechanical fallback.
+   443→- render.ts: SFX mix weight 0.55→0.35 (synth accents ~9dB under voice); music bed re-tuned 0.10/0.07/0.05 → 0.045/0.032/0.022 with a 0.07Hz breathing LFO + lowpass 900Hz (measured mean −28dB vs −21dB before — pad, not hum); ducking chain unchanged.
+   444→- Tests: test-quality-overhaul.mjs updated + extended (stub now models an over-eager writer: scene-5 rehook gets demoted, stray sfx stripped, none-sfx rehook upgraded, formula/chart fixture) → 47/47 PASS live (scene counts 8/12/16, rehooks [1,4,7]/[1,4,7,10]/[1,4,7,10,13,16], notation spoken, visual hardening, thumbnail still paints the script moment + no-charts negative, cuts every ≤2.43s, 0 black frames, opener boom −10.2dB, limiter holds, re-roll invalidates thumbnail); NEW scripts/test-caption-decimals.ts (bun, real scene narrations → "$6.5 million each." stays whole).
+   445→- Repackaged via scripts/package-local.sh → download/tubeforge-local.zip.
+   446→
+   447→Stage Summary:
+   448→- The "worse" video was hurt by caption number-butchering + slop prompts + over-dense SFX/rehooks, NOT by the camera engine (multi-shot cuts verified smooth).
+   449→- Retention pacing is now deterministic (rehooks 1,4,7,…; SFX reserved for those beats; opener boom), scripts/visuals/math are sanitized post-hoc so weak models can't leak slop past prompts, and the music bed is a quiet breathing pad.
+   450→- Old videos keep their old scripts — to benefit, re-roll the script (regenerates scenes + invalidates the stale thumbnail), then storyboard → voiceover → render again.
+   451→
+   452→---
+   453→Task ID: quality-pass-2
+   454→Agent: main (Z.ai)
+   455→Task: User six-point bar — storyboard image↔scene perfect match, subtitle↔voiceover sync, no foolish transition sounds, per-niche background music, top-notch sound engineering, top-performer practices.
+   456→
+   457→Work Log:
+   458→- Forensics on the re-rendered final.mp4 (113.7s): 0 black frames; found scene 5 (dark credit-card art) read as a 13.5s FROZEN shot. Standalone repro of multiShotFilter proved cuts existed but were visually INVISIBLE — the wide↔tight flip was only 1.04↔1.14 (~10% FOV), undetectable on dark/low-texture art; and wide pans at z≈1.02 have ~2% travel = frozen.
+   459→- render.ts camera overhaul: every cut is now a ~35-40% FOV jump (zoom-in 1→1.4, zoom-out 1.42→1.02, push-in 1.02→1.4, punch 1.32→1.14); pans/tilts hold z 1.22-1.36 so sweeps move ~10-14% of frame (frozen-pan fix); shotSequence flip logic rewritten per-variant (startZoomFor).
+   460→- render.ts per-niche music beds: MUSIC_PROFILES for all 8 niches (Motivation warm A-min swell, Fun Facts bright C, History epic low D, Finance cold minimal G, Psychology soft E, Space airy A fifth, Technology clean F, Mysteries dark F#-C tritone) — own partials/LFO rate/depth/lowpass/level each; finalize() builds the aevalsrc from musicProfileForNiche(niche); render route passes video.niche.
+   461→- render.ts mastering: loudnorm=I=-14:TP=-1.5:LRA=11 (YouTube target) between the ducked mix and the limiter — consistent broadcast level on every upload.
+   462→- sfx.ts "no foolish sounds" pass: sting 660/699Hz game-show ding → cinematic braam (92+97.4Hz dissonant low pair + 55→30Hz sub drop + brown-noise bow, lowpassed); riser now noise-dominant (bare sine glissando read as cheap theremin); boom crack → brown-noise thud; "pop" (880Hz blip) REMOVED from SFX_KINDS + recipes (legacy "pop" cues silently skip); stale _sfx cache cleared. Catalog is now LOW and DARK only.
+   463→- captions.ts sync hardening: chunk boundaries snap to real silence-run pauses within ±0.45s (pauses ARE phrase boundaries); cues lead voice by 80ms (early reads in-sync, late reads broken), floored at scene start; MAX_CHUNK_WORDS 9→7 (1-2 punchy lines).
+   464→- Storyboard↔scene match: quality.ts gate prompt adds STORY MISMATCH rule (clean-but-wrong-subject scores ≤3); story.ts gate context now carries scene visual + mood + narration moment; artPrompt adds "ONE dominant subject filling the frame"; this install's qualityGate setting flipped to "all" so every storyboard image is VLM-verified against its scene with one bounded re-roll.
+   465→- Top-performer research folded in: pattern interrupts every 3-4s (2.7s shots + perceptible amplitude), music ~ducked far under voice, -14 LUFS, captions 1-2 lines slightly early.
+   466→- Tests: test-shotchain 11/11, test-quality-overhaul 47/47 (opener peak now -2.7dB under loudnorm, limiter holds), test-caption-decimals OK, lint 0 errors.
+   467→- App re-render of cmvqvgzau003er9v2xj7cdn8x verified: scene 5 window now continuous 15-21 per-0.5s diffs (constant motion) + hard cut at 69.0s; 0 black frames; opener boom -1.1dB peak; bed -17.5dB mean in gaps; captions "$1,000"/"10 percent" whole + ≤7 words + 80ms early; thumbnail = scene-1 moment (Sarah + single gold coin over coin mountain, vault light shafts).
+   468→
+   469→Stage Summary:
+   470→- The invisible-cut defect is fixed at the root: amplitude, not frequency, was the retention killer on dark art. Every camera cut is now unmistakable and pans never freeze.
+   471→- Sound design has no game-show noises left; each niche breathes its own bed; every render masters to YouTube loudness.
+   472→- Storyboard images are verified against their scenes by the VLM gate by default (fails open, one bounded re-roll).
+   473→- Deliverable: re-render + tests verified; repackage pending.
+   474→
