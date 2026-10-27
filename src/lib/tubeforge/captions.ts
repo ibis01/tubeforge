@@ -106,7 +106,7 @@ function tokenizeKeepAll(text: string): string[] {
     .filter(Boolean);
 }
 
-const MAX_CHUNK_WORDS = 9;
+const MAX_CHUNK_WORDS = 7;
 const MIN_CHUNK_WORDS = 2;
 
 /**
@@ -219,6 +219,28 @@ function wordPosToTime(pos: number, totalWords: number, runs: SpeechRun[]): numb
   return runs[runs.length - 1].end;
 }
 
+/**
+ * Snap a proportional word-position timestamp to the nearest real speech-run
+ * boundary when one sits within ±0.45s. Proportional mapping assumes a
+ * uniform speaking rate, which drifts around pauses — but a pause IS a
+ * phrase boundary, so cue starts that land near one should sit exactly on
+ * it. This measurably tightens perceived subtitle↔voice sync.
+ */
+function snapToPause(t: number, runs: SpeechRun[], maxShift = 0.45): number {
+  let best = t;
+  let bestD = maxShift;
+  for (const r of runs) {
+    for (const boundary of [r.start, r.end]) {
+      const d = Math.abs(t - boundary);
+      if (d < bestD) {
+        best = boundary;
+        bestD = d;
+      }
+    }
+  }
+  return best;
+}
+
 // ---------- SRT ----------
 
 function srtTime(sec: number): string {
@@ -324,10 +346,18 @@ export async function buildSmartSrt(
     const startPos = ends.map((_, i) => (i === 0 ? 0 : ends[i - 1]));
 
     chunks.forEach((chunk, ci) => {
-      const wavStart = wordPosToTime(startPos[ci], totalWords, runs);
-      const wavEnd = wordPosToTime(ends[ci], totalWords, runs);
+      // Proportional position, then snap to a real pause when one is close —
+      // boundaries that sit on silence are exactly where the voice moves on.
+      const wavStart = snapToPause(wordPosToTime(startPos[ci], totalWords, runs), runs);
+      const wavEnd = Math.max(wordPosToTime(ends[ci], totalWords, runs), wavStart + 0.4);
 
-      const globalStart = segment.start + LEAD_SEC + wavStart;
+      // Cues lead the voice by 80 ms (captions that appear a beat early read
+      // as in-sync; captions that lag read as broken). Never slip back past
+      // the scene start though.
+      const globalStart = Math.max(
+        segment.start + 0.02,
+        segment.start + LEAD_SEC + wavStart - 0.08
+      );
       const rawEnd = segment.start + LEAD_SEC + Math.max(wavEnd, wavStart + 0.4);
 
       cues.push({

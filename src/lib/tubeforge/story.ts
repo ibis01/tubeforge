@@ -313,7 +313,10 @@ export async function generateSceneImage(opts: {
   } | null;
 }): Promise<{ fileBytes: number }> {
   const { scene } = opts;
-  const artPrompt = `${scene.visual}. ${scene.mood}. Wide 16:9 cinematic frame, highly detailed, professional color grading, storytelling composition. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
+  // ONE dominant subject, painted literally: multi-subject prompts scatter
+  // the composition and the model fills the frame with unrelated clutter.
+  // The no-text clause stays (numbers/charts come out as gibberish glyphs).
+  const artPrompt = `${scene.visual}. ${scene.mood}. Wide 16:9 cinematic frame, ONE dominant subject filling the frame, highly detailed, professional color grading, storytelling composition. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
 
   const portrait =
     scene.hostInScene && opts.character?.id
@@ -365,13 +368,14 @@ export async function generateSceneImage(opts: {
     fs.writeFileSync(imagePath, buffer);
   };
 
-  // Phase 3: VLM quality gate (re-rolls badly deformed scene art once when
-  // qualityGate = "all"; disabled by default to keep storyboards fast).
+  // Phase 3: VLM quality gate — when enabled (qualityGate = "all") every
+  // scene image is inspected against ITS scene: subject/story match first,
+  // artifact detection second; below-threshold images get one re-roll.
   await runQualityGate({
     kind: "scene",
     videoId: opts.videoId,
     imagePath,
-    context: `storyboard scene ${scene.index} "${scene.title}" — should depict: ${scene.visual}`,
+    context: `storyboard scene ${scene.index} "${scene.title}" of a story video — this exact image must depict the scene's moment: ${scene.visual} (mood: ${scene.mood}; narration at this moment: "${scene.narration.slice(0, 140)}")`,
     generate: produce,
   });
 

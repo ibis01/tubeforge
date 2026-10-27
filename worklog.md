@@ -448,3 +448,26 @@ Stage Summary:
 - The "worse" video was hurt by caption number-butchering + slop prompts + over-dense SFX/rehooks, NOT by the camera engine (multi-shot cuts verified smooth).
 - Retention pacing is now deterministic (rehooks 1,4,7,…; SFX reserved for those beats; opener boom), scripts/visuals/math are sanitized post-hoc so weak models can't leak slop past prompts, and the music bed is a quiet breathing pad.
 - Old videos keep their old scripts — to benefit, re-roll the script (regenerates scenes + invalidates the stale thumbnail), then storyboard → voiceover → render again.
+
+---
+Task ID: quality-pass-2
+Agent: main (Z.ai)
+Task: User six-point bar — storyboard image↔scene perfect match, subtitle↔voiceover sync, no foolish transition sounds, per-niche background music, top-notch sound engineering, top-performer practices.
+
+Work Log:
+- Forensics on the re-rendered final.mp4 (113.7s): 0 black frames; found scene 5 (dark credit-card art) read as a 13.5s FROZEN shot. Standalone repro of multiShotFilter proved cuts existed but were visually INVISIBLE — the wide↔tight flip was only 1.04↔1.14 (~10% FOV), undetectable on dark/low-texture art; and wide pans at z≈1.02 have ~2% travel = frozen.
+- render.ts camera overhaul: every cut is now a ~35-40% FOV jump (zoom-in 1→1.4, zoom-out 1.42→1.02, push-in 1.02→1.4, punch 1.32→1.14); pans/tilts hold z 1.22-1.36 so sweeps move ~10-14% of frame (frozen-pan fix); shotSequence flip logic rewritten per-variant (startZoomFor).
+- render.ts per-niche music beds: MUSIC_PROFILES for all 8 niches (Motivation warm A-min swell, Fun Facts bright C, History epic low D, Finance cold minimal G, Psychology soft E, Space airy A fifth, Technology clean F, Mysteries dark F#-C tritone) — own partials/LFO rate/depth/lowpass/level each; finalize() builds the aevalsrc from musicProfileForNiche(niche); render route passes video.niche.
+- render.ts mastering: loudnorm=I=-14:TP=-1.5:LRA=11 (YouTube target) between the ducked mix and the limiter — consistent broadcast level on every upload.
+- sfx.ts "no foolish sounds" pass: sting 660/699Hz game-show ding → cinematic braam (92+97.4Hz dissonant low pair + 55→30Hz sub drop + brown-noise bow, lowpassed); riser now noise-dominant (bare sine glissando read as cheap theremin); boom crack → brown-noise thud; "pop" (880Hz blip) REMOVED from SFX_KINDS + recipes (legacy "pop" cues silently skip); stale _sfx cache cleared. Catalog is now LOW and DARK only.
+- captions.ts sync hardening: chunk boundaries snap to real silence-run pauses within ±0.45s (pauses ARE phrase boundaries); cues lead voice by 80ms (early reads in-sync, late reads broken), floored at scene start; MAX_CHUNK_WORDS 9→7 (1-2 punchy lines).
+- Storyboard↔scene match: quality.ts gate prompt adds STORY MISMATCH rule (clean-but-wrong-subject scores ≤3); story.ts gate context now carries scene visual + mood + narration moment; artPrompt adds "ONE dominant subject filling the frame"; this install's qualityGate setting flipped to "all" so every storyboard image is VLM-verified against its scene with one bounded re-roll.
+- Top-performer research folded in: pattern interrupts every 3-4s (2.7s shots + perceptible amplitude), music ~ducked far under voice, -14 LUFS, captions 1-2 lines slightly early.
+- Tests: test-shotchain 11/11, test-quality-overhaul 47/47 (opener peak now -2.7dB under loudnorm, limiter holds), test-caption-decimals OK, lint 0 errors.
+- App re-render of cmvqvgzau003er9v2xj7cdn8x verified: scene 5 window now continuous 15-21 per-0.5s diffs (constant motion) + hard cut at 69.0s; 0 black frames; opener boom -1.1dB peak; bed -17.5dB mean in gaps; captions "$1,000"/"10 percent" whole + ≤7 words + 80ms early; thumbnail = scene-1 moment (Sarah + single gold coin over coin mountain, vault light shafts).
+
+Stage Summary:
+- The invisible-cut defect is fixed at the root: amplitude, not frequency, was the retention killer on dark art. Every camera cut is now unmistakable and pans never freeze.
+- Sound design has no game-show noises left; each niche breathes its own bed; every render masters to YouTube loudness.
+- Storyboard images are verified against their scenes by the VLM gate by default (fails open, one bounded re-roll).
+- Deliverable: re-render + tests verified; repackage pending.

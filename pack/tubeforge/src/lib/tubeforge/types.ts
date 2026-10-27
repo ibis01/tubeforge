@@ -90,8 +90,12 @@ export const SCENE_COUNTS: Record<string, number> = {
   long: 16,
 };
 
-/** SFX cues the script LLM can attach to a scene (see sfx.ts for synthesis). */
-export const SFX_KINDS = ["whoosh", "boom", "riser", "sting", "pop"] as const;
+/**
+ * SFX cues the script LLM can attach to a scene (see sfx.ts for synthesis).
+ * Palette is deliberately LOW and DARK only — no bright "pop"/"ding" kinds;
+ * those read as UI/game noises, not cinema.
+ */
+export const SFX_KINDS = ["whoosh", "boom", "riser", "sting"] as const;
 export type SfxKind = (typeof SFX_KINDS)[number];
 
 /** A single story beat — narration drives TTS, visual drives storyboard art. */

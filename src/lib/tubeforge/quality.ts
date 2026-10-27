@@ -64,6 +64,7 @@ Rate this image 0-10 for upload readiness. Deduct heavily for:
 - deformed faces, hands, or limbs; fused or duplicated subjects
 - obvious AI artifacts, watermarks, or frames around the image
 - blank / nearly-solid images, or a composition that misses the described subject entirely
+- STORY MISMATCH: when the context describes a specific scene, the image must show THAT moment — the described subject, setting and action. A technically clean picture of the wrong subject scores at most 3.
 
 Respond with STRICT JSON only:
 {"score": <integer 0-10>, "issues": [<short strings, empty if perfect>], "summary": "<one sentence>"}`,

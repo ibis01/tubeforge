@@ -40,6 +40,7 @@ export interface RenderOptions {
   burnSubtitles: boolean;
   smartCaptions: boolean; // audio-synced cues (silence + ASR alignment) vs one caption per scene
   music: boolean;
+  musicNiche?: string; // selects the per-niche music bed profile
   sceneLimit?: number; // render only the first N scenes (preview render)
   onProgress?: (current: number, total: number, label: string) => void;
 }
@@ -87,8 +88,14 @@ export async function probeDuration(file: string): Promise<number> {
 
 /**
  * Per-shot camera moves. Every variant is tuned for SHORT shots (≤3s) so cuts
- * feel like a real multi-cam edit: zooms are snappy, pans sweep a partial
- * range, and each shot's framing deliberately JUMPS from the previous one.
+ * feel like a real multi-cam edit: zooms are snappy, pans sweep a wide range,
+ * and each shot's framing deliberately JUMPS from the previous one.
+ *
+ * Amplitude matters more than frequency: forensic diffing of real renders
+ * showed that a 1.04↔1.14 zoom flip (~10% FOV) is visually INVISIBLE on dark
+ * or low-texture art — viewers (and detectors) read the scene as frozen.
+ * Every variant below jumps at least ~35% of field-of-view across a cut
+ * (wide ≈ z1.0 vs tight ≈ z1.4), which reads as a hard cut on ANY image.
  */
 function kenBurnsFilter(variant: string, totalFrames: number, zStart: number): string {
   const last = Math.max(totalFrames - 1, 1); // avoid divide-by-zero
@@ -102,7 +109,7 @@ function kenBurnsFilter(variant: string, totalFrames: number, zStart: number): s
     fwd ? "(ih-ih/zoom)*(0.15+0.7*on/" + last + ")" : "(ih-ih/zoom)*(0.85-0.7*on/" + last + ")";
   switch (variant) {
     case "zoom-out":
-      return `z='1.12-0.12*on/${last}':x='${centeredX}':y='${centeredY}'`;
+      return `z='1.42-0.4*on/${last}':x='${centeredX}':y='${centeredY}'`;
     case "pan-right":
       return `z='${zStart.toFixed(2)}':x='${panX(true)}':y='${centeredY}'`;
     case "pan-left":
@@ -112,26 +119,26 @@ function kenBurnsFilter(variant: string, totalFrames: number, zStart: number): s
     case "tilt-up":
       return `z='${zStart.toFixed(2)}':x='${centeredX}':y='${panY(false)}'`;
     case "push-in":
-      return `z='1.02+0.17*on/${last}':x='${centeredX}':y='${centeredY}'`;
+      return `z='1.02+0.38*on/${last}':x='${centeredX}':y='${centeredY}'`;
     case "punch": {
-      // Rehook opener — fast attack (1.16 → 1.06 over 0.45s) then a slow
+      // Rehook opener — fast attack (1.32 → 1.14 over 0.45s) then a slow
       // drift. Reads as an impact frame the instant the scene lands.
       const f = Math.max(Math.round(0.45 * FPS), 2);
-      return `z='if(lte(on\\,${f})\\,1.16-0.10*on/${f}\\,1.06+0.05*(on-${f})/${Math.max(last - f, 1)})':x='${centeredX}':y='${centeredY}'`;
+      return `z='if(lte(on\\,${f})\\,1.32-0.18*on/${f}\\,1.14+0.06*(on-${f})/${Math.max(last - f, 1)})':x='${centeredX}':y='${centeredY}'`;
     }
     case "zoom-in":
     default:
-      return `z='1+0.12*on/${last}':x='${centeredX}':y='${centeredY}'`;
+      return `z='1+0.4*on/${last}':x='${centeredX}':y='${centeredY}'`;
   }
 }
 
 /** End-state zoom of a variant (used to force a framing jump at the next cut). */
 function endZoomOf(variant: string, zStart: number): number {
   switch (variant) {
-    case "zoom-in": return 1.12;
-    case "zoom-out": return 1.0;
-    case "push-in": return 1.19;
-    case "punch": return 1.11;
+    case "zoom-in": return 1.4;
+    case "zoom-out": return 1.02;
+    case "push-in": return 1.4;
+    case "punch": return 1.2;
     default: return zStart; // pans/tilts hold a constant zoom
   }
 }
@@ -146,17 +153,31 @@ function endZoomOf(variant: string, zStart: number): number {
 function shotSequence(camera: string, shotCount: number, rehook: boolean): { id: string; zStart: number }[] {
   const rotation = ["zoom-in", "pan-right", "zoom-out", "tilt-down", "push-in", "pan-left", "zoom-out", "tilt-up"];
   const first = rehook && camera !== "punch" ? "punch" : camera;
-  // Pans/tilts need zoom > 1 to have travel room — a z=1.0 pan is frozen, so
-  // the opening shot starts tight enough to actually move.
-  const isPanOrTilt = ["pan-right", "pan-left", "tilt-down", "tilt-up"].includes(first);
-  const shots: { id: string; zStart: number }[] = [{ id: first, zStart: isPanOrTilt ? 1.1 : 1.0 }];
+  const isPan = (id: string) => ["pan-right", "pan-left", "tilt-down", "tilt-up"].includes(id);
+
+  /**
+   * Start zoom per variant + side of the wide↔tight flip.
+   * Pans/tilts are special: their only motion IS the pan, and pan travel is
+   * (iw - iw/zoom) — at z=1.02 that's ~2% of the frame, i.e. FROZEN. Pans
+   * therefore always start between 1.22 and 1.36, where a 2.7s sweep moves
+   * ~10-14% of the frame — clearly visible on any artwork.
+   */
+  const startZoomFor = (id: string, wantWide: boolean): number => {
+    if (isPan(id)) return wantWide ? 1.22 : 1.36;
+    return wantWide ? 1.0 : 1.38;
+  };
+
+  const shots: { id: string; zStart: number }[] = [
+    { id: first, zStart: isPan(first) ? 1.3 : 1.0 },
+  ];
   let i = 0;
   while (shots.length < shotCount) {
     const next = rotation[i++ % rotation.length];
     if (next === shots[shots.length - 1].id) continue;
-    // Wide↔tight flip: start opposite to where the previous shot ended.
+    // Wide↔tight flip: start opposite to where the previous shot ended so
+    // every cut is a ~35-40% FOV jump — a visible reframe on any artwork.
     const prevEnd = endZoomOf(shots[shots.length - 1].id, shots[shots.length - 1].zStart);
-    shots.push({ id: next, zStart: prevEnd > 1.07 ? 1.04 : 1.14 });
+    shots.push({ id: next, zStart: startZoomFor(next, prevEnd <= 1.12) });
   }
   return shots;
 }
@@ -277,6 +298,86 @@ async function ensureSceneClip(videoId: string, scene: Scene): Promise<string> {
   return clip;
 }
 
+// ---------- Per-niche music beds ----------
+
+/**
+ * A synthesized ambient bed profile. Each niche gets its own tonal center,
+ * interval stack, breathing rate and filter so a Motivation video doesn't
+ * sound like a Mysteries one. All beds are slow evolving pads — they sit
+ * UNDER narration (ducked later) and must never carry a melody or rhythm
+ * that competes with the voice.
+ */
+interface MusicProfile {
+  /** Stacked sine partials (Hz) with relative gains — root + color intervals. */
+  partials: [freq: number, gain: number][];
+  /** Breathing LFO rate (Hz) + depth (0-1) — how much the pad swells. */
+  lfoRate: number;
+  lfoDepth: number;
+  /** Lowpass ceiling (Hz) — lower = darker, further from the voice band. */
+  lowpassHz: number;
+  /** Bed gain before ducking. */
+  level: number;
+}
+
+const MUSIC_PROFILES: Record<string, MusicProfile> = {
+  // Warm uplifting A-minor stack with a slow sunrise swell.
+  Motivation: {
+    partials: [[55, 0.05], [110.4, 0.034], [164.8, 0.02], [220.5, 0.012]],
+    lfoRate: 0.07, lfoDepth: 0.22, lowpassHz: 1000, level: 1.0,
+  },
+  // Light, curious C-major-ish stack, a touch brighter and quicker.
+  "Fun Facts": {
+    partials: [[65.4, 0.05], [130.8, 0.032], [196.2, 0.022], [261.8, 0.011]],
+    lfoRate: 0.11, lfoDepth: 0.18, lowpassHz: 1200, level: 0.95,
+  },
+  // Solemn epic D — low, wide, slowest breathing in the catalog.
+  History: {
+    partials: [[36.7, 0.055], [73.4, 0.036], [110.2, 0.02], [146.9, 0.012]],
+    lfoRate: 0.05, lfoDepth: 0.26, lowpassHz: 850, level: 1.0,
+  },
+  // Cold minimal G — sparse, steady, businesslike.
+  Finance: {
+    partials: [[49.0, 0.05], [98.1, 0.03], [147.0, 0.018]],
+    lfoRate: 0.06, lfoDepth: 0.14, lowpassHz: 800, level: 0.9,
+  },
+  // Introspective E — soft, round, slightly airy.
+  Psychology: {
+    partials: [[41.2, 0.05], [82.4, 0.033], [123.5, 0.02], [164.8, 0.01]],
+    lfoRate: 0.08, lfoDepth: 0.2, lowpassHz: 950, level: 0.95,
+  },
+  // Vast airy A fifth — space, orbital, weightless.
+  "Space & Science": {
+    partials: [[55.0, 0.05], [82.5, 0.03], [110.0, 0.022], [165.2, 0.01]],
+    lfoRate: 0.06, lfoDepth: 0.24, lowpassHz: 1100, level: 1.0,
+  },
+  // Clean neutral F fifth — precise, digital, unobtrusive.
+  Technology: {
+    partials: [[58.3, 0.05], [116.6, 0.03], [174.7, 0.018]],
+    lfoRate: 0.09, lfoDepth: 0.15, lowpassHz: 1150, level: 0.9,
+  },
+  // Dark F#-C tension — unease without ever becoming a jump-scare.
+  Mysteries: {
+    partials: [[46.2, 0.05], [69.3, 0.034], [92.6, 0.02], [139.0, 0.012]],
+    lfoRate: 0.045, lfoDepth: 0.28, lowpassHz: 780, level: 1.0,
+  },
+};
+
+const DEFAULT_MUSIC_PROFILE: MusicProfile = MUSIC_PROFILES.Motivation;
+
+/** Pick the ambient bed for a video niche (unknown niches get the default). */
+export function musicProfileForNiche(niche: string | undefined | null): MusicProfile {
+  return (niche && MUSIC_PROFILES[niche]) || DEFAULT_MUSIC_PROFILE;
+}
+
+/** Build the aevalsrc expression for a profile's breathing pad. */
+function droneSource(profile: MusicProfile): string {
+  const tones = profile.partials
+    .map(([f, g]) => `${g.toFixed(4)}*sin(2*PI*${f}*t)`)
+    .join("+");
+  const breath = `(1-${profile.lfoDepth.toFixed(2)}+${profile.lfoDepth.toFixed(2)}*sin(2*PI*${profile.lfoRate}*t))`;
+  return `aevalsrc='(${tones})*${breath}':s=48000`;
+}
+
 // ---------- Segments & assembly ----------
 
 /** Build one scene segment: visual track of exactly `dur` + narration audio (+ SFX cue). */
@@ -371,6 +472,7 @@ async function finalize(opts: {
   out: string;
   burnSubtitles: boolean;
   music: boolean;
+  musicNiche?: string;
   srtPath: string | null;
   scenes: Scene[];
   segments: { start: number; duration: number }[];
@@ -394,27 +496,33 @@ async function finalize(opts: {
     filters.push("[0:v]null[v]");
   }
 
-  // Warm ambient drone (A1 + detuned A2 + E3) under the narration, DUCKED by
-  // the voice itself via sidechain compression: the bed swells in narration
-  // gaps and drops hard while anyone is speaking (broadcast-style ducking).
-  // A slow LFO lets the bed breathe instead of sitting at one flat level,
-  // and the lowpass keeps it a soft pad rather than an audible hum.
-  const drone =
-    "aevalsrc='(0.045*sin(2*PI*55*t)+0.032*sin(2*PI*110.4*t)+0.022*sin(2*PI*164.8*t))*(0.82+0.18*sin(2*PI*0.07*t))':s=48000";
   if (music) {
+    // Per-niche ambient bed (see MUSIC_PROFILES): each niche gets its own
+    // tonal center + breathing rate, DUCKED by the voice itself via
+    // sidechain compression — the bed swells in narration gaps and drops
+    // hard while anyone is speaking (broadcast-style ducking). The lowpass
+    // keeps it a soft pad below the voice band rather than an audible hum.
+    const profile = musicProfileForNiche(opts.musicNiche);
     filters.push(
       "[0:a]aformat=channel_layouts=stereo,asplit=2[voice][sc]",
-      `[1:a]aformat=channel_layouts=stereo,lowpass=f=900,afade=t=in:d=3,` +
+      `[1:a]aformat=channel_layouts=stereo,lowpass=f=${profile.lowpassHz},afade=t=in:d=3,` +
         `afade=t=out:st=${Math.max(total - 4, 0).toFixed(2)}:d=4[music]`,
       `[music][sc]sidechaincompress=threshold=0.03:ratio=9:attack=25:release=450[mduck]`,
-      "[voice][mduck]amix=inputs=2:duration=first:normalize=0:weights='1 0.85',alimiter=limit=0.95[a]"
+      // Master chain: mix bed under voice, normalize to YouTube's loudness
+      // target (-14 LUFS integrated, -1.5 dBTP) so every upload lands at a
+      // consistent, broadcast-clean level, then a safety limiter.
+      `[voice][mduck]amix=inputs=2:duration=first:normalize=0:weights='1 0.85',` +
+        `loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.95[a]`
     );
   } else {
     filters.push("[0:a]anull[a]");
   }
 
   const args = ["-i", base];
-  if (music) args.push("-f", "lavfi", "-t", total.toFixed(3), "-i", drone);
+  if (music)
+    args.push(
+      "-f", "lavfi", "-t", total.toFixed(3), "-i", droneSource(musicProfileForNiche(opts.musicNiche))
+    );
 
   args.push(
     "-filter_complex", filters.join(";"),
@@ -534,6 +642,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       out: outPath,
       burnSubtitles: opts.burnSubtitles,
       music: opts.music,
+      musicNiche: opts.musicNiche,
       srtPath,
       scenes,
       segments,

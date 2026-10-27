@@ -87,6 +87,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         burnSubtitles: subtitles,
         smartCaptions,
         music,
+        musicNiche: video.niche,
         sceneLimit,
         onProgress: (current, total, label) =>
           setJobProgress(id, "render", current, total, label),
