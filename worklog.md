@@ -537,3 +537,19 @@ Stage Summary:
 - The password page is now the owner's choice, not a roadblock: the studio is open by default, and Settings → Studio access turns protection on/off instantly with a guided password flow.
 - Enforcement, sessions, rate limiting, CSRF and Bearer tokens are unchanged while the lock is ON — only the default posture changed (locked-out → opt-in).
 - Recovery exists at three levels: the enabling tab keeps its session, `bun run auth:reset` reopens the studio, and `--purge` forgets a lost password.
+
+---
+Task ID: local-run-package
+Agent: main (Z.ai)
+Task: User wants TubeForge running on their local PC — refresh and verify the portable package.
+
+Work Log:
+- NEW scripts/auth-reset.mjs: Node/cross-platform recovery command (no bun needed on the user's PC) — flips auth.enabled via `prisma db execute`, removes db/auth.lock, supports --purge. Tested against the live sandbox DB.
+- package-local.sh updated: ships only runtime helpers (backup.sh + auth-reset.mjs) instead of all sandbox test suites; portable package.json gains "auth:reset": "node scripts/auth-reset.mjs"; ships empty db/ (.gitkeep) so prisma's relative file:../db/custom.db resolves; header comments now describe the opt-in lock.
+- SETUP-local.md rewritten: fresh/empty studio (no live DB shipped — it held keys/tokens), setup is now 5 steps incl. `npm run setup` (prisma db push), new "Protecting your studio" section (Settings → Studio access opt-in lock + auth:reset recovery), scripts/ tree updated, Windows note for the cp-based build/start, backup note.
+- SECURITY.md: recovery line now covers both bun (sandbox) and npm (local package) variants.
+- PACKAGE VERIFIED END-TO-END: rebuilt download/tubeforge-local.zip (491KB, 261 files), secret scan clean (no live db/uploads/live secret), then unzipped to /tmp and simulated the user's machine: npm install OK → npx prisma db push creates db/custom.db inside the package → next dev on :3100 → /api/auth/status {configured:false, gateEnabled:false} (no popup), / 200, /api/videos 200 with empty library. Caught + dismissed a false negative: the sandbox shell exports DATABASE_URL which overrode the package .env (env -u reproduces the user's clean environment where the relative path resolves correctly).
+- Test server killed, /tmp artifacts removed. Deliverable: /home/z/my-project/download/tubeforge-local.zip.
+
+Stage Summary:
+- The user can now run TubeForge locally: download tubeforge-local.zip → unzip → npm install → npm run setup → npm run dev → paste their own Z.ai key in Settings. Open studio by default, opt-in lock, npm run auth:reset recovery — all shipped and boot-verified from a cold extraction.

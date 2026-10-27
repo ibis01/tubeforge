@@ -4,10 +4,10 @@ TubeForge is a YouTube-automation studio: it researches topics, writes scripts w
 GLM, splits them into scene storyboards, paints AI images, generates voiceovers,
 renders the final MP4 (with Shorts), and can even upload to YouTube.
 
-This package contains the full source code plus your SQLite database
-(`db/custom.db`) with your existing library. Generated media (rendered videos,
-thumbnails, voiceovers — the `uploads/` folder) was intentionally left out
-because it is 550+ MB; everything regenerates on demand.
+This package is **source + empty database**: a fresh, private studio. For your
+protection it deliberately does NOT include this machine's database (it held API
+keys and account tokens), `.env` secrets, or the 550+ MB of generated media —
+everything regenerates on demand once your own key is in.
 
 ---
 
@@ -26,7 +26,7 @@ rendering need a small credit balance on your account.
 
 ---
 
-## 2. Setup (4 steps)
+## 2. Setup (5 steps)
 
 ```bash
 # 1. unzip the package, then:
@@ -35,11 +35,14 @@ cd tubeforge
 # 2. install dependencies (this also runs `prisma generate` automatically)
 npm install
 
-# 3. start it
+# 3. create the SQLite database (empty — one-time)
+npm run setup
+
+# 4. start it
 npm run dev
 ```
 
-4. Open **http://localhost:3000** → go to **Settings → AI Providers**:
+5. Open **http://localhost:3000** → go to **Settings → AI Providers**:
 
    You can mix providers per task — e.g. free Gemini for scripts, OpenAI for
    voice and art, Z.ai for video. The simplest start is one Z.ai key:
@@ -58,15 +61,36 @@ npm run dev
    | Artwork | Z.ai CogView · OpenAI-compatible (DALL·E 3 / gpt-image-1) |
    | Scene animation | Z.ai CogVideoX (only option — Ken Burns render needs no AI video) |
 
-That's it — no config files to edit by hand. The database ships preloaded with
-your videos, channels, characters and settings, so the Library looks exactly
-like it does in the sandbox.
+That's it — no config files to edit by hand. The studio starts empty: create your
+first video from the **Create** page (Auto-Pilot walks the whole pipeline), add
+channels in **Channels**, recurring characters in **Cast**.
 
 To let other devices on your Wi-Fi reach it: `npm run dev:lan`.
 
 ---
 
-## 3. Optional: config file instead of the UI
+## 3. Protecting your studio (optional, recommended before sharing)
+
+The studio is **open by default** — no password popup, you are the only one who
+knows the URL. Before exposing it to your network (`dev:lan`) or the internet:
+
+- **Settings → Studio access** → flip **Password protection** on and create a
+  password (min 8 chars). Every visit then needs it; APIs reject anyone without
+  a signed session. The browser you enable it from stays signed in.
+- Change your mind anytime — flip it off (needs a signed-in browser).
+- **Locked out?** From the project folder run:
+
+  ```bash
+  npm run auth:reset           # studio open again, password kept
+  npm run auth:reset --purge   # also forget the password entirely
+  ```
+
+- Rotating `TUBEFORGE_AUTH_SECRET` in `.env` signs everyone out instantly
+  (sessions and API tokens are HMAC-signed with it).
+
+---
+
+## 4. Optional: config file instead of the UI
 
 The Z.ai SDK reads a `.z-ai-config` JSON file (project dir → home dir → `/etc`).
 The Settings UI writes this file for you (UI wins over the file). If you prefer
@@ -86,25 +110,26 @@ on scripting videos / library cards.
 
 ---
 
-## 4. What ships in this package
+## 5. What ships in this package
 
 ```
 tubeforge/
 ├── src/               # full app source (Next.js 16 + React 19 + Tailwind 4)
 ├── prisma/            # database schema (SQLite)
-├── db/custom.db       # YOUR current library data (videos, channels, settings)
+├── db/                # empty — `npm run setup` creates custom.db here
 ├── public/            # icons, PWA manifest
-├── scripts/           # diagnostic + test scripts (optional to use)
-├── package.json       # npm scripts (dev / build / db)
-├── .env               # DATABASE_URL — relative path, works anywhere
+├── scripts/           # backup.sh + auth-reset.mjs (recovery helpers)
+├── package.json       # npm scripts (dev / setup / build / db / auth:reset)
+├── .env               # DATABASE_URL (relative, works anywhere) + fresh auth secret
 ├── .env.example       # same, for reference
 ├── .z-ai-config.example  # optional manual config template
+├── SECURITY.md        # protection matrix + security checklist
 └── SETUP.md           # this guide
 ```
 
 ---
 
-## 5. Troubleshooting
+## 6. Troubleshooting
 
 **`ffmpeg not found`** when rendering — install it (see table above) and restart
 the dev server so the PATH refreshes.
@@ -112,9 +137,10 @@ the dev server so the PATH refreshes.
 **`Error: Cannot find module '@prisma/client'`** — run `npx prisma generate`
 (the `postinstall` hook normally does this for you).
 
-**`P1003: database file does not exist`** — the `.env` uses a relative path
-(`file:../db/custom.db`), resolved against the `prisma/` folder. Keep the folder
-layout as shipped, or run `npm run db:push` to recreate an empty database.
+**`P1003: database file does not exist`** — run `npm run setup` (creates
+`db/custom.db` from the schema). The `.env` uses a relative path
+(`file:../db/custom.db`) resolved against the `prisma/` folder — keep the folder
+layout as shipped.
 
 **AI calls fail instantly with 429** — quota throttling on your API key, not a
 bug. Free flash models are concurrency-limited: wait a moment or switch model in
@@ -126,8 +152,9 @@ space/newline, or was revoked. Re-copy it from the Z.ai API keys page.
 
 **Port 3000 already in use** — change the port: `npx next dev -p 3001`.
 
-**Production mode** (optional):
-```bash
-npm run build
-npm start        # serves the optimized build on port 3000
-```
+**Production mode** (optional): `npm run build && npm start` serves the optimized
+build on port 3000. The build/start scripts use `cp`, so on Windows use WSL or
+Git Bash for those two commands — `npm run dev` works everywhere as-is.
+
+**Backups** (optional): `npm run backup` writes a hot-copy of the database plus
+an uploads manifest into `backups/` (needs the `sqlite3` CLI installed).

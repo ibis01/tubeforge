@@ -5,11 +5,13 @@
 #
 # SECURITY (2025-10 hardening pass):
 #   - Does NOT ship the live database (it contains provider API keys + OAuth
-#     tokens + private records). Fresh installs run `npm run db:push` on first
+#     tokens + private records). Fresh installs run `npm run setup` on first
 #     boot via the documented setup step instead.
 #   - Does NOT ship .env / .z-ai-config / uploads — those are runtime secrets/data.
 #   - Ships bun.lock for reproducible installs.
-#   - Ships a per-package TUBEFORGE_AUTH_SECRET so the lock screen is on by default.
+#   - Ships a per-package TUBEFORGE_AUTH_SECRET so the owner can turn the lock
+#     on from Settings → Studio access without editing .env (lock is OPT-IN —
+#     the studio is open by default).
 
 set -euo pipefail
 
@@ -27,8 +29,13 @@ rsync -a "$ROOT/src/"          "$STAGE/src/"
 rsync -a "$ROOT/prisma/"       "$STAGE/prisma/"
 rsync -a "$ROOT/public/"       "$STAGE/public/"
 mkdir -p "$STAGE/scripts"
-# small diagnostic/test scripts only (no PNG artifacts)
-find "$ROOT/scripts" -maxdepth 1 \( -name '*.cjs' -o -name '*.mjs' \) -exec cp {} "$STAGE/scripts/" \;
+# Ship only the runtime helpers a local owner needs (backup + lock recovery).
+# Test/verify suites stay out — they assume bun + the sandbox environment.
+cp "$ROOT/scripts/backup.sh" "$STAGE/scripts/backup.sh" 2>/dev/null || true
+cp "$ROOT/scripts/auth-reset.mjs" "$STAGE/scripts/auth-reset.mjs"
+# Empty db folder so prisma's relative `file:../db/custom.db` resolves on first setup
+mkdir -p "$STAGE/db"
+touch "$STAGE/db/.gitkeep"
 for f in next.config.ts tsconfig.json tailwind.config.ts postcss.config.mjs \
          components.json eslint.config.mjs .gitignore SECURITY.md; do
   cp "$ROOT/$f" "$STAGE/" 2>/dev/null || true
@@ -53,6 +60,7 @@ orig.scripts = {
   postinstall: "prisma generate",
   setup: "prisma db push",
   backup: "bash scripts/backup.sh",
+  "auth:reset": "node scripts/auth-reset.mjs",
   "db:push": "prisma db push --accept-data-loss",
   "db:generate": "prisma generate",
   "db:migrate": "prisma migrate dev",
@@ -74,7 +82,6 @@ EOF
 
 echo "==> Copying SETUP.md"
 cp "$ROOT/scripts/SETUP-local.md" "$STAGE/SETUP.md" 2>/dev/null || true
-cp "$ROOT/scripts/backup.sh" "$STAGE/scripts/backup.sh" 2>/dev/null || true
 
 echo "==> Zipping"
 cd "$ROOT/pack"

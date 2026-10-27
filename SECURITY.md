@@ -37,7 +37,8 @@ Do this now:
   is required to SIGN sessions; the lock itself is toggled in Settings → Studio access.
 - Sharing the studio outside your machine? Turn the lock ON first (Settings → Studio access),
   then run behind a reverse proxy with TLS. Do not port-forward an open studio.
-- Locked out? `bun run auth:reset` switches back to the open studio (add `--purge` to also forget
+- Locked out? `bun run auth:reset` (dev sandbox) / `npm run auth:reset` (local
+  package) switches back to the open studio (add `--purge` to also forget
   the password). Enable protection again from Settings when ready.
 - Before uploading to YouTube, review the track license record in Settings → Background Music.
 
