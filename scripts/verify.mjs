@@ -25,15 +25,7 @@ console.log("TubeForge verification" + (full ? " (FULL)" : " (fast)"));
 
 run("ESLint", ["bun", "run", "lint"]);
 run("TypeScript (strict, no ignoreBuildErrors)", ["bunx", "tsc", "--noEmit"]);
-run("Auth gate live (server must 401 anonymous API calls)", ["node", "-e", `
-  const t = async () => {
-    const res = await fetch("http://localhost:3000/api/stats");
-    if (res.status === 401) { console.log("  api gate: 401 for anonymous ✓"); return 0; }
-    if (res.status === 200) { console.log("  api gate: OPEN (TUBEFORGE_AUTH_SECRET unset) — acceptable for dev"); return 0; }
-    console.log("  api gate: unexpected", res.status); return 1;
-  };
-  t().then((c) => process.exit(c)).catch(() => process.exit(1));
-`]);
+run("Auth opt-in gate (open by default, lock on demand)", ["bun", "scripts/test-auth-optin.mjs"]);
 
 if (existsSync("scripts/test-shotchain.mjs"))
   run("ffmpeg render chain (cuts, SFX, ducking, black frames)", ["node", "scripts/test-shotchain.mjs"]);

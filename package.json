@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "verify": "node scripts/verify.mjs",
     "verify:full": "node scripts/verify.mjs --full",
-    "backup": "bash scripts/backup.sh"
+    "backup": "bash scripts/backup.sh",
+    "auth:reset": "bun scripts/auth-reset.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

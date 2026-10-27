@@ -20,8 +20,8 @@ Do this now:
 
 | Area | Protection |
 | --- | --- |
-| API access | `src/middleware.ts` — every `/api/*` request requires a signed session cookie or Bearer token (except `/api/auth/*`). Wrong/absent credential → 401 JSON. |
-| Lock screen | First visit to `/` shows a password setup (first run) or sign-in. Passwords: PBKDF2-SHA256, 120k iterations, salted, constant-time compare. |
+| API access | **Opt-in.** The studio is OPEN by default. Once the owner enables it (Settings → Studio access), `src/middleware.ts` requires a signed session cookie or Bearer token on every `/api/*` request (except `/api/auth/*`). Wrong/absent credential → 401 JSON. |
+| Lock screen | Appears only while protection is ON: first visit to `/` shows a password setup (first run) or sign-in. Passwords: PBKDF2-SHA256, 120k iterations, salted, constant-time compare. |
 | Brute force | 5 failed logins per IP per 10 minutes → 10-minute lockout. |
 | CSRF | Cookie-authenticated mutations with a mismatching `Origin` are rejected (plus `SameSite=Lax`). |
 | Sessions | HMAC-SHA256-signed tokens (`TUBEFORGE_AUTH_SECRET` in `.env`), HttpOnly cookies, 7-day expiry. Rotating the secret revokes everything instantly. |
@@ -29,14 +29,16 @@ Do this now:
 | SSRF | User-supplied audio URLs: http(s) only, private/loopback/link-local/CGNAT/metadata hosts blocked, DNS answers re-checked, redirects manually followed with each hop re-validated, size + type caps. |
 | Secrets in responses | Provider API keys are masked in every settings GET; YouTube tokens never leave the server. |
 | Distributables | `scripts/package-local.sh` no longer copies the live database; `.gitignore` excludes `db/`, `uploads/`, `.env`. |
-| Local dev | Without `TUBEFORGE_AUTH_SECRET` the gate stays open (documented) — set the secret to enable it. |
+| Local dev | The lock is opt-in: Setting `auth.enabled` (mirrored to `db/auth.lock`, hot-checked by the middleware) decides. Removing the flag file or the secret instantly re-opens the studio. |
 
 ## Daily-use security checklist
 
-- Keep `TUBEFORGE_AUTH_SECRET` set in `.env` (32+ hex chars) and never commit `.env`.
-- Don't port-forward the dev server without the secret set; run behind a reverse proxy with TLS.
-- Change the access password if you suspect exposure (clear the `auth.password` row in Settings →
-  next boot offers first-run setup again).
+- Keep `TUBEFORGE_AUTH_SECRET` set in `.env` (32+ hex chars) and never commit `.env` — the secret
+  is required to SIGN sessions; the lock itself is toggled in Settings → Studio access.
+- Sharing the studio outside your machine? Turn the lock ON first (Settings → Studio access),
+  then run behind a reverse proxy with TLS. Do not port-forward an open studio.
+- Locked out? `bun run auth:reset` switches back to the open studio (add `--purge` to also forget
+  the password). Enable protection again from Settings when ready.
 - Before uploading to YouTube, review the track license record in Settings → Background Music.
 
 ## Backups

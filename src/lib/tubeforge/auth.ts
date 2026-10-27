@@ -6,6 +6,8 @@
 //   pbkdf2$<iterations>$<saltB64>$<hashB64>
 // Only the verifier ever reads the hash; nothing returns it to the browser.
 
+import fs from "node:fs";
+import path from "node:path";
 import { db } from "@/lib/db";
 import {
   SESSION_COOKIE,
@@ -16,8 +18,59 @@ import {
 } from "./auth-token";
 
 const PASSWORD_KEY = "auth.password";
+const ENABLED_KEY = "auth.enabled";
 const PBKDF2_ITERS = 120_000; // ~100ms per attempt on server hardware
 const MIN_PASSWORD_LEN = 8;
+
+// Protection is OPT-IN: the studio stays open until the owner explicitly
+// enables the lock (Settings → Studio access). The Setting row is the source
+// of truth for the UI; a tiny flag file mirrors it for src/middleware.ts,
+// which runs per-request and must not touch the database.
+const LOCK_FLAG = path.join(process.cwd(), "db", "auth.lock");
+
+function writeLockFlag(on: boolean): void {
+  try {
+    if (on) fs.writeFileSync(LOCK_FLAG, new Date().toISOString());
+    else fs.rmSync(LOCK_FLAG, { force: true });
+  } catch {
+    // flag sync is best-effort; the Setting row remains the source of truth
+  }
+}
+
+/** Is password protection currently active? (opt-in via Settings, needs a secret to sign sessions) */
+export async function isAuthEnabled(): Promise<boolean> {
+  const enabled = Boolean(getAuthSecret());
+  if (!enabled) return false;
+  const row = await db.setting.findUnique({ where: { key: ENABLED_KEY } }).catch(() => null);
+  const on = row?.value === "true";
+  // self-heal the flag mirror if it ever drifts from the Setting row
+  if (fs.existsSync(LOCK_FLAG) !== on) writeLockFlag(on);
+  return on;
+}
+
+/** Toggle password protection. Enabling requires a password to exist (or creates one upstream). */
+export async function setAuthEnabled(on: boolean): Promise<void> {
+  if (on && !getAuthSecret())
+    throw new Error("Cannot enable the lock: TUBEFORGE_AUTH_SECRET is missing from .env");
+  await db.setting.upsert({
+    where: { key: ENABLED_KEY },
+    update: { value: on ? "true" : "false" },
+    create: { key: ENABLED_KEY, value: on ? "true" : "false" },
+  });
+  writeLockFlag(on);
+}
+
+/** Recovery script helper — force the lock off regardless of DB state. */
+export async function forceLockOff(): Promise<void> {
+  writeLockFlag(false);
+  await db.setting
+    .upsert({
+      where: { key: ENABLED_KEY },
+      update: { value: "false" },
+      create: { key: ENABLED_KEY, value: "false" },
+    })
+    .catch(() => {});
+}
 
 // ----- Password hashing (Web Crypto — works in Node 20 and edge) -----
 

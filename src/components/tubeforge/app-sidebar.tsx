@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { TubeForgeLogo, TubeForgeWordmark } from "@/components/tubeforge/logo";
 import {
@@ -37,6 +38,13 @@ export const MOBILE_NAV_ITEMS = NAV_ITEMS;
 export function AppSidebar() {
   const view = useAppStore((s) => s.view);
   const setView = useAppStore((s) => s.setView);
+  const [gateOn, setGateOn] = useState(false);
+
+  useEffect(() => {
+    const onGate = (e: Event) => setGateOn(Boolean((e as CustomEvent).detail?.enabled));
+    window.addEventListener("tf-gate", onGate);
+    return () => window.removeEventListener("tf-gate", onGate);
+  }, []);
 
   return (
     <aside className="hidden lg:flex w-60 shrink-0 flex-col border-r border-white/5 bg-sidebar sticky top-0 h-screen">
@@ -89,18 +97,21 @@ export function AppSidebar() {
             Script → Voice → Thumbnail → Ready. Zero manual work.
           </p>
         </div>
-        <button
-          onClick={() => {
-            void fetch("/api/auth/logout", { method: "POST" }).then(() =>
-              window.location.reload()
-            );
-          }}
-          className="w-full flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
-          aria-label="Sign out"
-        >
-          <LogOut className="h-3.5 w-3.5" />
-          Sign out
-        </button>
+        {/* Sign out only makes sense while the lock is active (AuthGate broadcasts it) */}
+        {gateOn && (
+          <button
+            onClick={() => {
+              void fetch("/api/auth/logout", { method: "POST" }).then(() =>
+                window.location.reload()
+              );
+            }}
+            className="w-full flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
+            aria-label="Sign out"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            Sign out
+          </button>
+        )}
       </div>
     </aside>
   );

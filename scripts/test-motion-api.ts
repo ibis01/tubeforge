@@ -55,9 +55,29 @@ const check = (name, cond, detail = "") => {
   }
 };
 
-// 0. auth gate: anonymous requests are rejected, bearer accepted
+// 0. auth gate — opt-in: the test temporarily enables the lock (creating the
+// password if none exists) so the 401 path is exercised, then restores the
+// previous state. Bearer tokens are accepted either way.
+const TEST_PW = "tf-motion-api-lock-42";
+const s0 = await (await fetch(`${BASE}/api/auth/status`)).json();
+let lockCookie: string | null = null;
+let lockChanged = false;
+if (!s0.gateEnabled && !s0.configured) {
+  const en = await fetch(`${BASE}/api/auth/lock`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: true, password: TEST_PW }),
+  });
+  lockCookie = en.headers.get("set-cookie")?.split(";")[0] ?? null;
+  lockChanged = en.ok;
+}
+const gateOn = lockChanged || s0.gateEnabled;
 const anon = await fetch(`${BASE}/api/stats`);
-check("auth gate still 401 for anonymous", anon.status === 401, `status ${anon.status}`);
+check(
+  "auth gate enforced for anonymous",
+  anon.status === (gateOn ? 401 : 200),
+  `status ${anon.status} (gate ${gateOn ? "on" : "off"})`
+);
 const authed = await api("/api/stats");
 check("bearer token accepted", authed.status === 200, `status ${authed.status}`);
 
@@ -129,6 +149,17 @@ const badCreate = await api("/api/videos", {
   body: JSON.stringify({ topic: "", motionMode: "off", motionIntensity: 12 }),
 });
 check("create validation still gates on topic", badCreate.status === 400, `status ${badCreate.status}`);
+
+// restore: undo the temporary lock the test enabled (never leave state behind)
+if (lockChanged) {
+  await fetch(`${BASE}/api/auth/lock`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(lockCookie ? { Cookie: lockCookie } : {}) },
+    body: JSON.stringify({ enabled: false, clearPassword: true }),
+  });
+  const after = await (await fetch(`${BASE}/api/auth/status`)).json();
+  check("lock state restored (off, password cleared)", after.gateEnabled === false && after.configured === false);
+}
 
 console.log(`\n${fail === 0 ? "OK" : "FAIL"}: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

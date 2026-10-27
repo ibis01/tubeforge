@@ -13,6 +13,11 @@ import { Lock, LogOut, ShieldCheck, Loader2, Eye, EyeOff } from "lucide-react";
 
 type AuthState = "checking" | "locked" | "setup" | "open" | "disabled";
 
+/** Sidebar & friends listen for this to know whether the lock is active. */
+export function broadcastGateState(enabled: boolean) {
+  window.dispatchEvent(new CustomEvent("tf-gate", { detail: { enabled } }));
+}
+
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AuthState>("checking");
   const [password, setPassword] = useState("");
@@ -38,7 +43,10 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    void refresh().then(setState);
+    void refresh().then((s) => {
+      setState(s);
+      broadcastGateState(s !== "disabled");
+    });
   }, [refresh]);
 
   const submit = async (e: React.FormEvent) => {
@@ -66,6 +74,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       setPassword("");
       setConfirm("");
       setState("open");
+      broadcastGateState(true);
     } catch {
       setError("Network error — check your connection and retry.");
     } finally {
@@ -80,19 +89,21 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     window.location.reload();
   };
 
-  if (state === "checking" || state === "disabled") {
-    // Splash while the lock state resolves (or when auth is disabled for dev).
+  if (state === "checking") {
+    // Brief splash while the lock state resolves.
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4 animate-pulse">
           <TubeForgeLogo size={56} />
-          <p className="text-sm text-muted-foreground">
-            {state === "checking" ? "Warming up the forge…" : "Auth gate disabled — set TUBEFORGE_AUTH_SECRET"}
-          </p>
+          <p className="text-sm text-muted-foreground">Warming up the forge…</p>
         </div>
-        {state === "disabled" && children}
       </div>
     );
+  }
+
+  if (state === "disabled") {
+    // Protection is OFF (the owner hasn't enabled it) — straight into the app.
+    return <>{children}</>;
   }
 
   if (state === "open") {
