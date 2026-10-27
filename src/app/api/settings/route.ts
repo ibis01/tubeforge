@@ -19,6 +19,13 @@ const DEFAULTS: Record<string, string> = {
   aiTtsPerMin: "12",
   aiImagePerMin: "8",
   aiVideoPerMin: "4",
+  // Background music (music.ts reads these at render time)
+  "music.enabled": "true",
+  "music.mode": "auto", // auto | manual
+  "music.trackId": "", // used when mode=manual
+  "music.volume": "0.5",
+  "music.fadeInSec": "1.5",
+  "music.fadeOutSec": "2.5",
 };
 
 export async function GET() {
@@ -36,6 +43,11 @@ export async function PUT(req: NextRequest) {
 
     for (const [key, raw] of Object.entries(body)) {
       if (!allowed.has(key)) continue;
+      // music.trackId accepts explicit null → clears the manual default.
+      if (key === "music.trackId" && (raw === null || raw === "")) {
+        await db.setting.deleteMany({ where: { key } });
+        continue;
+      }
       const value =
         typeof raw === "boolean" ? String(raw) : String(raw ?? "").trim();
       if (!value) continue;

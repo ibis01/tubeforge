@@ -33,6 +33,14 @@ const SUBTITLE_STYLE =
 /** Subtle finishing grade — a touch of contrast/saturation + soft vignette. */
 const GRADE = "eq=contrast=1.05:saturation=1.08,vignette=PI/5";
 
+/** A library music track resolved for this render (music.ts). */
+export interface ResolvedTrack {
+  filePath: string; // absolute path to the track file (flac/wav)
+  gain: number; // linear bed gain (track is anchored at -16 LUFS)
+  fadeInSec: number;
+  fadeOutSec: number;
+}
+
 export interface RenderOptions {
   videoId: string;
   scenes: Scene[];
@@ -40,7 +48,8 @@ export interface RenderOptions {
   burnSubtitles: boolean;
   smartCaptions: boolean; // audio-synced cues (silence + ASR alignment) vs one caption per scene
   music: boolean;
-  musicNiche?: string; // selects the per-niche music bed profile
+  musicNiche?: string; // selects the per-niche music bed profile (drone fallback)
+  musicTrack?: ResolvedTrack | null; // library track — wins over the drone when set
   sceneLimit?: number; // render only the first N scenes (preview render)
   onProgress?: (current: number, total: number, label: string) => void;
 }
@@ -473,11 +482,18 @@ async function finalize(opts: {
   burnSubtitles: boolean;
   music: boolean;
   musicNiche?: string;
+  musicTrack?: ResolvedTrack | null;
   srtPath: string | null;
   scenes: Scene[];
   segments: { start: number; duration: number }[];
 }): Promise<void> {
   const { base, out, burnSubtitles, music } = opts;
+
+  // Library track with a readable file wins; otherwise the synthesized drone.
+  const track =
+    music && opts.musicTrack && fs.existsSync(opts.musicTrack.filePath)
+      ? opts.musicTrack
+      : null;
 
   if (!burnSubtitles && !music) {
     // Pure remux — put the moov atom up front for streaming playback.
@@ -497,32 +513,49 @@ async function finalize(opts: {
   }
 
   if (music) {
-    // Per-niche ambient bed (see MUSIC_PROFILES): each niche gets its own
-    // tonal center + breathing rate, DUCKED by the voice itself via
-    // sidechain compression — the bed swells in narration gaps and drops
-    // hard while anyone is speaking (broadcast-style ducking). The lowpass
-    // keeps it a soft pad below the voice band rather than an audible hum.
-    const profile = musicProfileForNiche(opts.musicNiche);
-    filters.push(
-      "[0:a]aformat=channel_layouts=stereo,asplit=2[voice][sc]",
-      `[1:a]aformat=channel_layouts=stereo,lowpass=f=${profile.lowpassHz},afade=t=in:d=3,` +
-        `afade=t=out:st=${Math.max(total - 4, 0).toFixed(2)}:d=4[music]`,
-      `[music][sc]sidechaincompress=threshold=0.03:ratio=9:attack=25:release=450[mduck]`,
-      // Master chain: mix bed under voice, normalize to YouTube's loudness
-      // target (-14 LUFS integrated, -1.5 dBTP) so every upload lands at a
-      // consistent, broadcast-clean level, then a safety limiter.
-      `[voice][mduck]amix=inputs=2:duration=first:normalize=0:weights='1 0.85',` +
-        `loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.95[a]`
-    );
+    // Bed chain: loop the track to length (or synthesize the niche drone),
+    // trim, fade, then DUCK under the voice via sidechain compression — the
+    // bed swells in narration gaps and drops hard while anyone speaks
+    // (broadcast-style). loudnorm to YouTube's -14 LUFS + a safety limiter.
+    if (track) {
+      const fadeIn = Math.min(track.fadeInSec, Math.max(total / 3, 0.2));
+      const fadeOut = Math.min(track.fadeOutSec, Math.max(total / 3, 0.2));
+      filters.push(
+        "[0:a]aformat=channel_layouts=stereo,asplit=2[voice][sc]",
+        `[1:a]aformat=channel_layouts=stereo,atrim=duration=${total.toFixed(3)},asetpts=N/SR/TB,` +
+          `volume=${track.gain.toFixed(3)},afade=t=in:d=${fadeIn.toFixed(2)},` +
+          `afade=t=out:st=${Math.max(total - fadeOut, 0).toFixed(2)}:d=${fadeOut.toFixed(2)}[music]`,
+        `[music][sc]sidechaincompress=threshold=0.03:ratio=9:attack=25:release=450[mduck]`,
+        `[voice][mduck]amix=inputs=2:duration=first:normalize=0:weights='1 1',` +
+          `loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.95[a]`
+      );
+    } else {
+      const profile = musicProfileForNiche(opts.musicNiche);
+      filters.push(
+        "[0:a]aformat=channel_layouts=stereo,asplit=2[voice][sc]",
+        `[1:a]aformat=channel_layouts=stereo,lowpass=f=${profile.lowpassHz},afade=t=in:d=3,` +
+          `afade=t=out:st=${Math.max(total - 4, 0).toFixed(2)}:d=4[music]`,
+        `[music][sc]sidechaincompress=threshold=0.03:ratio=9:attack=25:release=450[mduck]`,
+        `[voice][mduck]amix=inputs=2:duration=first:normalize=0:weights='1 0.85',` +
+          `loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.95[a]`
+      );
+    }
   } else {
     filters.push("[0:a]anull[a]");
   }
 
   const args = ["-i", base];
-  if (music)
-    args.push(
-      "-f", "lavfi", "-t", total.toFixed(3), "-i", droneSource(musicProfileForNiche(opts.musicNiche))
-    );
+  if (music) {
+    if (track) {
+      // Loop the library track enough times to cover the video; atrim +
+      // amix(duration=first) bound the actual output.
+      args.push("-stream_loop", "-1", "-i", track.filePath);
+    } else {
+      args.push(
+        "-f", "lavfi", "-t", total.toFixed(3), "-i", droneSource(musicProfileForNiche(opts.musicNiche))
+      );
+    }
+  }
 
   args.push(
     "-filter_complex", filters.join(";"),
@@ -643,6 +676,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       burnSubtitles: opts.burnSubtitles,
       music: opts.music,
       musicNiche: opts.musicNiche,
+      musicTrack: opts.musicTrack,
       srtPath,
       scenes,
       segments,

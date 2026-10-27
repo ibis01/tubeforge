@@ -52,7 +52,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         { error: `Audio exceeds the ${MAX_AUDIO_BYTES / 1024 / 1024} MB limit` },
         { status: 413 }
       );
-    const label = (form.get("label") as string | null)?.trim() || file.name || "uploaded audio";
+    const label = (form?.get("label") as string | null)?.trim() || file.name || "uploaded audio";
     mode = {
       kind: "upload",
       buffer: Buffer.from(await file.arrayBuffer()),
@@ -79,6 +79,18 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
 
   const custom = mode.kind !== "tts";
+  // Narrow the union once so the job closure can use it without re-checking kind.
+  const customMode: { kind: "upload"; buffer: Buffer; filename: string } | {
+    kind: "url";
+    url: string;
+    label?: string;
+  } | null = custom
+    ? (mode as { kind: "upload"; buffer: Buffer; filename: string } | {
+        kind: "url";
+        url: string;
+        label?: string;
+      })
+    : null;
   const scenes = video.format === "story" ? parseScenes(video.scenes) : [];
   if (!custom && video.format === "story" && scenes.length === 0)
     return NextResponse.json(
@@ -101,19 +113,20 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       let voiceLabel: string | null = null;
       let activityMsg: string;
 
-      if (custom) {
+      if (custom && customMode) {
         // ----- Bring-your-own-voice: normalize + (scene videos) cut -----
         const result = await ingestCustomAudio({
           videoId: id,
           source:
-            mode.kind === "upload"
-              ? { kind: "upload", buffer: mode.buffer, filename: mode.filename }
-              : { kind: "url", url: mode.url },
+            customMode.kind === "upload"
+              ? { kind: "upload", buffer: customMode.buffer, filename: customMode.filename }
+              : { kind: "url", url: customMode.url },
           onProgress: (label) => setJobProgress(id, "voiceover", 1, 2, label),
         });
         durationSec = result.durationSec;
         voiceSource = "custom";
-        voiceLabel = mode.kind === "upload" ? mode.filename : (mode.label ?? result.sourceLabel);
+        voiceLabel =
+          customMode.kind === "upload" ? customMode.filename : (customMode.label ?? result.sourceLabel);
         activityMsg = `Custom voice attached from ${mode.kind === "upload" ? "upload" : "web link"} — “${voiceLabel}”, ${Math.round(durationSec)}s${
           result.scenesCut !== null ? `, cut across ${result.scenesCut} scenes` : ""
         }`;

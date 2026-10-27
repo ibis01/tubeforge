@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useVoices, VoiceSelectWithPreview } from "@/components/tubeforge/shared";
+import { MusicPickerCard, type MusicPickerValue } from "@/components/tubeforge/music-controls";
 import {
   VOICES,
   NICHES,
@@ -134,6 +135,13 @@ export function CreateView() {
   const { voices } = useVoices();
   const [speed, setSpeed] = useState(1.0);
   const [thumbStyle, setThumbStyle] = useState<string>("cinematic");
+  const [music, setMusic] = useState<MusicPickerValue>({
+    enabled: null,
+    trackId: null,
+    volume: null,
+    fadeIn: null,
+    fadeOut: null,
+  });
   const [channelId, setChannelId] = useState<string>("none");
   const [channels, setChannels] = useState<{ id: string; name: string }[]>([]);
   const [characterId, setCharacterId] = useState<string>("none");
@@ -253,9 +261,14 @@ export function CreateView() {
           characterId: characterId !== "none" ? characterId : null,
           format,
           renderMode,
+          musicEnabled: music.enabled,
+          musicTrackId: music.trackId,
+          musicVolume: music.volume,
+          musicFadeIn: music.fadeIn,
+          musicFadeOut: music.fadeOut,
         }),
       }).then((d) => d.video),
-    [topic, niche, tone, length, voice, speed, thumbStyle, channelId, characterId, format, renderMode]
+    [topic, niche, tone, length, voice, speed, thumbStyle, channelId, characterId, format, renderMode, music]
   );
 
   const startVoiceover = useCallback(
@@ -684,6 +697,8 @@ export function CreateView() {
               </SelectContent>
             </Select>
           </div>
+
+          <MusicPickerCard value={music} onChange={setMusic} compact={isStory} />
 
           <div className="pt-1.5 flex flex-col gap-2">
             <Button

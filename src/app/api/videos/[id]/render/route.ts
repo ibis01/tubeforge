@@ -2,12 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { parseScenes } from "@/lib/tubeforge/story";
 import { renderVideo } from "@/lib/tubeforge/render";
+import { resolveMusicForVideo, trackAbsolutePath } from "@/lib/tubeforge/music";
+import { qcForVideo } from "@/lib/tubeforge/qc";
 import {
   startJob,
   isJobRunning,
+  isJobCancelled,
   lastJobError,
   jobProgress,
   setJobProgress,
+  JobCancelledError,
 } from "@/lib/tubeforge/jobs";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -35,6 +39,11 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
  * POST — render the final MP4 as a background job (202).
  * Body: { mode?: "kenburns" | "animated", subtitles?: boolean, music?: boolean,
  *         sceneLimit?: number }  — sceneLimit renders a preview (first N scenes).
+ *
+ * Music resolution: video-level pin → Settings manual pick → auto mood-match
+ * by niche (music.ts); falls back to the inline synthesized drone when the
+ * library has no active track. Full renders finish with the QC battery
+ * (qc.ts) recorded on the video row.
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
@@ -75,6 +84,17 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       ? Math.min(sceneLimitRaw, scenes.length)
       : undefined;
 
+  // Resolve the library track (null → synthesized drone fallback in render.ts).
+  const resolved = music ? await resolveMusicForVideo(video) : null;
+  const musicTrack = resolved
+    ? {
+        filePath: trackAbsolutePath(resolved.track),
+        gain: resolved.gain,
+        fadeInSec: resolved.fadeInSec,
+        fadeOutSec: resolved.fadeOutSec,
+      }
+    : null;
+
   // Clear any stale error before the job starts.
   await db.video.update({ where: { id }, data: { error: null } });
 
@@ -88,36 +108,64 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         smartCaptions,
         music,
         musicNiche: video.niche,
+        musicTrack,
         sceneLimit,
-        onProgress: (current, total, label) =>
-          setJobProgress(id, "render", current, total, label),
+        onProgress: (current, total, label) => {
+          // Cancellation checkpoint: fires between scenes/long steps.
+          if (isJobCancelled(id, "render")) throw new JobCancelledError();
+          setJobProgress(id, "render", current, total, label);
+        },
       });
 
       if (result.fileName === "final.mp4") {
+        // Quality gate — verify the file actually plays, is in sync, on level.
+        setJobProgress(id, "render", scenes.length + 1, scenes.length + 1, "Running quality checks");
+        const report = await qcForVideo(id, result.durationSec, video.audioDuration);
         await db.video.update({
           where: { id },
           data: {
             hasVideo: true,
             videoDuration: Math.round(result.durationSec * 10) / 10,
+            qcReport: JSON.stringify(report),
             error: null,
           },
         });
+        await db.activity.create({
+          data: {
+            videoId: id,
+            stage: "render",
+            level: report.passed ? "info" : "warn",
+            message:
+              `Video rendered (${mode === "animated" ? "full AI animation" : "Ken Burns"}, ` +
+              `${Math.round(result.durationSec)}s) — ` +
+              `${music ? (resolved ? `music: ${resolved.why}` : "music: synthesized bed") : "no music"}, ` +
+              `QC ${report.passed ? "passed" : "flagged " + report.checks.filter((c) => !c.pass).length + " check(s)"}`,
+          },
+        });
       } else {
-        // Preview renders never mark the video as produced.
+        // Preview renders never mark the video as produced (no QC battery).
         await db.video.update({ where: { id }, data: { error: null } });
+        await db.activity.create({
+          data: {
+            videoId: id,
+            stage: "render",
+            message: `Preview rendered (scene 1, ${mode === "animated" ? "animated" : "Ken Burns"})`,
+          },
+        });
       }
-
-      await db.activity.create({
-        data: {
-          videoId: id,
-          stage: "render",
-          message:
-            result.fileName === "final.mp4"
-              ? `Video rendered (${mode === "animated" ? "full AI animation" : "Ken Burns"}) — ${Math.round(result.durationSec)}s MP4`
-              : `Preview rendered (scene 1, ${mode === "animated" ? "animated" : "Ken Burns"})`,
-        },
-      });
     } catch (err) {
+      if (err instanceof JobCancelledError) {
+        // Cancellation is not a failure — keep the previous state, clear error.
+        await db.video.update({ where: { id }, data: { error: null } });
+        await db.activity.create({
+          data: {
+            videoId: id,
+            stage: "render",
+            message: "Render cancelled — completed scenes kept, run render again to restart",
+          },
+        });
+        throw err;
+      }
       const message = err instanceof Error ? err.message : "Render failed";
       await db.video.update({ where: { id }, data: { error: message } });
       await db.activity.create({
@@ -134,7 +182,17 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   });
 
   return NextResponse.json(
-    { accepted, generating: true, mode, sceneLimit: sceneLimit ?? null },
+    {
+      accepted,
+      generating: true,
+      mode,
+      sceneLimit: sceneLimit ?? null,
+      music: resolved
+        ? { track: resolved.track.name, why: resolved.why }
+        : music
+          ? "synthesized-fallback"
+          : false,
+    },
     { status: accepted ? 202 : 200 }
   );
 }

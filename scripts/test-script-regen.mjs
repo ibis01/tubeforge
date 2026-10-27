@@ -26,7 +26,7 @@ const ok = (cond, label) => {
 async function jfetch(path, opts = {}) {
   const res = await fetch(BASE + path, {
     ...opts,
-    headers: { "Content-Type": "application/json", ...(opts.headers ?? {}) },
+    headers: { "Content-Type": "application/json", ...(process.env.TF_API_TOKEN ? { Authorization: `Bearer ${process.env.TF_API_TOKEN}` } : {}), ...(opts.headers ?? {}) },
   });
   let body = null;
   try {

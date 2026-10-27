@@ -239,10 +239,33 @@ export interface VideoDTO {
   shortUrl: string | null;
   shortDuration: number | null;
   shortScene: number | null;
+  // Background music (per-video overrides; null = Settings defaults)
+  musicEnabled: boolean | null;
+  musicTrackId: string | null;
+  musicVolume: number | null;
+  musicFadeIn: number | null;
+  musicFadeOut: number | null;
+  // Post-render quality gate (qc.ts) — parsed report or null
+  qc: QcReportDTO | null;
   // Latest synced performance (Phase 5, null before the first sync)
   stats: { views: number; likes: number; comments: number } | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface QcCheckDTO {
+  id: string;
+  label: string;
+  pass: boolean;
+  value: string;
+  detail?: string;
+}
+
+export interface QcReportDTO {
+  passed: boolean;
+  checkedAt: string;
+  durationSec: number;
+  checks: QcCheckDTO[];
 }
 
 export interface ChannelDTO {
@@ -380,7 +403,7 @@ export interface CharacterDTO {
 
 // ---------- Phase 3: robustness DTOs ----------
 
-export type JobStatusDTO = "running" | "done" | "failed" | "interrupted";
+export type JobStatusDTO = "running" | "done" | "failed" | "interrupted" | "cancelled";
 
 /** One row in the Settings "Background Jobs" history panel. */
 export interface JobDTO {

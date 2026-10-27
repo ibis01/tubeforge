@@ -35,7 +35,7 @@ const ok = (cond, label, detail = "") => {
 async function jfetch(p, opts = {}) {
   const res = await fetch(BASE + p, {
     ...opts,
-    headers: { "Content-Type": "application/json", ...(opts.headers ?? {}) },
+    headers: { "Content-Type": "application/json", ...(process.env.TF_API_TOKEN ? { Authorization: `Bearer ${process.env.TF_API_TOKEN}` } : {}), ...(opts.headers ?? {}) },
   });
   let body = null;
   try { body = await res.json(); } catch { /* no body */ }

@@ -175,7 +175,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   add(`${base}/thumbnail.png`, thumb);
 
   for (const v of listVariants(video.id)) {
-    add(`${base}/thumbnail-variants/${v.style}.png`, readMedia(video.id, v.fileName));
+    add(`${base}/thumbnail-variants/${v.style}.png`, readMedia(video.id, v.fileName as `variant-${string}.png`));
   }
 
   // Story engine artifacts — storyboard art, captions, rendered video

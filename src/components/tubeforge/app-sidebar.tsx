@@ -1,6 +1,7 @@
 "use client";
 
 import { useAppStore, type ViewId } from "@/lib/store";
+import { TubeForgeLogo, TubeForgeWordmark } from "@/components/tubeforge/logo";
 import {
   LayoutDashboard,
   TrendingUp,
@@ -11,6 +12,7 @@ import {
   CalendarDays,
   Radio,
   Settings,
+  LogOut,
 } from "lucide-react";
 
 export const NAV_ITEMS: {
@@ -40,17 +42,8 @@ export function AppSidebar() {
     <aside className="hidden lg:flex w-60 shrink-0 flex-col border-r border-white/5 bg-sidebar sticky top-0 h-screen">
       {/* Logo */}
       <div className="flex items-center gap-2.5 px-5 h-16 border-b border-white/5">
-        <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center shadow-lg glow-red-soft shrink-0">
-          <svg viewBox="0 0 24 24" className="h-4.5 w-4.5 fill-white" aria-hidden="true">
-            <path d="M8 5.5v13l11-6.5-11-6.5z" />
-          </svg>
-        </div>
-        <div>
-          <p className="font-semibold leading-tight tracking-tight">
-            Tube<span className="text-gradient">Forge</span>
-          </p>
-          <p className="text-[11px] text-muted-foreground">Auto-Pilot Engine</p>
-        </div>
+        <TubeForgeLogo size={36} />
+        <TubeForgeWordmark />
       </div>
 
       {/* Nav */}
@@ -85,8 +78,8 @@ export function AppSidebar() {
         </ul>
       </nav>
 
-      {/* Auto-pilot status card */}
-      <div className="px-3 pb-4">
+      {/* Auto-pilot status card + session */}
+      <div className="px-3 pb-4 space-y-2">
         <div className="glass rounded-xl p-3.5">
           <div className="flex items-center gap-2">
             <span className="animate-pulse-dot h-2 w-2 rounded-full bg-primary shrink-0" />
@@ -96,6 +89,18 @@ export function AppSidebar() {
             Script → Voice → Thumbnail → Ready. Zero manual work.
           </p>
         </div>
+        <button
+          onClick={() => {
+            void fetch("/api/auth/logout", { method: "POST" }).then(() =>
+              window.location.reload()
+            );
+          }}
+          className="w-full flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
+          aria-label="Sign out"
+        >
+          <LogOut className="h-3.5 w-3.5" />
+          Sign out
+        </button>
       </div>
     </aside>
   );

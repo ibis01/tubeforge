@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { StatCard, EmptyState, timeAgo } from "@/components/tubeforge/shared";
+import { AttentionPanel } from "@/components/tubeforge/attention-panel";
 import type { StatsDTO } from "@/lib/tubeforge/types";
 import {
   Film,
@@ -136,6 +137,9 @@ export function DashboardView() {
         <StatCard icon={Loader2} label="In Pipeline" value={String(stats.inPipeline)} sub="Scripting / voicing / art" />
         <StatCard icon={Timer} label="Audio Produced" value={`${stats.audioMinutes}m`} sub="Narration runtime" />
       </div>
+
+      {/* Needs attention + generating now (Mission Control audit points) */}
+      <AttentionPanel />
 
       <div className="grid lg:grid-cols-5 gap-4">
         {/* Production chart */}

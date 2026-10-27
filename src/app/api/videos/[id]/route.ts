@@ -62,6 +62,26 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   if (RENDER_MODES.some((m) => m.id === body.renderMode))
     data.renderMode = String(body.renderMode);
 
+  // Background-music overrides (null = follow Settings defaults)
+  if (typeof body.musicEnabled === "boolean" || body.musicEnabled === null)
+    data.musicEnabled = body.musicEnabled;
+  if (typeof body.musicTrackId === "string" || body.musicTrackId === null) {
+    if (body.musicTrackId) {
+      const track = await db.musicTrack.findUnique({
+        where: { id: String(body.musicTrackId) },
+      });
+      if (!track)
+        return NextResponse.json({ error: "Music track not found" }, { status: 400 });
+    }
+    data.musicTrackId = body.musicTrackId;
+  }
+  if (typeof body.musicVolume === "number")
+    data.musicVolume = Math.min(Math.max(body.musicVolume, 0), 1);
+  if (typeof body.musicFadeIn === "number")
+    data.musicFadeIn = Math.min(Math.max(body.musicFadeIn, 0.5), 8);
+  if (typeof body.musicFadeOut === "number")
+    data.musicFadeOut = Math.min(Math.max(body.musicFadeOut, 0.5), 8);
+
   // Status transitions (publish / mark ready / retry)
   if (typeof body.status === "string") {
     const allowed = ["draft", "scripted", "voiced", "ready", "published", "failed"];

@@ -102,7 +102,7 @@ async function json(url, opts) {
 async function putTts(patch) {
   return json(`${BASE}/api/settings/ai`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(process.env.TF_API_TOKEN ? { Authorization: `Bearer ${process.env.TF_API_TOKEN}` } : {}) },
     body: JSON.stringify({ scope: "capability", capability: "tts", ...patch }),
   });
 }
@@ -110,7 +110,7 @@ async function putTts(patch) {
 async function postPreview(voice) {
   const res = await fetch(`${BASE}/api/settings/voices/preview`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(process.env.TF_API_TOKEN ? { Authorization: `Bearer ${process.env.TF_API_TOKEN}` } : {}) },
     body: JSON.stringify({ voice }),
   });
   const buf = Buffer.from(await res.arrayBuffer());

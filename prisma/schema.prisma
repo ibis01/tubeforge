@@ -80,6 +80,18 @@ model Video {
   hasShort     Boolean  @default(false)
   shortScene   Int? // scene index the short was cut from (null = auto-picked)
   shortDuration Float? @default(0)
+
+  // Background music (per-video overrides; null = fall back to Settings defaults)
+  musicEnabled Boolean? // null = use the global default (Settings -> Background Music)
+  musicTrackId String? // manual pick (overrides auto mood-matching)
+  musicVolume Float? // 0..1 multiplier applied to the licensed track
+  musicFadeIn Float? // seconds
+  musicFadeOut Float? // seconds
+
+  // Post-render quality gate — JSON report from qc.ts: streams, duration,
+  // loudness, peaks, black frames, SRT sanity.
+  qcReport     String?
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   activities    Activity[]
@@ -149,6 +161,39 @@ model Setting {
   key       String   @id
   value     String
   updatedAt DateTime @updatedAt
+}
+
+// Background-music library — every track carries its license record so a
+// published video can always answer "is this safe to monetize?". The
+// TubeForge-original beds are synthesized in-app (zero third-party samples);
+// users can upload their OWN licensed tracks with full attribution metadata.
+model MusicTrack {
+  id            String   @id @default(cuid())
+  name          String
+  // Comma-separated mood/niche tags used by the auto-selection engine, e.g.
+  // "motivation,uplifting" — niches map onto these tags (see music.ts).
+  moods         String   @default("")
+  genre         String?
+  durationSec   Float    @default(0)
+  filePath      String // relative path under uploads/, e.g. "_music/uplifting-aurora.wav"
+  fileSizeBytes Int      @default(0)
+  isOriginal    Boolean  @default(false) // synthesized by TubeForge — no third-party audio
+
+  // --- Copyright / license record (kept for every track, shown in UI) ---
+  licenseType   String   @default("TubeForge Original") // e.g. "YouTube Audio Library", "CC BY 4.0", "Commercial license"
+  sourceUrl     String? // where it came from
+  commercialUse Boolean  @default(true)
+  attributionRequired Boolean @default(false)
+  attributionText String? // exact credit line to paste into the description
+  licenseEvidence String? // URL or note proving the license (screenshot, license page)
+  downloadedAt  DateTime @default(now())
+  contentIdNotes String? // known Content ID claims / restrictions, if any
+
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([isActive])
 }
 
 // Phase 3 — persistent job registry: survives server restarts so interrupted

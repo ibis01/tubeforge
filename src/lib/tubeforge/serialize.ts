@@ -75,8 +75,25 @@ export function serializeVideo(
     shortUrl: hasShortFile ? `/api/videos/${v.id}/mp4?variant=short` : null,
     shortDuration: hasShortFile ? v.shortDuration : null,
     shortScene: hasShortFile ? v.shortScene : null,
+    musicEnabled: v.musicEnabled,
+    musicTrackId: v.musicTrackId,
+    musicVolume: v.musicVolume,
+    musicFadeIn: v.musicFadeIn,
+    musicFadeOut: v.musicFadeOut,
+    qc: parseQc(v.qcReport),
     stats: opts.stats ?? null,
     createdAt: v.createdAt.toISOString(),
     updatedAt: v.updatedAt.toISOString(),
   };
+}
+
+/** Parse the stored QC JSON safely (bad/legacy payloads → null). */
+function parseQc(raw: string | null): import("./types").QcReportDTO | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as import("./types").QcReportDTO;
+    return parsed && typeof parsed.passed === "boolean" && Array.isArray(parsed.checks) ? parsed : null;
+  } catch {
+    return null;
+  }
 }

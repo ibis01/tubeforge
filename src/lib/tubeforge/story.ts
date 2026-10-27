@@ -392,11 +392,18 @@ export async function generateStoryboard(opts: {
     identityAnchor: string | null;
     appearance: string | null;
   } | null;
+  /** Throw inside the loop when the user cancelled the job (jobs.ts). */
+  shouldCancel?: () => boolean;
+  /** Progress hook per finished scene (i is 0-based). */
+  onSceneDone?: (i: number, total: number) => void;
 }): Promise<{ generated: number }> {
   let generated = 0;
   for (const [i, scene] of opts.scenes.entries()) {
+    if (opts.shouldCancel?.())
+      throw new Error("__CANCELLED__"); // route translates into JobCancelledError
     await generateSceneImage({ ...opts, scene });
     generated++;
+    opts.onSceneDone?.(i, opts.scenes.length);
     if (i < opts.scenes.length - 1) await sleep(2000);
   }
   return { generated };

@@ -26,7 +26,15 @@ export type JobKind =
   | "convert" // classic narration script -> scene-based story
   | "script"; // (re)generate the script package — retry after a failed create, or re-roll
 
-export type JobStatus = "running" | "done" | "failed" | "interrupted";
+export type JobStatus = "running" | "done" | "failed" | "interrupted" | "cancelled";
+
+/** Thrown by cancellable loops when a user requested cancellation. */
+export class JobCancelledError extends Error {
+  constructor(message = "Cancelled by the user") {
+    super(message);
+    this.name = "CancelError";
+  }
+}
 
 interface RunningEntry {
   jobId: string;
@@ -39,6 +47,7 @@ interface JobState {
   running: Map<string, RunningEntry>; // key -> active job
   lastErrors: Map<string, string>;
   progress: Map<string, { current: number; total: number; label: string }>;
+  cancelled: Set<string>; // keys with a pending cancel request
   bootTs: number; // process boot time — rows older than this are from a dead process
   recoveryPromise: Promise<void> | null;
 }
@@ -48,6 +57,7 @@ const state: JobState = (g.__tfJobs ??= {
   running: new Map(),
   lastErrors: new Map(),
   progress: new Map(),
+  cancelled: new Set(),
   bootTs: Date.now(),
   recoveryPromise: null,
 });
@@ -156,6 +166,24 @@ export function isJobRunning(entityId: string, kind: JobKind): boolean {
   return state.running.has(key(entityId, kind));
 }
 
+/** Request cancellation of one running job (all running jobs when kind omitted). */
+export function requestJobCancel(entityId: string, kind?: JobKind): JobKind[] {
+  const cancelled: JobKind[] = [];
+  const prefix = `${entityId}:`;
+  for (const k of state.running.keys()) {
+    if (!k.startsWith(prefix)) continue;
+    if (kind && k !== key(entityId, kind)) continue;
+    state.cancelled.add(k);
+    cancelled.push(k.slice(prefix.length) as JobKind);
+  }
+  return cancelled;
+}
+
+/** True when a cancel request is pending for this job (checked by long loops). */
+export function isJobCancelled(entityId: string, kind: JobKind): boolean {
+  return state.cancelled.has(key(entityId, kind));
+}
+
 export function jobStartedAt(entityId: string, kind: JobKind): number | null {
   return state.running.get(key(entityId, kind))?.startedAt ?? null;
 }
@@ -212,6 +240,7 @@ export async function startJob(
 
   state.lastErrors.delete(k);
   state.progress.delete(k);
+  state.cancelled.delete(k);
 
   let jobId: string | null = null;
   try {
@@ -234,17 +263,26 @@ export async function startJob(
           .catch(() => {});
     })
     .catch(async (err) => {
+      const cancelled = err instanceof JobCancelledError;
       const message = err instanceof Error ? err.message : `${kind} job failed`;
       state.lastErrors.set(k, message);
-      console.error(`[job:${k}] failed:`, message);
+      if (!cancelled) console.error(`[job:${k}] failed:`, message);
       if (jobId)
         await db.job
-          .update({ where: { id: jobId }, data: { status: "failed", error: message, endedAt: new Date() } })
+          .update({
+            where: { id: jobId },
+            data: {
+              status: cancelled ? "cancelled" : "failed",
+              error: cancelled ? message : message,
+              endedAt: new Date(),
+            },
+          })
           .catch(() => {});
     })
     .finally(() => {
       state.running.delete(k);
       state.progress.delete(k);
+      state.cancelled.delete(k);
     });
 
   return true;

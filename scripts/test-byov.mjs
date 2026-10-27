@@ -33,7 +33,15 @@ const ok = (cond, msg) => {
 };
 
 const api = async (p, opts = {}) => {
-  const res = await fetch(`${BASE}${p}`, opts);
+  const res = await fetch(`${BASE}${p}`, {
+    ...opts,
+    headers: {
+      ...(opts.headers ?? {}),
+      ...(process.env.TF_API_TOKEN
+        ? { Authorization: `Bearer ${process.env.TF_API_TOKEN}` }
+        : {}),
+    },
+  });
   let body = null;
   try {
     body = await res.json();

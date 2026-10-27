@@ -56,6 +56,28 @@ export async function POST(req: NextRequest) {
       ? String(body.renderMode)
       : "kenburns";
 
+    // Background-music overrides (null → Settings defaults at render time)
+    const musicEnabled =
+      typeof body.musicEnabled === "boolean" ? body.musicEnabled : null;
+    const musicTrackId = body.musicTrackId ? String(body.musicTrackId) : null;
+    if (musicTrackId) {
+      const track = await db.musicTrack.findUnique({ where: { id: musicTrackId } });
+      if (!track)
+        return NextResponse.json({ error: "Music track not found" }, { status: 400 });
+    }
+    const musicVolume =
+      typeof body.musicVolume === "number"
+        ? Math.min(Math.max(body.musicVolume, 0), 1)
+        : null;
+    const musicFadeIn =
+      typeof body.musicFadeIn === "number"
+        ? Math.min(Math.max(body.musicFadeIn, 0.5), 8)
+        : null;
+    const musicFadeOut =
+      typeof body.musicFadeOut === "number"
+        ? Math.min(Math.max(body.musicFadeOut, 0.5), 8)
+        : null;
+
     // Validate the character exists (avoids dangling FK on SQLite)
     const character = characterId
       ? await db.character.findUnique({ where: { id: characterId } })
@@ -77,6 +99,11 @@ export async function POST(req: NextRequest) {
         characterId,
         format,
         renderMode,
+        musicEnabled,
+        musicTrackId,
+        musicVolume,
+        musicFadeIn,
+        musicFadeOut,
         status: "draft",
       },
       include: {

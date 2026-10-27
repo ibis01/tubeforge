@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -25,6 +25,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusBadge, formatDuration, timeAgo, useVoices, VoiceSelectWithPreview } from "@/components/tubeforge/shared";
+import { MusicPickerCard, type MusicPickerValue } from "@/components/tubeforge/music-controls";
+import { CircleCheck, CircleX, Ban } from "lucide-react";
 import {
   pollVoiceover,
   pollThumbnail,
@@ -118,7 +120,16 @@ export function VideoDetailDialog({
   const [renderMode, setRenderMode] = useState<string>("kenburns");
   const [subtitles, setSubtitles] = useState(true);
   const [smartCaps, setSmartCaps] = useState(true); // ASR-synced caption cues (Phase 4)
-  const [music, setMusic] = useState(true);
+  // Per-video music overrides (null = follow Settings defaults) — PATCHed with a
+  // debounce so slider drags don't spam the API.
+  const [musicDraft, setMusicDraft] = useState<MusicPickerValue>({
+    enabled: null,
+    trackId: null,
+    volume: null,
+    fadeIn: null,
+    fadeOut: null,
+  });
+  const musicPatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [renderLabel, setRenderLabel] = useState<string | null>(null);
 
   // Narration check state (Phase 3 — ASR proofreading)
@@ -192,6 +203,13 @@ export function VideoDetailDialog({
     }
     let cancelled = false;
     setRenderMode(video.renderMode ?? "kenburns");
+    setMusicDraft({
+      enabled: video.musicEnabled ?? null,
+      trackId: video.musicTrackId ?? null,
+      volume: video.musicVolume ?? null,
+      fadeIn: video.musicFadeIn ?? null,
+      fadeOut: video.musicFadeOut ?? null,
+    });
     setRenderLabel(null);
     setVerifyReport(null);
     setVerifyRunning(false);
@@ -636,6 +654,41 @@ export function VideoDetailDialog({
     }
   };
 
+  const onMusicChange = (v: MusicPickerValue) => {
+    setMusicDraft(v);
+    if (musicPatchTimer.current) clearTimeout(musicPatchTimer.current);
+    musicPatchTimer.current = setTimeout(() => {
+      void fetch(`/api/videos/${video.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          musicEnabled: v.enabled,
+          musicTrackId: v.trackId,
+          musicVolume: v.volume,
+          musicFadeIn: v.fadeIn,
+          musicFadeOut: v.fadeOut,
+        }),
+      });
+    }, 600);
+  };
+
+  const cancelRunningJobs = async () => {
+    try {
+      const res = await fetch(`/api/videos/${video.id}/cancel`, { method: "POST" });
+      if (res.ok) {
+        const d = (await res.json()) as { cancelled: string[] };
+        toast({
+          title: "Cancel requested",
+          description: `Stopping: ${d.cancelled.join(", ")} — it stops after the current step.`,
+        });
+      } else {
+        toast({ title: "Nothing to cancel", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Cancel failed", variant: "destructive" });
+    }
+  };
+
   const startRender = async (mode: string, sceneLimit?: number) => {
     if (busy) return;
     setBusy(sceneLimit ? "preview" : "render");
@@ -644,7 +697,13 @@ export function VideoDetailDialog({
       await fetch(`/api/videos/${video.id}/render`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, subtitles, smartCaptions: smartCaps, music, sceneLimit }),
+        body: JSON.stringify({
+          mode,
+          subtitles,
+          smartCaptions: smartCaps,
+          music: musicDraft.enabled !== false, // null = follow defaults → music on
+          sceneLimit,
+        }),
       });
       await pollRender(
         video.id,
@@ -954,13 +1013,10 @@ export function VideoDetailDialog({
               ASR-synced cues
             </label>
           </div>
-          <div className="flex items-center gap-2">
-            <Switch id="music" checked={music} onCheckedChange={setMusic} disabled={Boolean(busy)} />
-            <label htmlFor="music" className="text-xs text-muted-foreground cursor-pointer">
-              Ambient music bed
-            </label>
-          </div>
         </div>
+
+        {/* Per-video soundtrack — track pin, volume, fades (debounced PATCH) */}
+        <MusicPickerCard value={musicDraft} onChange={onMusicChange} />
 
         <div className="flex flex-wrap gap-2">
           <Button
@@ -992,6 +1048,18 @@ export function VideoDetailDialog({
             )}
             Preview first scene
           </Button>
+          {(busy === "render" || busy === "preview") && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void cancelRunningJobs()}
+              className="border-red-500/30 text-red-300 hover:bg-red-500/10"
+              title="Stop after the current step — completed scenes are kept"
+            >
+              <Ban className="h-3.5 w-3.5" />
+              Cancel render
+            </Button>
+          )}
         </div>
 
         {renderDisabledReason && (
@@ -1009,6 +1077,52 @@ export function VideoDetailDialog({
           </p>
         )}
       </div>
+
+      {/* Quality-check report — measured on every full render (qc.ts) */}
+      {video.qc && (
+        <div className="rounded-xl border border-white/10 bg-white/3 p-4">
+          <div className="flex items-center justify-between gap-2 mb-2.5">
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
+              Quality check · {new Date(video.qc.checkedAt).toLocaleString()}
+            </p>
+            <Badge
+              variant="outline"
+              className={
+                video.qc.passed
+                  ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200 text-[10px]"
+                  : "border-amber-500/30 bg-amber-500/10 text-amber-200 text-[10px]"
+              }
+            >
+              {video.qc.passed ? (
+                <>
+                  <CircleCheck className="h-2.5 w-2.5 mr-1" /> Passed
+                </>
+              ) : (
+                <>
+                  <CircleX className="h-2.5 w-2.5 mr-1" />
+                  {video.qc.checks.filter((c) => !c.pass).length} flagged
+                </>
+              )}
+            </Badge>
+          </div>
+          <ul className="space-y-1.5">
+            {video.qc.checks.map((c) => (
+              <li key={c.id} className="flex items-start gap-2 text-[11px]">
+                {c.pass ? (
+                  <CircleCheck className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                ) : (
+                  <CircleX className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
+                )}
+                <div className="min-w-0">
+                  <span className="text-foreground/85">{c.label}</span>
+                  <span className="text-muted-foreground"> — {c.value}</span>
+                  {c.detail && <p className="text-muted-foreground/70 text-[10px]">{c.detail}</p>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Final video */}
       {video.hasVideo && video.videoUrl ? (

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { AppSidebar, MOBILE_NAV_ITEMS, NAV_ITEMS } from "@/components/tubeforge/app-sidebar";
+import { AuthGate } from "@/components/tubeforge/auth-gate";
 import { DashboardView } from "@/components/tubeforge/views/dashboard-view";
 import { AnalyticsView } from "@/components/tubeforge/views/analytics-view";
 import { ResearchView } from "@/components/tubeforge/views/research-view";
@@ -15,6 +16,7 @@ import { SettingsView } from "@/components/tubeforge/views/settings-view";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
 import { Menu, Plus } from "lucide-react";
+import { TubeForgeLogo, TubeForgeWordmark } from "@/components/tubeforge/logo";
 
 const VIEW_META: Record<ViewId, { title: string; subtitle: string }> = {
   dashboard: {
@@ -66,13 +68,29 @@ export default function Home() {
     window.scrollTo({ top: 0 });
   }, [view]);
 
+  // Global 401 watcher: when a session expires mid-use, every API call starts
+  // answering 401 — reload once so the AuthGate takes over and shows the lock.
+  useEffect(() => {
+    const orig = window.fetch.bind(window);
+    window.fetch = (async (...args: Parameters<typeof fetch>) => {
+      const res = await orig(...args);
+      if (res.status === 401 && !res.url.includes("/api/auth/"))
+        window.location.reload();
+      return res;
+    }) as typeof fetch;
+    return () => {
+      window.fetch = orig;
+    };
+  }, []);
+
   const handleNav = (v: ViewId) => {
     setView(v);
     setMobileNavOpen(false);
   };
 
   return (
-    <div className="min-h-screen flex bg-background">
+    <AuthGate>
+      <div className="min-h-screen flex bg-background">
       {/* Desktop sidebar */}
       <AppSidebar />
 
@@ -150,6 +168,7 @@ export default function Home() {
         </footer>
       </div>
     </div>
+    </AuthGate>
   );
 }
 
@@ -163,15 +182,8 @@ function MobileNavContent({
   return (
     <nav aria-label="Main navigation" className="p-3">
       <div className="flex items-center gap-2.5 px-3 py-4">
-        <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center shadow-lg shrink-0">
-          <svg viewBox="0 0 24 24" className="h-4.5 w-4.5 fill-white" aria-hidden="true">
-            <path d="M8 5.5v13l11-6.5-11-6.5z" />
-          </svg>
-        </div>
-        <div>
-          <p className="font-semibold leading-tight">TubeForge</p>
-          <p className="text-[11px] text-muted-foreground">Auto-Pilot Engine</p>
-        </div>
+        <TubeForgeLogo size={36} />
+        <TubeForgeWordmark />
       </div>
       <ul className="space-y-1">
         {MOBILE_NAV_ITEMS.map((item) => (

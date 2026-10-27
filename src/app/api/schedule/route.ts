@@ -20,7 +20,7 @@ const VIDEO_INCLUDE = {
   },
 } as const;
 
-type SlotRow = Prisma.ScheduleSlotGetPayload<typeof VIDEO_INCLUDE>;
+type SlotRow = Prisma.ScheduleSlotGetPayload<{ include: typeof VIDEO_INCLUDE }>;
 
 const asSlot = (s: unknown) => s as SlotWithRelations;
 

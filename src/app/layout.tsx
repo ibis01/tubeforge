@@ -24,9 +24,7 @@ export const metadata: Metadata = {
     "auto-pilot content",
     "TubeForge",
   ],
-  icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
-  },
+  // Favicon comes from src/app/icon.svg (the red-orange TubeForge mark).
 };
 
 export default function RootLayout({

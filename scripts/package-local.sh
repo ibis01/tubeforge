@@ -2,6 +2,15 @@
 # Rebuild the portable TubeForge local-run package from the live source tree.
 # Usage: bash scripts/package-local.sh
 # Output: /home/z/my-project/download/tubeforge-local.zip
+#
+# SECURITY (2025-10 hardening pass):
+#   - Does NOT ship the live database (it contains provider API keys + OAuth
+#     tokens + private records). Fresh installs run `npm run db:push` on first
+#     boot via the documented setup step instead.
+#   - Does NOT ship .env / .z-ai-config / uploads — those are runtime secrets/data.
+#   - Ships bun.lock for reproducible installs.
+#   - Ships a per-package TUBEFORGE_AUTH_SECRET so the lock screen is on by default.
+
 set -euo pipefail
 
 ROOT="/home/z/my-project"
@@ -13,18 +22,20 @@ rm -rf "$ROOT/pack"
 mkdir -p "$STAGE" "$ROOT/download"
 rm -f "$OUT"
 
-echo "==> Copying source, prisma, public, db, configs"
+echo "==> Copying source, prisma, public, configs (NO db, NO uploads, NO .env)"
 rsync -a "$ROOT/src/"          "$STAGE/src/"
 rsync -a "$ROOT/prisma/"       "$STAGE/prisma/"
 rsync -a "$ROOT/public/"       "$STAGE/public/"
-mkdir -p "$STAGE/db" "$STAGE/scripts"
-cp "$ROOT/db/custom.db" "$STAGE/db/custom.db"
+mkdir -p "$STAGE/scripts"
 # small diagnostic/test scripts only (no PNG artifacts)
 find "$ROOT/scripts" -maxdepth 1 \( -name '*.cjs' -o -name '*.mjs' \) -exec cp {} "$STAGE/scripts/" \;
 for f in next.config.ts tsconfig.json tailwind.config.ts postcss.config.mjs \
-         components.json eslint.config.mjs .gitignore; do
+         components.json eslint.config.mjs .gitignore SECURITY.md; do
   cp "$ROOT/$f" "$STAGE/" 2>/dev/null || true
 done
+
+echo "==> Copying lockfile for reproducible installs"
+cp "$ROOT/bun.lock" "$STAGE/bun.lock"
 
 echo "==> Writing portable package.json (verbatim deps, cross-platform scripts)"
 node -e '
@@ -38,7 +49,10 @@ orig.scripts = {
   build: "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
   start: "NODE_ENV=production node .next/standalone/server.js",
   lint: "eslint .",
+  typecheck: "tsc --noEmit",
   postinstall: "prisma generate",
+  setup: "prisma db push",
+  backup: "bash scripts/backup.sh",
   "db:push": "prisma db push --accept-data-loss",
   "db:generate": "prisma generate",
   "db:migrate": "prisma migrate dev",
@@ -47,9 +61,10 @@ orig.scripts = {
 fs.writeFileSync("'"$STAGE"'/package.json", JSON.stringify(orig, null, 2) + "\n");
 '
 
-echo "==> Writing .env (relative SQLite path) + SDK config template"
-printf 'DATABASE_URL=file:../db/custom.db\n' > "$STAGE/.env"
-printf 'DATABASE_URL=file:../db/custom.db\n' > "$STAGE/.env.example"
+echo "==> Writing .env (relative SQLite path + fresh auth secret)"
+SECRET=$(openssl rand -hex 32)
+printf 'DATABASE_URL=file:../db/custom.db\nTUBEFORGE_AUTH_SECRET=%s\n' "$SECRET" > "$STAGE/.env"
+printf 'DATABASE_URL=file:../db/custom.db\n# Generate your own secret: openssl rand -hex 32\nTUBEFORGE_AUTH_SECRET=\n' > "$STAGE/.env.example"
 cat > "$STAGE/.z-ai-config.example" << 'EOF'
 {
   "baseUrl": "https://api.z.ai/api/paas/v4",
@@ -58,15 +73,27 @@ cat > "$STAGE/.z-ai-config.example" << 'EOF'
 EOF
 
 echo "==> Copying SETUP.md"
-cp "$ROOT/scripts/SETUP-local.md" "$STAGE/SETUP.md"
+cp "$ROOT/scripts/SETUP-local.md" "$STAGE/SETUP.md" 2>/dev/null || true
+cp "$ROOT/scripts/backup.sh" "$STAGE/scripts/backup.sh" 2>/dev/null || true
 
 echo "==> Zipping"
 cd "$ROOT/pack"
 zip -rq "$OUT" tubeforge -x "*/.next/*" "*/node_modules/*"
 
-echo "==> Verifying"
+echo "==> Verifying: no secrets in the package"
+# The packaged .env intentionally ships a FRESH auth secret + relative db path.
+# What must NEVER be inside: the live database, uploads, or THIS machine's secrets.
+LIVE_SECRET=$(grep -o 'TUBEFORGE_AUTH_SECRET=.*' "$ROOT/.env" | cut -d= -f2)
+if unzip -p "$OUT" tubeforge/.env | grep -q "$LIVE_SECRET"; then
+  echo "!!! SECURITY CHECK FAILED — live auth secret leaked into package !!!" >&2
+  exit 1
+fi
+if unzip -l "$OUT" | grep -E "custom\.db|uploads/" | grep -v ".env.example"; then
+  echo "!!! SECURITY CHECK FAILED — live database or uploads found in package !!!" >&2
+  exit 1
+fi
+echo "secret scan OK (no live db / uploads / live secret inside — fresh secret generated)"
 unzip -t "$OUT" > /dev/null && echo "zip integrity OK"
 ls -lh "$OUT"
 unzip -l "$OUT" | tail -2
-unzip -l "$OUT" | grep -E "SETUP.md|z-ai-config|custom.db|schema.prisma|settings/ai|zai-config.ts" || true
 echo "==> DONE: $OUT"

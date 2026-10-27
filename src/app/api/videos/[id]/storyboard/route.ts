@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import { db } from "@/lib/db";
 import { generateStoryboard, generateSceneImage, serializeScenes, storyboardComplete, parseScenes } from "@/lib/tubeforge/story";
-import { startJob, isJobRunning, lastJobError } from "@/lib/tubeforge/jobs";
+import { startJob, isJobRunning, isJobCancelled, lastJobError, setJobProgress, JobCancelledError } from "@/lib/tubeforge/jobs";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -134,7 +134,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // Full storyboard
   const accepted = await startJob(id, "storyboard", async () => {
     try {
-      await generateStoryboard({ videoId: id, scenes, character: castOpts });
+      await generateStoryboard({
+        videoId: id,
+        scenes,
+        character: castOpts,
+        shouldCancel: () => isJobCancelled(id, "storyboard"),
+        onSceneDone: (i, total) =>
+          setJobProgress(id, "storyboard", i + 1, total, `Painting scene ${i + 1} of ${total}`),
+      });
 
       invalidateRenders(id);
       await db.video.update({
@@ -154,6 +161,23 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         },
       });
     } catch (err) {
+      if (err instanceof Error && err.message === "__CANCELLED__") {
+        await db.video.update({
+          where: { id },
+          data: {
+            hasStoryboard: storyboardComplete(id, scenes),
+            error: null,
+          },
+        });
+        await db.activity.create({
+          data: {
+            videoId: id,
+            stage: "storyboard",
+            message: `Storyboard cancelled — finished scenes were kept`,
+          },
+        });
+        throw new JobCancelledError();
+      }
       const message = err instanceof Error ? err.message : "Storyboard failed";
       await db.video.update({
         where: { id },

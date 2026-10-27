@@ -120,7 +120,7 @@ const server = http.createServer((req, res) => {
 async function postTest(payload) {
   const res = await fetch(`${BASE}/api/settings/ai`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(process.env.TF_API_TOKEN ? { Authorization: `Bearer ${process.env.TF_API_TOKEN}` } : {}) },
     body: JSON.stringify(payload),
   });
   return res.json();

@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { VOICES, NICHES, TONES, LENGTHS, THUMB_STYLES, CHAT_MODELS, DEFAULT_CHAT_MODEL, DEFAULT_ZAI_BASE_URL, type JobDTO, type YouTubeStatusDTO } from "@/lib/tubeforge/types";
+import { MusicLibrarySection } from "@/components/tubeforge/settings-music";
 import {
   Save,
   Loader2,
@@ -560,7 +561,7 @@ export function SettingsView() {
               </Badge>
             )}
           </div>
-          <div className="grid sm:grid-cols-2 gap-3">
+          <div className="grid sm:grid-cols-2 gap-3 [&>*]:min-w-0">
             <div className="space-y-1.5">
               <Label>API base URL</Label>
               <Input
@@ -670,7 +671,7 @@ export function SettingsView() {
 
                 {row.provider === "zai" ? (
                   cap === "chat" ? (
-                    <div className="grid sm:grid-cols-2 gap-3">
+                    <div className="grid sm:grid-cols-2 gap-3 [&>*]:min-w-0">
                       <div className="space-y-1.5">
                         <Label>Model</Label>
                         <Select
@@ -720,7 +721,7 @@ export function SettingsView() {
                   )
                 ) : (
                   <div className="space-y-3">
-                    <div className="grid sm:grid-cols-2 gap-3">
+                    <div className="grid sm:grid-cols-2 gap-3 [&>*]:min-w-0">
                       <div className="space-y-1.5">
                         <Label>API base URL</Label>
                         <Input
@@ -877,6 +878,9 @@ export function SettingsView() {
           </span>
         </div>
       </Card>
+
+      {/* Background music — licensed library, mood matching, mix defaults */}
+      <MusicLibrarySection />
 
       {/* YouTube connection (Phase 4 — OAuth upload) */}
       <Card className="glass rounded-2xl p-5 sm:p-6">
