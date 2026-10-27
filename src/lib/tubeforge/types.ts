@@ -138,19 +138,29 @@ export interface SceneDTO {
  */
 export const CHAT_MODELS = [
   {
-    id: "glm-4.5-flash",
-    label: "GLM-4.5 Flash",
-    hint: "Free — $0 per token, fast, great for scripts",
+    id: "glm-5.3-flash",
+    label: "GLM-5.3 Flash",
+    hint: "Current flash generation — native multimodal, budget tier",
+  },
+  {
+    id: "glm-5.3",
+    label: "GLM-5.3",
+    hint: "Flagship — open SOTA quality, paid",
   },
   {
     id: "glm-4.7-flash",
     label: "GLM-4.7 Flash",
-    hint: "Free — newest free generation",
+    hint: "Previous-gen flash",
+  },
+  {
+    id: "glm-4.5-flash",
+    label: "GLM-4.5 Flash",
+    hint: "Legacy — delisted from docs but still served, $0",
   },
   {
     id: "glm-4.6",
     label: "GLM-4.6",
-    hint: "Paid — deepest quality, needs credit",
+    hint: "Paid — deep quality, needs credit",
   },
   {
     id: "glm-4.5",

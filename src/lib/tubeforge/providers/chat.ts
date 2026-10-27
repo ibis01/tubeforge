@@ -63,7 +63,11 @@ async function zaiChat(req: ChatRequest, config: CapabilityConfig): Promise<stri
       { role: "assistant", content: req.system },
       { role: "user", content: req.user },
     ],
-    thinking: { type: "disabled" },
+    // GLM-4.7 / GLM-5.3 models FORCE thinking — sending "disabled" there
+    // errors with code 1210. Everything else accepts the fast direct mode.
+    thinking: /^glm-(4\.7|5\.3)/.test(model)
+      ? { type: "enabled" }
+      : { type: "disabled" },
   });
   return completion.choices[0]?.message?.content ?? "";
 }

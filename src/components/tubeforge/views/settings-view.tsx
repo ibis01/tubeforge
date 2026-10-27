@@ -117,7 +117,7 @@ export function SettingsView() {
   const [ytConnecting, setYtConnecting] = useState(false);
   const [ytCopied, setYtCopied] = useState(false);
 
-  // AI providers — global Z.ai credentials + one provider per task capability
+  // AI providers — shared AI credentials + one provider per task capability
   const [zaiCreds, setZaiCreds] = useState({
     baseUrl: DEFAULT_ZAI_BASE_URL,
     apiKey: "",
@@ -339,7 +339,7 @@ export function SettingsView() {
     if (provSaving) return;
     setProvSaving(true);
     try {
-      // 1) Global Z.ai credentials (only when the user typed something).
+      // 1) Shared AI credentials (only when the user typed something).
       if (zaiCreds.apiKey.trim() || zaiCreds.baseUrl.trim()) {
         const res = await fetch("/api/settings/ai", {
           method: "PUT",
@@ -352,7 +352,7 @@ export function SettingsView() {
         });
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
-          throw new Error(d.error ?? `Z.ai credentials: HTTP ${res.status}`);
+          throw new Error(d.error ?? `Shared credentials: HTTP ${res.status}`);
         }
       }
 
@@ -544,19 +544,19 @@ export function SettingsView() {
           </div>
         </div>
 
-        {/* Shared Z.ai credentials */}
+        {/* Shared AI credentials (built-in gateway) */}
         <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div className="min-w-0">
               <p className="text-sm font-medium flex items-center gap-1.5">
                 <KeyRound className="h-3.5 w-3.5 text-primary" />
-                Z.ai credentials
+                Shared AI credentials
                 <Badge className="bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 text-[10px]">
                   shared
                 </Badge>
               </p>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                One key powers every Z.ai task — GLM scripts, TTS voices, CogView art, CogVideoX clips
+                One account for the built-in gateway — used by every task you leave on its default provider
               </p>
             </div>
             {zaiCreds.hasKey && (
@@ -580,7 +580,7 @@ export function SettingsView() {
               <Input
                 value={zaiCreds.apiKey}
                 onChange={(e) => setZaiCreds((f) => ({ ...f, apiKey: e.target.value }))}
-                placeholder={zaiCreds.hasKey ? `saved (${zaiCreds.maskedKey}) — type to replace` : "Paste your Z.ai key"}
+                placeholder={zaiCreds.hasKey ? `saved (${zaiCreds.maskedKey}) — type to replace` : "Paste your API key"}
                 type="password"
                 className="bg-white/5 border-white/10 text-xs font-mono h-9"
               />
@@ -592,7 +592,7 @@ export function SettingsView() {
             rel="noreferrer"
             className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2 inline-flex items-center gap-0.5"
           >
-            Get a free Z.ai API key <ExternalLink className="h-2.5 w-2.5" />
+            Get a free API key <ExternalLink className="h-2.5 w-2.5" />
           </a>
         </div>
 

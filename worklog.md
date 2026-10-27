@@ -553,3 +553,20 @@ Work Log:
 
 Stage Summary:
 - The user can now run TubeForge locally: download tubeforge-local.zip → unzip → npm install → npm run setup → npm run dev → paste their own Z.ai key in Settings. Open studio by default, opt-in lock, npm run auth:reset recovery — all shipped and boot-verified from a cold extraction.
+
+---
+Task ID: provider-neutral-rebrand
+Agent: main (Z.ai)
+Task: User wants the Settings "Z.ai credentials" card to feel provider-neutral, not tied to one AI brand.
+
+Work Log:
+- settings-view.tsx: card title "Z.ai credentials" → "Shared AI credentials"; subtitle now "One account for the built-in gateway — used by every task you leave on its default provider"; placeholder "Paste your Z.ai key" → "Paste your API key"; link "Get a free Z.ai API key" → "Get a free API key" (href unchanged); error prefix + code comments neutralized. Internal Setting keys (zai.baseUrl/zai.apiKey) intentionally unchanged — zero migration, saved keys keep working.
+- types.ts: CHAT_MODELS refreshed to the 2026-10 platform lineup — added glm-5.3-flash ("Current flash generation — native multimodal, budget tier") and glm-5.3 (flagship), glm-4.5-flash hint now honestly says "Legacy — delisted from docs but still served, $0".
+- providers/chat.ts: thinking param is now model-aware — /^glm-(4\.7|5\.3)/ models get { type: "enabled" } (they FORCE thinking; disabled errors with code 1210 per docs.z.ai/guides/capabilities/thinking), all other models keep the fast { type: "disabled" }. Fixes the user's local glm-5.3-flash 1210 failure without changing sandbox 4.5-flash behavior.
+- VERIFY: bunx tsc --noEmit → exit 0.
+- PACKAGING: rebuilt download/tubeforge-local.zip (491KB, 261 files, integrity OK) with all changes baked in; copied over public/tubeforge-local.zip. Staged the 3 changed files individually at public/tubeforge/{settings-view.tsx,types.ts,chat.ts} so the user can curl-patch their local install without re-downloading the zip.
+
+Stage Summary:
+- Settings now reads brand-neutral ("Shared AI credentials", "Paste your API key") while keeping the provider names in per-task dropdowns (those are accurate identities, not branding).
+- Model dropdown matches today's platform; glm-5.3-flash is selectable directly and the 1210 thinking error is auto-avoided by chat.ts.
+- User apply path: 3 short curl commands from the preview site (settings-view.tsx → src/components/tubeforge/views/, types.ts → src/lib/tubeforge/, chat.ts → src/lib/tubeforge/providers/), then restart dev server. chat.ts overwrite supersedes the earlier manual nano step (idempotent, strictly better).
