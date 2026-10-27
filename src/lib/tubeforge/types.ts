@@ -56,7 +56,7 @@ export const RENDER_MODES = [
     id: "kenburns",
     label: "Ken Burns",
     icon: "Zap",
-    desc: "Cinematic multi-shot pans & zooms over storyboard art — camera cuts every ~3s, SFX and a ducked music bed included",
+    desc: "Smart Motion: scene-aware pans & zooms over storyboard art — focal-locked framing, camera cuts paced per scene, SFX and a ducked music bed included",
     eta: "≈ 2–5 min",
   },
   {
@@ -81,8 +81,8 @@ export const CAMERAS = [
 /**
  * Scene count per script length. Tuned for retention pacing: shorter scenes
  * mean more visual changes, more hooks and tighter narration. The render
- * engine additionally cuts every scene into ≤3s camera shots, so the on-screen
- * view changes far more often than the scene count alone implies.
+ * engine adds scene-aware Ken Burns shots on top (Smart Motion), so the
+ * on-screen view changes far more often than the scene count alone implies.
  */
 export const SCENE_COUNTS: Record<string, number> = {
   short: 8,
@@ -110,6 +110,7 @@ export interface Scene {
   hostInScene: boolean; // does the recurring host appear in this scene?
   rehook: boolean; // attention pivot — punch-zoom + sting at scene start
   sfx: string; // one of SFX_KINDS or "none"
+  focal?: string; // where the eye must stay (Smart Motion) — e.g. "upper-right"
 }
 
 export interface SceneDTO {
@@ -124,6 +125,7 @@ export interface SceneDTO {
   hostInScene: boolean;
   rehook: boolean;
   sfx: string;
+  focal: string; // focal hint ("center" when unset)
   hasImage: boolean;
   imageUrl: string | null;
   generating: boolean; // single-scene re-roll in flight
@@ -245,6 +247,11 @@ export interface VideoDTO {
   musicVolume: number | null;
   musicFadeIn: number | null;
   musicFadeOut: number | null;
+  // Smart Motion (Ken Burns) per-video overrides; null = built-in defaults
+  motionMode: string | null; // smart | zoom | pan | off
+  motionIntensity: number | null; // 0..30 (% zoom amplitude, default 12)
+  motionCurve: string | null; // smooth | linear
+  motionVary: boolean | null; // vary direction between scenes
   // Post-render quality gate (qc.ts) — parsed report or null
   qc: QcReportDTO | null;
   // Latest synced performance (Phase 5, null before the first sync)

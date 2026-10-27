@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { useVoices, VoiceSelectWithPreview } from "@/components/tubeforge/shared";
 import { MusicPickerCard, type MusicPickerValue } from "@/components/tubeforge/music-controls";
+import { MotionControlsCard, type MotionPickerValue } from "@/components/tubeforge/motion-controls";
 import {
   VOICES,
   NICHES,
@@ -141,6 +142,12 @@ export function CreateView() {
     volume: null,
     fadeIn: null,
     fadeOut: null,
+  });
+  const [motion, setMotion] = useState<MotionPickerValue>({
+    mode: null,
+    intensity: null,
+    curve: null,
+    vary: null,
   });
   const [channelId, setChannelId] = useState<string>("none");
   const [channels, setChannels] = useState<{ id: string; name: string }[]>([]);
@@ -266,9 +273,13 @@ export function CreateView() {
           musicVolume: music.volume,
           musicFadeIn: music.fadeIn,
           musicFadeOut: music.fadeOut,
+          motionMode: motion.mode,
+          motionIntensity: motion.intensity,
+          motionCurve: motion.curve,
+          motionVary: motion.vary,
         }),
       }).then((d) => d.video),
-    [topic, niche, tone, length, voice, speed, thumbStyle, channelId, characterId, format, renderMode, music]
+    [topic, niche, tone, length, voice, speed, thumbStyle, channelId, characterId, format, renderMode, music, motion]
   );
 
   const startVoiceover = useCallback(
@@ -562,6 +573,20 @@ export function CreateView() {
                 </p>
               )}
             </div>
+          )}
+
+          {isStory && (
+            <MotionControlsCard
+              value={motion}
+              onChange={setMotion}
+              compact
+              disabled={busy}
+              note={
+                renderMode === "animated"
+                  ? "Image Motion applies to Ken Burns renders — the animated mode generates real video per scene instead."
+                  : null
+              }
+            />
           )}
 
           <div className="grid grid-cols-2 gap-3">

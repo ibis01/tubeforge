@@ -110,6 +110,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         musicNiche: video.niche,
         musicTrack,
         sceneLimit,
+        motion: {
+          mode: (video.motionMode ?? "smart") as "smart" | "zoom" | "pan" | "off",
+          intensity: video.motionIntensity ?? 12,
+          curve: (video.motionCurve ?? "smooth") as "smooth" | "linear",
+          vary: video.motionVary ?? true,
+        },
+        motionContext: { tone: video.tone, niche: video.niche },
         onProgress: (current, total, label) => {
           // Cancellation checkpoint: fires between scenes/long steps.
           if (isJobCancelled(id, "render")) throw new JobCancelledError();

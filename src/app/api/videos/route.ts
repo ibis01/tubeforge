@@ -78,6 +78,20 @@ export async function POST(req: NextRequest) {
         ? Math.min(Math.max(body.musicFadeOut, 0.5), 8)
         : null;
 
+    // Smart Motion (Ken Burns) overrides (null = built-in defaults)
+    const MOTION_MODE_IDS = ["smart", "zoom", "pan", "off"];
+    const motionMode = MOTION_MODE_IDS.includes(String(body.motionMode))
+      ? String(body.motionMode)
+      : null;
+    const motionIntensity =
+      typeof body.motionIntensity === "number"
+        ? Math.round(Math.min(Math.max(body.motionIntensity, 0), 30))
+        : null;
+    const motionCurve = ["smooth", "linear"].includes(String(body.motionCurve))
+      ? String(body.motionCurve)
+      : null;
+    const motionVary = typeof body.motionVary === "boolean" ? body.motionVary : null;
+
     // Validate the character exists (avoids dangling FK on SQLite)
     const character = characterId
       ? await db.character.findUnique({ where: { id: characterId } })
@@ -104,6 +118,10 @@ export async function POST(req: NextRequest) {
         musicVolume,
         musicFadeIn,
         musicFadeOut,
+        motionMode,
+        motionIntensity,
+        motionCurve,
+        motionVary,
         status: "draft",
       },
       include: {

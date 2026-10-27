@@ -14,6 +14,7 @@ import { promisify } from "util";
 import type { Scene } from "./types";
 import { sceneImageFile } from "./story";
 import { videoDir } from "./ai";
+import { focalForScene, sanitizeMotion, type MotionSettings } from "./motion";
 
 const execFileAsync = promisify(execFile);
 
@@ -51,6 +52,22 @@ async function probeDuration(file: string): Promise<number> {
   if (!Number.isFinite(d) || d <= 0)
     throw new Error(`Could not probe duration of ${path.basename(file)}`);
   return d;
+}
+
+/** Pixel dimensions of the first video stream. */
+async function probeDims(file: string): Promise<{ w: number; h: number }> {
+  const out = await run("ffprobe", [
+    "-v", "error",
+    "-select_streams", "v:0",
+    "-show_entries", "stream=width,height",
+    "-of", "json",
+    file,
+  ]);
+  const parsed = JSON.parse(out) as { streams?: { width?: number; height?: number }[] };
+  const w = Number(parsed.streams?.[0]?.width ?? 0);
+  const h = Number(parsed.streams?.[0]?.height ?? 0);
+  if (!w || !h) throw new Error(`Could not probe dimensions of ${path.basename(file)}`);
+  return { w, h };
 }
 
 // ---------- scene selection ----------
@@ -154,6 +171,8 @@ export interface ShortRenderOptions {
   videoId: string;
   scenes: Scene[];
   sceneIndex?: number | null; // null/undefined = auto-pick
+  /** Smart Motion settings — shape the vertical crop + punch-in. */
+  motion?: MotionSettings | null;
   onProgress?: (label: string) => void;
 }
 
@@ -201,16 +220,35 @@ export async function renderShort(opts: ShortRenderOptions): Promise<ShortRender
 
   const fadeOut = Math.min(0.6, dur / 4);
 
+  // Focal-aware vertical framing: a blind center-crop of a 16:9 master into
+  // 9:16 throws away ~57% of the width — exactly where faces drift out of
+  // frame. The crop window is positioned so the scene's focal point (face /
+  // key object, same source as Smart Motion) lands at the CENTER of the
+  // vertical frame — the best crop for 16:9 is not the best crop for 9:16.
+  const motion = sanitizeMotion(opts.motion ?? null);
+  const focal = focalForScene(chosen);
+  const { w, h } = await probeDims(finalPath);
+  const cover = Math.max(1080 / w, 1920 / h);
+  const scaledW = Math.max(1080, Math.round(w * cover));
+  const scaledH = Math.max(1920, Math.round(h * cover));
+  const cropX = Math.min(Math.max(Math.round(focal.x * scaledW - 540), 0), Math.max(scaledW - 1080, 0));
+  const cropY = Math.min(Math.max(Math.round(focal.y * scaledH - 960), 0), Math.max(scaledH - 1920, 0));
+
   opts.onProgress?.(`Cutting scene ${chosen.index} vertical`);
 
-  // Punch-in: cover-fit to 9:16, upscale, then a slow creeping zoom (10%).
-  // Working at 2x target resolution keeps the zoompan sub-pixel smooth; every
-  // intermediate stays integer-sized (fractional crop w would make ffmpeg throw).
+  // Punch-in: focal-centered 9:16 cover crop, upscale, then a smooth eased
+  // creep (cosine easing like the master render; amplitude from the video's
+  // motion intensity, clamped to a Short-friendly range). Working at 2x
+  // target resolution keeps the zoompan sub-pixel smooth; every intermediate
+  // stays integer-sized (fractional crop w would make ffmpeg throw).
   const last = Math.max(Math.round(dur * FPS) - 1, 1);
+  const amp = Math.min(Math.max(motion.intensity, 0) / 100, 0.16);
+  const ease = motion.curve === "linear" ? `on/${last}` : `(0.5-0.5*cos(PI*on/${last}))`;
+  const zf = motion.intensity < 1 ? "1" : `1+${amp.toFixed(4)}*${ease}`;
   const vf =
-    `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,` +
+    `scale=${scaledW}:${scaledH},crop=1080:1920:${cropX}:${cropY},` +
     `scale=2160:3840:flags=lanczos,` +
-    `zoompan=z='min(1+0.10*on/${last},1.10)':` +
+    `zoompan=z='${zf}':` +
     `x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':d=1:s=1080x1920:fps=${FPS},` +
     `format=yuv420p,fade=t=in:st=0:d=0.4,fade=t=out:st=${(dur - fadeOut).toFixed(2)}:d=${fadeOut.toFixed(2)},` +
     `subtitles=f='${srtPath.replace(/\\/g, "/").replace(/'/g, "\\'")}':force_style='${SHORT_CAPTION_STYLE}'`;

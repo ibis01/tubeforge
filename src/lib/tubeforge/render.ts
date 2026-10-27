@@ -17,6 +17,15 @@ import { getZAI, videoDir } from "./ai";
 import { aiCall } from "./budget";
 import { ensureSfx } from "./sfx";
 import { getCapability, VIDEO_DEFAULT_MODEL } from "./providers/settings";
+import {
+  planSceneMovements,
+  sceneFilterGraph,
+  sanitizeMotion,
+  MOTION_DEFAULTS,
+  type MotionScenePlan,
+  type MotionSettings,
+  type SceneContext,
+} from "./motion";
 
 const execFileAsync = promisify(execFile);
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
@@ -25,9 +34,6 @@ const FPS = 30;
 const LEAD_SEC = 0.35; // silence before narration starts in each scene
 const TAIL_SEC = 0.85; // breathing room after narration ends
 const MIN_SEG_SEC = 2.0;
-const SHOT_SEC = 2.7; // target length of each Ken Burns shot — a visible
-// camera cut lands at least every ~3s (retention rule)
-const MAX_SHOTS = 12; // safety cap for pathologically long scenes
 const SUBTITLE_STYLE =
   "FontName=Noto Sans SC,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H64000000,BorderStyle=1,Outline=1.4,Shadow=0,Alignment=2,MarginV=30";
 /** Subtle finishing grade — a touch of contrast/saturation + soft vignette. */
@@ -51,6 +57,10 @@ export interface RenderOptions {
   musicNiche?: string; // selects the per-niche music bed profile (drone fallback)
   musicTrack?: ResolvedTrack | null; // library track — wins over the drone when set
   sceneLimit?: number; // render only the first N scenes (preview render)
+  /** Smart Motion settings (null/undefined = defaults — Smart Motion on, 12%). */
+  motion?: MotionSettings | null;
+  /** Video-level context so scene classification can read tone/niche. */
+  motionContext?: SceneContext;
   onProgress?: (current: number, total: number, label: string) => void;
 }
 
@@ -93,144 +103,9 @@ export async function probeDuration(file: string): Promise<number> {
   return d;
 }
 
-// ---------- Ken Burns (multi-shot) ----------
-
-/**
- * Per-shot camera moves. Every variant is tuned for SHORT shots (≤3s) so cuts
- * feel like a real multi-cam edit: zooms are snappy, pans sweep a wide range,
- * and each shot's framing deliberately JUMPS from the previous one.
- *
- * Amplitude matters more than frequency: forensic diffing of real renders
- * showed that a 1.04↔1.14 zoom flip (~10% FOV) is visually INVISIBLE on dark
- * or low-texture art — viewers (and detectors) read the scene as frozen.
- * Every variant below jumps at least ~35% of field-of-view across a cut
- * (wide ≈ z1.0 vs tight ≈ z1.4), which reads as a hard cut on ANY image.
- */
-function kenBurnsFilter(variant: string, totalFrames: number, zStart: number): string {
-  const last = Math.max(totalFrames - 1, 1); // avoid divide-by-zero
-  const centeredX = "iw/2-(iw/zoom)/2";
-  const centeredY = "ih/2-(ih/zoom)/2";
-  // Pans/tilts sweep 70% of the travel range (15% → 85%) — brisk at 2.7s
-  // instead of the glacial full-range drift a long scene used to get.
-  const panX = (fwd: boolean) =>
-    fwd ? "(iw-iw/zoom)*(0.15+0.7*on/" + last + ")" : "(iw-iw/zoom)*(0.85-0.7*on/" + last + ")";
-  const panY = (fwd: boolean) =>
-    fwd ? "(ih-ih/zoom)*(0.15+0.7*on/" + last + ")" : "(ih-ih/zoom)*(0.85-0.7*on/" + last + ")";
-  switch (variant) {
-    case "zoom-out":
-      return `z='1.42-0.4*on/${last}':x='${centeredX}':y='${centeredY}'`;
-    case "pan-right":
-      return `z='${zStart.toFixed(2)}':x='${panX(true)}':y='${centeredY}'`;
-    case "pan-left":
-      return `z='${zStart.toFixed(2)}':x='${panX(false)}':y='${centeredY}'`;
-    case "tilt-down":
-      return `z='${zStart.toFixed(2)}':x='${centeredX}':y='${panY(true)}'`;
-    case "tilt-up":
-      return `z='${zStart.toFixed(2)}':x='${centeredX}':y='${panY(false)}'`;
-    case "push-in":
-      return `z='1.02+0.38*on/${last}':x='${centeredX}':y='${centeredY}'`;
-    case "punch": {
-      // Rehook opener — fast attack (1.32 → 1.14 over 0.45s) then a slow
-      // drift. Reads as an impact frame the instant the scene lands.
-      const f = Math.max(Math.round(0.45 * FPS), 2);
-      return `z='if(lte(on\\,${f})\\,1.32-0.18*on/${f}\\,1.14+0.06*(on-${f})/${Math.max(last - f, 1)})':x='${centeredX}':y='${centeredY}'`;
-    }
-    case "zoom-in":
-    default:
-      return `z='1+0.4*on/${last}':x='${centeredX}':y='${centeredY}'`;
-  }
-}
-
-/** End-state zoom of a variant (used to force a framing jump at the next cut). */
-function endZoomOf(variant: string, zStart: number): number {
-  switch (variant) {
-    case "zoom-in": return 1.4;
-    case "zoom-out": return 1.02;
-    case "push-in": return 1.4;
-    case "punch": return 1.2;
-    default: return zStart; // pans/tilts hold a constant zoom
-  }
-}
-
-/**
- * Shot plan for one scene: the scene's own camera direction opens, then a
- * rotating mix of moves that never repeats back-to-back. Pans/tilts get a
- * start zoom OPPOSITE to the previous shot's end zoom (wide↔tight), so every
- * cut shows a clearly visible reframe of the same artwork.
- * Rehook scenes open with the punch move instead.
- */
-function shotSequence(camera: string, shotCount: number, rehook: boolean): { id: string; zStart: number }[] {
-  const rotation = ["zoom-in", "pan-right", "zoom-out", "tilt-down", "push-in", "pan-left", "zoom-out", "tilt-up"];
-  const first = rehook && camera !== "punch" ? "punch" : camera;
-  const isPan = (id: string) => ["pan-right", "pan-left", "tilt-down", "tilt-up"].includes(id);
-
-  /**
-   * Start zoom per variant + side of the wide↔tight flip.
-   * Pans/tilts are special: their only motion IS the pan, and pan travel is
-   * (iw - iw/zoom) — at z=1.02 that's ~2% of the frame, i.e. FROZEN. Pans
-   * therefore always start between 1.22 and 1.36, where a 2.7s sweep moves
-   * ~10-14% of the frame — clearly visible on any artwork.
-   */
-  const startZoomFor = (id: string, wantWide: boolean): number => {
-    if (isPan(id)) return wantWide ? 1.22 : 1.36;
-    return wantWide ? 1.0 : 1.38;
-  };
-
-  const shots: { id: string; zStart: number }[] = [
-    { id: first, zStart: isPan(first) ? 1.3 : 1.0 },
-  ];
-  let i = 0;
-  while (shots.length < shotCount) {
-    const next = rotation[i++ % rotation.length];
-    if (next === shots[shots.length - 1].id) continue;
-    // Wide↔tight flip: start opposite to where the previous shot ended so
-    // every cut is a ~35-40% FOV jump — a visible reframe on any artwork.
-    const prevEnd = endZoomOf(shots[shots.length - 1].id, shots[shots.length - 1].zStart);
-    shots.push({ id: next, zStart: startZoomFor(next, prevEnd <= 1.12) });
-  }
-  return shots;
-}
-
-/**
- * Build the multi-shot visual filter graph for one scene: the scene image is
- * split into N sub-streams, each trimmed to its shot range and driven by its
- * own zoompan move, then concat'd — hard camera cuts WITHOUT extra images.
- * The finishing grade runs over the whole chain.
- */
-function multiShotFilter(dur: number, scene: Scene): string {
-  const totalFrames = Math.max(Math.round(dur * FPS), 2);
-  const shotCount = Math.max(1, Math.min(MAX_SHOTS, Math.round(dur / SHOT_SEC)));
-  const variants = shotSequence(scene.camera, shotCount, scene.rehook);
-
-  // Frames per shot — the last shot absorbs the rounding remainder.
-  const per = Math.max(Math.floor(totalFrames / shotCount), 2);
-  const bounds: number[] = [];
-  for (let i = 1; i < shotCount; i++) bounds.push(Math.min(per * i, totalFrames - 1));
-
-  const parts: string[] = [
-    `[0:v]scale=3840:2160:force_original_aspect_ratio=increase,crop=3840:2160,split=${shotCount}${
-      variants.map((_, i) => `[s${i}]`).join("")
-    }`,
-  ];
-
-  let start = 0;
-  variants.forEach(({ id, zStart }, i) => {
-    const end = i < variants.length - 1 ? bounds[i] : totalFrames;
-    const frames = Math.max(end - start, 2);
-    const kb = kenBurnsFilter(id, frames, zStart);
-    parts.push(
-      `[s${i}]trim=start_frame=${start}:end_frame=${end},setpts=PTS-STARTPTS,` +
-        `zoompan=${kb}:d=1:s=1920x1080:fps=${FPS},format=yuv420p[v${i}]`
-    );
-    start = end;
-  });
-
-  parts.push(
-    `${variants.map((_, i) => `[v${i}]`).join("")}concat=n=${shotCount}:v=1:a=0[vc]`,
-    `[vc]${GRADE}[v]`
-  );
-  return parts.join(";");
-}
+// ---------- Ken Burns (Smart Motion) ----------
+// The camera plans and the ffmpeg graph live in motion.ts — the reusable,
+// unit-tested Smart Motion module. render.ts only orchestrates.
 
 // ---------- Animated (CogVideoX i2v) ----------
 
@@ -395,9 +270,11 @@ async function buildSegment(opts: {
   scene: Scene;
   dur: number;
   mode: "kenburns" | "animated";
+  motion: MotionSettings;
+  plan?: MotionScenePlan;
   outPath: string;
 }): Promise<void> {
-  const { scene, dur, mode, outPath } = opts;
+  const { scene, dur, mode, motion, plan, outPath } = opts;
   const dir = videoDir(opts.videoId);
   const wav = path.join(dir, sceneWavFile(scene.index));
   const leadMs = Math.round(LEAD_SEC * 1000);
@@ -414,7 +291,15 @@ async function buildSegment(opts: {
 
   if (mode === "kenburns") {
     const img = path.join(dir, sceneImageFile(scene.index));
-    const vChain = multiShotFilter(dur, scene);
+    // Smart Motion: scene-aware plan (from motion.ts) -> ffmpeg filter graph.
+    const vChain = sceneFilterGraph({
+      dur,
+      plan: plan ?? { sceneType: "standard", move: "Static hold", shots: [{ kind: "hold", zStart: 1, zEnd: 1, focal: { x: 0.5, y: 0.5 }, travel: 0, sec: 99 }], staticImage: true },
+      settings: motion,
+      fps: FPS,
+      aspect: "16:9",
+      grade: GRADE,
+    });
     const aChain = await sceneAudioChain(opts.videoId, scene, leadMs);
     await run("ffmpeg", [
       "-loop", "1", "-framerate", String(FPS), "-t", dur.toFixed(3), "-i", img,
@@ -622,6 +507,18 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       duration: d,
     }));
 
+    // Smart Motion — one camera plan per scene, sized to each scene's real
+    // duration (defaults to Smart Motion on when settings are absent).
+    const motion = sanitizeMotion(opts.motion ?? null);
+    const plans =
+      opts.mode === "kenburns"
+        ? planSceneMovements(scenes, motion, {
+            aspect: "16:9",
+            ctx: opts.motionContext,
+            durationsSec: durations,
+          })
+        : [];
+
     // 2) One segment per scene (visual + narration audio, exact duration).
     const segPaths: string[] = [];
     for (const [i, scene] of scenes.entries()) {
@@ -632,6 +529,8 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         scene,
         dur: durations[i],
         mode: opts.mode,
+        motion,
+        plan: plans[i],
         outPath: segPath,
       });
       segPaths.push(segPath);

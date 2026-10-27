@@ -6,6 +6,12 @@
 //   5. music ducking: bed level during speech < bed level in silence
 // Replication (not import) is acceptable because the app-level E2E in
 // test-quality-overhaul.mjs exercises the real code path end to end.
+//
+// NOTE: since the Smart Motion overhaul, render.ts no longer contains these
+// copied functions — the live Ken Burns engine is src/lib/tubeforge/motion.ts,
+// validated directly (real import, zero drift) by scripts/test-motion.ts.
+// The copies below are kept so the ffmpeg-capability checks (cuts, SFX,
+// ducking) still run standalone.
 
 import { execFile } from "child_process";
 import { promisify } from "util";

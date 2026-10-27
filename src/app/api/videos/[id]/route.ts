@@ -82,6 +82,19 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   if (typeof body.musicFadeOut === "number")
     data.musicFadeOut = Math.min(Math.max(body.musicFadeOut, 0.5), 8);
 
+  // Smart Motion (Ken Burns) overrides (null = built-in defaults)
+  if (typeof body.motionMode === "string" && ["smart", "zoom", "pan", "off"].includes(body.motionMode))
+    data.motionMode = body.motionMode;
+  if (body.motionMode === null) data.motionMode = null;
+  if (typeof body.motionIntensity === "number")
+    data.motionIntensity = Math.round(Math.min(Math.max(body.motionIntensity, 0), 30));
+  if (body.motionIntensity === null) data.motionIntensity = null;
+  if (typeof body.motionCurve === "string" && ["smooth", "linear"].includes(body.motionCurve))
+    data.motionCurve = body.motionCurve;
+  if (body.motionCurve === null) data.motionCurve = null;
+  if (typeof body.motionVary === "boolean") data.motionVary = body.motionVary;
+  if (body.motionVary === null) data.motionVary = null;
+
   // Status transitions (publish / mark ready / retry)
   if (typeof body.status === "string") {
     const allowed = ["draft", "scripted", "voiced", "ready", "published", "failed"];

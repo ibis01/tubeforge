@@ -38,9 +38,14 @@ run("Auth gate live (server must 401 anonymous API calls)", ["node", "-e", `
 if (existsSync("scripts/test-shotchain.mjs"))
   run("ffmpeg render chain (cuts, SFX, ducking, black frames)", ["node", "scripts/test-shotchain.mjs"]);
 
+if (existsSync("scripts/test-motion.ts"))
+  run("Smart Motion (scene-aware Ken Burns, focal lock, real renders)", ["bun", "scripts/test-motion.ts"]);
+
 if (full) {
   if (existsSync("scripts/test-quality-overhaul.mjs"))
     run("App E2E — quality overhaul suite", ["node", "scripts/test-quality-overhaul.mjs"]);
+  if (existsSync("scripts/test-motion-api.ts"))
+    run("App E2E — Smart Motion API (auth, PATCH round-trip, validation)", ["bun", "scripts/test-motion-api.ts"]);
   if (existsSync("scripts/test-providers.mjs"))
     run("App E2E — provider adapters", ["node", "scripts/test-providers.mjs"]);
 }

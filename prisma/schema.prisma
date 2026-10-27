@@ -88,6 +88,14 @@ model Video {
   musicFadeIn Float? // seconds
   musicFadeOut Float? // seconds
 
+  // Smart Motion (Ken Burns) per-video overrides; null = built-in defaults
+  // (smart scene-aware mode, 12% zoom intensity, smooth easing, direction
+  // variation on — see src/lib/tubeforge/motion.ts)
+  motionMode      String? // smart | zoom | pan | off
+  motionIntensity Int? // 0..30 (% zoom amplitude)
+  motionCurve     String? // smooth | linear
+  motionVary      Boolean?
+
   // Post-render quality gate — JSON report from qc.ts: streams, duration,
   // loudness, peaks, black frames, SRT sanity.
   qcReport     String?

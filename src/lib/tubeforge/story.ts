@@ -10,6 +10,7 @@ import { aiCall } from "./budget";
 import { runQualityGate } from "./quality";
 import { mergeWavs } from "./wav";
 import { CAMERAS, SCENE_COUNTS, SFX_KINDS, type Scene } from "./types";
+import { normalizeFocalToken } from "./motion";
 import { characterSceneFragment, readPortrait } from "./characters";
 import { isJobRunning } from "./jobs";
 import { chatComplete } from "./providers/chat";
@@ -50,6 +51,7 @@ export function parseScenes(json: string | null | undefined): Scene[] {
           : s.rehook && s.sfx == null
             ? "sting" // legacy rehook rows still get their attention reset
             : "none",
+        focal: normalizeFocalToken(s.focal as string | null | undefined) ?? undefined,
       }))
       .filter((s: Scene) => s.narration && s.visual);
   } catch {
@@ -77,6 +79,7 @@ export function serializeScenes(
       hostInScene: s.hostInScene,
       rehook: s.rehook,
       sfx: s.sfx,
+      focal: normalizeFocalToken(s.focal) ?? "center",
       hasImage,
       imageUrl: hasImage ? `/api/videos/${videoId}/storyboard/${s.index}` : null,
       generating: isJobRunning(`${videoId}#scene${s.index}`, "scene"),
@@ -117,6 +120,7 @@ export function normalizeScene(s: Record<string, unknown>, i: number): Scene {
     hostInScene: Boolean(s.hostInScene),
     rehook: Boolean(s.rehook),
     sfx: (SFX_KINDS as readonly string[]).includes(sfx) ? sfx : "none",
+    focal: normalizeFocalToken(s.focal as string | null | undefined) ?? undefined,
   };
 }
 
@@ -262,6 +266,7 @@ Return JSON with exactly these keys:
       "camera": "one of: zoom-in, zoom-out, pan-left, pan-right, push-in",
       "mood": "color palette + lighting mood keywords, e.g. 'teal shadows, cold moonlight, volumetric haze'",
       "caption": "punchy on-screen subtitle under 45 characters (no quotes, no emojis)",
+      "focal": "where the viewer's eye must stay while the camera moves — the subject, face or key object in the frame. One of: center, left, right, upper, lower, upper-left, upper-right, lower-left, lower-right",
       "hostInScene": ${opts.character ? "true/false — does the host appear in this scene?" : "false"},
       "rehook": true/false,
       "sfx": "whoosh|boom|riser|sting|pop|none"

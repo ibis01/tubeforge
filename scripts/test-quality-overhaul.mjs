@@ -6,7 +6,8 @@
 //   2. rehook + sfx parsed end-to-end (scene 1 forced rehook, valid sfx kinds)
 //   3. Thumbnail always matches the script: image prompt contains the
 //      story's opening-scene concept (not a generic topic card)
-//   4. Multi-shot kenburns render: camera cuts land ≤ ~3s apart, no black
+//   4. Smart Motion kenburns render: scene-aware pacing (cuts inside
+//      multi-shot scenes, full-scene holds on calm/text scenes), no black
 //      frames, punch move on the rehook scene
 //   5. SFX cue audible at scene starts (whoosh on scene 1)
 //   6. Music bed present + limiter holds (no clipping)
@@ -303,13 +304,19 @@ async function main() {
   const bf = await blackFrames(previewPath);
   ok(bf === 0, "3d. zero black frames across every shot", `${bf} black frames`);
 
-  // 4. Camera cuts ≤ ~3s apart in every scene (multi-shot engine)
+  // 4. Smart Motion (scene-aware) pacing. The spec replaced the old global
+  // "cut every ≤3s" rule: calm kinds (emotional/establishing/suspense/text)
+  // hold ONE intentional move across the whole scene, while multi-shot kinds
+  // (detail/action/standard) cut every few seconds. This preview renders
+  // scene 1 (compass-on-map → detail, 2 shots) + scene 2 (bar-chart → text
+  // kind via the hardened no-writing clause, 1 full-scene hold):
+  //   expected cuts = 1 scene-internal + 1 scene boundary = 2
+  //   expected max gap ≤ the calm hold ceiling (~8.5s)
   const cuts = await cutTimes(previewPath);
-  // scenes: 6s voice + 1.2 pad = 7.2s each → shots per scene = round(7.2/2.7)=3 → 2 cuts/scene = 4 total
-  ok(cuts.length >= 4, "4a. multi-shot cuts present (≥4 across 2 scenes)", `cuts at ${cuts.map((t) => t.toFixed(2)).join(", ")}`);
+  ok(cuts.length >= 2, "4a. scene-aware cuts present (internal + boundary)", `cuts at ${cuts.map((t) => t.toFixed(2)).join(", ")}`);
   const gaps = [0, ...cuts, dur].slice(1).map((t, i, arr) => t - [0, ...cuts, dur][i]).filter((g) => g > 0);
   const maxGap = Math.max(...gaps);
-  ok(maxGap <= 3.3, "4b. visual change at least every ~3s (max shot gap ≤ 3.3s)", `maxGap=${maxGap.toFixed(2)}s`);
+  ok(maxGap <= 8.5, "4b. calm scenes hold full-scene moves (max shot gap ≤ 8.5s)", `maxGap=${maxGap.toFixed(2)}s`);
 
   // 5. SFX on the rehook opener + mix hygiene
   const startPeak = await maxVol(previewPath, 0.05, 0.35);

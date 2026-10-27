@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select";
 import { StatusBadge, formatDuration, timeAgo, useVoices, VoiceSelectWithPreview } from "@/components/tubeforge/shared";
 import { MusicPickerCard, type MusicPickerValue } from "@/components/tubeforge/music-controls";
+import { MotionControlsCard, type MotionPickerValue } from "@/components/tubeforge/motion-controls";
 import { CircleCheck, CircleX, Ban } from "lucide-react";
 import {
   pollVoiceover,
@@ -130,6 +131,14 @@ export function VideoDetailDialog({
     fadeOut: null,
   });
   const musicPatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Per-video Smart Motion (Ken Burns) overrides — same debounced PATCH pattern.
+  const [motionDraft, setMotionDraft] = useState<MotionPickerValue>({
+    mode: null,
+    intensity: null,
+    curve: null,
+    vary: null,
+  });
+  const motionPatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [renderLabel, setRenderLabel] = useState<string | null>(null);
 
   // Narration check state (Phase 3 — ASR proofreading)
@@ -209,6 +218,12 @@ export function VideoDetailDialog({
       volume: video.musicVolume ?? null,
       fadeIn: video.musicFadeIn ?? null,
       fadeOut: video.musicFadeOut ?? null,
+    });
+    setMotionDraft({
+      mode: video.motionMode ?? null,
+      intensity: video.motionIntensity ?? null,
+      curve: video.motionCurve ?? null,
+      vary: video.motionVary ?? null,
     });
     setRenderLabel(null);
     setVerifyReport(null);
@@ -672,6 +687,23 @@ export function VideoDetailDialog({
     }, 600);
   };
 
+  const onMotionChange = (v: MotionPickerValue) => {
+    setMotionDraft(v);
+    if (motionPatchTimer.current) clearTimeout(motionPatchTimer.current);
+    motionPatchTimer.current = setTimeout(() => {
+      void fetch(`/api/videos/${video.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          motionMode: v.mode,
+          motionIntensity: v.intensity,
+          motionCurve: v.curve,
+          motionVary: v.vary,
+        }),
+      });
+    }, 600);
+  };
+
   const cancelRunningJobs = async () => {
     try {
       const res = await fetch(`/api/videos/${video.id}/cancel`, { method: "POST" });
@@ -1017,6 +1049,18 @@ export function VideoDetailDialog({
 
         {/* Per-video soundtrack — track pin, volume, fades (debounced PATCH) */}
         <MusicPickerCard value={musicDraft} onChange={onMusicChange} />
+
+        {/* Per-video Smart Motion — mode, intensity, easing, variation */}
+        <MotionControlsCard
+          value={motionDraft}
+          onChange={onMotionChange}
+          disabled={Boolean(busy)}
+          note={
+            renderMode === "animated"
+              ? "Image Motion applies to Ken Burns renders — the animated mode generates real video per scene instead."
+              : null
+          }
+        />
 
         <div className="flex flex-wrap gap-2">
           <Button

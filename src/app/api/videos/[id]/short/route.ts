@@ -56,6 +56,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         videoId: id,
         scenes,
         sceneIndex,
+        motion: {
+          mode: (video.motionMode ?? "smart") as "smart" | "zoom" | "pan" | "off",
+          intensity: video.motionIntensity ?? 12,
+          curve: (video.motionCurve ?? "smooth") as "smooth" | "linear",
+          vary: video.motionVary ?? true,
+        },
         onProgress: (label) => setJobProgress(id, "short", 1, 2, label),
       });
 
