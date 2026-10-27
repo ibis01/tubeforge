@@ -517,3 +517,23 @@ Stage Summary:
 - Ken Burns is now a core, spec-complete feature: every scene gets an intentional camera plan (not a uniform zoom), focal points from the storyboard LLM (new "focal" field) are locked in frame through every zoom and pan (proven by test, worst margin 5.7%), default 12% amplitude with smooth easing and direction variation matches the mock, and movement modes/intensity/curve/variation are user-controllable in Create and the video dialog with a live config summary.
 - The engine is one reusable module (motion.ts) consumed by both the 16:9 master renderer and the 9:16 Short cutter — no duplicated ffmpeg logic, and the test suite imports the real source so it can never drift again.
 - Smart Motion is enabled by default for Ken Burns renders; Off/None still renders static frames; quality gates (QC battery, black-frame scan) unchanged and green.
+
+---
+Task ID: auth-optin-lock
+Agent: main (Z.ai)
+Task: User blocked by forced password popup — make the lock screen OPT-IN (studio open by default; owner enables protection when they choose, from Settings).
+
+Work Log:
+- MODEL FLIP: protection is no longer forced by TUBEFORGE_AUTH_SECRET presence. Setting "auth.enabled" is the source of truth, mirrored to db/auth.lock flag file; src/middleware.ts now nodejs runtime and hot-checks the flag per request (existsSync is microsecond-scale — no cache, so toggling bites the very next call; a 1.5s TTL cache version failed the live suite and was removed). Secret still required to SIGN sessions; removing flag file or secret re-opens the studio instantly.
+- API: new POST /api/auth/lock ({enabled:true,password} first-enable creates the password, re-enable demands the existing one so a LAN stranger cannot claim a configured studio; {enabled:false,clearPassword?} reopens + optionally forgets the hash; the enabling browser always gets a fresh session cookie — can't lock yourself out of the tab you enabled from). /api/auth/status now reports gateEnabled from the opt-in state.
+- UI: AuthGate renders children directly when gateEnabled=false (no popup, no splash beyond the brief checking state) and broadcasts tf-gate events; app-sidebar listens and hides "Sign out" while the studio is open. NEW security-card.tsx ("Studio access" in Settings, after Auto-Pilot): switch, inline create/confirm password form, toast feedback, `bun run auth:reset` recovery hint.
+- RECOVERY: scripts/auth-reset.ts (bun:sqlite; resolves DB from DATABASE_URL; --purge also deletes the password hash) + package.json "auth:reset". First draft had TS-in-.mjs and a Setting.updatedAt NOT NULL miss — both fixed.
+- TESTS: NEW scripts/test-auth-optin.ts (11 live checks: open by default, first-enable, instant 401 on anon, wrong-pw 401, session accepted, re-enable-without-pw 400, disable+clearPassword restores clean state; respects an owner-configured lock without touching it) wired into verify.mjs; test-motion-api.ts now lock-aware (temporarily enables the lock for its 401 check, restores state after, +1 check).
+- DOCS: SECURITY.md rewritten for the opt-in model (protection matrix + checklist + recovery).
+- STATE: ran auth-reset --purge — user's server is lock-off, no password stored (they choose their own when enabling).
+- VERIFY: lint 0 errors, tsc clean, auth-optin 11/11, shotchain 11/11, Smart Motion 55/55, quality-overhaul 47/47, motion-api 16/16, providers 55/55. Browser E2E: fresh visit → straight to Dashboard (no popup, zero console/page errors); Settings toggle on → toast + Sign out reappears; second browser session → lock screen; owner reload stays open (session); toggle off → popup gone for everyone. Commit 1509256.
+
+Stage Summary:
+- The password page is now the owner's choice, not a roadblock: the studio is open by default, and Settings → Studio access turns protection on/off instantly with a guided password flow.
+- Enforcement, sessions, rate limiting, CSRF and Bearer tokens are unchanged while the lock is ON — only the default posture changed (locked-out → opt-in).
+- Recovery exists at three levels: the enabling tab keeps its session, `bun run auth:reset` reopens the studio, and `--purge` forgets a lost password.
