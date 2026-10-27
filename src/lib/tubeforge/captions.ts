@@ -109,13 +109,26 @@ function tokenizeKeepAll(text: string): string[] {
 const MAX_CHUNK_WORDS = 9;
 const MIN_CHUNK_WORDS = 2;
 
+/**
+ * Protect number tokens from sentence splitting BEFORE the regex runs:
+ * "$6.5 million", "3.14", "12,440" must never be cut at their decimal point
+ * (the old splitter produced caption cues like "$6." / "5 million each.").
+ * Decimal points are swapped to a placeholder and restored after splitting.
+ */
+function protectNumbers(text: string): { guarded: string; restore: (s: string) => string } {
+  const DOT = "\u0001";
+  const guarded = text.replace(/(\d)\.(\d)/g, "$1" + DOT + "$2");
+  return { guarded, restore: (s) => s.replace(new RegExp(DOT, "g"), ".") };
+}
+
 /** Split narration into short, readable caption chunks at natural breaks. */
 export function captionChunks(narration: string): CaptionChunk[] {
-  const sentences =
-    narration.match(/[^.!?]+[.!?]+["')\]]*\s*/g) ?? [narration];
+  const { guarded, restore } = protectNumbers(narration);
+  const sentences = guarded.match(/[^.!?]+[.!?]+["')\]]*\s*/g) ?? [guarded];
   const pieces: string[] = [];
   for (const sentence of sentences) {
-    const words = sentence.trim().split(/\s+/).filter(Boolean);
+    const restored = restore(sentence);
+    const words = restored.trim().split(/\s+/).filter(Boolean);
     if (words.length <= MAX_CHUNK_WORDS) {
       pieces.push(words.join(" "));
       continue;

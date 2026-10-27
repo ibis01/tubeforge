@@ -21,7 +21,7 @@ import { db } from "@/lib/db";
 import { parseJsonLoose, videoDir } from "./ai";
 import { aiCall } from "./budget";
 import { chatComplete } from "./providers/chat";
-import { sceneWavFile, normalizeScene } from "./story";
+import { sceneWavFile, normalizeScene, applyRetentionRules, isRehookPosition } from "./story";
 import { SCENE_COUNTS, type Scene } from "./types";
 
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
@@ -77,8 +77,8 @@ function mechanicalSplit(script: string, n: number): Scene[] {
     mood: "",
     caption: "",
     hostInScene: false,
-    rehook: i === 0,
-    sfx: i === 0 ? "sting" : "none",
+    rehook: isRehookPosition(i),
+    sfx: i === 0 ? "boom" : isRehookPosition(i) ? "sting" : "none",
   }));
 }
 
@@ -104,16 +104,16 @@ STRICT RULES for "narration":
 - Copy the script text VERBATIM — word for word, in order. No rewriting, no summarizing, no skipping.
 - Together your scenes must cover the ENTIRE script from first sentence to last.
 - Break at natural story beats; keep scenes roughly balanced in length.
-- Scene 1 is always "rehook": true (it opens the video). Mark 1-2 later scenes that begin with a reversal, question or shocking claim as "rehook": true too.
+- Scene 1 is always "rehook": true (it opens the video). Later rehook scenes are every 3rd scene — flag "rehook": true ONLY on those, and give each of them a matching "sfx" cue.
 
 For each scene also write art direction:
 - "title": short scene label (2-4 words)
-- "visual": detailed image prompt (main subject, setting, action, composition, time of day — NO camera or lighting words)
+- "visual": detailed image prompt (main subject, setting, action, composition, time of day — NO camera or lighting words). NEVER ask for charts, graphs, formulas, floating numbers, letters, documents or UI screens — image models render those as garbled gibberish; express the idea with physical objects and people. NEVER describe transformations ("aging", "dissolving") — paint one frozen moment.
 - "camera": one of: zoom-in, zoom-out, pan-left, pan-right, push-in
 - "mood": color palette + lighting keywords, e.g. "teal shadows, cold moonlight, volumetric haze"
 - "caption": punchy on-screen subtitle under 45 characters
 - "hostInScene": false
-- "sfx": one of "whoosh" (transitions), "boom" (reveals), "riser" (building tension), "sting" (dramatic hits), "pop" (light beats) — pick what matches the scene, or "none"
+- "sfx": one of "boom" (reveals/impacts), "sting" (dramatic hits), "riser" (tension), "whoosh" (transitions) — RESERVED for rehook scenes; "none" on every other scene
 
 Return JSON: { "scenes": [ { "title", "narration", "visual", "camera", "mood", "caption", "hostInScene", "rehook", "sfx" } ] }
 
@@ -124,9 +124,14 @@ ${opts.script}`,
   const parsed = parseJsonLoose(raw);
   const rawScenes = Array.isArray(parsed.scenes) ? parsed.scenes : [];
 
-  return rawScenes
-    .map((s: Record<string, unknown>, i: number) => normalizeScene(s, i))
-    .filter((s: Scene) => s.narration);
+  // Same deterministic retention map as fresh story scripts: rehooks on
+  // scene 1 + every 3rd, SFX reserved for those beats, notation spoken,
+  // visuals hardened against image-model gibberish.
+  return applyRetentionRules(
+    rawScenes
+      .map((s: Record<string, unknown>, i: number) => normalizeScene(s, i))
+      .filter((s: Scene) => s.narration)
+  );
 }
 
 // ---------- 2) Voiceover cutting ----------
