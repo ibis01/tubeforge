@@ -27,7 +27,7 @@ rm -f "$OUT"
 echo "==> Copying source, prisma, public, configs (NO db, NO uploads, NO .env)"
 rsync -a "$ROOT/src/"          "$STAGE/src/"
 rsync -a "$ROOT/prisma/"       "$STAGE/prisma/"
-rsync -a "$ROOT/public/"       "$STAGE/public/"
+rsync -a --exclude=tubeforge-local.zip "$ROOT/public/" "$STAGE/public/"
 mkdir -p "$STAGE/scripts"
 # Ship only the runtime helpers a local owner needs (backup + lock recovery).
 # Test/verify suites stay out — they assume bun + the sandbox environment.
