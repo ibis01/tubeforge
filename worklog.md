@@ -619,3 +619,16 @@ Work Log:
 
 Stage Summary:
 - No code changes needed — tunnel tooling was working; user typed the example URL instead of the script-assigned one. Awaiting user confirmation that the real https://<words>.trycloudflare.com URL loads their dashboard.
+
+---
+Task ID: go-public-eaddrinuse
+Agent: main (Z.ai)
+Task: User hit EADDRINUSE when running `npm run dev` on local ~/tubeforge.
+
+Work Log:
+- Diagnosed: EADDRINUSE on port 3000 = their dev server was already running from earlier — not a failure. Advised: verify with `curl -s localhost:3000/api/auth/status`, then check tunnel with `pgrep -af cloudflared`; restart tunnel via `bash ~/tf-go-public.sh` only if pgrep prints nothing.
+- Gave clean-restart sequence for when a fresh app start is genuinely wanted: `fuser -k 3000/tcp` then `cd ~/tubeforge && npm run dev`, with note that the tunnel 502s while the app is down.
+- Repeated lock-screen reminder (still OFF on user's local studio).
+
+Stage Summary:
+- Guidance only. State: user's local app is (almost certainly) already up on :3000; tunnel status unknown until user runs pgrep / the script again.
