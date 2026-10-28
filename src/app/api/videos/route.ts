@@ -5,7 +5,10 @@ import { latestStatsMap } from "@/lib/tubeforge/analytics";
 import { generateSceneScriptPackage } from "@/lib/tubeforge/story";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
 import { FORMATS, RENDER_MODES, type VideoDTO } from "@/lib/tubeforge/types";
+import { TRANSITIONS, sanitizeTransitionDuration } from "@/lib/tubeforge/transitions";
 import { errorText } from "@/lib/tubeforge/redact";
+
+const TRANSITION_IDS = new Set<string>(TRANSITIONS.map((t) => t.id));
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -93,6 +96,15 @@ export async function POST(req: NextRequest) {
       : null;
     const motionVary = typeof body.motionVary === "boolean" ? body.motionVary : null;
 
+    // Scene transition overrides (null = built-in default: crossfade 0.5s)
+    const transitionStyle = TRANSITION_IDS.has(String(body.transitionStyle))
+      ? String(body.transitionStyle)
+      : null;
+    const transitionDuration =
+      typeof body.transitionDuration === "number"
+        ? sanitizeTransitionDuration(body.transitionDuration)
+        : null;
+
     // Validate the character exists (avoids dangling FK on SQLite)
     const character = characterId
       ? await db.character.findUnique({ where: { id: characterId } })
@@ -123,6 +135,8 @@ export async function POST(req: NextRequest) {
         motionIntensity,
         motionCurve,
         motionVary,
+        transitionStyle,
+        transitionDuration,
         status: "draft",
       },
       include: {

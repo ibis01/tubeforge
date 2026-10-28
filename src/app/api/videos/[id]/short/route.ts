@@ -63,6 +63,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           curve: (video.motionCurve ?? "smooth") as "smooth" | "linear",
           vary: video.motionVary ?? true,
         },
+        transition: { style: video.transitionStyle, durationSec: video.transitionDuration },
         onProgress: (label) => setJobProgress(id, "short", 1, 2, label),
       });
 

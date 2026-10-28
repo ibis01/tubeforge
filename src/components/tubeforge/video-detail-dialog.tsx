@@ -27,7 +27,9 @@ import {
 import { StatusBadge, formatDuration, timeAgo, useVoices, VoiceSelectWithPreview } from "@/components/tubeforge/shared";
 import { MusicPickerCard, type MusicPickerValue } from "@/components/tubeforge/music-controls";
 import { MotionControlsCard, type MotionPickerValue } from "@/components/tubeforge/motion-controls";
-import { CircleCheck, CircleX, Ban } from "lucide-react";
+import { TransitionControlsCard, type TransitionPickerValue } from "@/components/tubeforge/transition-controls";
+import { SceneEditorDialog } from "@/components/tubeforge/scene-editor";
+import { CircleCheck, CircleX, Ban, Brush } from "lucide-react";
 import {
   pollVoiceover,
   pollThumbnail,
@@ -139,6 +141,14 @@ export function VideoDetailDialog({
     vary: null,
   });
   const motionPatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Per-video scene-transition overrides — same debounced PATCH pattern.
+  const [transitionDraft, setTransitionDraft] = useState<TransitionPickerValue>({
+    style: null,
+    durationSec: null,
+  });
+  const transitionPatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Scene Studio — which scene's editor dialog is open (null = closed).
+  const [editingScene, setEditingScene] = useState<number | null>(null);
   const [renderLabel, setRenderLabel] = useState<string | null>(null);
 
   // Narration check state (Phase 3 — ASR proofreading)
@@ -225,6 +235,11 @@ export function VideoDetailDialog({
       curve: video.motionCurve ?? null,
       vary: video.motionVary ?? null,
     });
+    setTransitionDraft({
+      style: video.transitionStyle ?? null,
+      durationSec: video.transitionDuration ?? null,
+    });
+    setEditingScene(null);
     setRenderLabel(null);
     setVerifyReport(null);
     setVerifyRunning(false);
@@ -704,6 +719,21 @@ export function VideoDetailDialog({
     }, 600);
   };
 
+  const onTransitionChange = (v: TransitionPickerValue) => {
+    setTransitionDraft(v);
+    if (transitionPatchTimer.current) clearTimeout(transitionPatchTimer.current);
+    transitionPatchTimer.current = setTimeout(() => {
+      void fetch(`/api/videos/${video.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transitionStyle: v.style,
+          transitionDuration: v.durationSec,
+        }),
+      });
+    }, 600);
+  };
+
   const cancelRunningJobs = async () => {
     try {
       const res = await fetch(`/api/videos/${video.id}/cancel`, { method: "POST" });
@@ -956,22 +986,35 @@ export function VideoDetailDialog({
                     </Badge>
                   )}
                 </div>
-                {s.hasImage && (
+                <div className="flex items-center gap-1">
                   <Button
                     variant="ghost"
                     size="sm"
                     disabled={Boolean(busy) || s.generating}
-                    onClick={() => regenScene(s.index, s.title)}
+                    onClick={() => setEditingScene(s.index)}
                     className="h-7 text-[11px] text-muted-foreground hover:text-foreground hover:bg-white/6 w-fit px-2"
+                    title="Scene Studio — style, prompt, AI edit, or upload your own art"
                   >
-                    {busy === `scene-${s.index}` || s.generating ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <RefreshCw className="h-3 w-3" />
-                    )}
-                    Re-roll scene
+                    <Brush className="h-3 w-3" />
+                    Edit scene
                   </Button>
-                )}
+                  {s.hasImage && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={Boolean(busy) || s.generating}
+                      onClick={() => regenScene(s.index, s.title)}
+                      className="h-7 text-[11px] text-muted-foreground hover:text-foreground hover:bg-white/6 w-fit px-2"
+                    >
+                      {busy === `scene-${s.index}` || s.generating ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-3 w-3" />
+                      )}
+                      Re-roll
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
           ))}
@@ -1061,6 +1104,9 @@ export function VideoDetailDialog({
               : null
           }
         />
+
+        {/* Per-video scene transitions — style + blend length (debounced PATCH) */}
+        <TransitionControlsCard value={transitionDraft} onChange={onTransitionChange} disabled={Boolean(busy)} />
 
         <div className="flex flex-wrap gap-2">
           <Button
@@ -2190,6 +2236,20 @@ export function VideoDetailDialog({
           {footer}
         </div>
       </DialogContent>
+
+      {/* Scene Studio — per-scene art editing (style / prompt / AI edit / upload) */}
+      <SceneEditorDialog
+        videoId={video.id}
+        scene={scenes.find((s) => s.index === editingScene) ?? null}
+        open={editingScene !== null}
+        onOpenChange={(o) => {
+          if (!o) setEditingScene(null);
+        }}
+        onUpdated={() => {
+          void reloadScenes(video.id);
+          bumpRefresh();
+        }}
+      />
     </Dialog>
   );
 }

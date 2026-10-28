@@ -178,9 +178,20 @@ interface OriginalTrackDef {
   lowpassHz: number;
   /** Detune between L/R channels in cents — stereo width via slow beating. */
   detuneCents: number;
+  /**
+   * Optional melodic layer — a step-sequenced arpeggio over the pad. Notes
+   * play in fixed slots (slot i at phase i·stepSec of a notes.length·stepSec
+   * cycle, which must divide 60 for a seamless loop), each windowed by a
+   * triangular envelope so steps fade in/out instead of clicking.
+   */
+  arp?: {
+    notes: [freq: number, gain: number][];
+    stepSec: number; // slot length (one note per slot)
+  };
 }
 
-const ORIGINAL_LIBRARY: OriginalTrackDef[] = [
+/** The in-app original bed catalog. Exported read-only for verification tooling. */
+export const ORIGINAL_LIBRARY: OriginalTrackDef[] = [
   {
     slug: "sunrise-drive", name: "Sunrise Drive", moods: ["motivation", "uplifting", "documentary"], genre: "Ambient",
     partials: [[55, 0.05], [110.4, 0.034], [164.8, 0.02], [220.5, 0.012]],
@@ -231,15 +242,59 @@ const ORIGINAL_LIBRARY: OriginalTrackDef[] = [
     partials: [[55, 0.05], [82.4, 0.03], [110, 0.018], [164.8, 0.01]],
     moveRatio: 1.26, cycleSec: 20, lfoCycles60: 4, lowpassHz: 1000, detuneCents: 3,
   },
+  // ---- Musical layer (v2): arpeggio beds with real melodic movement ----
+  {
+    slug: "momentum-run", name: "Momentum Run", moods: ["motivation", "uplifting", "documentary"], genre: "Ambient",
+    // Uplifting A-minor pentatonic climb over the warm Sunrise pad.
+    partials: [[55, 0.045], [110.4, 0.03], [164.8, 0.018]],
+    moveRatio: 1.26, cycleSec: 20, lfoCycles60: 4, lowpassHz: 1400, detuneCents: 3,
+    arp: { notes: [[220, 0.020], [261.6, 0.018], [329.6, 0.016], [440, 0.013], [523.2, 0.011], [440, 0.013], [329.6, 0.016], [261.6, 0.018]], stepSec: 0.5 },
+  },
+  {
+    slug: "neon-pulse", name: "Neon Pulse", moods: ["technology", "clean", "documentary"], genre: "Electronic",
+    // Minimal 8th-note pulse — a heartbeat for tech explainers.
+    partials: [[58.3, 0.045], [116.6, 0.028], [174.7, 0.016]],
+    moveRatio: 1.26, cycleSec: 15, lfoCycles60: 5, lowpassHz: 1300, detuneCents: 2.5,
+    arp: { notes: [[110, 0.018], [110, 0.013], [146.8, 0.015], [110, 0.013], [164.8, 0.013], [110, 0.013], [146.8, 0.015], [196, 0.011]], stepSec: 0.5 },
+  },
+  {
+    slug: "masked-waltz", name: "Masked Waltz", moods: ["mysteries", "dark", "documentary"], genre: "Cinematic",
+    // Dark F#-minor waltz — three slow beats per bar, unease with grace.
+    partials: [[46.2, 0.05], [69.3, 0.032], [92.6, 0.018]],
+    moveRatio: 1.19, cycleSec: 30, lfoCycles60: 3, lowpassHz: 1100, detuneCents: 2,
+    arp: { notes: [[92.5, 0.016], [138.6, 0.013], [185, 0.011], [110, 0.014], [164.8, 0.011], [207.7, 0.01]], stepSec: 1 },
+  },
+  {
+    slug: "starfield-waltz", name: "Starfield Waltz", moods: ["space", "airy", "documentary"], genre: "Ambient",
+    // High airy arpeggio — orbital, weightless, gently sparkling.
+    partials: [[55.0, 0.045], [82.5, 0.028], [110.0, 0.02]],
+    moveRatio: 1.5, cycleSec: 30, lfoCycles60: 3, lowpassHz: 1500, detuneCents: 2,
+    arp: { notes: [[164.8, 0.014], [220, 0.013], [261.6, 0.011], [196, 0.013], [246.9, 0.011], [329.6, 0.01]], stepSec: 1 },
+  },
+  {
+    slug: "market-rhythm", name: "Market Rhythm", moods: ["finance", "minimal", "documentary"], genre: "Minimal",
+    // Spare four-beat pulse — steady, businesslike, never busy.
+    partials: [[49.0, 0.045], [98.1, 0.028], [147.0, 0.016]],
+    moveRatio: 1.25, cycleSec: 20, lfoCycles60: 3, lowpassHz: 1200, detuneCents: 2.5,
+    arp: { notes: [[98, 0.016], [98, 0.011], [130.8, 0.013], [116.5, 0.011]], stepSec: 1 },
+  },
+  {
+    slug: "storybook-morning", name: "Storybook Morning", moods: ["funfacts", "bright", "documentary"], genre: "Ambient",
+    // Bright plucky C-major run — curious, light-footed, friendly.
+    partials: [[65.4, 0.045], [130.8, 0.03], [196.2, 0.02]],
+    moveRatio: 1.2, cycleSec: 15, lfoCycles60: 6, lowpassHz: 1500, detuneCents: 3.5,
+    arp: { notes: [[261.6, 0.016], [329.6, 0.014], [392, 0.013], [523.2, 0.011], [587.3, 0.01], [523.2, 0.011], [392, 0.013], [329.6, 0.014]], stepSec: 0.5 },
+  },
 ];
 
 /**
  * Build one stereo expression: two chord stacks (A, B) blended with a smooth
- * cos window, breathing LFO, and a slightly detuned right channel for width.
- * All periods are quantized to divisors of the file length so `-stream_loop`
- * loops without a seam.
+ * cos window, breathing LFO, an optional step-sequenced arpeggio, and a
+ * slightly detuned right channel for width. All periods are quantized to
+ * divisors of the file length so `-stream_loop` loops without a seam.
+ * Exported for offline/CI verification of the aevalsrc graphs.
  */
-function bedExpression(def: OriginalTrackDef): string {
+export function bedExpression(def: OriginalTrackDef): string {
   const stack = (ratio: number, detuneCents: number) =>
     def.partials
       .map(([f, g]) => `${g.toFixed(4)}*sin(2*PI*${(f * ratio * Math.pow(2, detuneCents / 1200)).toFixed(3)}*t)`)
@@ -248,8 +303,29 @@ function bedExpression(def: OriginalTrackDef): string {
   const cycleRate = (1 / def.cycleSec).toFixed(5);
   const breath = `(0.82+0.18*sin(2*PI*${lfoRate}*t))`;
   const blend = `(0.5-0.5*cos(2*PI*${cycleRate}*t))`;
-  const left = `((${stack(1, 0)})*(1-${blend})+(${stack(def.moveRatio, 0)})*${blend})*${breath}`;
-  const right = `((${stack(1, def.detuneCents)})*(1-${blend})+(${stack(def.moveRatio, def.detuneCents)})*${blend})*${breath}`;
+
+  // Arpeggio: note i lives in slot i of a cycle = N·stepSec (must divide 60).
+  // Each slot gets a triangular window centred in the slot — a soft pluck
+  // that rises and falls inside its own step, so steps never click and
+  // neighbours never overlap. mod(t-P, CYC) wraps the phase; abs() distance
+  // from the slot centre gives the envelope.
+  const arpLayer = (detuneCents: number): string => {
+    const arp = def.arp;
+    if (!arp) return "0";
+    const n = arp.notes.length;
+    const cyc = (n * arp.stepSec).toFixed(3);
+    const half = (arp.stepSec / 2).toFixed(3);
+    return arp.notes
+      .map(([f, g], i) => {
+        const phase = (i * arp.stepSec).toFixed(3);
+        const freq = (f * Math.pow(2, detuneCents / 1200)).toFixed(3);
+        return `${g.toFixed(4)}*max(0,1-abs(mod(t-${phase},${cyc})-${half})/${half})*sin(2*PI*${freq}*t)`;
+      })
+      .join("+");
+  };
+
+  const left = `((${stack(1, 0)}+${arpLayer(0)})*(1-${blend})+(${stack(def.moveRatio, 0)}+${arpLayer(0)})*${blend})*${breath}`;
+  const right = `((${stack(1, def.detuneCents)}+${arpLayer(def.detuneCents)})*(1-${blend})+(${stack(def.moveRatio, def.detuneCents)}+${arpLayer(def.detuneCents)})*${blend})*${breath}`;
   return `${left}|${right}`;
 }
 

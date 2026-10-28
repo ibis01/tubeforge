@@ -4,7 +4,10 @@
 //   • stock     — real Pexels/Pixabay footage per matched scene, Smart Motion
 //                 art for the rest (the hybrid)
 //   • animated  — every scene animated via CogVideoX image-to-video (~4 min/scene)
-// Pipeline: per-scene segments (video+audio) -> concat -> subtitles/music pass.
+// Pipeline: per-scene segments (video+audio) -> transitions/concat ->
+// subtitles/music pass. "cut" stitches with the stream-copy concat demuxer;
+// any other transition (src/lib/tubeforge/transitions.ts) runs one chained
+// xfade/acrossfade pass so scenes blend instead of snapping.
 // All commands run via execFile (no shell) so filter strings need only
 // ffmpeg-internal quoting, never shell quoting.
 
@@ -28,6 +31,12 @@ import {
   type MotionSettings,
   type SceneContext,
 } from "./motion";
+import {
+  sanitizeTransition,
+  buildTransitionGraph,
+  shiftSegmentsForBlend,
+  type TransitionSettings,
+} from "./transitions";
 
 const execFileAsync = promisify(execFile);
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
@@ -61,6 +70,8 @@ export interface RenderOptions {
   sceneLimit?: number; // render only the first N scenes (preview render)
   /** Smart Motion settings (null/undefined = defaults — Smart Motion on, 12%). */
   motion?: MotionSettings | null;
+  /** Scene transitions (undefined = built-in default — crossfade 0.5s). */
+  transition?: TransitionSettings | null;
   /** Video-level context so scene classification can read tone/niche. */
   motionContext?: SceneContext;
   onProgress?: (current: number, total: number, label: string) => void;
@@ -378,6 +389,41 @@ async function concatSegments(segPaths: string[], outPath: string): Promise<void
 }
 
 /**
+ * Stitch segments with real transitions: one chained xfade (video) +
+ * acrossfade (audio) pass over every segment. Costs a full re-encode (the
+ * price of blending), encoded with the same settings the segments use so
+ * downstream passes (subtitles/music, Shorts cutter) see identical streams.
+ * Falls back to the stream-copy concat for "cut" or single-segment renders.
+ */
+async function stitchSegments(opts: {
+  segPaths: string[];
+  durationsSec: number[];
+  transition: TransitionSettings;
+  outPath: string;
+}): Promise<void> {
+  const graph = buildTransitionGraph(
+    opts.durationsSec,
+    opts.transition.style,
+    opts.transition.durationSec
+  );
+  if (!graph) {
+    await concatSegments(opts.segPaths, opts.outPath);
+    return;
+  }
+  const args: string[] = [];
+  for (const p of opts.segPaths) args.push("-i", p);
+  args.push(
+    "-filter_complex", `${graph.video};${graph.audio}`,
+    "-map", "[v]", "-map", "[a]",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+    "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+    "-y", opts.outPath
+  );
+  await run("ffmpeg", args);
+}
+
+/**
  * Final pass — burn subtitles and/or lay a soft ambient music bed under the
  * narration, with faststart for instant web playback. Skips re-encoding when
  * neither effect is requested.
@@ -570,12 +616,26 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       segPaths.push(segPath);
     }
 
-    // 3) Concat into the base video.
+    // 3) Stitch into the base video — blended transitions or stream-copy cuts.
     report(scenes.length, "Stitching scenes");
+    const trans = sanitizeTransition(opts.transition);
     const basePath = path.join(tmpDir, "base.mp4");
-    await concatSegments(segPaths, basePath);
+    await stitchSegments({
+      segPaths,
+      durationsSec: durations,
+      transition: trans,
+      outPath: basePath,
+    });
 
     // 4) Subtitles + music, then move into place.
+    // Captions must live on the BLENDED timeline: each boundary pulls every
+    // later scene d seconds earlier, so unshifted cues would drift late and
+    // run past the end of the shorter video.
+    const blended =
+      trans.style === "cut" || scenes.length < 2
+        ? segments
+        : shiftSegmentsForBlend(segments, trans.durationSec);
+
     let srtPath: string | null = null;
     if (opts.burnSubtitles) {
       srtPath = path.join(tmpDir, "captions.srt");
@@ -586,7 +646,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
           const smart = await buildSmartSrt({
             videoId: opts.videoId,
             scenes,
-            segments,
+            segments: blended,
             asr: true,
             onProgress: (label) => opts.onProgress?.(scenes.length + 1, scenes.length + 1, label),
           });
@@ -596,10 +656,10 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
           );
         } catch (err) {
           console.warn("[render] smart captions failed — falling back to scene captions:", err);
-          fs.writeFileSync(srtPath, buildSrtFromSegments(scenes, segments));
+          fs.writeFileSync(srtPath, buildSrtFromSegments(scenes, blended));
         }
       } else {
-        fs.writeFileSync(srtPath, buildSrtFromSegments(scenes, segments));
+        fs.writeFileSync(srtPath, buildSrtFromSegments(scenes, blended));
       }
     }
     report(scenes.length, "Adding captions & music");
@@ -620,7 +680,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       const exportSrt = path.join(dir, "subtitles.srt");
       if (opts.burnSubtitles && srtPath && fs.existsSync(srtPath))
         fs.copyFileSync(srtPath, exportSrt);
-      else fs.writeFileSync(exportSrt, buildSrtFromSegments(scenes, segments));
+      else fs.writeFileSync(exportSrt, buildSrtFromSegments(scenes, blended));
     }
 
     const durationSec = await probeDuration(outPath);

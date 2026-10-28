@@ -15,6 +15,7 @@ import type { Scene } from "./types";
 import { sceneImageFile } from "./story";
 import { videoDir } from "./ai";
 import { focalForScene, sanitizeMotion, type MotionSettings } from "./motion";
+import { sanitizeTransition } from "./transitions";
 
 const execFileAsync = promisify(execFile);
 
@@ -99,10 +100,15 @@ export function pickBestScene(scenes: Scene[]): Scene | null {
   return best;
 }
 
-/** On the final.mp4 timeline, scene N occupies [start, start + dur). */
+/** On the final.mp4 timeline, scene N occupies [start, start + dur).
+ *  transitionLossSec: when the master was stitched with blended transitions,
+ *  each boundary before a scene pulls its content that much earlier — scene
+ *  starts shift by −i·loss and non-final scenes lose the blend window at
+ *  their tail so cuts stay inside clean content. */
 export function sceneTimeline(
   scenes: Scene[],
-  wavDurations: number[]
+  wavDurations: number[],
+  transitionLossSec = 0
 ): { scene: Scene; start: number; duration: number }[] {
   // Must mirror render.ts segment math exactly.
   const LEAD_SEC = 0.35;
@@ -115,7 +121,14 @@ export function sceneTimeline(
 
   let start = 0;
   return scenes.map((scene, i) => {
-    const seg = { scene, start, duration: segDurations[i] };
+    const seg = {
+      scene,
+      start: Math.max(start - i * transitionLossSec, 0),
+      duration:
+        transitionLossSec > 0 && i < scenes.length - 1
+          ? Math.max(segDurations[i] - transitionLossSec, 0.5)
+          : segDurations[i],
+    };
     start += segDurations[i];
     return seg;
   });
@@ -173,6 +186,8 @@ export interface ShortRenderOptions {
   sceneIndex?: number | null; // null/undefined = auto-pick
   /** Smart Motion settings — shape the vertical crop + punch-in. */
   motion?: MotionSettings | null;
+  /** Master's scene transitions — cut windows must respect the blended timeline. */
+  transition?: { style?: unknown; durationSec?: unknown } | null;
   onProgress?: (label: string) => void;
 }
 
@@ -201,7 +216,12 @@ export async function renderShort(opts: ShortRenderOptions): Promise<ShortRender
   const wavDurations = await Promise.all(
     scenes.map((s) => probeDuration(path.join(dir, `scene-${String(s.index).padStart(2, "0")}.wav`)))
   );
-  const timeline = sceneTimeline(scenes, wavDurations);
+  // Blended masters are shorter than the segment math — apply the same shift
+  // render.ts uses for captions so cuts land on the chosen scene, not on the
+  // tail of the previous dissolve.
+  const trans = sanitizeTransition(opts.transition);
+  const loss = trans.style !== "cut" && scenes.length > 1 ? trans.durationSec : 0;
+  const timeline = sceneTimeline(scenes, wavDurations, loss);
   const seg = timeline.find((t) => t.scene.index === chosen.index)!;
 
   const totalDur = await probeDuration(finalPath);

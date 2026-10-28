@@ -115,6 +115,43 @@ export const SCENE_COUNTS: Record<string, number> = {
 export const SFX_KINDS = ["whoosh", "boom", "riser", "sting"] as const;
 export type SfxKind = (typeof SFX_KINDS)[number];
 
+/**
+ * Per-scene art styles — the "edit each storyboard image to suit my taste"
+ * palette. Every scene can override the default cinematic pipeline look with
+ * a distinct art direction; the suffix is appended to the scene's visual
+ * prompt at generation time (see story.ts generateSceneImage).
+ * "default" = the standard pipeline prompt, no extra style clause.
+ */
+export const SCENE_ART_STYLES = [
+  { id: "default", label: "Standard", prompt: "" },
+  { id: "photoreal", label: "Photo Real", prompt: "ultra-realistic photograph, 50mm lens, natural light, true-to-life textures, editorial photography quality" },
+  { id: "anime", label: "Anime", prompt: "high-quality anime key visual, crisp cel shading, expressive characters, professional anime film art direction" },
+  { id: "watercolor", label: "Watercolor", prompt: "soft watercolor painting, visible brush strokes, textured paper, gentle washes of color" },
+  { id: "comic", label: "Comic Ink", prompt: "bold comic-book ink illustration, strong outlines, halftone shading, dynamic graphic composition" },
+  { id: "render3d", label: "3D Render", prompt: "stylized 3D render, soft global illumination, subsurface materials, high-end animation film look" },
+  { id: "noir", label: "Dark Noir", prompt: "black-and-white film noir still, extreme contrast, deep shadows, hard key light" },
+  { id: "vintage", label: "Vintage Film", prompt: "vintage 1970s film still, warm faded colors, organic grain, anamorphic haze" },
+  { id: "neon", label: "Neon Nights", prompt: "cyberpunk neon-lit scene, saturated accent glows, moody nocturnal atmosphere, reflective wet surfaces" },
+  { id: "pastel", label: "Soft Pastel", prompt: "soft pastel illustration, gentle palette, dreamy diffused light, storybook charm" },
+  { id: "epic", label: "Epic Fantasy", prompt: "epic fantasy matte painting, sweeping scale, dramatic god rays, highly detailed environment art" },
+] as const;
+
+export type SceneArtStyleId = (typeof SCENE_ART_STYLES)[number]["id"];
+
+const SCENE_STYLE_IDS = new Set<string>(SCENE_ART_STYLES.map((s) => s.id));
+
+/** Validate a stored scene style id (unknown/legacy → "default"). */
+export function sanitizeSceneStyle(v: unknown): SceneArtStyleId {
+  return typeof v === "string" && SCENE_STYLE_IDS.has(v)
+    ? (v as SceneArtStyleId)
+    : "default";
+}
+
+/** The prompt suffix a scene style contributes ("" for the standard look). */
+export function sceneStylePrompt(style: string | null | undefined): string {
+  return SCENE_ART_STYLES.find((s) => s.id === sanitizeSceneStyle(style))?.prompt ?? "";
+}
+
 /** A single story beat — narration drives TTS, visual drives storyboard art. */
 export interface Scene {
   index: number; // 1-based
@@ -129,6 +166,7 @@ export interface Scene {
   sfx: string; // one of SFX_KINDS or "none"
   focal?: string; // where the eye must stay (Smart Motion) — e.g. "upper-right"
   stock?: StockRef; // matched real-footage clip (render mode "stock")
+  style?: string; // per-scene art style override (SCENE_ART_STYLES id; default = pipeline look)
 }
 
 export interface SceneDTO {
@@ -144,6 +182,7 @@ export interface SceneDTO {
   rehook: boolean;
   sfx: string;
   focal: string; // focal hint ("center" when unset)
+  style: string; // art style id ("default" = pipeline look)
   hasImage: boolean;
   imageUrl: string | null;
   generating: boolean; // single-scene re-roll in flight
@@ -285,6 +324,9 @@ export interface VideoDTO {
   motionIntensity: number | null; // 0..30 (% zoom amplitude, default 12)
   motionCurve: string | null; // smooth | linear
   motionVary: boolean | null; // vary direction between scenes
+  // Scene transitions per-video overrides; null = built-in default (fade 0.5s)
+  transitionStyle: string | null; // transitions.ts catalog id ("cut" = hard cuts)
+  transitionDuration: number | null; // blend length seconds (0.2..1.5)
   // Post-render quality gate (qc.ts) — parsed report or null
   qc: QcReportDTO | null;
   // Latest synced performance (Phase 5, null before the first sync)

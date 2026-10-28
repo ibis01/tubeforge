@@ -86,6 +86,8 @@ export function serializeVideo(
     motionIntensity: v.motionIntensity,
     motionCurve: v.motionCurve,
     motionVary: v.motionVary,
+    transitionStyle: v.transitionStyle,
+    transitionDuration: v.transitionDuration,
     qc: parseQc(v.qcReport),
     stats: opts.stats ?? null,
     createdAt: v.createdAt.toISOString(),

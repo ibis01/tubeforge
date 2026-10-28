@@ -3,19 +3,23 @@
 // final video timeline maps 1:1 to scenes, and SRT caption building.
 // The `render.ts` compositor consumes these artifacts to assemble the MP4.
 
+import { execFile } from "child_process";
 import fs from "fs";
 import path from "path";
+import { promisify } from "util";
 import { parseJsonLoose, videoDir, splitForTts, researchBriefBlock, type ResearchBrief } from "./ai";
 import { aiCall } from "./budget";
 import { runQualityGate } from "./quality";
 import { mergeWavs } from "./wav";
-import { CAMERAS, SCENE_COUNTS, SFX_KINDS, type Scene, type StockRef } from "./types";
+import { CAMERAS, SCENE_COUNTS, SFX_KINDS, sanitizeSceneStyle, sceneStylePrompt, type Scene, type StockRef } from "./types";
 import { normalizeFocalToken } from "./motion";
 import { characterSceneFragment, readPortrait } from "./characters";
 import { isJobRunning } from "./jobs";
 import { chatComplete } from "./providers/chat";
 import { ttsSynthesize } from "./providers/tts";
 import { imageEdit, imageGenerate, imageEditSupported } from "./providers/image";
+
+const execFileAsync = promisify(execFile);
 
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -73,6 +77,7 @@ export function parseScenes(json: string | null | undefined): Scene[] {
             : "none",
         focal: normalizeFocalToken(s.focal as string | null | undefined) ?? undefined,
         stock: parseStockRef(s.stock),
+        style: s.style != null ? sanitizeSceneStyle(s.style) : undefined,
       }))
       .filter((s: Scene) => s.narration && s.visual);
   } catch {
@@ -101,6 +106,7 @@ export function serializeScenes(
       rehook: s.rehook,
       sfx: s.sfx,
       focal: normalizeFocalToken(s.focal) ?? "center",
+      style: sanitizeSceneStyle(s.style),
       hasImage,
       imageUrl: hasImage ? `/api/videos/${videoId}/storyboard/${s.index}` : null,
       generating: isJobRunning(`${videoId}#scene${s.index}`, "scene"),
@@ -347,7 +353,10 @@ export async function generateSceneImage(opts: {
   // ONE dominant subject, painted literally: multi-subject prompts scatter
   // the composition and the model fills the frame with unrelated clutter.
   // The no-text clause stays (numbers/charts come out as gibberish glyphs).
-  const artPrompt = `${scene.visual}. ${scene.mood}. Wide 16:9 cinematic frame, ONE dominant subject filling the frame, highly detailed, professional color grading, storytelling composition. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
+  // A per-scene art style (Scene Studio) is woven in right after the subject
+  // so the taste override steers the whole render, not just the edges.
+  const styleClause = sceneStylePrompt(scene.style);
+  const artPrompt = `${scene.visual}.${styleClause ? ` ${styleClause}.` : ""} ${scene.mood}. Wide 16:9 cinematic frame, ONE dominant subject filling the frame, highly detailed, professional color grading, storytelling composition. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
 
   const portrait =
     scene.hostInScene && opts.character?.id
@@ -411,6 +420,123 @@ export async function generateSceneImage(opts: {
   });
 
   return { fileBytes: fs.existsSync(imagePath) ? fs.statSync(imagePath).size : 0 };
+}
+
+// ---------- Scene Studio — per-scene image editing ----------
+
+/**
+ * AI-edit the CURRENT scene image with a free-form instruction ("make it
+ * night", "remove the crowd", "warmer light"). Keeps the composition the
+ * user already chose — this is the taste knob between a full re-roll and
+ * settling for what the model painted. Requires an edit-capable image
+ * provider (CogView / gpt-image-1); throws an actionable error otherwise.
+ */
+export async function editSceneImage(opts: {
+  videoId: string;
+  scene: Scene;
+  instruction: string;
+}): Promise<{ fileBytes: number }> {
+  const { scene } = opts;
+  const instruction = opts.instruction.trim();
+  if (instruction.length < 3)
+    throw new Error("Describe the change you want (at least 3 characters)");
+  if (instruction.length > 500)
+    throw new Error("Instruction too long — keep it under 500 characters");
+
+  const imagePath = path.join(videoDir(opts.videoId), sceneImageFile(scene.index));
+  if (!fs.existsSync(imagePath))
+    throw new Error(`Scene ${scene.index} has no image yet — generate the storyboard first`);
+
+  if (!(await imageEditSupported()))
+    throw new Error(
+      "Your image provider can't edit existing images — use Regenerate with an updated prompt instead"
+    );
+
+  const current = fs.readFileSync(imagePath);
+  const buffer = await aiCall(
+    "image",
+    `scene ${scene.index} edit (instruction)`,
+    () =>
+      imageEdit({
+        // Keep the edit surgical: preserve the composition/subject, apply the
+        // requested change, and keep the no-text hygiene clause so edits don't
+        // smuggle garbled lettering into previously clean frames.
+        prompt: `Edit this image: ${instruction}. Keep the overall composition, subject and framing unchanged unless the instruction asks otherwise. Photorealistic continuity with the original. Absolutely no text, no letters, no numbers, no watermarks.`,
+        imagePngBase64: current.toString("base64"),
+        size: "1344x768",
+      }).then((b) => {
+        if (!b) throw new Error("Image edit returned no data");
+        return b;
+      }),
+    { attempts: 3, baseDelayMs: 5000 }
+  );
+
+  if (buffer.length < 1000) throw new Error(`Edited image for scene ${scene.index} is empty`);
+  fs.writeFileSync(imagePath, buffer);
+  return { fileBytes: buffer.length };
+}
+
+const MAX_SCENE_UPLOAD_BYTES = 15 * 1024 * 1024;
+
+/** Magic-byte sniffing — extensions lie, file signatures don't. */
+function sniffImageFormat(buf: Buffer): "png" | "jpeg" | "webp" | null {
+  if (buf.length > 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47)
+    return "png";
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "jpeg";
+  if (
+    buf.length > 12 &&
+    buf.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buf.subarray(8, 12).toString("ascii") === "WEBP"
+  )
+    return "webp";
+  return null;
+}
+
+/**
+ * Replace a scene's image with a user-supplied file (Scene Studio upload).
+ * The bytes are cover-cropped to the pipeline's 1344x768 canvas with ffmpeg
+ * so Smart Motion, the renderer and the Shorts cutter can treat it exactly
+ * like a generated frame. Returns the written file's size.
+ */
+export async function replaceSceneImage(
+  videoId: string,
+  index: number,
+  upload: Buffer
+): Promise<number> {
+  if (!Number.isInteger(index) || index < 1 || index > 99)
+    throw new Error("Invalid scene number");
+  if (upload.length < 1000) throw new Error("That file is too small to be a real image");
+  if (upload.length > MAX_SCENE_UPLOAD_BYTES)
+    throw new Error(`Image exceeds the ${MAX_SCENE_UPLOAD_BYTES / 1024 / 1024} MB limit`);
+  if (!sniffImageFormat(upload))
+    throw new Error("Unsupported image — upload a PNG, JPEG or WebP file");
+
+  const dir = videoDir(videoId);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, `upload-tmp-${Date.now()}`);
+  const outPath = path.join(dir, sceneImageFile(index));
+  fs.writeFileSync(tmp, upload);
+
+  try {
+    // Cover-crop: scale up to fill 1344x768, center-crop the overflow, lock
+    // the sample aspect — identical geometry to generated scene art.
+    await execFileAsync(
+      "ffmpeg",
+      [
+        "-y", "-i", tmp,
+        "-vf", "scale=1344:768:force_original_aspect_ratio=increase,crop=1344:768,setsar=1",
+        "-frames:v", "1",
+        outPath,
+      ],
+      { timeout: 60_000, maxBuffer: 4 * 1024 * 1024 }
+    );
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+
+  const bytes = fs.existsSync(outPath) ? fs.statSync(outPath).size : 0;
+  if (bytes < 1000) throw new Error("Could not process that image — the file may be corrupt");
+  return bytes;
 }
 
 /** Full storyboard — every scene image, paced to respect upstream burst limits.

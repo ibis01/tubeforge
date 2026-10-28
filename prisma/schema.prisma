@@ -96,6 +96,12 @@ model Video {
   motionCurve     String? // smooth | linear
   motionVary      Boolean?
 
+  // Scene transitions (per-video overrides; null = built-in default fade).
+  // style ids live in src/lib/tubeforge/transitions.ts (fade, fadeblack, …,
+  // "cut" = hard cuts); duration is the blend length in seconds.
+  transitionStyle    String? // fade | cut | … (transitions.ts catalog)
+  transitionDuration Float? // blend length, 0.2..1.5 s
+
   // Post-render quality gate — JSON report from qc.ts: streams, duration,
   // loudness, peaks, black frames, SRT sanity.
   qcReport     String?

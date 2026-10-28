@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import { db } from "@/lib/db";
-import { generateStoryboard, generateSceneImage, serializeScenes, storyboardComplete, parseScenes } from "@/lib/tubeforge/story";
+import { generateStoryboard, generateSceneImage, editSceneImage, serializeScenes, storyboardComplete, parseScenes } from "@/lib/tubeforge/story";
 import { startJob, isJobRunning, isJobCancelled, lastJobError, setJobProgress, JobCancelledError } from "@/lib/tubeforge/jobs";
 import { errorText } from "@/lib/tubeforge/redact";
 
@@ -44,7 +44,9 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
 
 /**
  * POST — generate the storyboard as a background job (202).
- * Body: {} for the full storyboard, or { scene: n } to re-roll one scene.
+ * Body: {} for the full storyboard, { scene: n } to re-roll one scene from
+ * its (Scene Studio-edited) prompt, or { scene: n, instruction: "..." } to
+ * AI-edit the EXISTING scene image in place ("make it night", "warmer light").
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
@@ -84,15 +86,28 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   await db.video.update({ where: { id }, data: { error: null } });
 
   if (Number.isInteger(sceneIndex) && sceneIndex >= 1) {
-    // Single-scene re-roll
+    // Single-scene re-roll OR instruction-based AI edit of the current image.
     const scene = scenes.find((s) => s.index === sceneIndex);
     if (!scene)
       return NextResponse.json({ error: `Scene ${sceneIndex} does not exist` }, { status: 400 });
 
+    const instruction =
+      typeof body?.instruction === "string" ? body.instruction.trim() : "";
+    if (instruction && instruction.length > 500)
+      return NextResponse.json(
+        { error: "Instruction too long — keep it under 500 characters" },
+        { status: 400 }
+      );
+    const mode = instruction ? "edit" : "reroll";
+
     const jobKey = `${id}#scene${sceneIndex}`;
     const accepted = await startJob(jobKey, "scene", async () => {
       try {
-        await generateSceneImage({ videoId: id, scene, character: castOpts });
+        if (mode === "edit") {
+          await editSceneImage({ videoId: id, scene, instruction });
+        } else {
+          await generateSceneImage({ videoId: id, scene, character: castOpts });
+        }
         invalidateRenders(id);
         await db.video.update({
           where: { id },
@@ -107,18 +122,21 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           data: {
             videoId: id,
             stage: "storyboard",
-            message: `Scene ${sceneIndex} "${scene.title}" re-rolled`,
+            message:
+              mode === "edit"
+                ? `Scene ${sceneIndex} "${scene.title}" AI-edited: ${instruction.slice(0, 80)}`
+                : `Scene ${sceneIndex} "${scene.title}" re-rolled`,
           },
         });
       } catch (err) {
-        const message = errorText(err, "Scene re-roll failed");
+        const message = errorText(err, "Scene edit failed");
         await db.video.update({ where: { id }, data: { error: message } });
         await db.activity.create({
           data: {
             videoId: id,
             stage: "storyboard",
             level: "error",
-            message: `Scene ${sceneIndex} re-roll failed: ${message}`,
+            message: `Scene ${sceneIndex} ${mode === "edit" ? "edit" : "re-roll"} failed: ${message}`,
           },
         });
         // Re-thrown so startJob records the failure for GET polling + history.
@@ -127,7 +145,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     });
 
     return NextResponse.json(
-      { accepted, generating: true },
+      { accepted, generating: true, mode },
       { status: accepted ? 202 : 200 }
     );
   }

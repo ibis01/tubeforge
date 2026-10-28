@@ -4,6 +4,9 @@ import { latestStatsFor } from "@/lib/tubeforge/analytics";
 import { jobSnapshot } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
 import { RENDER_MODES } from "@/lib/tubeforge/types";
+import { TRANSITIONS, sanitizeTransitionDuration } from "@/lib/tubeforge/transitions";
+
+const TRANSITION_IDS = new Set(TRANSITIONS.map((t) => t.id));
 
 // Next.js 16: params is a Promise
 type Ctx = { params: Promise<{ id: string }> };
@@ -94,6 +97,14 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   if (body.motionCurve === null) data.motionCurve = null;
   if (typeof body.motionVary === "boolean") data.motionVary = body.motionVary;
   if (body.motionVary === null) data.motionVary = null;
+
+  // Scene transition overrides (null = built-in default: crossfade 0.5s)
+  if (typeof body.transitionStyle === "string" && TRANSITION_IDS.has(body.transitionStyle))
+    data.transitionStyle = body.transitionStyle;
+  if (body.transitionStyle === null) data.transitionStyle = null;
+  if (typeof body.transitionDuration === "number")
+    data.transitionDuration = sanitizeTransitionDuration(body.transitionDuration);
+  if (body.transitionDuration === null) data.transitionDuration = null;
 
   // Status transitions (publish / mark ready / retry)
   if (typeof body.status === "string") {

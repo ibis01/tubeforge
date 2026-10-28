@@ -14,6 +14,7 @@ import {
   JobCancelledError,
 } from "@/lib/tubeforge/jobs";
 import { errorText } from "@/lib/tubeforge/redact";
+import { sanitizeTransition, transitionSummary } from "@/lib/tubeforge/transitions";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -96,6 +97,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       }
     : null;
 
+  // Scene transitions: per-video override (null = built-in crossfade 0.5s).
+  const transition = sanitizeTransition({
+    style: video.transitionStyle,
+    durationSec: video.transitionDuration,
+  });
+
   // Clear any stale error before the job starts.
   await db.video.update({ where: { id }, data: { error: null } });
 
@@ -118,6 +125,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           vary: video.motionVary ?? true,
         },
         motionContext: { tone: video.tone, niche: video.niche },
+        transition,
         onProgress: (current, total, label) => {
           // Cancellation checkpoint: fires between scenes/long steps.
           if (isJobCancelled(id, "render")) throw new JobCancelledError();
@@ -147,6 +155,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
               `Video rendered (${mode === "animated" ? "full AI animation" : mode === "stock" ? "stock b-roll" : "Ken Burns"}, ` +
               `${Math.round(result.durationSec)}s) — ` +
               `${music ? (resolved ? `music: ${resolved.why}` : "music: synthesized bed") : "no music"}, ` +
+              `${transitionSummary(transition.style, transition.durationSec)}, ` +
               `QC ${report.passed ? "passed" : "flagged " + report.checks.filter((c) => !c.pass).length + " check(s)"}`,
           },
         });
@@ -195,6 +204,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       generating: true,
       mode,
       sceneLimit: sceneLimit ?? null,
+      transition,
       music: resolved
         ? { track: resolved.track.name, why: resolved.why }
         : music

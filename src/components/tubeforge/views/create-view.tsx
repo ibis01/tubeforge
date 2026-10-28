@@ -21,6 +21,7 @@ import {
 import { useVoices, VoiceSelectWithPreview } from "@/components/tubeforge/shared";
 import { MusicPickerCard, type MusicPickerValue } from "@/components/tubeforge/music-controls";
 import { MotionControlsCard, type MotionPickerValue } from "@/components/tubeforge/motion-controls";
+import { TransitionControlsCard, type TransitionPickerValue } from "@/components/tubeforge/transition-controls";
 import {
   VOICES,
   NICHES,
@@ -158,6 +159,10 @@ export function CreateView() {
     curve: null,
     vary: null,
   });
+  const [transition, setTransition] = useState<TransitionPickerValue>({
+    style: null,
+    durationSec: null,
+  });
   const [channelId, setChannelId] = useState<string>("none");
   const [channels, setChannels] = useState<{ id: string; name: string }[]>([]);
   const [characterId, setCharacterId] = useState<string>("none");
@@ -289,9 +294,11 @@ export function CreateView() {
           motionIntensity: motion.intensity,
           motionCurve: motion.curve,
           motionVary: motion.vary,
+          transitionStyle: transition.style,
+          transitionDuration: transition.durationSec,
         }),
       }).then((d) => d.video),
-    [topic, niche, tone, length, voice, speed, thumbStyle, channelId, characterId, format, renderMode, music, motion]
+    [topic, niche, tone, length, voice, speed, thumbStyle, channelId, characterId, format, renderMode, music, motion, transition]
   );
 
   const startVoiceover = useCallback(
@@ -680,6 +687,10 @@ export function CreateView() {
                   : null
               }
             />
+          )}
+
+          {isStory && (
+            <TransitionControlsCard value={transition} onChange={setTransition} compact disabled={busy} />
           )}
 
           <div className="grid grid-cols-2 gap-3">
