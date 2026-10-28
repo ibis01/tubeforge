@@ -255,7 +255,8 @@ export function CreateView() {
     }
   }, [prefillTopic, setPrefillTopic]);
 
-  const busy = anyRunning || runningRef.current;
+  // ✅ FIX: Do not read runningRef.current during render
+  const busy = anyRunning;
 
   // Casting a character adopts their voice so narration matches the persona.
   const castCharacter = characters.find((c) => c.id === characterId) ?? null;
