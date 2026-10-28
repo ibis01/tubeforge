@@ -6,6 +6,7 @@ import { CHAT_MODELS } from "../types";
 export type CapabilityId = "chat" | "tts" | "image" | "video";
 
 export type ProviderKind = "zai" | "openai" | "anthropic" | "gemini" | "native";
+export type ProviderId = string;
 
 export interface ProviderMeta {
   id: string;
@@ -192,6 +193,19 @@ export const IMAGE_PROVIDERS: ProviderMeta[] = [
     note: "Built-in default art model, supports identity-locked edits.",
   },
   {
+    id: "pollinations",
+    kind: "native",
+    label: "Pollinations.ai (Free)",
+    defaultBaseUrl: "https://image.pollinations.ai",
+    keyUrl: "https://pollinations.ai/",
+    models: [
+      { id: "flux", hint: "high quality" },
+      { id: "turbo", hint: "faster" },
+    ],
+    note: "Completely free, no API key required.",
+    requiresKey: false,
+  },
+  {
     id: "openai",
     kind: "native",
     label: "OpenAI Images",
@@ -218,6 +232,17 @@ export const IMAGE_PROVIDERS: ProviderMeta[] = [
     keyUrl: "https://fal.ai/dashboard/keys",
     models: [{ id: "fal-ai/flux-pro/v1.1" }, { id: "fal-ai/flux/dev" }],
   },
+  {
+    id: "replicate",
+    kind: "native",
+    label: "Replicate",
+    defaultBaseUrl: "https://api.replicate.com/v1",
+    keyUrl: "https://replicate.com/account/api-tokens",
+    models: [
+      { id: "black-forest-labs/flux-1.1-pro", hint: "FLUX Pro" },
+      { id: "stability-ai/sdxl", hint: "SDXL" },
+    ],
+  },
 ];
 
 // ───────────────────────────── VIDEO ─────────────────────────────
@@ -230,6 +255,32 @@ export const VIDEO_PROVIDERS: ProviderMeta[] = [
     keyUrl: "https://z.ai/model-api",
     models: [{ id: "cogvideox-3", hint: "5s 1080p clips" }],
     note: "Ken Burns render mode needs no AI video at all.",
+  },
+  {
+    id: "fal",
+    kind: "native",
+    label: "fal.ai Video (Free Credits)",
+    defaultBaseUrl: "https://fal.run",
+    keyUrl: "https://fal.ai/dashboard/keys",
+    models: [
+      // Correct endpoint for SVD (no suffix)
+      { id: "fal-ai/fast-svd", hint: "Stable Video Diffusion" },
+      // Reliable, widely-used alternative
+      {
+        id: "fal-ai/minimax/video-01/image-to-video",
+        hint: "MiniMax Hailuo Video",
+      },
+    ],
+    note: "Includes free starting credits. Fast generation.",
+  },
+  {
+    id: "replicate",
+    kind: "native",
+    label: "Replicate Video (Free Credits)",
+    defaultBaseUrl: "https://api.replicate.com/v1",
+    keyUrl: "https://replicate.com/account/api-tokens",
+    models: [{ id: "minimax/video-01", hint: "Hailuo Video" }],
+    note: "Includes $5 free credits on signup.",
   },
   {
     id: "runway",

@@ -4,14 +4,11 @@
 //   ai.chat  = { provider, model, visionModel?, baseUrl?, apiKey? }
 //   ai.tts   = { provider, model, baseUrl?, apiKey? }
 //   ai.image = { provider, model, baseUrl?, apiKey? }
-//   ai.video = { provider, model }
+//   ai.video = { provider, model, baseUrl?, apiKey? }
 //
 // Z.ai credentials stay GLOBAL in the legacy keys (zai.baseUrl / zai.apiKey)
 // because the Z.ai SDK is a shared singleton reading one .z-ai-config file.
 // Non-Z.ai providers carry their credentials per capability right here.
-//
-// Read-time migration: when ai.chat is absent but the legacy zai.chatModel is
-// set, it is used as the Z.ai chat model — old installs keep working.
 
 import { db } from "@/lib/db";
 import { DEFAULT_CHAT_MODEL } from "../types";
@@ -56,7 +53,11 @@ export async function readLegacyZai(): Promise<{
   visionModel: string;
 }> {
   const rows = await db.setting.findMany({
-    where: { key: { in: ["zai.baseUrl", "zai.apiKey", "zai.chatModel", "zai.visionModel"] } },
+    where: {
+      key: {
+        in: ["zai.baseUrl", "zai.apiKey", "zai.chatModel", "zai.visionModel"],
+      },
+    },
   });
   const map = new Map(rows.map((r) => [r.key, r.value]));
   return {
@@ -70,7 +71,7 @@ export async function readLegacyZai(): Promise<{
 /** Effective config for a capability, with legacy migration baked in. */
 export async function getCapability(
   capability: CapabilityId,
-  overrides?: Partial<CapabilityConfig>
+  overrides?: Partial<CapabilityConfig>,
 ): Promise<CapabilityConfig> {
   let config = defaultFor(capability);
   try {
@@ -103,7 +104,7 @@ export async function getCapability(
 /** Persist a capability config (partial updates merge with what's stored). */
 export async function saveCapability(
   capability: CapabilityId,
-  patch: Partial<CapabilityConfig>
+  patch: Partial<CapabilityConfig>,
 ): Promise<CapabilityConfig> {
   const current = await getCapability(capability);
   const next: CapabilityConfig = {
@@ -112,19 +113,28 @@ export async function saveCapability(
     provider: (patch.provider ?? current.provider) as ProviderId,
     model: (patch.model ?? current.model)?.trim() ?? "",
   };
-  if (capability === "chat") next.visionModel = (next.visionModel ?? "")?.trim() ?? "";
+
+  if (capability === "chat") {
+    next.visionModel = (next.visionModel ?? "")?.trim() ?? "";
+  }
+
   // Empty key = "keep the saved one" so the masked field can stay blank.
-  if (patch.apiKey === "") next.apiKey = current.apiKey;
+  if (patch.apiKey === "") {
+    next.apiKey = current.apiKey;
+  }
+
   if (next.provider === "zai") {
     // zai credentials are global — never store them per capability.
     delete next.baseUrl;
     delete next.apiKey;
   }
+
   await db.setting.upsert({
     where: { key: CAPABILITY_KEYS[capability] },
     update: { value: JSON.stringify(next) },
     create: { key: CAPABILITY_KEYS[capability], value: JSON.stringify(next) },
   });
+
   return next;
 }
 
@@ -132,7 +142,7 @@ export async function saveCapability(
 export function effectiveModel(
   capability: CapabilityId,
   config: CapabilityConfig,
-  providerDefault: string
+  providerDefault: string,
 ): string {
   return config.model?.trim() || providerDefault;
 }
@@ -149,7 +159,7 @@ export function publicCapability(config: CapabilityConfig) {
     provider: config.provider,
     model: config.model ?? "",
     visionModel: config.visionModel ?? "",
-    baseUrl: config.provider === "zai" ? "" : config.baseUrl?.trim() ?? "",
+    baseUrl: config.provider === "zai" ? "" : (config.baseUrl?.trim() ?? ""),
     hasKey: Boolean(config.apiKey),
     maskedKey: maskKey(config.apiKey ?? ""),
   };

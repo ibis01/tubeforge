@@ -1013,41 +1013,41 @@ export function SettingsView() {
                   </div>
                 )}
 
-                {cap !== "video" && (
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={provTesting === cap}
-                      onClick={() => {
-                        if (test?.needsConfirm) testCapability(cap, cap, true);
-                        else testCapability(cap, cap);
-                      }}
-                      className="border-white/15 bg-white/6 hover:bg-white/10 h-7 text-[11px]"
-                      title={
-                        cap === "image"
-                          ? "Generates a small real image — may cost a few cents"
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={provTesting === cap}
+                    onClick={() => {
+                      if (test?.needsConfirm) testCapability(cap, cap, true);
+                      else testCapability(cap, cap);
+                    }}
+                    className="border-white/15 bg-white/6 hover:bg-white/10 h-7 text-[11px]"
+                    title={
+                      cap === "image"
+                        ? "Generates a small real image — may cost a few cents"
+                        : cap === "video"
+                          ? "Generates a short video clip — may take up to a minute"
                           : "Send a tiny test request"
-                      }
-                    >
-                      {provTesting === cap ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        <FlaskConical className="h-3 w-3" />
-                      )}
-                      {test?.needsConfirm
-                        ? "Confirm — runs a paid test"
-                        : "Test"}
-                    </Button>
-                    <span className="text-[10px] text-muted-foreground">
-                      {cap === "chat"
-                        ? "pings the model with a tiny prompt"
-                        : cap === "tts"
-                          ? "speaks one short sentence"
-                          : "generates one small image (real cost)"}
-                    </span>
-                  </div>
-                )}
+                    }
+                  >
+                    {provTesting === cap ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <FlaskConical className="h-3 w-3" />
+                    )}
+                    {test?.needsConfirm ? "Confirm — runs a paid test" : "Test"}
+                  </Button>
+                  <span className="text-[10px] text-muted-foreground">
+                    {cap === "chat"
+                      ? "pings the model with a tiny prompt"
+                      : cap === "tts"
+                        ? "speaks one short sentence"
+                        : cap === "image"
+                          ? "generates one small image (real cost)"
+                          : "generates a short video clip (takes 30s+)"}
+                  </span>
+                </div>
 
                 {test && (
                   <div
