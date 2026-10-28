@@ -1,7 +1,3 @@
-// TubeForge brand mark — uses the uploaded image from the public folder.
-// mix-blend-screen makes the black background of the image transparent
-// so it blends seamlessly into the dark UI.
-
 export function TubeForgeLogo({ size = 36 }: { size?: number }) {
   return (
     <img
@@ -18,7 +14,7 @@ export function TubeForgeLogo({ size = 36 }: { size?: number }) {
 export function TubeForgeWordmark() {
   return (
     <div>
-      <p className="font-bold leading-tight text-lg tracking-tight">
+      <p className="font-semibold leading-tight">
         Tube<span className="text-gradient">Forge</span>
       </p>
       <p className="text-[11px] text-muted-foreground">Auto-Pilot Engine</p>
