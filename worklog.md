@@ -648,3 +648,21 @@ Work Log:
 Stage Summary:
 - User apply path: `curl -fsSL https://preview-chat-92cf2337-6ca5-4169-a0bc-3579414f698b.space-z.ai/tubeforge/story.ts -o ~/tubeforge/src/lib/tubeforge/story.ts` then restart the local dev server (fuser -k 3000/tcp && npm run dev). After the patch, clicking "Generate Storyboard" again only paints scenes whose image file is missing — scenes 1-4 are skipped, scene 5+ resumes. Per-scene "重新生成" buttons still force a single scene to repaint as before.
 - Reminders still pending: enable Settings → Studio access lock before sharing the public URL; optional ngrok free static domain for a permanent address; README/LICENSE; rm -rf ~/tf-pkg cleanup.
+
+---
+Task ID: storyboard-429-malformed-response
+Agent: main (Z.ai)
+Task: User's storyboard crashed with "Cannot read properties of undefined (reading 'map')" mid-run (screenshot: 16-scene video "Productivity Lies Exposed", scenes 1-4 painted, storyboard stage marked Failed). Diagnose + fix.
+
+Work Log:
+- Forensics: the exact error string "Cannot read properties of undefined (reading 'map')" is thrown inside `node_modules/z-ai-web-dev-sdk/dist/index.js` at line 269 (createImage) and line 316 (createImageEdit) — both do `result.data.map(...)` with no guard. When z.ai returns HTTP 200 with a body that has NO `data` field (capacity / soft-rate-limit envelope), the SDK crashes with that TypeError. The error bubbles up through `aiCall` → `generateSceneImage` → `generateStoryboard`, lands in the storyboard route's catch block (line 181), and gets saved to `video.error`. The dialog then displays it via the `{video.error && !renderLabel && ...}` banner at line 2157 — exactly what the screenshot shows.
+- Why retry didn't save it: `budget.ts` `withRetry` only escalates backoff when the error message matches `/429|too many requests/i`. A bare TypeError doesn't match, so the retry layer treats it as a terminal error and gives up after 4 attempts without waiting for the upstream to recover.
+- Fix `src/lib/tubeforge/providers/image.ts`: added `callZaiImage<T>(label, fn)` wrapper that catches the malformed-response TypeError (`/reading 'map'/i`) and rethrows as `429 too many requests — <label> returned a malformed response (no data field), treating as rate limit`. Now the budget.ts retry layer sees "429", triggers the 45-second shared cool-down (`noteRateLimit`), and uses the x4 backoff multiplier — so the storyboard loop will wait out the upstream storm instead of failing the video.
+- Wrapped both SDK call sites: `zai.images.generations.create` and `zai.images.generations.edit`. The OpenAI-compatible path was already safe (uses `data?.` optional chaining).
+- Typecheck: src tree clean (the public/tubeforge/*.ts snapshot errors are expected — those files are curl-distribution copies outside src).
+- Staged at public/tubeforge/image.ts (md5 84a6baf09bfe1ad697f9e81e4487324a), preview host serving same md5.
+
+Stage Summary:
+- User apply path (one command, then restart): `curl -fsSL https://preview-chat-92cf2337-6ca5-4169-a0bc-3579414f698b.space-z.ai/tubeforge/image.ts -o ~/tubeforge/src/lib/tubeforge/providers/image.ts` then `fuser -k 3000/tcp && cd ~/tubeforge && npm run dev`. After the patch, malformed z.ai responses are treated as 429s — the storyboard will pause and retry instead of marking the video "Failed".
+- Combined with the earlier story.ts resumable patch, even if the storm is bad enough that the storyboard eventually fails after the full retry window, re-clicking will only paint scenes that didn't finish. Two patches, same one-line curl flow.
+- Recommended pairing: lower Settings → AI Budget → "Image per minute" to 5-6 for the heaviest storyboards. Pending: lock-screen enable, public URL confirmation, README/LICENSE, rm -rf ~/tf-pkg cleanup.

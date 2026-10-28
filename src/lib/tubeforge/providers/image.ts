@@ -8,11 +8,41 @@
 // imageEdit() returns null when the provider/model can't edit images —
 // callers fall back to a prompt-seeded fresh generation (cast fragment), the
 // same path used when no reference portrait exists.
+//
+// z.ai occasionally returns HTTP 200 with a body that has no `data` field
+// (capacity / soft-rate-limit envelopes). The z-ai-web-dev-sdk then crashes
+// with "Cannot read properties of undefined (reading 'map')" because it does
+// `result.data.map(...)` unguarded. We catch that TypeError here and rethrow
+// as a 429-flavored message so the budget.ts retry layer treats it as a
+// rate-limit storm and backs off (instead of failing the storyboard).
 
 import { getZAI } from "../ai";
 import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta } from "./registry";
 import { joinUrl, providerFetch, providerFetchJson } from "./http";
+
+/** True when an error looks like the SDK's "result.data.map" crash. */
+function isMalformedSdkResponse(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return /reading 'map'|reading "map"/i.test(err.message);
+}
+
+/** Wrap an SDK image call: convert malformed-response TypeErrors into a
+ *  retryable, 429-flavored error so budget.ts backs off. */
+async function callZaiImage<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (isMalformedSdkResponse(err)) {
+      // Upstream sent 200 but the body was missing `data` — almost always a
+      // capacity / soft-rate-limit envelope. Make the retry layer see "429".
+      throw new Error(
+        `429 too many requests — ${label} returned a malformed response (no data field), treating as rate limit`
+      );
+    }
+    throw err;
+  }
+}
 
 export interface ImageRequest {
   prompt: string;
@@ -80,11 +110,13 @@ export async function imageEdit(
 
 async function zaiImage(req: ImageRequest): Promise<Buffer> {
   const zai = await getZAI();
-  const response = await zai.images.generations.create({
-    prompt: req.prompt,
-    // App only ever passes "1344x768" (wide) or "1024x1024" (square).
-    size: req.size as "1344x768" | "1024x1024",
-  });
+  const response = await callZaiImage("Z.ai image", () =>
+    zai.images.generations.create({
+      prompt: req.prompt,
+      // App only ever passes "1344x768" (wide) or "1024x1024" (square).
+      size: req.size as "1344x768" | "1024x1024",
+    })
+  );
   const base64 = response.data[0]?.base64;
   if (!base64) throw new Error("Image generation returned no data");
   const buffer = Buffer.from(base64, "base64");
@@ -97,11 +129,13 @@ async function zaiImageEdit(req: ImageEditRequest): Promise<Buffer> {
   // NOTE: the SDK's .d.ts wrongly declares `image`, but the live Z.ai edit
   // endpoint takes `images: [{url}]` (proven by working pose generation) —
   // the SDK posts the body verbatim, hence the cast.
-  const response = await zai.images.generations.edit({
-    prompt: req.prompt,
-    images: [{ url: `data:image/png;base64,${req.imagePngBase64}` }],
-    size: req.size as "1344x768" | "1024x1024",
-  } as Parameters<typeof zai.images.generations.edit>[0]);
+  const response = await callZaiImage("Z.ai image edit", () =>
+    zai.images.generations.edit({
+      prompt: req.prompt,
+      images: [{ url: `data:image/png;base64,${req.imagePngBase64}` }],
+      size: req.size as "1344x768" | "1024x1024",
+    } as Parameters<typeof zai.images.generations.edit>[0])
+  );
   const base64 = response.data[0]?.base64;
   if (!base64) throw new Error("Image edit returned no data");
   const buffer = Buffer.from(base64, "base64");
