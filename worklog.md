@@ -588,3 +588,19 @@ Stage Summary:
 - Push source is the user's LOCAL ~/tubeforge (newer 14-provider code, clean fresh history) — not the sandbox (history has secrets)
 - Script gates guarantee .env, db/custom.db, uploads/, archives never reach GitHub; .env.example + .gitkeep placeholders do
 - Next: user runs tf-git-setup.sh (gh authed → auto private repo + push; else manual remote+PAT); optional README/LICENSE follow-up; reminder to rm -rf ~/tf-pkg (557MB tar with credentials)
+
+---
+Task ID: github-push-done
+Agent: main (Z.ai)
+Task: User executed tf-git-setup.sh on local ~/tubeforge — first GitHub push
+
+Work Log:
+- User curl'd https://preview-chat-92cf2337-6ca5-4169-a0bc-3579414f698b.space-z.ai/tf-git-setup.sh (md5 verified against sandbox copy before handing over the URL)
+- Script ran clean: .gitignore hardened, git init on main, commit af7e12d (221 files tracked), gh CLI authed
+- gh created PRIVATE repo ibis01/tubeforge, pushed 292 objects / 618 KiB, main tracking origin/main
+- No gate triggers → .env, db/custom.db, uploads/ confirmed absent from the push
+
+Stage Summary:
+- TubeForge source now lives at https://github.com/ibis01/tubeforge (private)
+- Future updates: cd ~/tubeforge && git add -A && git commit -m "..." && git push
+- Pending user actions: delete ~/tf-pkg (557MB tar with credentials); optional README/LICENSE; optional first end-to-end video test
