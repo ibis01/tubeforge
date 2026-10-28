@@ -272,6 +272,46 @@ async function synthesizeOriginal(def: OriginalTrackDef): Promise<{ filePath: st
   return { filePath: path.relative(UPLOAD_ROOT, outPath), durationSec, bytes: fs.statSync(outPath).size };
 }
 
+// ---------------------------------------------------------------------------
+// Bed preview resolution (GET /api/music/preview — "hear it before you pick")
+// ---------------------------------------------------------------------------
+
+export interface BedPreviewSource {
+  /** Lavfi graph to synthesize live (original beds) — null when file-based. */
+  graph: string | null;
+  /** Absolute path of an existing track file to slice — null for presets. */
+  file: string | null;
+  /** True for the TubeForge-original library (no +6 dB preview boost). */
+  isPreset: boolean;
+}
+
+/**
+ * Resolve a preview source for a bed id — accepts either a MusicTrack row id
+ * or an original-bed slug ("sunrise-drive"). Presets resolve to the SAME
+ * aevalsrc graph the library synthesizer uses, so the preview is exactly what
+ * the video will sound like; uploads resolve to their file for a sliced
+ * sample. Returns null when the id is unknown or its file is missing.
+ */
+export async function resolveBedPreview(idOrSlug: string): Promise<BedPreviewSource | null> {
+  const bySlug = ORIGINAL_LIBRARY.find((d) => d.slug === idOrSlug);
+  if (bySlug)
+    return { graph: `aevalsrc='${bedExpression(bySlug)}':s=48000`, file: null, isPreset: true };
+
+  const row = await db.musicTrack.findUnique({ where: { id: idOrSlug } }).catch(() => null);
+  if (!row) return null;
+
+  // Original row (cuid id): recover the slug from the stored file name.
+  if (row.isOriginal) {
+    const slug = path.basename(row.filePath).replace(/\.(flac|wav)$/i, "");
+    const rowDef = ORIGINAL_LIBRARY.find((d) => d.slug === slug);
+    if (rowDef)
+      return { graph: `aevalsrc='${bedExpression(rowDef)}':s=48000`, file: null, isPreset: true };
+  }
+
+  const abs = trackAbsolutePath(row);
+  return fs.existsSync(abs) ? { graph: null, file: abs, isPreset: row.isOriginal } : null;
+}
+
 /**
  * Materialize the TubeForge-original library (idempotent): any track whose
  * row exists is left alone, missing ones are synthesized. Safe to call from

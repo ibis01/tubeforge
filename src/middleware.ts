@@ -8,6 +8,17 @@
 // Pages are not redirected: the single / page renders a lock screen until
 // authenticated, and all data flows through these protected APIs.
 // If TUBEFORGE_AUTH_SECRET is unset, the gate stays open (documented dev mode).
+//
+// PRODUCTION FAIL-SAFE: an intentionally-open studio is fine for localhost
+// development, but a production server (NODE_ENV=production) must never serve
+// studio data with the gate disabled — a stray 0.0.0.0 bind would expose
+// every API to the network. In production without an active gate only the
+// auth bootstrap endpoints stay reachable (status / setup / login / logout /
+// lock — enabling the lock is password-checked on a configured studio), and
+// every other API answers 503 until the lock is enabled or the deployment
+// explicitly opts out with TUBEFORGE_REQUIRE_LOCK=0. Recovery paths:
+//   bun run auth:reset               (unlock from the server)
+//   bun run auth:enable <password>   (lock from the server, headless)
 
 import fs from "node:fs";
 import path from "node:path";
@@ -27,6 +38,13 @@ const PUBLIC_API = new Set<string>([
   "/api/auth/logout",
 ]);
 
+// Superset reachable during a production fail-safe window (gate disabled).
+// /api/auth/lock enable is password-protected on a configured studio and its
+// disable is a no-op while the gate is already off, so this never widens the
+// attack surface beyond the first-come setup race that /api/auth/setup has
+// always had on a fresh install.
+const PROD_BOOTSTRAP_API = new Set<string>([...PUBLIC_API, "/api/auth/lock"]);
+
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 const LOCK_FLAG = path.join(process.cwd(), "db", "auth.lock");
@@ -41,16 +59,53 @@ function lockFlagActive(): boolean {
   }
 }
 
+// Warn once per process, not once per request.
+let warnedOpenGate = false;
+function warnProductionOpenGate(): void {
+  if (warnedOpenGate) return;
+  warnedOpenGate = true;
+  console.warn(
+    "[TubeForge] SECURITY: production server with the studio lock DISABLED — " +
+      "all data APIs return 503 until the lock is enabled " +
+      "(Settings → Studio access, or `bun run auth:enable <password>`). " +
+      "Deployments that intentionally run open can set TUBEFORGE_REQUIRE_LOCK=0."
+  );
+}
+
 export async function middleware(req: NextRequest) {
   const secret = getAuthSecret();
   const { pathname } = req.nextUrl;
+  const gateActive = Boolean(secret) && lockFlagActive();
+  const isProd = process.env.NODE_ENV === "production";
+
+  if (!pathname.startsWith("/api/")) {
+    if (isProd && !gateActive && process.env.TUBEFORGE_REQUIRE_LOCK !== "0")
+      warnProductionOpenGate();
+    return NextResponse.next();
+  }
+
+  // PRODUCTION FAIL-SAFE — opt-out explicitly with TUBEFORGE_REQUIRE_LOCK=0.
+  if (
+    isProd &&
+    !gateActive &&
+    process.env.TUBEFORGE_REQUIRE_LOCK !== "0"
+  ) {
+    warnProductionOpenGate();
+    if (!PROD_BOOTSTRAP_API.has(pathname))
+      return NextResponse.json(
+        {
+          error:
+            "Studio lock is disabled — enable Studio access (Settings → Studio access) to use TubeForge in production",
+        },
+        { status: 503 }
+      );
+    return NextResponse.next();
+  }
 
   // Opt-in model: gate closed (open app) unless the owner enabled the lock
   // AND a signing secret exists. Removing the secret or the flag file
   // instantly re-opens the studio (documented recovery path).
-  if (!secret || !lockFlagActive()) return NextResponse.next();
-
-  if (!pathname.startsWith("/api/")) return NextResponse.next();
+  if (!gateActive) return NextResponse.next();
   if (PUBLIC_API.has(pathname)) return NextResponse.next();
 
   const bearer = req.headers.get("authorization");

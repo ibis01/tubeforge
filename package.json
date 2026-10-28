@@ -12,10 +12,14 @@
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
     "typecheck": "tsc --noEmit",
+    "test": "bun scripts/test-unit.ts && bun scripts/test-net-guard.ts",
+    "test:live": "bun scripts/test-auth-optin.ts",
+    "check": "bun run typecheck && bun run lint && bun run test",
     "verify": "node scripts/verify.mjs",
     "verify:full": "node scripts/verify.mjs --full",
     "backup": "bash scripts/backup.sh",
-    "auth:reset": "bun scripts/auth-reset.ts"
+    "auth:reset": "bun scripts/auth-reset.ts",
+    "auth:enable": "bun scripts/auth-enable.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -79,6 +83,7 @@
     "sonner": "^2.0.6",
     "tailwind-merge": "^3.3.1",
     "tailwindcss-animate": "^1.0.7",
+    "undici": "^8.12.3",
     "uuid": "^11.1.0",
     "vaul": "^1.1.2",
     "z-ai-web-dev-sdk": "^0.0.18",

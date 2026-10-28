@@ -69,8 +69,16 @@ export async function verifyToken(
   } catch {
     return null;
   }
-  if (payload?.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
+  // Strict contract: a token MUST carry a well-formed FUTURE expiry and a
+  // unique id. The old falsy check (`payload?.exp && …`) let a correctly
+  // signed token with exp = 0 / undefined pass the expiry gate — an
+  // effectively never-expiring token. Reject anything that is not a positive
+  // integer expiry in the future, and require the jti issued by signToken.
+  const now = Math.floor(Date.now() / 1000);
+  const exp = payload?.exp;
+  if (typeof exp !== "number" || !Number.isSafeInteger(exp) || exp <= now) return null;
   if (payload?.s !== "session" && payload?.s !== "api") return null;
+  if (typeof payload.jti !== "string" || payload.jti.length < 6) return null;
   const key = await hmacKey(secret);
   const ok = await crypto.subtle.verify(
     "HMAC",

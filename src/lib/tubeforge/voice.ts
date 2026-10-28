@@ -19,11 +19,10 @@ import fs from "fs";
 import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { lookup as dnsLookup } from "node:dns/promises";
-import { isIP } from "node:net";
 import { videoDir } from "./ai";
 import { cutVoiceoverIntoScenes } from "./convert";
 import { parseScenes } from "./story";
+import { isPrivateHostname, safeFetch } from "./net-guard";
 
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
@@ -35,30 +34,13 @@ const execFileAsync = promisify(execFile);
 
 const AUDIO_EXT_RE = /\.(mp3|wav|wave|m4a|aac|ogg|oga|opus|flac|webm|mp4|m4b|wma|aiff?|amr)$/i;
 
-/** True when the address is private/loopback/link-local/CGNAT/metadata. */
-function isPrivateAddress(addr: string): boolean {
-  const parts = addr.split(".");
-  if (parts.length === 4 && parts.every((p) => /^\d{1,3}$/.test(p))) {
-    const [a, b] = parts.map(Number);
-    if (a === 0 || a === 10 || a === 127) return true; // this-network, private, loopback
-    if (a === 169 && b === 254) return true; // link-local incl. cloud metadata (169.254.169.254)
-    if (a === 172 && b >= 16 && b <= 31) return true; // private
-    if (a === 192 && b === 168) return true; // private
-    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
-    return false;
-  }
-  const v6 = addr.toLowerCase().replace(/^::ffff:/, (m) => m); // keep mapped form for v4 check below
-  if (/^::ffff:\d+\.\d+\.\d+\.\d+$/.test(v6))
-    return isPrivateAddress(v6.slice(7)); // IPv4-mapped IPv6
-  if (v6 === "::1" || v6 === "::") return true; // loopback / unspecified
-  if (v6.startsWith("fe80") || v6.startsWith("fc") || v6.startsWith("fd")) return true; // link-local / ULA
-  return false;
-}
-
 const BLOCKED_HOST_RE =
   /^(localhost|.+\.local|.+\.localhost|.+\.internal|.+\.lan|metadata\.google\.internal)$/i;
 
-/** SSRF guard: only public http(s) hosts are allowed for user-supplied links. */
+/** SSRF guard: only public http(s) hosts are allowed for user-supplied links.
+ *  IP-literal checks reuse net-guard's full IPv4/IPv6 special-purpose table
+ *  (multicast, TEST-NETs, benchmarking, NAT64/mapped-v4 included). Hostname
+ *  resolution is validated per-connection by net-guard's pinned dispatcher. */
 export function isValidAudioUrl(url: string): boolean {
   try {
     const u = new URL(url);
@@ -66,35 +48,11 @@ export function isValidAudioUrl(url: string): boolean {
     const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, ""); // strip IPv6 brackets
     if (!host) return false;
     if (BLOCKED_HOST_RE.test(host)) return false;
-    if (isIP(host) !== 0 && isPrivateAddress(host)) return false;
+    if (isPrivateHostname(host)) return false;
     // No extension is fine (many CDNs serve audio bare) — extension only helps.
     return true;
   } catch {
     return false;
-  }
-}
-
-/**
- * Resolve the hostname and reject private answers (DNS-rebinding guard).
- * Throws readable errors — callers surface them on the video row.
- */
-async function assertPublicHost(hostname: string): Promise<void> {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (isIP(host) !== 0) {
-    if (isPrivateAddress(host)) throw new Error("That link points at a private network address");
-    return;
-  }
-  let addrs: { address: string }[];
-  try {
-    addrs = await dnsLookup(host, { all: true });
-  } catch {
-    throw new Error("Could not resolve that host — check the link works in a browser");
-  }
-  if (addrs.length === 0)
-    throw new Error("Could not resolve that host — check the link works in a browser");
-  for (const { address } of addrs) {
-    if (isPrivateAddress(address))
-      throw new Error("That host resolves to a private network address — blocked for safety");
   }
 }
 
@@ -143,66 +101,37 @@ async function probeAudio(filePath: string): Promise<AudioProbe> {
 
 /** Download an audio file from the internet with SSRF + size + type guards. */
 async function downloadAudio(url: string): Promise<{ buffer: Buffer; filename: string }> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 120_000); // 2 min hard cap
-  try {
-    // Manual redirect loop: every hop is re-validated so a public URL can't
-    // bounce the server at an internal address (classic SSRF bypass).
-    let current = url;
-    for (let hop = 0; hop < 4; hop++) {
-      if (!isValidAudioUrl(current))
-        throw new Error("That link is not a valid public http(s) audio address");
-      await assertPublicHost(new URL(current).hostname);
+  // safeFetch: DNS-PINNED connections (a hostile DNS server cannot rebind the
+  // host between validation and connection), every redirect hop re-validated,
+  // a 2-minute cap and the MAX_AUDIO_BYTES ceiling enforced while streaming.
+  const res = await safeFetch(url, {
+    timeoutMs: 120_000,
+    maxBytes: MAX_AUDIO_BYTES,
+    headers: { "User-Agent": "TubeForge/1.0 (+voice import)" },
+  });
 
-      const res = await fetch(current, {
-        signal: controller.signal,
-        redirect: "manual",
-        headers: { "User-Agent": "TubeForge/1.0 (+voice import)" },
-      });
+  if (!res.ok)
+    throw new Error(
+      `The site answered ${res.status} ${res.statusText} — check the link works in a browser`
+    );
 
-      if (res.status >= 300 && res.status < 400) {
-        const loc = res.headers.get("location");
-        if (!loc) throw new Error("The site returned a redirect with nowhere to go");
-        current = new URL(loc, current).toString();
-        continue;
-      }
+  const buffer = Buffer.from(await res.arrayBuffer());
+  if (buffer.length === 0) throw new Error("The link returned an empty file");
 
-      if (!res.ok)
-        throw new Error(
-          `The site answered ${res.status} ${res.statusText} — check the link works in a browser`
-        );
+  const finalUrl = res.url || url;
+  const contentType = (res.headers.get("content-type") ?? "").toLowerCase();
+  const looksAudio =
+    contentType.includes("audio") ||
+    contentType.includes("octet-stream") ||
+    contentType.includes("video/mp4") || // mp4 files often carry the audio track users want
+    AUDIO_EXT_RE.test(new URL(finalUrl).pathname);
 
-      const lenHeader = Number(res.headers.get("content-length") ?? 0);
-      if (lenHeader > MAX_AUDIO_BYTES)
-        throw new Error(
-          `File is ${(lenHeader / 1024 / 1024).toFixed(0)} MB — the limit is ${MAX_AUDIO_BYTES / 1024 / 1024} MB`
-        );
+  if (!looksAudio)
+    throw new Error(
+      `The link serves "${contentType || "unknown type"}" — paste a direct link to an audio file (mp3, wav, m4a…)`
+    );
 
-      const buffer = Buffer.from(await res.arrayBuffer());
-      if (buffer.length === 0) throw new Error("The link returned an empty file");
-      if (buffer.length > MAX_AUDIO_BYTES)
-        throw new Error(
-          `Downloaded ${(buffer.length / 1024 / 1024).toFixed(0)} MB — the limit is ${MAX_AUDIO_BYTES / 1024 / 1024} MB`
-        );
-
-      const contentType = (res.headers.get("content-type") ?? "").toLowerCase();
-      const looksAudio =
-        contentType.includes("audio") ||
-        contentType.includes("octet-stream") ||
-        contentType.includes("video/mp4") || // mp4 files often carry the audio track users want
-        AUDIO_EXT_RE.test(new URL(current).pathname);
-
-      if (!looksAudio)
-        throw new Error(
-          `The link serves "${contentType || "unknown type"}" — paste a direct link to an audio file (mp3, wav, m4a…)`
-        );
-
-      return { buffer, filename: labelFromUrl(current) };
-    }
-    throw new Error("Too many redirects while downloading");
-  } finally {
-    clearTimeout(timer);
-  }
+  return { buffer, filename: labelFromUrl(finalUrl) };
 }
 
 export interface IngestResult {

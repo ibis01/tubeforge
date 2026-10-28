@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>TubeForge — offline</title>
+<meta name="theme-color" content="#0a0a0a" />
+<link rel="icon" type="image/png" href="/icons/icon-192.png" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #0a0a0a; color: #fafafa;
+    display: flex; align-items: center; justify-content: center;
+    padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
+    text-align: center;
+  }
+  .card { max-width: 380px; display: flex; flex-direction: column; align-items: center; gap: 18px; }
+  .badge {
+    width: 84px; height: 84px; border-radius: 22px;
+    background: linear-gradient(135deg, #ff2020 0%, #ff5a1f 100%);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 40px rgb(255 32 32 / 30%);
+  }
+  .badge svg { width: 38px; height: 38px; fill: #fff; }
+  h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+  p { color: #a1a1aa; font-size: 14px; line-height: 1.6; }
+  button {
+    margin-top: 6px; border: 0; cursor: pointer;
+    background: linear-gradient(135deg, #ff2020 0%, #ff5a1f 100%);
+    color: #fff; font-weight: 600; font-size: 14px;
+    padding: 12px 28px; border-radius: 12px;
+  }
+  button:active { transform: scale(0.98); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">
+      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M6 3.803c0-1.483 1.613-2.4 2.895-1.65l12.006 6.994a1.9 1.9 0 0 1 0 3.28L8.895 19.42A1.9 1.9 0 0 1 6 17.77V3.803Z" transform="translate(-2,2)"/></svg>
+    </div>
+    <h1>TubeForge is offline</h1>
+    <p>This app runs on your computer. Make sure the dev server is running there and your phone is connected to the same Wi-Fi network, then try again.</p>
+    <button onclick="location.reload()">Reconnect</button>
+  </div>
+</body>
+</html>

@@ -42,6 +42,32 @@ export function parseWav(buf: Buffer): WavInfo {
   return { ...fmt, pcm: Buffer.concat(pcmParts) };
 }
 
+/** Wrap raw PCM bytes in a canonical 44-byte RIFF/WAVE container.
+ *  This is the format every TubeForge TTS adapter normalizes to
+ *  (24 kHz mono PCM-16 unless stated otherwise). */
+export function pcmToWav(
+  pcm: Buffer,
+  sampleRate: number,
+  channels: number,
+  bitsPerSample: number
+): Buffer {
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16); // PCM chunk size
+  header.writeUInt16LE(1, 20); // audio format: PCM
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE((sampleRate * channels * bitsPerSample) / 8, 28); // byte rate
+  header.writeUInt16LE((channels * bitsPerSample) / 8, 32); // block align
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+}
+
 /** Merge N same-format WAV buffers into one continuous WAV buffer. */
 export function mergeWavs(buffers: Buffer[]): { buffer: Buffer; durationSec: number } {
   if (buffers.length === 0) throw new Error("No buffers to merge");

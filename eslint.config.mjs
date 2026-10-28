@@ -44,7 +44,9 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "no-useless-escape": "off",
   },
 }, {
-  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills"]
+  // pack/ is a packaging artifact mirror; scripts/*.cjs are standalone ops
+  // scripts executed directly with node (CommonJS by design, not app code).
+  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills", "pack/**", "scripts/**/*.cjs"]
 }];
 
 export default eslintConfig;
