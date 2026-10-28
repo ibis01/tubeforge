@@ -91,83 +91,83 @@ export default function Home() {
   return (
     <AuthGate>
       <div className="min-h-screen flex bg-background">
-      {/* Desktop sidebar */}
-      <AppSidebar />
+        {/* Desktop sidebar */}
+        <AppSidebar />
 
-      {/* Main column */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Top bar */}
-        <header className="sticky top-0 z-30 glass-strong border-b border-white/5">
-          <div className="flex items-center gap-3 px-4 sm:px-6 h-16">
-            {/* Mobile nav trigger */}
-            <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-              <SheetTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="lg:hidden text-foreground hover:bg-white/10"
-                  aria-label="Open navigation menu"
+        {/* Main column */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Top bar */}
+          <header className="sticky top-0 z-30 glass-strong border-b border-white/5">
+            <div className="flex items-center gap-3 px-4 sm:px-6 h-16">
+              {/* Mobile nav trigger */}
+              <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+                <SheetTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="lg:hidden text-foreground hover:bg-white/10"
+                    aria-label="Open navigation menu"
+                  >
+                    <Menu className="h-5 w-5" />
+                  </Button>
+                </SheetTrigger>
+                <SheetContent
+                  side="left"
+                  className="w-64 p-0 bg-sidebar border-white/10"
                 >
-                  <Menu className="h-5 w-5" />
+                  <SheetTitle className="sr-only">Navigation</SheetTitle>
+                  <MobileNavContent onNavigate={handleNav} view={view} />
+                </SheetContent>
+              </Sheet>
+
+              <div className="min-w-0 flex-1">
+                <h1 className="text-base sm:text-lg font-semibold tracking-tight truncate">
+                  {meta.title}
+                </h1>
+                <p className="text-xs text-muted-foreground truncate hidden sm:block">
+                  {meta.subtitle}
+                </p>
+              </div>
+
+              {view !== "create" && view !== "settings" ? (
+                <Button
+                  onClick={() => setView("create")}
+                  className="bg-brand-gradient hover:opacity-90 text-white font-semibold shadow-lg shrink-0"
+                  size="sm"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span className="hidden sm:inline">New Video</span>
+                  <span className="sm:hidden">New</span>
                 </Button>
-              </SheetTrigger>
-              <SheetContent
-                side="left"
-                className="w-64 p-0 bg-sidebar border-white/10"
-              >
-                <SheetTitle className="sr-only">Navigation</SheetTitle>
-                <MobileNavContent onNavigate={handleNav} view={view} />
-              </SheetContent>
-            </Sheet>
-
-            <div className="min-w-0 flex-1">
-              <h1 className="text-base sm:text-lg font-semibold tracking-tight truncate">
-                {meta.title}
-              </h1>
-              <p className="text-xs text-muted-foreground truncate hidden sm:block">
-                {meta.subtitle}
-              </p>
+              ) : null}
             </div>
+          </header>
 
-            {view !== "create" && view !== "settings" ? (
-              <Button
-                onClick={() => setView("create")}
-                className="bg-brand-gradient hover:opacity-90 text-white font-semibold shadow-lg shrink-0"
-                size="sm"
-              >
-                <Plus className="h-4 w-4" />
-                <span className="hidden sm:inline">New Video</span>
-                <span className="sm:hidden">New</span>
-              </Button>
-            ) : null}
-          </div>
-        </header>
+          {/* View content */}
+          <main className="flex-1 px-4 sm:px-6 py-6 w-full max-w-[1400px] mx-auto">
+            {view === "dashboard" && <DashboardView />}
+            {view === "analytics" && <AnalyticsView />}
+            {view === "research" && <ResearchView />}
+            {view === "create" && <CreateView />}
+            {view === "library" && <LibraryView />}
+            {view === "cast" && <CastView />}
+            {view === "calendar" && <CalendarView />}
+            {view === "channels" && <ChannelsView />}
+            {view === "settings" && <SettingsView />}
+          </main>
 
-        {/* View content */}
-        <main className="flex-1 px-4 sm:px-6 py-6 w-full max-w-[1400px] mx-auto">
-          {view === "dashboard" && <DashboardView />}
-          {view === "analytics" && <AnalyticsView />}
-          {view === "research" && <ResearchView />}
-          {view === "create" && <CreateView />}
-          {view === "library" && <LibraryView />}
-          {view === "cast" && <CastView />}
-          {view === "calendar" && <CalendarView />}
-          {view === "channels" && <ChannelsView />}
-          {view === "settings" && <SettingsView />}
-        </main>
-
-        {/* Sticky footer */}
-        <footer className="mt-auto border-t border-white/5 px-4 sm:px-6 py-4">
-          <div className="max-w-[1400px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-muted-foreground">
-            <p>
-              <span className="text-gradient font-semibold">TubeForge</span> · Automated
-              faceless YouTube content engine
-            </p>
-            <p>GLM scripting · TTS voiceover · CogView thumbnails</p>
-          </div>
-        </footer>
+          {/* Sticky footer */}
+          <footer className="mt-auto border-t border-white/5 px-4 sm:px-6 py-4">
+            <div className="max-w-[1400px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-muted-foreground">
+              <p>
+                <span className="text-gradient font-semibold">TubeForge</span> ·
+                Automated faceless YouTube content engine
+              </p>
+              <p>AI scripting · AI voiceover · AI thumbnails</p>
+            </div>
+          </footer>
+        </div>
       </div>
-    </div>
     </AuthGate>
   );
 }
