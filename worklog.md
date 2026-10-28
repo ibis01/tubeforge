@@ -632,3 +632,19 @@ Work Log:
 
 Stage Summary:
 - Guidance only. State: user's local app is (almost certainly) already up on :3000; tunnel status unknown until user runs pgrep / the script again.
+
+---
+Task ID: storyboard-resumable
+Agent: main (Z.ai)
+Task: User hit a 429 mid-way through a 16-scene storyboard (scenes 1-4 painted, rest blocked). Diagnose + make storyboard resumable so re-clicking doesn't waste credits on already-painted scenes.
+
+Work Log:
+- Diagnosed: 429 = z.ai upstream rate limit on the image endpoint. Existing retry (4 attempts, 5s base × 4 on 429 → up to ~75s of waits) plus the 45s shared cool-down in budget.ts is correct — but the 16-scene storyboard loops through ALL scenes every run, so a 429 at scene 5 meant re-clicking would re-paint scenes 1-4 too (wasteful, plus more 429s).
+- Code patch src/lib/tubeforge/story.ts::generateStoryboard — added `force?: boolean` (default false) and a resume check at loop top: if `!force` AND scene-XX.png exists on disk AND size ≥ 1000 bytes, call onSceneDone, sleep 2s, continue. Per-scene re-roll endpoint (POST {scene:N}) is unaffected (it calls generateSceneImage directly, not generateStoryboard). No API or DB schema change.
+- Typecheck: project `bunx tsc --noEmit` clean (the staged public/tubeforge/*.ts snapshots show context-only errors because they live outside the src tree — those are intentional curl artifacts).
+- Staged at public/tubeforge/story.ts (md5 a737f9ff439ca2a3fb6d112c5b80efc9, verified identical to src), preview-host URL serves 200 with the same md5.
+- Restarted sandbox dev server via scripts/restart-dev.py to wake the preview proxy after a transient 403 (preview host needs the dev server up).
+
+Stage Summary:
+- User apply path: `curl -fsSL https://preview-chat-92cf2337-6ca5-4169-a0bc-3579414f698b.space-z.ai/tubeforge/story.ts -o ~/tubeforge/src/lib/tubeforge/story.ts` then restart the local dev server (fuser -k 3000/tcp && npm run dev). After the patch, clicking "Generate Storyboard" again only paints scenes whose image file is missing — scenes 1-4 are skipped, scene 5+ resumes. Per-scene "重新生成" buttons still force a single scene to repaint as before.
+- Reminders still pending: enable Settings → Studio access lock before sharing the public URL; optional ngrok free static domain for a permanent address; README/LICENSE; rm -rf ~/tf-pkg cleanup.

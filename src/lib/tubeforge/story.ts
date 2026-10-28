@@ -387,7 +387,10 @@ export async function generateSceneImage(opts: {
   return { fileBytes: fs.existsSync(imagePath) ? fs.statSync(imagePath).size : 0 };
 }
 
-/** Full storyboard — every scene image, paced to respect upstream burst limits. */
+/** Full storyboard — every scene image, paced to respect upstream burst limits.
+ *  Resumable: scenes whose image already exists on disk are skipped, so a 429
+ *  mid-way through a 16-scene run only re-paints the scenes that didn't finish.
+ */
 export async function generateStoryboard(opts: {
   videoId: string;
   scenes: Scene[];
@@ -401,11 +404,25 @@ export async function generateStoryboard(opts: {
   shouldCancel?: () => boolean;
   /** Progress hook per finished scene (i is 0-based). */
   onSceneDone?: (i: number, total: number) => void;
+  /** When true, regenerate every scene even if its image already exists. Default false. */
+  force?: boolean;
 }): Promise<{ generated: number }> {
   let generated = 0;
   for (const [i, scene] of opts.scenes.entries()) {
     if (opts.shouldCancel?.())
       throw new Error("__CANCELLED__"); // route translates into JobCancelledError
+
+    // Resume support: a scene whose image is already on disk is treated as done.
+    // The per-scene re-roll endpoint can still force a single scene to repaint.
+    if (!opts.force) {
+      const existing = path.join(videoDir(opts.videoId), sceneImageFile(scene.index));
+      if (fs.existsSync(existing) && fs.statSync(existing).size >= 1000) {
+        opts.onSceneDone?.(i, opts.scenes.length);
+        if (i < opts.scenes.length - 1) await sleep(2000);
+        continue;
+      }
+    }
+
     await generateSceneImage({ ...opts, scene });
     generated++;
     opts.onSceneDone?.(i, opts.scenes.length);
