@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { convertClassicToScenes } from "@/lib/tubeforge/convert";
 import { startJob, isJobRunning, lastJobError } from "@/lib/tubeforge/jobs";
+import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -47,7 +48,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     try {
       await convertClassicToScenes({ videoId: id });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Conversion failed";
+      const message = errorText(err, "Conversion failed");
       await db.video.update({ where: { id }, data: { error: message } });
       await db.activity.create({
         data: {

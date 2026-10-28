@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { serializeCharacter, buildAnchorFallback } from "@/lib/tubeforge/characters";
+import { errorText } from "@/lib/tubeforge/redact";
 
 export async function GET() {
   const characters = await db.character.findMany({
@@ -45,7 +46,7 @@ export async function POST(req: NextRequest) {
       { status: 201 }
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Invalid request";
+    const message = errorText(err, "Invalid request");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

@@ -10,6 +10,7 @@
 // can fix quota / auth / scope problems without reading Google's docs.
 
 import { db } from "@/lib/db";
+import { redactText } from "@/lib/tubeforge/redact";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -341,7 +342,11 @@ export async function uploadToYouTube(input: UploadInput): Promise<UploadResult>
       body: new Uint8Array(bytes),
     });
   } catch (err) {
-    throw new Error(`Could not transmit the video file: ${err instanceof Error ? err.message : err}`);
+    throw new Error(
+      redactText(
+        `Could not transmit the video file: ${err instanceof Error ? err.message : String(err)}`
+      )
+    );
   }
   if (!upRes.ok) throw await apiError(upRes, "Upload");
 

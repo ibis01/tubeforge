@@ -13,6 +13,7 @@ import {
   setJobProgress,
   JobCancelledError,
 } from "@/lib/tubeforge/jobs";
+import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -173,7 +174,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         });
         throw err;
       }
-      const message = err instanceof Error ? err.message : "Render failed";
+      const message = errorText(err, "Render failed");
       await db.video.update({ where: { id }, data: { error: message } });
       await db.activity.create({
         data: {

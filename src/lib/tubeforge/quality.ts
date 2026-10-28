@@ -14,6 +14,7 @@ import { db } from "@/lib/db";
 import { parseJsonLoose } from "./ai";
 import { aiCall } from "./budget";
 import { visionComplete } from "./providers/vision";
+import { errorText } from "@/lib/tubeforge/redact";
 
 export type GateKind = "thumbnail" | "scene";
 
@@ -127,7 +128,7 @@ export async function runQualityGate(opts: {
   try {
     first = await inspectImage(opts.imagePath, opts.context);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "VLM inspection failed";
+    const message = errorText(err, "VLM inspection failed");
     console.warn(`[quality] inspection failed, passing through: ${message}`);
     await logActivity(opts.videoId, `Quality check skipped — inspector unavailable (${message})`, "error");
     return { checked: false, score: null, issues: [], summary: null, rerolled: false, previousScore: null };
@@ -179,7 +180,7 @@ export async function runQualityGate(opts: {
       fs.copyFileSync(backup, opts.imagePath);
       fs.rmSync(backup, { force: true });
     }
-    const message = err instanceof Error ? err.message : "re-roll failed";
+    const message = errorText(err, "re-roll failed");
     console.warn(`[quality] re-roll failed, keeping original: ${message}`);
     await logActivity(
       opts.videoId,

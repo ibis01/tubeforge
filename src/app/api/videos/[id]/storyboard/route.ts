@@ -4,6 +4,7 @@ import path from "path";
 import { db } from "@/lib/db";
 import { generateStoryboard, generateSceneImage, serializeScenes, storyboardComplete, parseScenes } from "@/lib/tubeforge/story";
 import { startJob, isJobRunning, isJobCancelled, lastJobError, setJobProgress, JobCancelledError } from "@/lib/tubeforge/jobs";
+import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -110,7 +111,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           },
         });
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Scene re-roll failed";
+        const message = errorText(err, "Scene re-roll failed");
         await db.video.update({ where: { id }, data: { error: message } });
         await db.activity.create({
           data: {
@@ -178,7 +179,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         });
         throw new JobCancelledError();
       }
-      const message = err instanceof Error ? err.message : "Storyboard failed";
+      const message = errorText(err, "Storyboard failed");
       await db.video.update({
         where: { id },
         data: {

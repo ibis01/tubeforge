@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { generateTopicResearch } from "@/lib/tubeforge/ai";
 import { applyPerformanceBoost } from "@/lib/tubeforge/analytics";
 import { serializeSession } from "@/lib/tubeforge/research";
+import { errorText } from "@/lib/tubeforge/redact";
 
 /** GET — recent research sessions (newest first). */
 export async function GET(req: NextRequest) {
@@ -57,7 +58,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ session: serializeSession(row) });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Research failed";
+    const message = errorText(err, "Research failed");
     await db.activity.create({
       data: { stage: "research", level: "error", message: `Topic Radar failed: ${message}` },
     });

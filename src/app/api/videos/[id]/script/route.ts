@@ -7,6 +7,7 @@ import { generateSceneScriptPackage } from "@/lib/tubeforge/story";
 import { deriveStatus } from "@/lib/tubeforge/status";
 import { startJob, isJobRunning } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
+import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -196,7 +197,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       }
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "Script generation failed";
+        errorText(err, "Script generation failed");
       // A failed FIRST attempt marks the video failed (matches the create
       // flow); a failed re-roll keeps the old script + status — only the
       // error is surfaced.

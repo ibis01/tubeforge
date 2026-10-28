@@ -20,6 +20,7 @@ import { db } from "@/lib/db";
 import { generateScriptPackage } from "./ai";
 import { generateSceneScriptPackage } from "./story";
 import { JobCancelledError, cancellableSleep, throwIfCancelled } from "./cancel";
+import { errorText } from "@/lib/tubeforge/redact";
 
 const STORM_ROUNDS = 6;
 /** Escalating cool-down between storm rounds, in minutes (index = round-1). */
@@ -141,7 +142,7 @@ export async function runScriptJob(videoId: string): Promise<void> {
       }
 
       const message =
-        err instanceof Error ? err.message : "Script generation failed";
+        errorText(err, "Script generation failed");
       const rateLimited = /429|too many requests/i.test(message);
 
       if (rateLimited && round < STORM_ROUNDS) {

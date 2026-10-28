@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { generateCharacterBible } from "@/lib/tubeforge/characters";
 import { serializeCharacter } from "@/lib/tubeforge/characters";
+import { errorText } from "@/lib/tubeforge/redact";
 
 /**
  * POST — GLM "character bible": expands a name + short concept into a full
@@ -48,7 +49,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ bible });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Bible generation failed";
+    const message = errorText(err, "Bible generation failed");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

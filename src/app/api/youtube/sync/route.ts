@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { syncYouTubeStats } from "@/lib/tubeforge/analytics";
 import { isConnected } from "@/lib/tubeforge/youtube";
+import { errorText } from "@/lib/tubeforge/redact";
 
 /**
  * POST — pull fresh performance stats for every published video (one batched
@@ -18,7 +19,7 @@ export async function POST() {
     const result = await syncYouTubeStats();
     return NextResponse.json(result);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Stats sync failed";
+    const message = errorText(err, "Stats sync failed");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

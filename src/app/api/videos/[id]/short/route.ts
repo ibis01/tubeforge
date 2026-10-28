@@ -6,6 +6,7 @@ import { startJob, isJobRunning, lastJobError, setJobProgress } from "@/lib/tube
 import { parseScenes } from "@/lib/tubeforge/story";
 import { renderShort } from "@/lib/tubeforge/shorts";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
+import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -83,7 +84,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         },
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Short render failed";
+      const message = errorText(err, "Short render failed");
       await db.video.update({ where: { id }, data: { error: message } });
       await db.activity.create({
         data: {

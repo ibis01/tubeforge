@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { setSetting } from "@/lib/tubeforge/youtube";
+import { errorText } from "@/lib/tubeforge/redact";
 
 /**
  * PUT — save the OAuth client credentials + upload defaults.
@@ -29,7 +30,7 @@ export async function PUT(req: NextRequest) {
 
     return NextResponse.json({ saved: true });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Invalid request";
+    const message = errorText(err, "Invalid request");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

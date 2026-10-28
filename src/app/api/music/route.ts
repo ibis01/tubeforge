@@ -7,6 +7,7 @@ import {
   getMusicSettings,
   MAX_TRACK_BYTES,
 } from "@/lib/tubeforge/music";
+import { errorText } from "@/lib/tubeforge/redact";
 
 /**
  * GET — the music library + settings. Auto-seeds the TubeForge-original beds
@@ -77,7 +78,7 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json({ track: serializeTrack(track) }, { status: 201 });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Upload failed";
+      const message = errorText(err, "Upload failed");
       return NextResponse.json({ error: message }, { status: 400 });
     }
   }

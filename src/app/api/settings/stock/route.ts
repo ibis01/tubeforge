@@ -6,6 +6,7 @@ import {
   searchAll,
   KEY_URLS,
 } from "@/lib/tubeforge/stock";
+import { errorText } from "@/lib/tubeforge/redact";
 
 /** GET — masked key state (the raw keys never leave the server). */
 export async function GET() {
@@ -30,7 +31,7 @@ export async function PUT(req: NextRequest) {
       pixabay: { hasKey: Boolean(keys.pixabay), maskedKey: maskStockKey(keys.pixabay) },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Invalid request";
+    const message = errorText(err, "Invalid request");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
@@ -72,7 +73,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ error: "Unknown provider" }, { status: 400 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Test failed";
+    const message = errorText(err, "Test failed");
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }

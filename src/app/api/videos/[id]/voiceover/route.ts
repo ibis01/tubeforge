@@ -8,6 +8,7 @@ import { ingestCustomAudio, MAX_AUDIO_BYTES, isValidAudioUrl } from "@/lib/tubef
 import { deriveStatus } from "@/lib/tubeforge/status";
 import { startJob, setJobProgress } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
+import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -191,7 +192,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       });
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "Voiceover failed";
+        errorText(err, "Voiceover failed");
       await db.video.update({
         where: { id },
         data: { status: "failed", error: message },

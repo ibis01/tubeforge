@@ -79,3 +79,6 @@ public/tubeforge/
 .vscode/
 .idea/
 Thumbs.db
+
+# bun is the single package manager (bun.lock) — keep npm metadata out
+package-lock.json

@@ -28,6 +28,7 @@ import { chatComplete } from "@/lib/tubeforge/providers/chat";
 import { visionComplete } from "@/lib/tubeforge/providers/vision";
 import { ttsSynthesize } from "@/lib/tubeforge/providers/tts";
 import { imageEdit, imageGenerate } from "@/lib/tubeforge/providers/image";
+import { errorText } from "@/lib/tubeforge/redact";
 
 const CAPABILITIES: CapabilityId[] = ["chat", "tts", "image", "video"];
 
@@ -132,7 +133,7 @@ export async function PUT(req: NextRequest) {
     resetZAIClient();
     return NextResponse.json({ capability, config: publicCapability(saved) });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Invalid request";
+    const message = errorText(err, "Invalid request");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
@@ -288,7 +289,7 @@ export async function POST(req: NextRequest) {
       }
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Connection failed";
+    const message = errorText(err, "Connection failed");
     return NextResponse.json({ ok: false, error: message.slice(0, 400) }, { status: 200 });
   } finally {
     // A test must never poison the live client: reset so the next real call

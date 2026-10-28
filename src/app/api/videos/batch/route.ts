@@ -9,6 +9,7 @@ import { startJob } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
 import { chatComplete } from "@/lib/tubeforge/providers/chat";
 import { FORMATS, RENDER_MODES } from "@/lib/tubeforge/types";
+import { errorText } from "@/lib/tubeforge/redact";
 
 const wordCount = (text: string) => text.split(/\s+/).filter(Boolean).length;
 
@@ -216,7 +217,7 @@ export async function POST(req: NextRequest) {
             });
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : "Script generation failed";
+          const message = errorText(err, "Script generation failed");
           await db.video
             .update({ where: { id: video.id }, data: { status: "failed", error: message } })
             .catch(() => {});
@@ -244,7 +245,7 @@ export async function POST(req: NextRequest) {
       { status: 202 }
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Invalid request";
+    const message = errorText(err, "Invalid request");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

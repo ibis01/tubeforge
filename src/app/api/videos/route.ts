@@ -5,6 +5,7 @@ import { latestStatsMap } from "@/lib/tubeforge/analytics";
 import { generateSceneScriptPackage } from "@/lib/tubeforge/story";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
 import { FORMATS, RENDER_MODES, type VideoDTO } from "@/lib/tubeforge/types";
+import { errorText } from "@/lib/tubeforge/redact";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -224,7 +225,7 @@ export async function POST(req: NextRequest) {
         }),
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Script generation failed";
+      const message = errorText(err, "Script generation failed");
       const failed = await db.video.update({
         where: { id: video.id },
         data: { status: "failed", error: message },
@@ -247,7 +248,7 @@ export async function POST(req: NextRequest) {
       );
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Invalid request";
+    const message = errorText(err, "Invalid request");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

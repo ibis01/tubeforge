@@ -28,6 +28,12 @@ import {
   getAuthSecret,
   verifyToken,
 } from "@/lib/tubeforge/auth-token";
+import {
+  READ_LIMIT,
+  WRITE_LIMIT,
+  clientIpFrom,
+  hitBucket,
+} from "@/lib/tubeforge/rate-limit";
 
 // Endpoints reachable without a session. /api/auth/token is deliberately NOT
 // here — creating an API token requires an authenticated session.
@@ -82,6 +88,24 @@ export async function middleware(req: NextRequest) {
     if (isProd && !gateActive && process.env.TUBEFORGE_REQUIRE_LOCK !== "0")
       warnProductionOpenGate();
     return NextResponse.next();
+  }
+
+  // Coarse per-IP rate limit — runs BEFORE auth so unauthenticated floods
+  // are shed at the door (auth adds its own login lockout; budget.ts caps
+  // provider spend). Reads 600/min, writes 90/min per IP — generous for a
+  // human-driven studio, hostile to runaway loops and scripted abuse.
+  // TUBEFORGE_RATE_READ / TUBEFORGE_RATE_WRITE = 0 disables a tier.
+  if (req.method !== "OPTIONS") {
+    const write = req.method !== "GET" && req.method !== "HEAD";
+    const hit = hitBucket(
+      `${write ? "w" : "r"}:${clientIpFrom(req.headers)}`,
+      write ? WRITE_LIMIT : READ_LIMIT
+    );
+    if (!hit.ok)
+      return NextResponse.json(
+        { error: "Too many requests — slow down and try again shortly" },
+        { status: 429, headers: { "Retry-After": String(hit.retryAfterSec) } }
+      );
   }
 
   // PRODUCTION FAIL-SAFE — opt-out explicitly with TUBEFORGE_REQUIRE_LOCK=0.

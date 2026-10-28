@@ -17,6 +17,7 @@
 // rate-limit storm and backs off (instead of failing the storyboard).
 
 import { getZAI } from "../ai";
+import { redactText } from "../redact";
 import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta } from "./registry";
 import { joinUrl, providerFetch, providerFetchJson, ProviderHttpError } from "./http";
@@ -296,7 +297,9 @@ async function pollinationsImage(
       // both should trigger the shared cool-down so the storyboard waits
       // instead of failing.
       throw new Error(
-        `429 too many requests — Pollinations rate-limited (HTTP ${err.status}); retry in ~20s. ${err.message.slice(0, 200)}`
+        redactText(
+          `429 too many requests — Pollinations rate-limited (HTTP ${err.status}); retry in ~20s. ${err.message.slice(0, 200)}`
+        )
       );
     }
     throw err;

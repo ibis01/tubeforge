@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { invalidateTtsSettings, zaiConfigured, type TtsProvider } from "@/lib/tubeforge/tts";
+import { errorText } from "@/lib/tubeforge/redact";
 
 const maskKey = (k: string) =>
   k ? (k.length <= 8 ? "••••" : `${k.slice(0, 4)}…${k.slice(-4)}`) : null;
@@ -41,7 +42,7 @@ export async function GET() {
   try {
     return NextResponse.json(await status());
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    const message = errorText(err, "Unknown error");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -95,7 +96,7 @@ export async function PUT(req: NextRequest) {
     invalidateTtsSettings();
     return NextResponse.json(await status());
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Invalid request";
+    const message = errorText(err, "Invalid request");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

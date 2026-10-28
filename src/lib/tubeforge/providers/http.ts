@@ -2,6 +2,8 @@
 // timeouts, and readable errors (status + body snippet) so users can debug
 // 401s / wrong endpoints straight from the activity feed.
 
+import { redactText } from "../redact";
+
 const TIMEOUT_MS = 300_000; // 5 min — long LLM and image calls are normal
 
 export function joinUrl(baseUrl: string, ...path: string[]): string {
@@ -42,7 +44,7 @@ export class ProviderHttpError extends Error {
     body: string
   ) {
     super(
-      `${provider} request failed (HTTP ${status}): ${body.slice(0, 300)}`
+      `${provider} request failed (HTTP ${status}): ${redactText(body).slice(0, 300)}`
     );
     this.name = "ProviderHttpError";
   }
@@ -66,7 +68,9 @@ export async function providerFetch(
       );
     }
     throw new Error(
-      `${provider} request failed: ${err instanceof Error ? err.message : String(err)} (${sanitizeUrlForError(url)})`
+      redactText(
+        `${provider} request failed: ${err instanceof Error ? err.message : String(err)} (${sanitizeUrlForError(url)})`
+      )
     );
   }
   if (!response.ok) {

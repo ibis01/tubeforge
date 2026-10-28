@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { parseScenes } from "@/lib/tubeforge/story";
 import { readSceneStock, fetchStockForScenes, readStockKeys } from "@/lib/tubeforge/stock";
 import { startJob, isJobRunning, isJobCancelled, lastJobError, setJobProgress, JobCancelledError } from "@/lib/tubeforge/jobs";
+import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string; n: string }> };
 
@@ -78,7 +79,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     } catch (err) {
       if (err instanceof JobCancelledError || (err instanceof Error && err.message === "__CANCELLED__"))
         throw new JobCancelledError();
-      const message = err instanceof Error ? err.message : "Stock refetch failed";
+      const message = errorText(err, "Stock refetch failed");
       await db.video.update({ where: { id }, data: { error: message } }).catch(() => {});
       throw err;
     }

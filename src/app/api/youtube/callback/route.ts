@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { exchangeCode, fetchChannelInfo } from "@/lib/tubeforge/youtube";
 import { setSetting } from "@/lib/tubeforge/youtube";
+import { errorText } from "@/lib/tubeforge/redact";
 
 /**
  * GET — OAuth consent callback. Google redirects here with ?code & state.
@@ -62,7 +63,7 @@ export async function GET(req: NextRequest) {
 
     return done(true, `${title} is now connected — uploads go straight to this channel.`);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    const message = errorText(err, "Unknown error");
     return done(false, message);
   }
 }

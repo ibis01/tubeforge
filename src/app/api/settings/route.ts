@@ -4,6 +4,7 @@ import {
   DEFAULT_SETTINGS,
   publicSettingsMap,
 } from "@/lib/tubeforge/settings-public";
+import { errorText } from "@/lib/tubeforge/redact";
 
 // SECURITY: the Setting table also stores secrets (OAuth client secret +
 // refresh token, provider API keys, the studio password hash). Responses are
@@ -47,7 +48,7 @@ export async function PUT(req: NextRequest) {
     const rows = await db.setting.findMany();
     return NextResponse.json({ settings: publicSettingsMap(rows) });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Invalid request";
+    const message = errorText(err, "Invalid request");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

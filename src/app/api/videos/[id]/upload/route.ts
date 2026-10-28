@@ -18,6 +18,7 @@ import { db } from "@/lib/db";
 import { startJob, isJobRunning, lastJobError } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
 import { isConnected, uploadToYouTube } from "@/lib/tubeforge/youtube";
+import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -100,7 +101,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       });
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "YouTube upload failed";
+        errorText(err, "YouTube upload failed");
       await db.video.update({ where: { id }, data: { error: message } });
       await db.activity.create({
         data: {

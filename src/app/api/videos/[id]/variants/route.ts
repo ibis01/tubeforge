@@ -12,6 +12,7 @@ import { parseScenes } from "@/lib/tubeforge/story";
 import { deriveStatus } from "@/lib/tubeforge/status";
 import { isJobRunning, lastJobError, startJob } from "@/lib/tubeforge/jobs";
 import { THUMB_STYLES, type VariantDTO } from "@/lib/tubeforge/types";
+import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -91,7 +92,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
         },
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Variant generation failed";
+      const message = errorText(err, "Variant generation failed");
       await db.activity.create({
         data: {
           videoId: id,

@@ -7,6 +7,7 @@ import { runQualityGate } from "@/lib/tubeforge/quality";
 import { deriveStatus } from "@/lib/tubeforge/status";
 import { startJob } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
+import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -97,7 +98,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       });
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "Thumbnail failed";
+        errorText(err, "Thumbnail failed");
       await db.video.update({
         where: { id },
         data: { status: "failed", error: message },

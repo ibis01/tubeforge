@@ -9,6 +9,7 @@
 // never resolves.
 
 import { db } from "@/lib/db";
+import { errorText } from "@/lib/tubeforge/redact";
 
 export type JobKind =
   | "voiceover"
@@ -267,7 +268,7 @@ export async function startJob(
     })
     .catch(async (err) => {
       const cancelled = err instanceof JobCancelledError;
-      const message = err instanceof Error ? err.message : `${kind} job failed`;
+      const message = errorText(err, `${kind} job failed`);
       state.lastErrors.set(k, message);
       if (!cancelled) console.error(`[job:${k}] failed:`, message);
       if (jobId)

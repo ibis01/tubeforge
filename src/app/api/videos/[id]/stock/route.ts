@@ -17,6 +17,7 @@ import {
   setJobProgress,
   JobCancelledError,
 } from "@/lib/tubeforge/jobs";
+import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -134,7 +135,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         });
         throw new JobCancelledError();
       }
-      const message = err instanceof Error ? err.message : "Stock fetch failed";
+      const message = errorText(err, "Stock fetch failed");
       await db.video.update({ where: { id }, data: { error: message } });
       await db.activity.create({
         data: {

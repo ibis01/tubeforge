@@ -9,6 +9,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getVoicePreview, resolvePreviewVoice } from "@/lib/tubeforge/voice-preview";
+import { errorText } from "@/lib/tubeforge/redact";
 
 export async function POST(req: NextRequest) {
   let body: { voice?: unknown } = {};
@@ -46,7 +47,7 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Preview failed";
+    const message = errorText(err, "Preview failed");
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }
