@@ -60,6 +60,13 @@ export const RENDER_MODES = [
     eta: "≈ 2–5 min",
   },
   {
+    id: "stock",
+    label: "Stock b-roll",
+    icon: "Film",
+    desc: "Real footage from Pexels & Pixabay matched per scene — Smart Motion art fills any scene without a match",
+    eta: "≈ 2–5 min",
+  },
+  {
     id: "animated",
     label: "Full AI animation",
     icon: "Clapperboard",
@@ -69,6 +76,16 @@ export const RENDER_MODES = [
 ] as const;
 
 export type RenderMode = (typeof RENDER_MODES)[number]["id"];
+
+/** A downloaded stock clip attached to one scene (stock.ts). */
+export interface StockRef {
+  source: "pexels" | "pixabay";
+  file: string; // stock-XX.mp4 inside the video dir
+  query: string; // the search terms that matched
+  credit: string; // "Footage by NAME (Pexels)"
+  pageUrl: string; // source page for attribution
+  durationSec: number;
+}
 
 export const CAMERAS = [
   { id: "zoom-in", label: "Zoom in" },
@@ -111,6 +128,7 @@ export interface Scene {
   rehook: boolean; // attention pivot — punch-zoom + sting at scene start
   sfx: string; // one of SFX_KINDS or "none"
   focal?: string; // where the eye must stay (Smart Motion) — e.g. "upper-right"
+  stock?: StockRef; // matched real-footage clip (render mode "stock")
 }
 
 export interface SceneDTO {
@@ -129,6 +147,11 @@ export interface SceneDTO {
   hasImage: boolean;
   imageUrl: string | null;
   generating: boolean; // single-scene re-roll in flight
+  hasStock: boolean;
+  stockUrl: string | null;
+  stockSource: string | null; // "pexels" | "pixabay"
+  stockQuery: string | null;
+  stockCredit: string | null;
 }
 
 /**
@@ -236,7 +259,7 @@ export interface VideoDTO {
   // Story engine
   format: string;
   renderMode: string;
-  scenes?: Scene[] | null; // populated in detail/create responses only
+  scenes?: SceneDTO[] | null; // populated in detail/create responses only
   sceneCount?: number;
   hasStoryboard: boolean;
   hasVideo: boolean;

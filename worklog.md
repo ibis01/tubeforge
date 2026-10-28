@@ -692,3 +692,29 @@ Stage Summary:
   fuser -k 3000/tcp && cd ~/tubeforge && npm run dev
 - Then: Settings → AI Providers → Artwork → provider dropdown → pick "Pollinations.ai (free, no key)" → leave API key blank (field is hidden) → Save. Storyboard scenes will now generate via Pollinations. The 45s/IP limit means a 16-scene storyboard takes ~12 minutes; Pollinations 402/503 errors auto-trigger the 45s budget cool-down so the pipeline paces itself without failing.
 - Honest tradeoff the user needs to know: free Pollinations is slower than z.ai CogView (z.ai can do 8/min = 16 scenes in 2 min when not rate-limited; Pollinations is hard-capped at ~1.3/min). For users who want speed, options: (a) keep z.ai but drop AI Budget → Image per minute to 5-6 + rely on the new resumable+429 patches from the previous turns; (b) buy a Pollinations pollen key at enter.pollinations.ai for unlimited; (c) use the OpenAI-compatible image provider with a paid DALL·E / gpt-image key.
+
+---
+Task ID: stock-broll-plus-series-batch
+Agent: main (Z.ai)
+Task: User: "let make tubeforge better than this" (vs MoneyPrinterTurbo). Close the two remaining feature gaps: stock footage b-roll (MPT's hallmark) and batch generation — TubeForge already led on everything else (story engine, Smart Motion, cast, research radar, analytics loop, YouTube upload).
+
+Work Log:
+- Researched MPT current state (WebFetch): script→TTS→footage→subtitles pipeline; footage = stock (Pexels/Pixabay/Coverr) + AI i2v; batch generation; multi-provider. Mapped against TubeForge: everything already covered except stock footage + batch.
+- NEW src/lib/tubeforge/stock.ts (~420 lines): Pexels Video API + Pixabay Video API adapters (auth, timeouts, 401/429 mapping); deterministic scene→query derivation (stop-word stripped content words from scene.visual + title, 2-4 queries, zero LLM cost); clip scoring (HD ≥1280 landscape, duration-fit vs estimated narration length, resolution); download with 200KB sanity floor → uploads/<videoId>/stock-XX.mp4; fetchStockForScenes (resumable, per-scene DB persistence, cancel support, force/single-scene modes); clearStock; key management (Setting keys stock.pexelsKey/stock.pixabayKey, masked).
+- types.ts: StockRef interface; Scene.stock optional field; SceneDTO +hasStock/stockUrl/stockSource/stockQuery/stockCredit; RENDER_MODES + "stock" entry (label "Stock b-roll", icon Film) — third render mode alongside kenburns/animated.
+- story.ts: parseStockRef validator + parseScenes preserves stock refs; serializeScenes emits stock fields.
+- render.ts: mode "stock" — per-scene branch: matched stock clip → stream_loop to scene duration + GRADE + narration/SFX audio chain; no clip → Smart Motion Ken Burns fallback. Camera plans computed only for fallback scenes. Progress label "Cutting stock footage — scene N".
+- jobs.ts: "stock" JobKind + STAGE_LABEL + jobSnapshot.stock + boot-recovery artifact check (scenes JSON contains '"stock"').
+- API: /api/videos/[id]/stock (GET status w/ per-scene refs, POST {force} job, DELETE clear all + invalidate renders); /api/videos/[id]/stock/[n] (GET stream clip mp4, POST refetch single scene as job); /api/settings/stock (GET masked, PUT save/clear keys, POST free live test search "ocean waves aerial").
+- render route + create route accept renderMode "stock"; render activity message labels it.
+- serialize.ts: includeScenes now returns full SceneDTOs (serializeScenes) — image/stock URLs + live job flags in every detail/create response; VideoDTO.scenes retyped SceneDTO[].
+- NEW /api/videos/batch: validates blueprint, ONE cheap LLM brainstorm call → N (2-6) distinct non-overlapping angles (JSON, graceful fallback to numbered takes), creates N video rows, starts a tracked "script" job per video (story + classic paths, character-aware) — Library polling + job history + crash recovery all work per-video.
+- poll.ts: pollStock (StockStatus {generating, progress, matched, total, error}).
+- create-view: 3-up render mode picker w/ per-mode hint lines; new "stock" stage in STAGE_DEFS + stageState + Auto-Pilot pipeline (storyboard → stock b-roll → voiceover → thumbnail → render) + resume + continue-pipeline "Find Stock Footage" button; filmstrip scenes show Pexels/Pixabay badges + matched query; header/autopilot captions updated; NEW Series batch card (2-6 count select + "Generate N-Video Series" → navigates to Library).
+- settings-view: StockFootageSection card (per-provider key inputs w/ masked saved badges, free test buttons, key signup links) between AI Providers and Music; job-history KIND_META + stock.
+- Tests (live dev server): settings/stock GET shape ✓; stock POST w/o keys 400 ✓; w/ fake key → job 202 → per-scene progress (6/12 "no match found" — graceful per-scene provider error handling) → done, activity "Stock b-roll — 0 clips downloaded, 0/12 scenes covered" ✓ (fake key removed after); batch POST → HTTP 202, 2 distinct angles ("Earth's Abyss vs Cosmic Void", "Earth's Alien Deep-Sea Worlds") → both videos scripted w/ 8 scenes in stock mode ✓. Typecheck clean, eslint clean, page 200.
+- Note: real Pexels/Pixabay keys needed for actual clip downloads (free, instant signup; Settings → Stock footage has the links + test buttons). Two demo batch videos left in Library.
+
+Stage Summary:
+- TubeForge now covers 100% of MoneyPrinterTurbo's headline features (stock b-roll + batch) while keeping its own leads: scene-based story engine, Smart Motion camera language, consistent cast, SFX synthesis, ASR-verified narration, QC gate, research radar w/ performance feedback loop, YouTube OAuth upload + stats sync, budget/rate-limit resilience.
+- User flow: Settings → Stock Footage → paste free Pexels (and/or Pixabay) key → Test → Save. Then Create → Render mode "Stock b-roll" → Auto-Pilot. Or Series batch: one topic → 2-6 distinct videos with scripts written automatically.

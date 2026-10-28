@@ -180,6 +180,46 @@ export async function pollRender(
   }
 }
 
+// ---------- Stock b-roll ----------
+
+export interface StockStatus {
+  generating: boolean;
+  progress: { current: number; total: number; label: string } | null;
+  matched: number;
+  total: number;
+  error: string | null;
+}
+
+/** Poll the stock-fetch job until it stops generating (or records an error). */
+export async function pollStock(
+  videoId: string,
+  onTick?: (status: StockStatus) => void,
+  opts: PollOpts = {}
+): Promise<StockStatus> {
+  const interval = opts.intervalMs ?? 3000;
+  const timeout = opts.timeoutMs ?? 12 * 60 * 1000; // ~1.2s per scene + search time
+  const deadline = Date.now() + timeout;
+
+  for (;;) {
+    const res = await fetch(`/api/videos/${videoId}/stock`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data: StockStatus = await res.json();
+    onTick?.(data);
+
+    if (!data.generating) {
+      if (data.error) throw new Error(data.error);
+      return data;
+    }
+
+    if (Date.now() > deadline)
+      throw new Error(
+        "Stock matching is taking unusually long — it may still be running in the background; check back in a few minutes."
+      );
+
+    await sleep(interval);
+  }
+}
+
 /** Poll until the YouTube upload lands (youtubeUrl set) or records an error. */
 export function pollUpload(videoId: string, opts?: PollOpts) {
   return pollVideo(

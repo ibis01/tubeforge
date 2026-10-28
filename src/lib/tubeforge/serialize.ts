@@ -7,7 +7,7 @@ import fs from "fs";
 import path from "path";
 import type { Video } from "@prisma/client";
 import type { VideoDTO, VideoStatus } from "./types";
-import { parseScenes } from "./story";
+import { parseScenes, serializeScenes } from "./story";
 
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
@@ -26,6 +26,8 @@ export function serializeVideo(
 ): VideoDTO {
   const isStory = v.format === "story";
   const scenes = isStory ? parseScenes(v.scenes) : [];
+  // Serialized scene DTOs when included — image/stock URLs + live job flags.
+  const sceneDTOs = isStory && opts.includeScenes ? serializeScenes(v.id, scenes) : undefined;
   const hasFinal = isStory && fs.existsSync(path.join(UPLOAD_ROOT, v.id, "final.mp4"));
   const hasPreview = isStory && fs.existsSync(path.join(UPLOAD_ROOT, v.id, "preview.mp4"));
   const hasShortFile = isStory && v.hasShort && fs.existsSync(path.join(UPLOAD_ROOT, v.id, "short.mp4"));
@@ -61,7 +63,7 @@ export function serializeVideo(
         : null,
     format: v.format,
     renderMode: v.renderMode,
-    scenes: opts.includeScenes ? scenes : undefined,
+    scenes: sceneDTOs,
     sceneCount: scenes.length,
     hasStoryboard: isStory && v.hasStoryboard,
     hasVideo: isStory && v.hasVideo,

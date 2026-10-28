@@ -24,6 +24,7 @@ export type JobKind =
   | "upload" // YouTube OAuth upload
   | "short" // 9:16 vertical cut (Phase 5)
   | "convert" // classic narration script -> scene-based story
+  | "stock" // stock b-roll fetch (Pexels/Pixabay)
   | "script"; // (re)generate the script package — retry after a failed create, or re-roll
 
 export type JobStatus = "running" | "done" | "failed" | "interrupted" | "cancelled";
@@ -81,6 +82,7 @@ const STAGE_LABEL: Record<string, string> = {
   upload: "YouTube upload",
   short: "vertical short",
   convert: "scene conversion",
+  stock: "stock b-roll",
   script: "script",
 };
 
@@ -108,7 +110,7 @@ async function runRecovery(): Promise<void> {
       });
 
       // Surface the interruption where the UI already looks for errors.
-      if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "verify", "comments", "upload", "short", "convert", "script"].includes(row.kind)) {
+      if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "verify", "comments", "upload", "short", "convert", "script", "stock"].includes(row.kind)) {
         const videoId = baseEntityId(row.entityId);
         const video = await db.video.findUnique({ where: { id: videoId } });
         // Only set the error if the artifact never landed (completed after the row went stale).
@@ -124,7 +126,8 @@ async function runRecovery(): Promise<void> {
             (row.kind === "upload" && Boolean(video.youtubeUrl)) ||
             (row.kind === "short" && video.hasShort) ||
             (row.kind === "convert" && video.format === "story") ||
-            (row.kind === "script" && Boolean(video.script));
+            (row.kind === "script" && Boolean(video.script)) ||
+            (row.kind === "stock" && Boolean(video.scenes && video.scenes.includes('"stock"')));
           if (!artifactLanded && !video.error)
             await db.video.update({ where: { id: videoId }, data: { error: message } });
         }
@@ -301,6 +304,7 @@ export function jobSnapshot(videoId: string): {
   short: boolean;
   convert: boolean;
   script: boolean;
+  stock: boolean;
 } {
   return {
     voiceover: isJobRunning(videoId, "voiceover"),
@@ -314,6 +318,7 @@ export function jobSnapshot(videoId: string): {
     short: isJobRunning(videoId, "short"),
     convert: isJobRunning(videoId, "convert"),
     script: isJobRunning(videoId, "script"),
+    stock: isJobRunning(videoId, "stock"),
   };
 }
 

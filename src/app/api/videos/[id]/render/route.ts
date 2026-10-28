@@ -74,7 +74,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
 
   const body = await req.json().catch(() => ({}));
-  const mode = body?.mode === "animated" ? "animated" : "kenburns";
+  const mode = ["animated", "stock"].includes(body?.mode) ? body.mode : "kenburns";
   const subtitles = body?.subtitles !== false; // default: burn captions
   const smartCaptions = body?.smartCaptions !== false; // default: ASR-synced cues (Phase 4)
   const music = body?.music !== false; // default: ambient bed
@@ -143,7 +143,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
             stage: "render",
             level: report.passed ? "info" : "warn",
             message:
-              `Video rendered (${mode === "animated" ? "full AI animation" : "Ken Burns"}, ` +
+              `Video rendered (${mode === "animated" ? "full AI animation" : mode === "stock" ? "stock b-roll" : "Ken Burns"}, ` +
               `${Math.round(result.durationSec)}s) — ` +
               `${music ? (resolved ? `music: ${resolved.why}` : "music: synthesized bed") : "no music"}, ` +
               `QC ${report.passed ? "passed" : "flagged " + report.checks.filter((c) => !c.pass).length + " check(s)"}`,

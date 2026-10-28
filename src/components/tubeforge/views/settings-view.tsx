@@ -66,6 +66,7 @@ const KIND_META: Record<string, { label: string; icon: typeof Mic }> = {
   comments: { label: "Engagement kit", icon: History },
   upload: { label: "YT upload", icon: Youtube },
   convert: { label: "Scene conversion", icon: Clapperboard },
+  stock: { label: "Stock b-roll", icon: Film },
 };
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
@@ -887,6 +888,9 @@ export function SettingsView() {
         </div>
       </Card>
 
+      {/* Stock footage — free b-roll providers for the Stock render mode */}
+      <StockFootageSection />
+
       {/* Background music — licensed library, mood matching, mix defaults */}
       <MusicLibrarySection />
 
@@ -1325,5 +1329,198 @@ export function SettingsView() {
         </div>
       </Card>
     </div>
+  );
+}
+
+// ---------- Stock footage (Stock render mode — Pexels + Pixabay) ----------
+
+interface StockKeyState {
+  hasKey: boolean;
+  maskedKey: string;
+}
+
+function StockFootageSection() {
+  const { toast } = useToast();
+  const [pexels, setPexels] = useState("");
+  const [pixabay, setPixabay] = useState("");
+  const [saved, setSaved] = useState<{ pexels: StockKeyState; pixabay: StockKeyState } | null>(null);
+  const [keyUrls, setKeyUrls] = useState<{ pexels: string; pixabay: string }>({
+    pexels: "https://www.pexels.com/api/",
+    pixabay: "https://pixabay.com/api/docs/#api_key",
+  });
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState<string | null>(null);
+  const [tests, setTests] = useState<Record<string, { ok: boolean; text: string } | undefined>>({});
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings/stock", { cache: "no-store" });
+      if (!res.ok) return;
+      const d = await res.json();
+      setSaved({ pexels: d.pexels, pixabay: d.pixabay });
+      if (d.keyUrls) setKeyUrls(d.keyUrls);
+    } catch {
+      /* non-critical */
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const body: Record<string, string> = {};
+      if (pexels.trim()) body.pexels = pexels.trim();
+      if (pixabay.trim()) body.pixabay = pixabay.trim();
+      if (Object.keys(body).length === 0) {
+        toast({ title: "Nothing to save — paste a key first" });
+        return;
+      }
+      const res = await fetch("/api/settings/stock", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error ?? `HTTP ${res.status}`);
+      setSaved({ pexels: d.pexels, pixabay: d.pixabay });
+      setPexels("");
+      setPixabay("");
+      toast({ title: "Stock keys saved", description: "Ready to match b-roll in the Stock render mode." });
+    } catch (err) {
+      toast({ title: "Could not save stock keys", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const test = async (provider: "pexels" | "pixabay") => {
+    setTesting(provider);
+    setTests((t) => ({ ...t, [provider]: undefined }));
+    try {
+      const res = await fetch("/api/settings/stock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error ?? `HTTP ${res.status}`);
+      setTests((t) => ({
+        ...t,
+        [provider]: { ok: true, text: `Search works — ${d.results} clips found${d.sample ? ` · best: ${d.sample}` : ""}` },
+      }));
+    } catch (err) {
+      setTests((t) => ({ ...t, [provider]: { ok: false, text: err instanceof Error ? err.message : "Test failed" } }));
+    } finally {
+      setTesting(null);
+    }
+  };
+
+  const rows: {
+    id: "pexels" | "pixabay";
+    label: string;
+    value: string;
+    setValue: (v: string) => void;
+    state: StockKeyState | null;
+  }[] = [
+    { id: "pexels", label: "Pexels API key", value: pexels, setValue: setPexels, state: saved?.pexels ?? null },
+    { id: "pixabay", label: "Pixabay API key", value: pixabay, setValue: setPixabay, state: saved?.pixabay ?? null },
+  ];
+
+  return (
+    <Card className="glass rounded-2xl p-5 sm:p-6">
+      <div className="flex items-center gap-2.5 mb-1">
+        <div className="h-9 w-9 rounded-xl bg-emerald-600/90 flex items-center justify-center shrink-0">
+          <Film className="h-4.5 w-4.5 text-white" />
+        </div>
+        <div>
+          <h3 className="font-semibold leading-tight">Stock Footage</h3>
+          <p className="text-xs text-muted-foreground">
+            Free b-roll for the &ldquo;Stock b-roll&rdquo; render mode — real footage matched per scene
+          </p>
+        </div>
+      </div>
+
+      <p className="text-[11px] text-muted-foreground leading-relaxed mt-3 mb-4">
+        Both providers are free. Pexels needs a key from{" "}
+        <a href={keyUrls.pexels} target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2">
+          pexels.com/api
+        </a>{" "}
+        (instant); Pixabay needs one from{" "}
+        <a href={keyUrls.pixabay} target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2">
+          pixabay.com/api/docs
+        </a>
+        . Add either one — both together give the best match coverage. Footage credits are recorded per scene automatically.
+      </p>
+
+      <div className="space-y-3">
+        {rows.map((row) => (
+          <div key={row.id} className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label>{row.label}</Label>
+              <div className="flex items-center gap-2">
+                {row.state?.hasKey ? (
+                  <Badge variant="outline" className="border-emerald-500/25 bg-emerald-500/8 text-emerald-300 text-[10px]">
+                    saved · {row.state.maskedKey}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="border-white/15 bg-white/5 text-muted-foreground text-[10px]">
+                    not set
+                  </Badge>
+                )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={testing === row.id || (!row.state?.hasKey && !row.value.trim())}
+                  onClick={() => test(row.id)}
+                  className="border border-white/15 bg-white/6 hover:bg-white/10 h-7 text-[11px] px-2"
+                >
+                  {testing === row.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <FlaskConical className="h-3 w-3" />}
+                  Test
+                </Button>
+              </div>
+            </div>
+            <Input
+              type="password"
+              placeholder={row.state?.hasKey ? "Saved — paste a new key to replace" : `Paste your ${row.id === "pexels" ? "Pexels" : "Pixabay"} key`}
+              value={row.value}
+              onChange={(e) => row.setValue(e.target.value)}
+              className="bg-white/5"
+              autoComplete="off"
+            />
+            {tests[row.id] && (
+              <div
+                className={`rounded-lg border px-3 py-2 text-xs leading-relaxed ${
+                  tests[row.id]!.ok
+                    ? "border-emerald-500/25 bg-emerald-500/8 text-emerald-200"
+                    : "border-red-500/25 bg-red-500/8 text-red-200"
+                }`}
+              >
+                {tests[row.id]!.ok ? "✓ " : "✗ "}
+                {tests[row.id]!.text}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          onClick={save}
+          disabled={saving || (!pexels.trim() && !pixabay.trim())}
+          className="border-white/15 bg-white/6 hover:bg-white/10 font-medium h-8"
+          variant="outline"
+        >
+          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+          Save keys
+        </Button>
+        <span className="text-[11px] text-muted-foreground">
+          Test runs one real search (free) against the saved key
+        </span>
+      </div>
+    </Card>
   );
 }

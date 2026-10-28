@@ -38,6 +38,7 @@ import {
   pollThumbnail,
   pollStoryboard,
   pollRender,
+  pollStock,
 } from "@/lib/tubeforge/poll";
 import {
   Wand2,
@@ -54,10 +55,12 @@ import {
   Play,
   LayoutGrid,
   Clapperboard,
+  Film,
+  ListVideo,
 } from "lucide-react";
 import { clsx } from "clsx";
 
-type Stage = "script" | "storyboard" | "voiceover" | "thumbnail" | "render";
+type Stage = "script" | "storyboard" | "stock" | "voiceover" | "thumbnail" | "render";
 type StageState = "idle" | "running" | "done" | "error";
 
 const EXAMPLE_TOPICS = [
@@ -82,6 +85,12 @@ const STAGE_DEFS: Record<
     desc: "",
     storyDesc: "CogView paints every scene (host identity locked)",
     icon: LayoutGrid,
+  },
+  stock: {
+    label: "Stock B-Roll",
+    desc: "",
+    storyDesc: "Pexels + Pixabay matched to every scene",
+    icon: Film,
   },
   voiceover: {
     label: "Voiceover",
@@ -162,6 +171,7 @@ export function CreateView() {
   const [stageState, setStageState] = useState<Record<Stage, StageState>>({
     script: "idle",
     storyboard: "idle",
+    stock: "idle",
     voiceover: "idle",
     thumbnail: "idle",
     render: "idle",
@@ -170,6 +180,8 @@ export function CreateView() {
   const [renderLabel, setRenderLabel] = useState<string | null>(null);
   const [anyRunning, setAnyRunning] = useState(false);
   const runningRef = useRef(false);
+  const [batchCount, setBatchCount] = useState(3);
+  const [batchRunning, setBatchRunning] = useState(false);
 
   const isStory = format === "story";
   const sceneCount = SCENE_COUNTS[length] ?? 6;
@@ -306,6 +318,26 @@ export function CreateView() {
     }).then(() => pollStoryboard(id, { timeoutMs: 20 * 60 * 1000 }));
   }, []);
 
+  const startStock = useCallback((id: string) => {
+    setRenderLabel("Matching stock footage…");
+    return api(`/api/videos/${id}/stock`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }).then(() =>
+      pollStock(
+        id,
+        (s) => {
+          if (s.progress) setRenderLabel(s.progress.label);
+          else if (s.matched) setRenderLabel(`Stock b-roll · ${s.matched}/${s.total} scenes matched`);
+        },
+        { timeoutMs: 15 * 60 * 1000 }
+      )
+    ).then(async () => {
+      const d = await api<{ video: VideoDTO }>(`/api/videos/${id}`);
+      return d.video;
+    });
+  }, []);
+
   const startRender = useCallback((id: string, mode: string) => {
     setRenderLabel("Composing the video…");
     return api(`/api/videos/${id}/render`, {
@@ -337,6 +369,7 @@ export function CreateView() {
       setStageState({
         script: "idle",
         storyboard: "idle",
+        stock: "idle",
         voiceover: "idle",
         thumbnail: "idle",
         render: "idle",
@@ -348,9 +381,14 @@ export function CreateView() {
         bumpRefresh();
 
         if (autopilot && isStory) {
-          // Story pipeline: storyboard → voiceover → thumbnail → render
+          // Story pipeline: storyboard → (stock b-roll) → voiceover → thumbnail → render
           const boarded = await runStage("storyboard", () => startStoryboard(v.id));
           if (!boarded) return;
+
+          if (renderMode === "stock") {
+            const stocked = await runStage("stock", () => startStock(v.id));
+            if (!stocked) return;
+          }
 
           if (autopilot && autoVoice) {
             const voiced = await runStage("voiceover", () => startVoiceover(v.id));
@@ -360,12 +398,13 @@ export function CreateView() {
               const thumbed = await runStage("thumbnail", () => startThumbnail(v.id));
               if (!thumbed) return;
 
-              if (renderMode === "kenburns") {
-                await runStage("render", () => startRender(v.id, "kenburns"));
-              } else {
+              if (renderMode === "animated") {
                 // Full AI animation — runs end-to-end now (background render
                 // job, ~4 min per scene). The stepper tracks live progress.
                 await runStage("render", () => startRender(v.id, "animated"));
+              } else {
+                // Ken Burns + Stock b-roll hybrid — Smart Motion compositor.
+                await runStage("render", () => startRender(v.id, renderMode));
               }
             }
           }
@@ -423,6 +462,9 @@ export function CreateView() {
         if (stage === "storyboard") {
           const boarded = await runStage("storyboard", () => startStoryboard(video.id));
           if (boarded) bumpRefresh();
+        } else if (stage === "stock") {
+          const stocked = await runStage("stock", () => startStock(video.id));
+          if (stocked) bumpRefresh();
         } else if (stage === "voiceover") {
           const voiced = await runStage("voiceover", () => startVoiceover(video.id));
           if (voiced) bumpRefresh();
@@ -440,12 +482,54 @@ export function CreateView() {
         setAnyRunning(false);
       }
     },
-    [video, busy, renderMode, runStage, startStoryboard, startVoiceover, startThumbnail, startRender, bumpRefresh]
+    [video, busy, renderMode, runStage, startStoryboard, startStock, startVoiceover, startThumbnail, startRender, bumpRefresh]
+  );
+
+  const handleBatch = useCallback(
+    async () => {
+      if (!topic.trim() || batchRunning) return;
+      setBatchRunning(true);
+      setError(null);
+      try {
+        const d = await api<{ queued: number; angles: string[] }>("/api/videos/batch", {
+          method: "POST",
+          body: JSON.stringify({
+            topic,
+            count: batchCount,
+            niche,
+            tone,
+            length,
+            voice,
+            ttsSpeed: speed,
+            thumbStyle,
+            channelId: channelId !== "none" ? channelId : null,
+            characterId: characterId !== "none" ? characterId : null,
+            format,
+            renderMode,
+          }),
+        });
+        toast({
+          title: `Series queued — ${d.queued} videos`,
+          description: d.angles.slice(0, 3).join(" · ") + (d.angles.length > 3 ? " …" : ""),
+        });
+        bumpRefresh();
+        setView("library");
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Series batch failed";
+        setError(msg);
+        toast({ title: "Series batch failed", description: msg, variant: "destructive" });
+      } finally {
+        setBatchRunning(false);
+      }
+    },
+    [topic, batchRunning, batchCount, niche, tone, length, voice, speed, thumbStyle, channelId, characterId, format, renderMode, toast, bumpRefresh, setView]
   );
 
   const tags = video?.tags ? video.tags.split(",").map((t) => t.trim()).filter(Boolean) : [];
   const stages: Stage[] = isStory
-    ? ["script", "storyboard", "voiceover", "thumbnail", "render"]
+    ? renderMode === "stock"
+      ? ["script", "storyboard", "stock", "voiceover", "thumbnail", "render"]
+      : ["script", "storyboard", "voiceover", "thumbnail", "render"]
     : ["script", "voiceover", "thumbnail"];
   const allDone =
     stageState.script === "done" &&
@@ -540,7 +624,7 @@ export function CreateView() {
                   {sceneCount} scenes · {LENGTHS.find((l) => l.id === length)?.label ?? length}
                 </Badge>
               </div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 {RENDER_MODES.map((m) => (
                   <button
                     key={m.id}
@@ -557,6 +641,8 @@ export function CreateView() {
                     <div className="flex items-center gap-1.5">
                       {m.id === "kenburns" ? (
                         <Zap className="h-3.5 w-3.5 text-amber-300" />
+                      ) : m.id === "stock" ? (
+                        <Film className="h-3.5 w-3.5 text-emerald-300" />
                       ) : (
                         <Clapperboard className="h-3.5 w-3.5 text-sky-300" />
                       )}
@@ -570,6 +656,13 @@ export function CreateView() {
                 <p className="text-[11px] text-sky-300/90 leading-relaxed">
                   Auto-Pilot renders the full animated video — every scene is
                   animated via image-to-video (~4 min per scene, tracked live).
+                </p>
+              )}
+              {renderMode === "stock" && (
+                <p className="text-[11px] text-emerald-300/90 leading-relaxed">
+                  Auto-Pilot matches free stock footage (Pexels + Pixabay) to every
+                  scene and renders real b-roll — scenes without a match keep their
+                  Smart Motion art. Add your free keys in Settings → Stock footage.
                 </p>
               )}
             </div>
@@ -750,9 +843,47 @@ export function CreateView() {
             </Button>
             <p className="text-[11px] text-muted-foreground text-center leading-relaxed">
               {isStory
-                ? `Auto-Pilot runs: scene script → storyboard → ${autoVoice ? "voiceover → " : ""}${autoThumb ? "thumbnail → " : ""}render ${renderMode === "kenburns" ? "MP4" : "full AI animation"}`
+                ? `Auto-Pilot runs: scene script → storyboard → ${renderMode === "stock" ? "stock b-roll → " : ""}${autoVoice ? "voiceover → " : ""}${autoThumb ? "thumbnail → " : ""}render ${renderMode === "animated" ? "full AI animation" : "MP4"}`
                 : `Auto-Pilot runs: script → ${autoVoice ? "voiceover → " : ""}${autoThumb ? "thumbnail → " : ""}ready (configure in Settings)`}
             </p>
+          </div>
+
+          {/* Series batch — one topic, a whole series of distinct videos */}
+          <div className="rounded-xl border border-white/10 bg-white/3 p-3 space-y-2.5">
+            <div className="flex items-center gap-2">
+              <div className="h-7 w-7 rounded-lg bg-white/6 border border-white/10 flex items-center justify-center shrink-0">
+                <ListVideo className="h-3.5 w-3.5 text-primary" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-medium leading-tight">Series batch</p>
+                <p className="text-[10px] text-muted-foreground leading-snug">
+                  One topic → {batchCount} distinct videos, scripts auto-written
+                </p>
+              </div>
+              <div className="ml-auto shrink-0">
+                <Select value={String(batchCount)} onValueChange={(v) => setBatchCount(Number(v))} disabled={batchRunning}>
+                  <SelectTrigger className="h-8 w-[72px] bg-white/5">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[2, 3, 4, 5, 6].map((n) => (
+                      <SelectItem key={n} value={String(n)}>
+                        {n} videos
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <Button
+              onClick={handleBatch}
+              disabled={!topic.trim() || batchRunning || busy}
+              variant="outline"
+              className="w-full border-white/15 bg-white/4 hover:bg-white/10 h-10"
+            >
+              {batchRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListVideo className="h-4 w-4" />}
+              {batchRunning ? "Queuing series…" : `Generate ${batchCount}-Video Series`}
+            </Button>
           </div>
         </div>
       </Card>
@@ -767,7 +898,7 @@ export function CreateView() {
               <p className="text-xs text-muted-foreground">
                 {video
                   ? allDone
-                    ? isStory && renderMode === "kenburns"
+                    ? isStory && renderMode !== "animated"
                       ? "Video rendered — ready to upload"
                       : "Package complete — ready to upload"
                     : "Auto-Pilot is assembling your video"
@@ -903,7 +1034,7 @@ export function CreateView() {
                     <p className="text-xs text-muted-foreground mt-1.5">
                       {video.niche} · {video.wordCount ?? 0} words ·{" "}
                       {isStory
-                        ? `${video.sceneCount ?? 0} scenes · ${video.renderMode === "animated" ? "AI animation" : "Ken Burns"}`
+                        ? `${video.sceneCount ?? 0} scenes · ${video.renderMode === "animated" ? "AI animation" : video.renderMode === "stock" ? "Stock b-roll" : "Ken Burns"}`
                         : LENGTHS.find((l) => l.id === video.length)?.label ?? video.length}
                     </p>
                   </div>
@@ -940,7 +1071,7 @@ export function CreateView() {
                     {(video.scenes ?? []).map((s) => (
                       <div
                         key={s.index}
-                        className="shrink-0 w-40 rounded-xl overflow-hidden border border-white/10 bg-white/3"
+                        className="shrink-0 w-40 rounded-xl overflow-hidden border border-white/10 bg-white/3 relative"
                       >
                         {video.hasStoryboard ? (
                           <img
@@ -957,9 +1088,19 @@ export function CreateView() {
                             )}
                           </div>
                         )}
+                        {s.hasStock && (
+                          <div className="absolute top-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/70 backdrop-blur px-1.5 py-0.5 border border-emerald-500/30">
+                            <Film className="h-2.5 w-2.5 text-emerald-300" />
+                            <span className="text-[9px] font-semibold uppercase tracking-wide text-emerald-300">
+                              {s.stockSource === "pixabay" ? "Pixabay" : "Pexels"}
+                            </span>
+                          </div>
+                        )}
                         <div className="p-2">
                           <p className="text-[11px] font-medium truncate">{s.title}</p>
-                          <p className="text-[10px] text-muted-foreground truncate">{s.caption || s.mood}</p>
+                          <p className="text-[10px] text-muted-foreground truncate">
+                            {s.hasStock && s.stockQuery ? `stock: ${s.stockQuery}` : s.caption || s.mood}
+                          </p>
                         </div>
                       </div>
                     ))}
@@ -1041,9 +1182,10 @@ export function CreateView() {
               (s) =>
                 stageState[s] === "idle" &&
                 ((s === "storyboard" && !video.hasStoryboard) ||
+                  (s === "stock" && video.hasStoryboard && renderMode === "stock") ||
                   (s === "voiceover" && !video.hasVoiceover) ||
                   (s === "thumbnail" && !video.hasThumbnail) ||
-                  (s === "render" && !video.hasVideo && renderMode === "kenburns"))
+                  (s === "render" && !video.hasVideo && renderMode !== "animated"))
             ) &&
               video.status !== "published" && (
                 <Card className="glass rounded-2xl p-5">
@@ -1061,6 +1203,18 @@ export function CreateView() {
                       >
                         <LayoutGrid className="h-3.5 w-3.5" />
                         Generate Storyboard
+                      </Button>
+                    )}
+                    {isStory && renderMode === "stock" && video.hasStoryboard && (
+                      <Button
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => resumeStage("stock")}
+                        variant="outline"
+                        className="border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/15 text-emerald-200"
+                      >
+                        <Film className="h-3.5 w-3.5" />
+                        Find Stock Footage
                       </Button>
                     )}
                     {!video.hasVoiceover && (

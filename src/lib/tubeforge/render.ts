@@ -1,6 +1,8 @@
 // Video compositor — assembles the final MP4 from storyboard art + per-scene
-// voiceover using ffmpeg, in two modes:
+// voiceover using ffmpeg, in three modes:
 //   • kenburns  — cinematic pans/zooms over still art (fast, ~realtime/3)
+//   • stock     — real Pexels/Pixabay footage per matched scene, Smart Motion
+//                 art for the rest (the hybrid)
 //   • animated  — every scene animated via CogVideoX image-to-video (~4 min/scene)
 // Pipeline: per-scene segments (video+audio) -> concat -> subtitles/music pass.
 // All commands run via execFile (no shell) so filter strings need only
@@ -50,7 +52,7 @@ export interface ResolvedTrack {
 export interface RenderOptions {
   videoId: string;
   scenes: Scene[];
-  mode: "kenburns" | "animated";
+  mode: "kenburns" | "animated" | "stock";
   burnSubtitles: boolean;
   smartCaptions: boolean; // audio-synced cues (silence + ASR alignment) vs one caption per scene
   music: boolean;
@@ -269,7 +271,7 @@ async function buildSegment(opts: {
   videoId: string;
   scene: Scene;
   dur: number;
-  mode: "kenburns" | "animated";
+  mode: "kenburns" | "animated" | "stock";
   motion: MotionSettings;
   plan?: MotionScenePlan;
   outPath: string;
@@ -289,7 +291,26 @@ async function buildSegment(opts: {
     "-y", outPath,
   ];
 
-  if (mode === "kenburns") {
+  if (mode === "stock") {
+    // Hybrid: matched stock footage when the scene has a clip on disk,
+    // otherwise fall through to the Smart Motion art path below.
+    const clip = scene.stock
+      ? path.join(dir, scene.stock.file)
+      : null;
+    if (clip && fs.existsSync(clip)) {
+      const aChain = await sceneAudioChain(opts.videoId, scene, leadMs);
+      await run("ffmpeg", [
+        "-stream_loop", "-1", "-t", dur.toFixed(3), "-i", clip,
+        "-i", wav,
+        ...(await sfxInputs(opts.videoId, scene)),
+        "-filter_complex", `[0:v]${GRADE}[v];${aChain}`,
+        ...common,
+      ]);
+      return;
+    }
+  }
+
+  if (mode !== "animated") {
     const img = path.join(dir, sceneImageFile(scene.index));
     // Smart Motion: scene-aware plan (from motion.ts) -> ffmpeg filter graph.
     const vChain = sceneFilterGraph({
@@ -509,20 +530,33 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
 
     // Smart Motion — one camera plan per scene, sized to each scene's real
     // duration (defaults to Smart Motion on when settings are absent).
+    // Stock mode: only the fallback scenes (no footage) need a camera plan.
     const motion = sanitizeMotion(opts.motion ?? null);
+    const needsPlan =
+      opts.mode === "kenburns" ||
+      (opts.mode === "stock" &&
+        scenes.some((s) => !(s.stock && fs.existsSync(path.join(dir, s.stock.file)))));
     const plans =
-      opts.mode === "kenburns"
-        ? planSceneMovements(scenes, motion, {
-            aspect: "16:9",
-            ctx: opts.motionContext,
-            durationsSec: durations,
-          })
-        : [];
+      opts.mode === "animated"
+        ? []
+        : needsPlan
+          ? planSceneMovements(scenes, motion, {
+              aspect: "16:9",
+              ctx: opts.motionContext,
+              durationsSec: durations,
+            })
+          : [];
 
     // 2) One segment per scene (visual + narration audio, exact duration).
     const segPaths: string[] = [];
     for (const [i, scene] of scenes.entries()) {
-      report(i, opts.mode === "kenburns" ? `Composing scene ${i + 1}` : `Animating scene ${i + 1}`);
+      const label =
+        opts.mode === "animated"
+          ? `Animating scene ${i + 1}`
+          : scene.stock && fs.existsSync(path.join(dir, scene.stock.file))
+            ? `Cutting stock footage — scene ${i + 1}`
+            : `Composing scene ${i + 1}`;
+      report(i, label);
       const segPath = path.join(tmpDir, `seg-${String(i + 1).padStart(2, "0")}.mp4`);
       await buildSegment({
         videoId: opts.videoId,

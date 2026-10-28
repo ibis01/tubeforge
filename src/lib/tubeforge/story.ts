@@ -9,7 +9,7 @@ import { parseJsonLoose, videoDir, splitForTts, researchBriefBlock, type Researc
 import { aiCall } from "./budget";
 import { runQualityGate } from "./quality";
 import { mergeWavs } from "./wav";
-import { CAMERAS, SCENE_COUNTS, SFX_KINDS, type Scene } from "./types";
+import { CAMERAS, SCENE_COUNTS, SFX_KINDS, type Scene, type StockRef } from "./types";
 import { normalizeFocalToken } from "./motion";
 import { characterSceneFragment, readPortrait } from "./characters";
 import { isJobRunning } from "./jobs";
@@ -28,6 +28,26 @@ export function sceneImageFile(index: number): string {
 
 export function sceneWavFile(index: number): string {
   return `scene-${String(index).padStart(2, "0")}.wav`;
+}
+
+/** Validate a persisted StockRef (legacy/unknown shapes are dropped). */
+function parseStockRef(raw: unknown): StockRef | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const s = raw as Record<string, unknown>;
+  if (
+    (s.source !== "pexels" && s.source !== "pixabay") ||
+    typeof s.file !== "string" ||
+    !/^stock-\d{2}\.mp4$/.test(s.file)
+  )
+    return undefined;
+  return {
+    source: s.source,
+    file: s.file,
+    query: String(s.query ?? ""),
+    credit: String(s.credit ?? ""),
+    pageUrl: String(s.pageUrl ?? ""),
+    durationSec: Number(s.durationSec ?? 0),
+  };
 }
 
 export function parseScenes(json: string | null | undefined): Scene[] {
@@ -52,6 +72,7 @@ export function parseScenes(json: string | null | undefined): Scene[] {
             ? "sting" // legacy rehook rows still get their attention reset
             : "none",
         focal: normalizeFocalToken(s.focal as string | null | undefined) ?? undefined,
+        stock: parseStockRef(s.stock),
       }))
       .filter((s: Scene) => s.narration && s.visual);
   } catch {
@@ -83,6 +104,11 @@ export function serializeScenes(
       hasImage,
       imageUrl: hasImage ? `/api/videos/${videoId}/storyboard/${s.index}` : null,
       generating: isJobRunning(`${videoId}#scene${s.index}`, "scene"),
+      hasStock: Boolean(s.stock),
+      stockUrl: s.stock ? `/api/videos/${videoId}/stock/${s.index}` : null,
+      stockSource: s.stock?.source ?? null,
+      stockQuery: s.stock?.query ?? null,
+      stockCredit: s.stock?.credit ?? null,
     };
   });
 }
