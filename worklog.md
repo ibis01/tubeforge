@@ -570,3 +570,21 @@ Stage Summary:
 - Settings now reads brand-neutral ("Shared AI credentials", "Paste your API key") while keeping the provider names in per-task dropdowns (those are accurate identities, not branding).
 - Model dropdown matches today's platform; glm-5.3-flash is selectable directly and the 1210 thinking error is auto-avoided by chat.ts.
 - User apply path: 3 short curl commands from the preview site (settings-view.tsx → src/components/tubeforge/views/, types.ts → src/lib/tubeforge/, chat.ts → src/lib/tubeforge/providers/), then restart dev server. chat.ts overwrite supersedes the earlier manual nano step (idempotent, strictly better).
+
+---
+Task ID: github-push-prep
+Agent: main (Z.ai)
+Task: Prepare TubeForge for its first GitHub push ("let push to git hub")
+
+Work Log:
+- Audited sandbox repo: 634 tracked files incl. 429 workspace/debug artifacts (forensics/ frames, upload/ pastes, scripts/ screenshots, public zip+patches) and a REAL .env (TUBEFORGE_AUTH_SECRET); git history also contains committed .env/db — sandbox history must never be pushed
+- Hardened .gitignore: removed bare `test`/`prompt` footgun patterns; /db/ and /uploads/ changed to keep .gitkeep placeholders; appended hygiene block (!.env.example, *.sqlite*, /upload/, /forensics/, /scripts/, public/tubeforge-local.zip, public/tubeforge/, *.tar, .vscode/, .idea/, Thumbs.db)
+- Untracked .env + workspace dirs from index; added placeholder-only .env.example; committed → tracked set now 205 files, working tree clean
+- Wrote scripts/tf-git-setup.sh for the user's local ~/tubeforge: fixes .gitignore footguns, creates .env.example, git init on main, re-run-safe untracking of known secrets, HARD secret gate (.env*/z-ai-config/db/sqlite/tar, --diff-filter=ACMR) + 5MB size gate, single commit, push via gh CLI (private) or printed manual PAT steps
+- Wrote scripts/test-git-setup.sh: scratch tree mirrors the shipped zip (old .gitignore via git show HEAD~1, fake .env/db/renders/artifacts); 4 scenarios: happy path, idempotent re-run, gate refusal, recovery from previously-tracked .env. Fixed 1 bug found by tests (gate false-triggered on deletions). Final: 22/22 PASS
+- Delivered: download/tf-git-setup.sh + public/tf-git-setup.sh (curl-able)
+
+Stage Summary:
+- Push source is the user's LOCAL ~/tubeforge (newer 14-provider code, clean fresh history) — not the sandbox (history has secrets)
+- Script gates guarantee .env, db/custom.db, uploads/, archives never reach GitHub; .env.example + .gitkeep placeholders do
+- Next: user runs tf-git-setup.sh (gh authed → auto private repo + push; else manual remote+PAT); optional README/LICENSE follow-up; reminder to rm -rf ~/tf-pkg (557MB tar with credentials)
