@@ -2,7 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { useAppStore, type ViewId } from "@/lib/store";
-import { AppSidebar, MOBILE_NAV_ITEMS, NAV_ITEMS } from "@/components/tubeforge/app-sidebar";
+import {
+  AppSidebar,
+  MOBILE_NAV_ITEMS,
+  NAV_ITEMS,
+} from "@/components/tubeforge/app-sidebar";
 import { AuthGate } from "@/components/tubeforge/auth-gate";
 import { DashboardView } from "@/components/tubeforge/views/dashboard-view";
 import { AnalyticsView } from "@/components/tubeforge/views/analytics-view";
@@ -14,7 +18,12 @@ import { CalendarView } from "@/components/tubeforge/views/calendar-view";
 import { ChannelsView } from "@/components/tubeforge/views/channels-view";
 import { SettingsView } from "@/components/tubeforge/views/settings-view";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
+import {
+  Sheet,
+  SheetContent,
+  SheetTrigger,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Menu, Plus } from "lucide-react";
 import { TubeForgeLogo, TubeForgeWordmark } from "@/components/tubeforge/logo";
 
@@ -182,7 +191,7 @@ function MobileNavContent({
   return (
     <nav aria-label="Main navigation" className="p-3">
       <div className="flex items-center gap-2.5 px-3 py-4">
-        <TubeForgeLogo size={36} />
+        <TubeForgeLogo size={38} />
         <TubeForgeWordmark />
       </div>
       <ul className="space-y-1">
