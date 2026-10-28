@@ -79,7 +79,10 @@ export function DashboardView() {
         title="Could not load dashboard"
         hint="The stats service did not respond. Please retry."
         action={
-          <Button onClick={() => useAppStore.getState().bumpRefresh()} variant="outline">
+          <Button
+            onClick={() => useAppStore.getState().bumpRefresh()}
+            variant="outline"
+          >
             Retry
           </Button>
         }
@@ -89,10 +92,26 @@ export function DashboardView() {
 
   const pipelineData = [
     { label: "Draft", value: stats.byStatus["draft"] ?? 0, cls: "bg-zinc-400" },
-    { label: "Scripted", value: stats.byStatus["scripted"] ?? 0, cls: "bg-amber-400" },
-    { label: "Voiced", value: stats.byStatus["voiced"] ?? 0, cls: "bg-sky-400" },
-    { label: "Ready", value: stats.byStatus["ready"] ?? 0, cls: "bg-emerald-400" },
-    { label: "Published", value: stats.byStatus["published"] ?? 0, cls: "bg-primary" },
+    {
+      label: "Scripted",
+      value: stats.byStatus["scripted"] ?? 0,
+      cls: "bg-amber-400",
+    },
+    {
+      label: "Voiced",
+      value: stats.byStatus["voiced"] ?? 0,
+      cls: "bg-sky-400",
+    },
+    {
+      label: "Ready",
+      value: stats.byStatus["ready"] ?? 0,
+      cls: "bg-emerald-400",
+    },
+    {
+      label: "Published",
+      value: stats.byStatus["published"] ?? 0,
+      cls: "bg-primary",
+    },
   ];
   const maxPipeline = Math.max(1, ...pipelineData.map((p) => p.value));
 
@@ -100,7 +119,10 @@ export function DashboardView() {
     <div className="space-y-6">
       {/* Hero banner */}
       <Card className="glass rounded-2xl overflow-hidden relative">
-        <div className="absolute inset-0 bg-grid opacity-60" aria-hidden="true" />
+        <div
+          className="absolute inset-0 bg-grid opacity-60"
+          aria-hidden="true"
+        />
         <div
           className="absolute -top-24 -right-16 h-56 w-56 rounded-full bg-primary/15 blur-3xl"
           aria-hidden="true"
@@ -115,7 +137,7 @@ export function DashboardView() {
               Your faceless channel, fully automated.
             </h2>
             <p className="text-sm text-muted-foreground mt-2 max-w-lg leading-relaxed">
-              Drop a topic — GLM writes the script, TTS renders the narration, CogView
+              Drop a topic — AI writes the script, generates the narration, and
               paints the thumbnail. You just hit publish.
             </p>
           </div>
@@ -132,10 +154,31 @@ export function DashboardView() {
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-        <StatCard icon={Film} label="Total Videos" value={String(stats.total)} sub={`${stats.channels} channel${stats.channels === 1 ? "" : "s"} connected`} accent />
-        <StatCard icon={Rocket} label="Ready to Upload" value={String(stats.ready)} sub="Packaged & waiting" />
-        <StatCard icon={Loader2} label="In Pipeline" value={String(stats.inPipeline)} sub="Scripting / voicing / art" />
-        <StatCard icon={Timer} label="Audio Produced" value={`${stats.audioMinutes}m`} sub="Narration runtime" />
+        <StatCard
+          icon={Film}
+          label="Total Videos"
+          value={String(stats.total)}
+          sub={`${stats.channels} channel${stats.channels === 1 ? "" : "s"} connected`}
+          accent
+        />
+        <StatCard
+          icon={Rocket}
+          label="Ready to Upload"
+          value={String(stats.ready)}
+          sub="Packaged & waiting"
+        />
+        <StatCard
+          icon={Loader2}
+          label="In Pipeline"
+          value={String(stats.inPipeline)}
+          sub="Scripting / voicing / art"
+        />
+        <StatCard
+          icon={Timer}
+          label="Audio Produced"
+          value={`${stats.audioMinutes}m`}
+          sub="Narration runtime"
+        />
       </div>
 
       {/* Needs attention + generating now (Mission Control audit points) */}
@@ -147,25 +190,39 @@ export function DashboardView() {
           <div className="flex items-center justify-between">
             <div>
               <h3 className="font-semibold">Production Volume</h3>
-              <p className="text-xs text-muted-foreground">Videos created · last 7 days</p>
+              <p className="text-xs text-muted-foreground">
+                Videos created · last 7 days
+              </p>
             </div>
           </div>
-          <div className="mt-6 h-44 flex items-end gap-2 sm:gap-3" role="img" aria-label="Bar chart of videos created per day over the last 7 days">
+          <div
+            className="mt-6 h-44 flex items-end gap-2 sm:gap-3"
+            role="img"
+            aria-label="Bar chart of videos created per day over the last 7 days"
+          >
             {stats.perDay.map((d) => {
               const max = Math.max(1, ...stats.perDay.map((x) => x.count));
               const h = Math.max(6, Math.round((d.count / max) * 100));
               return (
-                <div key={d.day} className="flex-1 h-full flex flex-col items-center justify-end gap-1.5 min-w-0">
+                <div
+                  key={d.day}
+                  className="flex-1 h-full flex flex-col items-center justify-end gap-1.5 min-w-0"
+                >
                   <span className="text-[11px] text-muted-foreground tabular-nums">
                     {d.count > 0 ? d.count : ""}
                   </span>
                   <div className="flex-1 w-full max-w-12 flex items-end">
                     <div
                       className="w-full rounded-t-lg bg-gradient-to-t from-primary/80 to-primary/30 transition-all duration-500"
-                      style={{ height: `${h}%`, opacity: d.count > 0 ? 1 : 0.12 }}
+                      style={{
+                        height: `${h}%`,
+                        opacity: d.count > 0 ? 1 : 0.12,
+                      }}
                     />
                   </div>
-                  <span className="text-[10px] text-muted-foreground truncate">{d.day}</span>
+                  <span className="text-[10px] text-muted-foreground truncate">
+                    {d.day}
+                  </span>
                 </div>
               );
             })}
@@ -175,7 +232,9 @@ export function DashboardView() {
         {/* Pipeline breakdown */}
         <Card className="glass rounded-2xl p-5 lg:col-span-2">
           <h3 className="font-semibold">Pipeline Breakdown</h3>
-          <p className="text-xs text-muted-foreground">Where your videos currently sit</p>
+          <p className="text-xs text-muted-foreground">
+            Where your videos currently sit
+          </p>
           <ul className="mt-5 space-y-3.5">
             {pipelineData.map((p) => (
               <li key={p.label}>
@@ -200,7 +259,9 @@ export function DashboardView() {
         <div className="flex items-center justify-between">
           <div>
             <h3 className="font-semibold">Recent Activity</h3>
-            <p className="text-xs text-muted-foreground">Live from the automation floor</p>
+            <p className="text-xs text-muted-foreground">
+              Live from the automation floor
+            </p>
           </div>
           <Button
             variant="ghost"
@@ -214,7 +275,8 @@ export function DashboardView() {
         </div>
         {stats.recent.length === 0 ? (
           <p className="text-sm text-muted-foreground mt-6">
-            Nothing yet — generate your first video to see the pipeline in action.
+            Nothing yet — generate your first video to see the pipeline in
+            action.
           </p>
         ) : (
           <div className="mt-4 max-h-80 overflow-y-auto scroll-area-bar pr-1">

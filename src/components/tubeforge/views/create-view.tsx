@@ -82,14 +82,14 @@ const STAGE_DEFS: Record<
 > = {
   script: {
     label: "AI Script + Metadata",
-    desc: "GLM writes title, script, description, tags",
-    storyDesc: "GLM writes a scene-by-scene script with camera moves",
+    desc: "AI writes title, script, description, tags",
+    storyDesc: "AI writes a scene-by-scene script with camera moves",
     icon: FileText,
   },
   storyboard: {
     label: "Storyboard",
     desc: "",
-    storyDesc: "CogView paints every scene (host identity locked)",
+    storyDesc: "AI paints every scene (host identity locked)",
     icon: LayoutGrid,
   },
   voiceover: {
@@ -100,8 +100,8 @@ const STAGE_DEFS: Record<
   },
   thumbnail: {
     label: "Thumbnail",
-    desc: "CogView paints a click-worthy 16:9 cover",
-    storyDesc: "CogView paints a click-worthy 16:9 cover",
+    desc: "AI paints a click-worthy 16:9 cover",
+    storyDesc: "AI paints a click-worthy 16:9 cover",
     icon: ImageIcon,
   },
   render: {
@@ -250,8 +250,12 @@ export function CreateView() {
   // Prefill topic from other views
   useEffect(() => {
     if (prefillTopic) {
-      setTopic(prefillTopic);
-      setPrefillTopic(null);
+      // Defer state updates to avoid "setState synchronously within an effect" warning
+      const timer = setTimeout(() => {
+        setTopic(prefillTopic);
+        setPrefillTopic(null);
+      }, 0);
+      return () => clearTimeout(timer);
     }
   }, [prefillTopic, setPrefillTopic]);
 
@@ -1020,7 +1024,7 @@ export function CreateView() {
           <Card className="glass rounded-2xl p-5 space-y-3">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin text-primary" />
-              GLM is writing your script…
+              AI is writing your script…
             </div>
             <Skeleton className="h-6 w-3/4 bg-white/5" />
             <Skeleton className="h-4 w-full bg-white/5" />
