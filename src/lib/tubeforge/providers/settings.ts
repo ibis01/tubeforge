@@ -32,16 +32,22 @@ const CAPABILITY_KEYS: Record<CapabilityId, string> = {
   video: "ai.video",
 };
 
-export const VIDEO_DEFAULT_MODEL = "cogvideox-3";
+export const VIDEO_DEFAULT_MODEL = "fal-ai/fast-svd";
 
 function defaultFor(capability: CapabilityId): CapabilityConfig {
   switch (capability) {
     case "chat":
-      return { provider: "zai", model: DEFAULT_CHAT_MODEL, visionModel: "" };
+      return {
+        provider: "openai",
+        model: "gemini-3.8-flash",
+        visionModel: "gemini-3.8-flash",
+      };
     case "video":
-      return { provider: "zai", model: VIDEO_DEFAULT_MODEL };
+      return { provider: "fal", model: VIDEO_DEFAULT_MODEL };
+    case "image":
+      return { provider: "pollinations", model: "flux" };
     default:
-      return { provider: "zai", model: "" };
+      return { provider: "openai", model: "tts-1" };
   }
 }
 

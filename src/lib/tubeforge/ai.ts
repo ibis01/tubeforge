@@ -7,10 +7,14 @@ import ZAI from "z-ai-web-dev-sdk";
 import { mergeWavs } from "./wav";
 import { aiCall } from "./budget";
 import { LENGTHS, THUMB_STYLES, type ResearchIdea } from "./types";
-import { syncZaiConfigFile } from "./zai-config";
+import { syncZaiConfigFile } from "./providers/config"; // UPDATED IMPORT
 import { chatComplete } from "./providers/chat";
 import { ttsSynthesize } from "./providers/tts";
-import { imageEdit, imageGenerate, imageEditSupported } from "./providers/image";
+import {
+  imageEdit,
+  imageGenerate,
+  imageEditSupported,
+} from "./providers/image";
 
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
@@ -23,6 +27,11 @@ export function videoDir(videoId: string) {
 let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null;
 export async function getZAI() {
   if (!zaiInstance) {
+    // VERCEL FIX: Point HOME to /tmp so the SDK reads the config from there
+    if (process.env.VERCEL === "1" || process.env.NOW_BUILDER === "1") {
+      process.env.HOME = "/tmp";
+    }
+
     // Settings stored in the UI (API key / base URL) win over any existing
     // config file — materialize them before the SDK reads the file.
     await syncZaiConfigFile();
@@ -68,7 +77,9 @@ export interface ResearchBrief {
 }
 
 /** Prompt block that steers GLM with Topic Radar findings. */
-export function researchBriefBlock(brief: ResearchBrief | null | undefined): string {
+export function researchBriefBlock(
+  brief: ResearchBrief | null | undefined,
+): string {
   if (!brief) return "";
   const lines = [
     brief.angle ? `CONTENT ANGLE (research-approved): ${brief.angle}` : "",
@@ -122,7 +133,7 @@ Return JSON with exactly these keys:
   "description": "engaging YouTube description (2-3 sentences) followed by a line of relevant hashtags",
   "tags": ["array of 10 SEO tags relevant to the topic"]
 }`,
-    })
+    }),
   );
   const parsed = parseJsonLoose(raw);
 
@@ -133,7 +144,8 @@ Return JSON with exactly these keys:
     ? parsed.tags.map(String).slice(0, 12)
     : [];
 
-  if (!title || !script) throw new Error("Incomplete script package from model");
+  if (!title || !script)
+    throw new Error("Incomplete script package from model");
   return { title, script, description, tags };
 }
 
@@ -144,7 +156,7 @@ function scriptToSpeech(script: string): string {
     .replace(/\*\*|__|~~|`/g, " ") // markdown decorations
     .replace(
       /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}]/gu,
-      " "
+      " ",
     ) // emoji & arrows
     .replace(/[ \t]+/g, " ")
     .replace(/\s*\n\s*\n\s*/g, ". ") // paragraph breaks become sentence gaps
@@ -169,9 +181,10 @@ export function splitForTts(text: string, maxLen = 950): string[] {
     // Handle pathological single sentences longer than maxLen
     let s = restore(rawSentence);
     while (s.length > maxLen) {
-      const cutAt = s.lastIndexOf(",", maxLen) > maxLen * 0.5
-        ? s.lastIndexOf(",", maxLen)
-        : Math.floor(maxLen * 0.9);
+      const cutAt =
+        s.lastIndexOf(",", maxLen) > maxLen * 0.5
+          ? s.lastIndexOf(",", maxLen)
+          : Math.floor(maxLen * 0.9);
       chunks.push(s.slice(0, cutAt + 1).trim());
       s = s.slice(cutAt + 1);
     }
@@ -207,8 +220,9 @@ export async function generateVoiceover(opts: {
     const buffer = await aiCall(
       "tts",
       `tts chunk (${chunk.length} chars)`,
-      () => ttsSynthesize({ input: chunk, voice: opts.voice, speed: opts.speed }),
-      { attempts: 6, baseDelayMs: 8000 } // background job — outlast long rate-limit storms (≈16 min of patience)
+      () =>
+        ttsSynthesize({ input: chunk, voice: opts.voice, speed: opts.speed }),
+      { attempts: 6, baseDelayMs: 8000 }, // background job — outlast long rate-limit storms (≈16 min of patience)
     );
     if (buffer.length < 44) throw new Error("TTS returned empty audio");
     buffers.push(buffer);
@@ -239,7 +253,8 @@ export async function deriveThumbnailConcept(opts: {
     .slice(0, 300)
     .trim();
 
-  if (!opts.script || opts.script.trim().length < 80) return fallback || opts.topic;
+  if (!opts.script || opts.script.trim().length < 80)
+    return fallback || opts.topic;
   const script = opts.script; // capture so the closure below keeps the narrowing
 
   try {
@@ -253,7 +268,7 @@ Topic: "${opts.topic}"
 
 SCRIPT:
 ${script.slice(0, 4000)}`,
-      })
+      }),
     );
     const concept = raw.replace(/^["'\s]+|["'\s]+$/g, "").trim();
     return concept.length > 10 ? concept.slice(0, 400) : fallback || opts.topic;
@@ -294,8 +309,7 @@ export async function generateThumbnail(opts: {
   // Preferred path — visually seed the generation with the character's portrait
   // so the host keeps their real likeness inside the scene.
   const { readPortrait, characterSceneFragment } = await import("./characters");
-  const portrait =
-    opts.character?.id ? readPortrait(opts.character.id) : null;
+  const portrait = opts.character?.id ? readPortrait(opts.character.id) : null;
 
   let buffer: Buffer | null = null;
   if (opts.character && portrait && (await imageEditSupported())) {
@@ -313,7 +327,7 @@ export async function generateThumbnail(opts: {
           if (!b) throw new Error("Image edit returned no data");
           return b;
         }),
-      { attempts: 4, baseDelayMs: 5000 }
+      { attempts: 4, baseDelayMs: 5000 },
     ).catch(() => null);
   }
 
@@ -329,15 +343,13 @@ export async function generateThumbnail(opts: {
           prompt: `${scenePrompt}${castFragment ? ` ${castFragment}` : ""}`,
           size: "1344x768",
         }),
-      { attempts: 4, baseDelayMs: 5000 } // background job — room for rate-limit windows
+      { attempts: 4, baseDelayMs: 5000 }, // background job — room for rate-limit windows
     );
   }
 
   if (buffer.length < 1000) throw new Error("Generated image is empty");
 
-  const fileName = opts.variant
-    ? `variant-${opts.style}.png`
-    : "thumbnail.png";
+  const fileName = opts.variant ? `variant-${opts.style}.png` : "thumbnail.png";
   fs.writeFileSync(path.join(videoDir(opts.videoId), fileName), buffer);
 
   return { fileBytes: buffer.length, fileName };
@@ -356,7 +368,7 @@ export function pickVariantStyles(primaryStyle: string, count = 3): string[] {
 
 export function readMedia(
   videoId: string,
-  kind: "voiceover.wav" | "thumbnail.png" | `variant-${string}.png`
+  kind: "voiceover.wav" | "thumbnail.png" | `variant-${string}.png`,
 ) {
   const filePath = path.join(UPLOAD_ROOT, videoId, kind);
   if (!fs.existsSync(filePath)) return null;
@@ -364,21 +376,30 @@ export function readMedia(
 }
 
 /** List existing A/B thumbnail variants for a video. */
-export function listVariants(videoId: string): { style: string; fileName: string }[] {
+export function listVariants(
+  videoId: string,
+): { style: string; fileName: string }[] {
   const dir = path.join(UPLOAD_ROOT, videoId);
   if (!fs.existsSync(dir)) return [];
   return fs
     .readdirSync(dir)
     .filter((f) => /^variant-[\w-]+\.png$/.test(f))
-    .map((f) => ({ style: f.replace("variant-", "").replace(".png", ""), fileName: f }))
+    .map((f) => ({
+      style: f.replace("variant-", "").replace(".png", ""),
+      fileName: f,
+    }))
     .sort((a, b) => a.style.localeCompare(b.style));
 }
 
 /** Promote a variant file to be the primary thumbnail.png. */
 export function promoteVariant(videoId: string, style: string) {
   const variantPath = path.join(UPLOAD_ROOT, videoId, `variant-${style}.png`);
-  if (!fs.existsSync(variantPath)) throw new Error(`No variant for style "${style}"`);
-  fs.copyFileSync(variantPath, path.join(UPLOAD_ROOT, videoId, "thumbnail.png"));
+  if (!fs.existsSync(variantPath))
+    throw new Error(`No variant for style "${style}"`);
+  fs.copyFileSync(
+    variantPath,
+    path.join(UPLOAD_ROOT, videoId, "thumbnail.png"),
+  );
 }
 
 export interface ResearchResult {
@@ -420,7 +441,7 @@ Return JSON with exactly these keys:
     }
   ]
 }`,
-    })
+    }),
   );
   const parsed = parseJsonLoose(raw);
 
@@ -436,7 +457,7 @@ Return JSON with exactly these keys:
         competition: String(idea.competition ?? "Medium").trim(),
         viralScore: Math.max(
           1,
-          Math.min(100, Math.round(Number(idea.viralScore ?? 70) || 70))
+          Math.min(100, Math.round(Number(idea.viralScore ?? 70) || 70)),
         ),
         suggestedLength: String(idea.suggestedLength ?? "medium").trim(),
         why: String(idea.why ?? "").trim(),
@@ -445,7 +466,9 @@ Return JSON with exactly these keys:
 
   const valid = ideas.filter((i: ResearchIdea) => i.title && i.angle);
   if (valid.length === 0)
-    throw new Error("Research returned no usable ideas — try a different query");
+    throw new Error(
+      "Research returned no usable ideas — try a different query",
+    );
 
   return {
     ideas: valid.slice(0, 8),
