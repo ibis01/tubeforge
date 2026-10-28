@@ -46,18 +46,36 @@ local-*
 *.log
 dev.log
 dev.out.log
-test
-prompt
 
 server.log
 # Skills directory
 /skills/
 # Runtime data — NEVER commit or distribute (contains credentials + private records)
-/db/
-/uploads/
+/db/*
+!/db/.gitkeep
+/uploads/*
+!/uploads/.gitkeep
 /pack/
 /download/
 /tool-results/
 /backups/
 *.db
 *.db-journal
+*.sqlite
+*.sqlite3
+
+# --- tf-git-setup: repo hygiene ---
+# keep the env template (the .env* rule above still hides the real .env)
+!.env.example
+# local-only workspace dirs
+/upload/
+/forensics/
+/scripts/
+# packaging artifacts
+public/tubeforge-local.zip
+public/tubeforge/
+*.tar
+# editor / OS
+.vscode/
+.idea/
+Thumbs.db
