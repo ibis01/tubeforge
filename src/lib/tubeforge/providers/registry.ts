@@ -3,7 +3,7 @@
 
 import { CHAT_MODELS } from "../types";
 
-export type ProviderId = "zai" | "openai" | "anthropic" | "gemini";
+export type ProviderId = "zai" | "openai" | "anthropic" | "gemini" | "pollinations";
 export type CapabilityId = "chat" | "tts" | "image" | "video";
 
 export interface ProviderMeta {
@@ -101,6 +101,18 @@ export const IMAGE_PROVIDERS: ProviderMeta[] = [
     keyUrl: "https://z.ai/model-api",
     models: [],
     note: "Built-in default art model, supports identity-locked edits.",
+  },
+  {
+    id: "pollinations",
+    label: "Pollinations.ai (free, no key)",
+    defaultBaseUrl: "https://image.pollinations.ai",
+    keyUrl: "https://enter.pollinations.ai",
+    models: [
+      { id: "flux", hint: "best quality (recommended)" },
+      { id: "turbo", hint: "faster, slightly lower quality" },
+      { id: "flux-realism", hint: "photorealistic" },
+    ],
+    note: "No API key. Free tier is 1 image / 45s / IP (a 16-scene storyboard takes ~12 min). Buy a pollen key for unlimited at enter.pollinations.ai. No identity-locked edits (host scenes fall back to prompt-seeded generation).",
   },
   {
     id: "openai",

@@ -219,7 +219,10 @@ export async function POST(req: NextRequest) {
       }
       case "image":
       case "imageEdit": {
-        if (!body.confirmCost) {
+        // Pollinations is free — skip the cost-confirmation gate so the user
+        // can test it without the "may cost money" modal.
+        const isPollinations = provider === "pollinations";
+        if (!isPollinations && !body.confirmCost) {
           return NextResponse.json({
             ok: false,
             needsConfirm: true,

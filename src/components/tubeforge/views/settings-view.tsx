@@ -737,18 +737,20 @@ export function SettingsView() {
                           className="bg-white/5 border-white/10 text-xs font-mono h-9"
                         />
                       </div>
-                      <div className="space-y-1.5">
-                        <Label>API key</Label>
-                        <Input
-                          value={row.apiKey}
-                          onChange={(e) =>
-                            setProv((f) => ({ ...f, [cap]: { ...f[cap], apiKey: e.target.value } }))
-                          }
-                          placeholder={row.hasKey ? `saved (${row.maskedKey}) — type to replace` : `Paste your ${shortLabel} key`}
-                          type="password"
-                          className="bg-white/5 border-white/10 text-xs font-mono h-9"
-                        />
-                      </div>
+                      {row.provider !== "pollinations" && (
+                        <div className="space-y-1.5">
+                          <Label>API key</Label>
+                          <Input
+                            value={row.apiKey}
+                            onChange={(e) =>
+                              setProv((f) => ({ ...f, [cap]: { ...f[cap], apiKey: e.target.value } }))
+                            }
+                            placeholder={row.hasKey ? `saved (${row.maskedKey}) — type to replace` : `Paste your ${shortLabel} key`}
+                            type="password"
+                            className="bg-white/5 border-white/10 text-xs font-mono h-9"
+                          />
+                        </div>
+                      )}
                     </div>
                     <div className="space-y-1.5">
                       <Label>Model</Label>
@@ -830,7 +832,7 @@ export function SettingsView() {
                         else testCapability(cap, cap);
                       }}
                       className="border-white/15 bg-white/6 hover:bg-white/10 h-7 text-[11px]"
-                      title={cap === "image" ? "Generates a small real image — may cost a few cents" : "Send a tiny test request"}
+                      title={cap === "image" && row.provider !== "pollinations" ? "Generates a small real image — may cost a few cents" : "Send a tiny test request"}
                     >
                       {provTesting === cap ? (
                         <Loader2 className="h-3 w-3 animate-spin" />
@@ -844,7 +846,9 @@ export function SettingsView() {
                         ? "pings the model with a tiny prompt"
                         : cap === "tts"
                           ? "speaks one short sentence"
-                          : "generates one small image (real cost)"}
+                          : row.provider === "pollinations"
+                            ? "generates one image — free, no key"
+                            : "generates one small image (real cost)"}
                     </span>
                   </div>
                 )}

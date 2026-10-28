@@ -666,3 +666,29 @@ Stage Summary:
 - User apply path (one command, then restart): `curl -fsSL https://preview-chat-92cf2337-6ca5-4169-a0bc-3579414f698b.space-z.ai/tubeforge/image.ts -o ~/tubeforge/src/lib/tubeforge/providers/image.ts` then `fuser -k 3000/tcp && cd ~/tubeforge && npm run dev`. After the patch, malformed z.ai responses are treated as 429s — the storyboard will pause and retry instead of marking the video "Failed".
 - Combined with the earlier story.ts resumable patch, even if the storm is bad enough that the storyboard eventually fails after the full retry window, re-clicking will only paint scenes that didn't finish. Two patches, same one-line curl flow.
 - Recommended pairing: lower Settings → AI Budget → "Image per minute" to 5-6 for the heaviest storyboards. Pending: lock-screen enable, public URL confirmation, README/LICENSE, rm -rf ~/tf-pkg cleanup.
+
+---
+Task ID: pollinations-image-provider
+Agent: main (Z.ai)
+Task: User said "let use another alternative ai" after another storyboard 429 — wire Pollinations.ai as a free no-key image provider so they can switch off z.ai CogView when it rate-limits them.
+
+Work Log:
+- Network probe: curl'd Pollinations directly. Confirmed: returns JPEG bytes (not PNG as URL implies), downscales 1344x768 → 1015x580, free tier is 1 image / 45s / IP (returned 402 with "Free limit reached"), 503 SERVICE_UNAVAILABLE when at capacity. Both error responses carry JSON bodies with "Retry after Ns" hints.
+- Code changes (4 files):
+  1. src/lib/tubeforge/providers/registry.ts — added "pollinations" to ProviderId union; added a Pollinations entry to IMAGE_PROVIDERS with models [flux, turbo, flux-realism], note honestly explaining the 45s/IP limit.
+  2. src/lib/tubeforge/providers/image.ts — added pollinationsImage() that builds the URL `${baseUrl}/prompt/{enc(prompt)}?width=W&height=H&model={model}&nologo=true&seed={rand}` and fetches via providerFetch; converts JPEG → PNG via sharp (Next.js ships sharp, dynamic import keeps cold-start clean). Catches 503/429/402 from Pollinations and rethrows as a "429 too many requests — Pollinations rate-limited (HTTP N)" message so budget.ts triggers the 45s shared cool-down (which exactly matches Pollinations' free-tier window). imageGenerate routes to pollinationsImage when provider==="pollinations"; imageEdit returns null (caller falls back to prompt-seeded fresh generation with cast fragment, which lands back here); imageEditSupported returns false.
+  3. src/components/tubeforge/views/settings-view.tsx — hide the "API key" Input when provider==="pollinations" (no key needed); test button caption switches from "generates one small image (real cost)" to "generates one image — free, no key" when provider is pollinations.
+  4. src/app/api/settings/ai/route.ts — skip the cost-confirmation gate for the test endpoint when provider==="pollinations" (otherwise the user can't test the free provider without clicking "Confirm — runs a paid test" which is misleading).
+- End-to-end test (scripts/test-pollinations.mjs): real network call through the live adapter — imageGenerate({size:"1344x768"}) returned 766,631 bytes PNG (sharp converted from JPEG), 7.2s latency. imageEditSupported returned false ✓. imageEdit returned null ✓. Caught 402/503 mid-test and rethrew as 429-flavored errors (budget layer will handle). One test-script-side bug at the very end (named vs default fs import) — production code unaffected.
+- Typecheck: src tree clean (the staged public/tubeforge/*.ts snapshots show expected context errors because they live outside src — those are intentional curl artifacts).
+- Staged for curl-patch at public/tubeforge/{registry.ts, image.ts, settings-view.tsx, ai-route.ts}. All four md5s verified identical between src/ and preview-host responses.
+
+Stage Summary:
+- User apply path (4 curls + restart):
+  curl -fsSL https://preview-chat-92cf2337-6ca5-4169-a0bc-3579414f698b.space-z.ai/tubeforge/registry.ts       -o ~/tubeforge/src/lib/tubeforge/providers/registry.ts
+  curl -fsSL https://preview-chat-92cf2337-6ca5-4169-a0bc-3579414f698b.space-z.ai/tubeforge/image.ts          -o ~/tubeforge/src/lib/tubeforge/providers/image.ts
+  curl -fsSL https://preview-chat-92cf2337-6ca5-4169-a0bc-3579414f698b.space-z.ai/tubeforge/settings-view.tsx -o ~/tubeforge/src/components/tubeforge/views/settings-view.tsx
+  curl -fsSL https://preview-chat-92cf2337-6ca5-4169-a0bc-3579414f698b.space-z.ai/tubeforge/ai-route.ts        -o ~/tubeforge/src/app/api/settings/ai/route.ts
+  fuser -k 3000/tcp && cd ~/tubeforge && npm run dev
+- Then: Settings → AI Providers → Artwork → provider dropdown → pick "Pollinations.ai (free, no key)" → leave API key blank (field is hidden) → Save. Storyboard scenes will now generate via Pollinations. The 45s/IP limit means a 16-scene storyboard takes ~12 minutes; Pollinations 402/503 errors auto-trigger the 45s budget cool-down so the pipeline paces itself without failing.
+- Honest tradeoff the user needs to know: free Pollinations is slower than z.ai CogView (z.ai can do 8/min = 16 scenes in 2 min when not rate-limited; Pollinations is hard-capped at ~1.3/min). For users who want speed, options: (a) keep z.ai but drop AI Budget → Image per minute to 5-6 + rely on the new resumable+429 patches from the previous turns; (b) buy a Pollinations pollen key at enter.pollinations.ai for unlimited; (c) use the OpenAI-compatible image provider with a paid DALL·E / gpt-image key.
