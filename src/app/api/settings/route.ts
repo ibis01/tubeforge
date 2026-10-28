@@ -1,44 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import {
+  DEFAULT_SETTINGS,
+  publicSettingsMap,
+} from "@/lib/tubeforge/settings-public";
 
-const DEFAULTS: Record<string, string> = {
-  defaultVoice: "jam",
-  defaultSpeed: "1",
-  defaultTone: "informative",
-  defaultLength: "medium",
-  defaultNiche: "Motivation",
-  defaultThumbStyle: "cinematic",
-  autoVoiceover: "true",
-  autoThumbnail: "true",
-  // Phase 3 — VLM quality gate
-  qualityGate: "thumbnails", // off | thumbnails | all (thumbnails + storyboard scenes)
-  qualityThreshold: "6", // 1-9 — below this the image is re-rolled once
-  // Phase 3 — global AI rate budget
-  aiBudgetEnabled: "true",
-  aiLlmPerMin: "30",
-  aiTtsPerMin: "12",
-  aiImagePerMin: "8",
-  aiVideoPerMin: "4",
-  // Background music (music.ts reads these at render time)
-  "music.enabled": "true",
-  "music.mode": "auto", // auto | manual
-  "music.trackId": "", // used when mode=manual
-  "music.volume": "0.5",
-  "music.fadeInSec": "1.5",
-  "music.fadeOutSec": "2.5",
-};
+// SECURITY: the Setting table also stores secrets (OAuth client secret +
+// refresh token, provider API keys, the studio password hash). Responses are
+// filtered through the settings-public allow-list — unknown keys are dropped
+// server-side, so a future key added to the table can never leak by default.
+// Credential state is exposed ONLY masked, via /api/settings/ai and
+// /api/youtube/status.
 
 export async function GET() {
   const rows = await db.setting.findMany();
-  const map: Record<string, string> = { ...DEFAULTS };
-  for (const row of rows) map[row.key] = row.value;
-  return NextResponse.json({ settings: map });
+  return NextResponse.json({ settings: publicSettingsMap(rows) });
 }
 
 export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
-    const allowed = new Set(Object.keys(DEFAULTS));
+    const allowed = new Set(Object.keys(DEFAULT_SETTINGS));
     const updates: { key: string; value: string }[] = [];
 
     for (const [key, raw] of Object.entries(body)) {
@@ -63,10 +45,7 @@ export async function PUT(req: NextRequest) {
     }
 
     const rows = await db.setting.findMany();
-    const map: Record<string, string> = { ...DEFAULTS };
-    for (const row of rows) map[row.key] = row.value;
-
-    return NextResponse.json({ settings: map });
+    return NextResponse.json({ settings: publicSettingsMap(rows) });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Invalid request";
     return NextResponse.json({ error: message }, { status: 400 });
