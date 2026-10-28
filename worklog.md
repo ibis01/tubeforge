@@ -604,3 +604,18 @@ Stage Summary:
 - TubeForge source now lives at https://github.com/ibis01/tubeforge (private)
 - Future updates: cd ~/tubeforge && git add -A && git commit -m "..." && git push
 - Pending user actions: delete ~/tf-pkg (557MB tar with credentials); optional README/LICENSE; optional first end-to-end video test
+
+---
+Task ID: go-public-url-fix
+Agent: main (Z.ai)
+Task: User sent screenshot — browser shows DNS_PROBE_POSSIBLE for "random-words.trycloudflare.com". Diagnose and get the real quick-tunnel URL working.
+
+Work Log:
+- Diagnosed: "random-words.trycloudflare.com" is the placeholder example from my earlier chat message, NOT a real assigned URL (matches user's known habit of pasting placeholders literally). DNS_PROBE_POSSIBLE is expected — that domain doesn't exist.
+- Real URL source: tf-go-public.sh greps cloudflared's log and prints it in the "YOUR PUBLIC URL" box (verified script logic in public/tf-go-public.sh lines 44-62). Tunnel is alive only while that terminal stays open.
+- Advised user: (1) go back to the running tf-go-public.sh terminal, copy the boxed URL; (2) if terminal was closed, re-run `bash ~/tf-go-public.sh` — old URL dies, new one prints; (3) liveness check `pgrep -af cloudflared`; (4) app origin must be running too (`cd ~/tubeforge && npm run dev` in a second terminal if port 3000 died).
+- Re-issued security push: local studio lock screen is still OFF (user chose "y" earlier) — must enable Settings → Studio access + password BEFORE sharing the real URL, since API key/credits (db/custom.db) are exposed otherwise.
+- Offered follow-up: permanent address via ngrok free static domain (URL stops changing every run); also pending README/LICENSE + rm -rf ~/tf-pkg cleanup reminders.
+
+Stage Summary:
+- No code changes needed — tunnel tooling was working; user typed the example URL instead of the script-assigned one. Awaiting user confirmation that the real https://<words>.trycloudflare.com URL loads their dashboard.
