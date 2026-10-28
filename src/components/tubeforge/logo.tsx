@@ -1,7 +1,10 @@
+// TubeForge brand mark — uses the uploaded image from the public folder.
+// The ?v=2 forces the browser to bypass its cache and load the new image.
+
 export function TubeForgeLogo({ size = 36 }: { size?: number }) {
   return (
     <img
-      src="/logo.png"
+      src="/logo.png?v=2"
       alt="TubeForge Logo"
       width={size}
       height={size}
