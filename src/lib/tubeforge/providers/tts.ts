@@ -196,13 +196,13 @@ async function selfhostTts(
     );
   } catch (err) {
     throw new Error(
-      `Your voice server at ${baseUrl} is unreachable — is it running (and the cloudflared tunnel up)? (${(err as Error).message})`,
+      `Your voice server at ${baseUrl} didn't respond — if it's a sleeping free-tier server give it a minute and retry; if it's your PC, check the server (and cloudflared tunnel) are running. (${(err as Error).message})`,
     );
   }
   const buffer = Buffer.from(new Uint8Array(await response.arrayBuffer()));
   if (buffer.length < 44)
     throw new Error(
-      `Your voice server returned no audio (HTTP ${response.status}) — check its console window for errors`,
+      `Your voice server returned no audio (HTTP ${response.status}) — check its console (PC) or Logs tab (HF Space) for errors`,
     );
   return buffer;
 }
