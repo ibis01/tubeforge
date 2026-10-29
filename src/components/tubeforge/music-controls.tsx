@@ -19,7 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Music2, Play, Square, BadgeCheck, Sparkles } from "lucide-react";
+import { Music2, Play, BadgeCheck, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 export interface MusicTrackDTO {
@@ -150,7 +150,15 @@ export function TrackPreviewButton({ track, size = "icon" }: { track: MusicTrack
       aria-label={playing ? `Stop ${track.name}` : `Preview ${track.name}`}
       className="h-7 w-7 p-0 rounded-full border-white/15"
     >
-      {playing ? <Square className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+      {playing ? (
+        <span className="tf-eq" aria-hidden>
+          <span />
+          <span />
+          <span />
+        </span>
+      ) : (
+        <Play className="h-3 w-3" />
+      )}
     </Button>
   );
 }
@@ -229,10 +237,15 @@ export function MusicPickerCard({
                 </SelectItem>
                 {tracks.filter((t) => t.isActive).map((t) => (
                   <SelectItem key={t.id} value={t.id} className="text-xs">
-                    <span className="flex items-center gap-1.5">
-                      {t.name}
-                      <span className="text-muted-foreground">· {fmt(t.durationSec)}</span>
-                      {t.isOriginal && <BadgeCheck className="h-3 w-3 text-emerald-400" />}
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      <span className="truncate">{t.name}</span>
+                      <span className="text-muted-foreground shrink-0">· {fmt(t.durationSec)}</span>
+                      {t.moods.length > 0 && (
+                        <span className="text-muted-foreground/70 truncate hidden sm:inline">
+                          · {t.moods.slice(0, 2).join(" / ")}
+                        </span>
+                      )}
+                      {t.isOriginal && <BadgeCheck className="h-3 w-3 text-emerald-400 shrink-0" />}
                     </span>
                   </SelectItem>
                 ))}

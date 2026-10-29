@@ -185,3 +185,398 @@ audio {
 audio::-webkit-media-controls-panel {
   background: rgb(255 255 255 / 6%);
 }
+
+/* ============================================================
+   Transition preview stage (U1 polish)
+   Two abstract frames — A (indigo) underneath, B (amber/rose)
+   on top — animated through the SAME 30–60% window of the cycle
+   for every style family, so the whole grid can rest PAUSED at
+   the -45% midpoint (a scannable "frozen mid-transition"
+   catalog), run on hover, and loop continuously when selected.
+   --tf-t (cycle seconds) is set inline per stage and scales with
+   the blend-length slider.
+   ============================================================ */
+.tf-tx {
+  --tf-t: 1.6s;
+  position: relative;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #312e81;
+}
+.tf-tx-frame {
+  position: absolute;
+  inset: 0;
+}
+.tf-tx-a {
+  background: linear-gradient(135deg, #312e81 0%, #7c3aed 100%);
+}
+.tf-tx-b {
+  background: linear-gradient(135deg, #b45309 0%, #e11d48 100%);
+}
+.tf-tx-o {
+  opacity: 0;
+}
+.tf-o-black {
+  background: #000;
+}
+.tf-o-white {
+  background: #fff;
+}
+
+/* Shared animation contract: every animated frame runs the same
+   cycle — pause at -45% (mid-transition) unless running. */
+.tf-tx .tf-tx-a,
+.tf-tx .tf-tx-b,
+.tf-tx .tf-tx-o {
+  animation-duration: var(--tf-t);
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+  animation-fill-mode: both;
+  animation-play-state: paused;
+  animation-delay: calc(var(--tf-t) * -0.45);
+}
+/* Dip overlays rest a touch earlier so the tile shows the dip
+   RISING rather than sitting on the (opaque) plateau. */
+.tf-tx .tf-tx-o {
+  animation-delay: calc(var(--tf-t) * -0.37);
+}
+.tf-tx-run .tf-tx-a,
+.tf-tx-run .tf-tx-b,
+.tf-tx-run .tf-tx-o {
+  animation-play-state: running;
+  animation-delay: 0s;
+}
+.tf-tx-hover:hover .tf-tx-a,
+.tf-tx-hover:hover .tf-tx-b,
+.tf-tx-hover:hover .tf-tx-o {
+  animation-play-state: running;
+  animation-delay: 0s;
+}
+
+/* Family → keyframes wiring. The B frame carries the reveal; the
+   A frame animates only for hand-offs where it visibly moves
+   (blur melt, slides). */
+.tf-tx-fade .tf-tx-b {
+  animation-name: tf-kf-fade;
+}
+.tf-tx-dissolve .tf-tx-b {
+  animation-name: tf-kf-dissolve;
+}
+.tf-tx-hblur .tf-tx-b {
+  animation-name: tf-kf-hblur;
+}
+.tf-tx-hblur .tf-tx-a {
+  animation-name: tf-kf-hblur-a;
+}
+.tf-tx-fadeblack .tf-tx-b,
+.tf-tx-fadewhite .tf-tx-b {
+  animation-name: tf-kf-dip-b;
+}
+.tf-tx-fadeblack .tf-tx-o,
+.tf-tx-fadewhite .tf-tx-o {
+  animation-name: tf-kf-dip-o;
+}
+.tf-tx-wipeleft .tf-tx-b {
+  animation-name: tf-kf-wipeleft;
+}
+.tf-tx-wiperight .tf-tx-b {
+  animation-name: tf-kf-wiperight;
+}
+.tf-tx-smoothup .tf-tx-b {
+  animation-name: tf-kf-smoothup;
+}
+.tf-tx-smoothdown .tf-tx-b {
+  animation-name: tf-kf-smoothdown;
+}
+.tf-tx-circleopen .tf-tx-b {
+  animation-name: tf-kf-circleopen;
+}
+.tf-tx-slideleft .tf-tx-b {
+  animation-name: tf-kf-slideleft;
+}
+.tf-tx-slideleft .tf-tx-a {
+  animation-name: tf-kf-exit-left;
+}
+.tf-tx-slideright .tf-tx-b {
+  animation-name: tf-kf-slideright;
+}
+.tf-tx-slideright .tf-tx-a {
+  animation-name: tf-kf-exit-right;
+}
+.tf-tx-pixelize .tf-tx-b {
+  animation-name: tf-kf-pixelize;
+}
+/* Radial sweep: a registered percentage sweeps a conic mask. */
+@property --tf-sweep {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 50%;
+}
+.tf-tx-radial .tf-tx-b {
+  animation-name: tf-kf-radial;
+  -webkit-mask-image: conic-gradient(
+    from 0deg,
+    #000 var(--tf-sweep),
+    transparent 0
+  );
+  mask-image: conic-gradient(from 0deg, #000 var(--tf-sweep), transparent 0);
+}
+/* Cut: tiles show a static A|B split; only the running hero
+   snaps A→B. */
+.tf-tx-cut.tf-tx-run .tf-tx-b {
+  animation-name: tf-kf-cut;
+}
+.tf-tx-cut:not(.tf-tx-run) .tf-tx-b {
+  clip-path: inset(0 0 0 50%);
+}
+
+@keyframes tf-kf-fade {
+  0%,
+  30% {
+    opacity: 0;
+  }
+  60%,
+  100% {
+    opacity: 1;
+  }
+}
+@keyframes tf-kf-cut {
+  0%,
+  29.9% {
+    opacity: 0;
+  }
+  30%,
+  100% {
+    opacity: 1;
+  }
+}
+@keyframes tf-kf-dissolve {
+  0%,
+  30% {
+    opacity: 0;
+    filter: blur(3px);
+  }
+  60%,
+  100% {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+@keyframes tf-kf-hblur {
+  0%,
+  30% {
+    opacity: 0;
+    filter: blur(10px);
+  }
+  60%,
+  100% {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+@keyframes tf-kf-hblur-a {
+  0%,
+  30% {
+    opacity: 1;
+    filter: blur(0);
+  }
+  60%,
+  100% {
+    opacity: 0;
+    filter: blur(10px);
+  }
+}
+/* B swaps in instantly at the dip plateau's midpoint. */
+@keyframes tf-kf-dip-b {
+  0%,
+  44.9% {
+    opacity: 0;
+  }
+  45.1%,
+  100% {
+    opacity: 1;
+  }
+}
+@keyframes tf-kf-dip-o {
+  0%,
+  30% {
+    opacity: 0;
+  }
+  45% {
+    opacity: 1;
+  }
+  60%,
+  100% {
+    opacity: 0;
+  }
+}
+/* Wipes — B's reveal edge matches the catalog wording:
+   wipeleft = new scene revealed from the LEFT edge. */
+@keyframes tf-kf-wipeleft {
+  0%,
+  30% {
+    clip-path: inset(0 100% 0 0);
+  }
+  60%,
+  100% {
+    clip-path: inset(0 0 0 0);
+  }
+}
+@keyframes tf-kf-wiperight {
+  0%,
+  30% {
+    clip-path: inset(0 0 0 100%);
+  }
+  60%,
+  100% {
+    clip-path: inset(0 0 0 0);
+  }
+}
+@keyframes tf-kf-smoothup {
+  0%,
+  30% {
+    clip-path: inset(100% 0 0 0);
+  }
+  60%,
+  100% {
+    clip-path: inset(0 0 0 0);
+  }
+}
+@keyframes tf-kf-smoothdown {
+  0%,
+  30% {
+    clip-path: inset(0 0 100% 0);
+  }
+  60%,
+  100% {
+    clip-path: inset(0 0 0 0);
+  }
+}
+@keyframes tf-kf-circleopen {
+  0%,
+  30% {
+    clip-path: circle(0% at 50% 50%);
+  }
+  60%,
+  100% {
+    clip-path: circle(75% at 50% 50%);
+  }
+}
+/* slideleft = next scene slides in FROM the right (A exits left). */
+@keyframes tf-kf-slideleft {
+  0%,
+  30% {
+    transform: translateX(100%);
+  }
+  60%,
+  100% {
+    transform: translateX(0);
+  }
+}
+@keyframes tf-kf-exit-left {
+  0%,
+  30% {
+    transform: translateX(0);
+  }
+  60%,
+  100% {
+    transform: translateX(-100%);
+  }
+}
+@keyframes tf-kf-slideright {
+  0%,
+  30% {
+    transform: translateX(-100%);
+  }
+  60%,
+  100% {
+    transform: translateX(0);
+  }
+}
+@keyframes tf-kf-exit-right {
+  0%,
+  30% {
+    transform: translateX(0);
+  }
+  60%,
+  100% {
+    transform: translateX(100%);
+  }
+}
+/* Pixel melt: chunky stepped scale-down reads as a mosaic
+   resolving into the next frame. */
+@keyframes tf-kf-pixelize {
+  0%,
+  30% {
+    opacity: 0;
+    transform: scale(4);
+  }
+  36% {
+    opacity: 0.55;
+    transform: scale(3);
+  }
+  42% {
+    transform: scale(2.25);
+  }
+  48% {
+    opacity: 0.8;
+    transform: scale(1.6);
+  }
+  54% {
+    transform: scale(1.25);
+  }
+  60%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes tf-kf-radial {
+  0%,
+  30% {
+    --tf-sweep: 0%;
+  }
+  60%,
+  100% {
+    --tf-sweep: 100%;
+  }
+}
+
+/* Music preview — equalizer bars on the playing control. */
+.tf-eq {
+  display: flex;
+  align-items: flex-end;
+  gap: 1.5px;
+  height: 11px;
+}
+.tf-eq > span {
+  width: 2px;
+  height: 30%;
+  background: currentColor;
+  border-radius: 1px;
+  animation: tf-kf-eq 0.9s ease-in-out infinite;
+}
+.tf-eq > span:nth-child(2) {
+  animation-delay: -0.3s;
+}
+.tf-eq > span:nth-child(3) {
+  animation-delay: -0.6s;
+}
+@keyframes tf-kf-eq {
+  0%,
+  100% {
+    height: 30%;
+  }
+  50% {
+    height: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tf-tx .tf-tx-a,
+  .tf-tx .tf-tx-b,
+  .tf-tx .tf-tx-o,
+  .tf-eq > span {
+    animation-play-state: paused !important;
+  }
+}

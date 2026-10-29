@@ -39,6 +39,24 @@ import { SCENE_ART_STYLES, type SceneDTO } from "@/lib/tubeforge/types";
 
 type Busy = "save" | "regen" | "edit" | "upload" | null;
 
+/** Two-tone gradient swatch per art style — a quick visual signature for
+ *  the palette grid (UI-only; the prompt text stays the source of truth). */
+const STYLE_SWATCHES: Record<string, [string, string]> = {
+  default: ["#6366f1", "#a855f7"],
+  photoreal: ["#38bdf8", "#34d399"],
+  anime: ["#f472b6", "#60a5fa"],
+  watercolor: ["#fbcfe8", "#bfdbfe"],
+  comic: ["#ef4444", "#facc15"],
+  render3d: ["#22d3ee", "#818cf8"],
+  noir: ["#e5e5e5", "#525252"],
+  vintage: ["#dcb579", "#8a5a2b"],
+  neon: ["#e879f9", "#22d3ee"],
+  pastel: ["#fde68a", "#c4b5fd"],
+  epic: ["#f59e0b", "#4338ca"],
+};
+const styleSwatch = (id: string): [string, string] =>
+  STYLE_SWATCHES[id] ?? STYLE_SWATCHES.default;
+
 export function SceneEditorDialog({
   videoId,
   scene,
@@ -231,23 +249,33 @@ export function SceneEditorDialog({
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">Art style</Label>
             <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
-              {SCENE_ART_STYLES.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  disabled={anyBusy}
-                  onClick={() => setStyle(s.id)}
-                  aria-pressed={style === s.id}
-                  className={clsx(
-                    "rounded-lg border px-2 py-1.5 text-[11px] transition-all",
-                    style === s.id
-                      ? "border-primary/50 bg-primary/8 text-foreground"
-                      : "border-white/10 bg-white/3 hover:border-white/25 text-muted-foreground"
-                  )}
-                >
-                  {s.label}
-                </button>
-              ))}
+              {SCENE_ART_STYLES.map((s) => {
+                const [c1, c2] = styleSwatch(s.id);
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    disabled={anyBusy}
+                    onClick={() => setStyle(s.id)}
+                    aria-pressed={style === s.id}
+                    className={clsx(
+                      "flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[11px] transition-all",
+                      style === s.id
+                        ? "border-primary/50 bg-primary/8 text-foreground"
+                        : "border-white/10 bg-white/3 hover:border-white/25 text-muted-foreground"
+                    )}
+                  >
+                    <span
+                      aria-hidden
+                      className="h-3.5 w-3.5 shrink-0 rounded-[4px] ring-1 ring-white/15"
+                      style={{
+                        background: `linear-gradient(135deg, ${c1} 0%, ${c2} 100%)`,
+                      }}
+                    />
+                    <span className="truncate">{s.label}</span>
+                  </button>
+                );
+              })}
             </div>
             <p className="text-[10px] text-muted-foreground/80">
               {SCENE_ART_STYLES.find((s) => s.id === style)?.prompt ||

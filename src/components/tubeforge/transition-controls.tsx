@@ -9,7 +9,15 @@
 // The renderer (src/lib/tubeforge/transitions.ts) is the source of truth:
 // "cut" keeps the classic hard-cut concat; every other style runs one chained
 // xfade/acrossfade pass so scenes blend with matching audio crossfades.
+//
+// Visual previews (globals.css `.tf-tx-*`): every style plays on a two-frame
+// micro-stage — indigo frame A, amber frame B — with the reveal window fixed
+// at 30–60% of the cycle. Tiles rest PAUSED at the cycle midpoint (a scannable
+// "frozen mid-transition" catalog), play on hover, and loop when selected.
+// The hero strip always loops the current style at the chosen blend length so
+// the slider has visible cause-and-effect.
 
+import type { CSSProperties } from "react";
 import { Card } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
@@ -44,6 +52,55 @@ export function transitionSummaryLine(v: TransitionPickerValue): string {
   return `${def?.label ?? t.style} · ${t.durationSec.toFixed(1)}s blend, audio crossfades to match`;
 }
 
+/** Preview cycle length — holds + the reveal window scale with the blend. */
+function previewCycleSec(style: TransitionStyle, blendSec: number): number {
+  if (style === "cut") return 1.4;
+  return Math.max(1.15, 1.05 + blendSec);
+}
+
+/**
+ * The two-frame transition stage. `mode`:
+ *   • "run"   — loop continuously (hero strip, selected tile)
+ *   • "hover" — paused at the cycle midpoint; plays while hovered
+ * Frames + keyframe families live in globals.css (`.tf-tx-*`).
+ */
+export function TransitionStage({
+  style,
+  cycleSec,
+  mode,
+  className,
+}: {
+  style: TransitionStyle;
+  cycleSec: number;
+  mode: "run" | "hover";
+  className?: string;
+}) {
+  const dip = style === "fadeblack" || style === "fadewhite";
+  return (
+    <div
+      className={clsx(
+        "tf-tx",
+        `tf-tx-${style}`,
+        mode === "run" ? "tf-tx-run" : "tf-tx-hover",
+        className
+      )}
+      style={{ "--tf-t": `${cycleSec.toFixed(2)}s` } as CSSProperties}
+      aria-hidden
+    >
+      <div className="tf-tx-frame tf-tx-a" />
+      {dip && (
+        <div
+          className={clsx(
+            "tf-tx-frame tf-tx-o",
+            style === "fadeblack" ? "tf-o-black" : "tf-o-white"
+          )}
+        />
+      )}
+      <div className="tf-tx-frame tf-tx-b" />
+    </div>
+  );
+}
+
 /**
  * Scene Transitions card. `disabled` greys everything (busy renders);
  * `compact` trims the description footnotes for the Create form.
@@ -63,6 +120,7 @@ export function TransitionControlsCard({
 }) {
   const t = effectiveTransition(value);
   const isCut = t.style === "cut";
+  const cycle = previewCycleSec(t.style, t.durationSec);
 
   return (
     <Card className="glass border-white/10 p-4 space-y-4">
@@ -76,28 +134,68 @@ export function TransitionControlsCard({
         </div>
       </div>
 
-      {/* Style grid */}
+      {/* Live preview — always looping the current style at the chosen
+          blend length, so dragging the slider visibly retimes it. */}
+      <div className={clsx(disabled && "opacity-50")}>
+        <div className="relative rounded-lg overflow-hidden border border-white/10">
+          <TransitionStage style={t.style} cycleSec={cycle} mode="run" className="h-20" />
+          <span className="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[9px] font-medium text-white pointer-events-none">
+            SCENE A
+          </span>
+          <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[9px] font-medium text-white pointer-events-none">
+            SCENE B
+          </span>
+          <span className="absolute top-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[9px] tabular-nums text-white pointer-events-none">
+            {isCut ? "instant" : `${t.durationSec.toFixed(1)}s blend`}
+          </span>
+        </div>
+      </div>
+
+      {/* Style grid — every tile previews its style on hover; the selected
+          one loops. At rest the grid reads as a frozen mid-transition
+          catalog (hard cut shows its A|B split). */}
       <div className={clsx("space-y-1.5", disabled && "opacity-50 pointer-events-none")}>
         <Label className="text-xs text-muted-foreground">Transition style</Label>
-        <div className="grid grid-cols-3 gap-1.5">
-          {TRANSITIONS.map((def) => (
-            <button
-              key={def.id}
-              type="button"
-              disabled={disabled}
-              onClick={() => onChange({ ...value, style: def.id })}
-              title={def.desc}
-              aria-pressed={t.style === def.id}
-              className={clsx(
-                "rounded-lg border px-2 py-1.5 text-[11px] leading-tight transition-all text-left",
-                t.style === def.id
-                  ? "border-primary/50 bg-primary/8 text-foreground"
-                  : "border-white/10 bg-white/3 hover:border-white/25 text-muted-foreground"
-              )}
-            >
-              {def.label}
-            </button>
-          ))}
+        <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
+          {TRANSITIONS.map((def) => {
+            const selected = t.style === def.id;
+            return (
+              <button
+                key={def.id}
+                type="button"
+                disabled={disabled}
+                onClick={() => onChange({ ...value, style: def.id })}
+                title={def.desc}
+                aria-pressed={selected}
+                className={clsx(
+                  "group rounded-lg border px-1 py-1.5 transition-all text-center",
+                  selected
+                    ? "border-primary/50 bg-primary/8"
+                    : "border-white/10 bg-white/3 hover:border-white/25"
+                )}
+              >
+                <TransitionStage
+                  style={def.id}
+                  cycleSec={cycle}
+                  mode={selected ? "run" : "hover"}
+                  className={clsx(
+                    "h-8",
+                    selected
+                      ? "ring-1 ring-primary/40"
+                      : "opacity-80 group-hover:opacity-100"
+                  )}
+                />
+                <span
+                  className={clsx(
+                    "block mt-1 text-[10px] leading-tight",
+                    selected ? "text-foreground font-medium" : "text-muted-foreground"
+                  )}
+                >
+                  {def.label}
+                </span>
+              </button>
+            );
+          })}
         </div>
         <p className="text-[10px] text-muted-foreground/80 pt-0.5">
           {TRANSITIONS.find((x) => x.id === t.style)?.desc}
