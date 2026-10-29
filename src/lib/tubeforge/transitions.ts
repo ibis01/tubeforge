@@ -206,6 +206,58 @@ export function transitionSummary(style: TransitionStyle, durationSec: number): 
 
 // ---------- blended-timeline consumers (captions, Shorts) ----------
 
+// ---------- memory-bounded blending plan ----------
+//
+// A single chained-xfade graph over N inputs makes ffmpeg buffer frames for
+// every not-yet-consumed input; RSS grows roughly linearly with input count
+// (measured live: 12×1080p inputs → 2.4–3.1 GB → OOM-killed in a 4 GB
+// container). The fix: blend in bounded groups, then blend the group outputs,
+// recursing until one master remains. Any frame is re-encoded at most
+// ceil(log_G(N)) − 1 extra times; with G=4 a 12-scene video needs just
+// 3 group passes + 1 join pass and every frame sees exactly 2 generations.
+
+/** Max inputs per chained-xfade pass (empirical: ≤4 keeps peak RSS ~1 GB). */
+export const BLEND_GROUP_MAX = 4;
+
+export interface BlendGroup {
+  /** Indices into the original segment list (inclusive range start/end). */
+  from: number;
+  to: number; // inclusive
+  /** Duration of this group's OUTPUT (Σ − (k−1)·d) — the next round's input. */
+  outDurationSec: number;
+}
+
+/**
+ * One round of the grouping: partition `durations` into consecutive groups of
+ * at most BLEND_GROUP_MAX inputs, sized as evenly as ceil-division allows
+ * (remainder spread from the front — 13 @ G=4 → [4,4,4,1] never happens;
+ * it becomes 4 groups of 3–4). Groups of one pass through untouched in the
+ * next round (they carry no blend debt of their own).
+ */
+export function planBlendGroups(durationsSec: number[], durationSec: number): BlendGroup[] {
+  const n = durationsSec.length;
+  if (n === 0) return [];
+  const d = sanitizeTransitionDuration(durationSec);
+  const groupCount = Math.ceil(n / BLEND_GROUP_MAX);
+  // Balance sizes: base + 1 for the first (n % groupCount) groups.
+  const base = Math.floor(n / groupCount);
+  const extra = n % groupCount;
+  const groups: BlendGroup[] = [];
+  let idx = 0;
+  for (let g = 0; g < groupCount; g++) {
+    const size = base + (g < extra ? 1 : 0);
+    let sum = 0;
+    for (let i = idx; i < idx + size; i++) sum += Math.max(durationsSec[i], 0);
+    groups.push({
+      from: idx,
+      to: idx + size - 1,
+      outDurationSec: Math.max(sum - (size - 1) * d, 0),
+    });
+    idx += size;
+  }
+  return groups;
+}
+
 /**
  * Rebase segment-timeline consumers onto the BLENDED timeline. Every boundary
  * removes d seconds before the next scene's content starts, so scene i's

@@ -393,49 +393,103 @@ export async function resolveBedPreview(idOrSlug: string): Promise<BedPreviewSou
  * row exists is left alone, missing ones are synthesized. Safe to call from
  * the library GET route and before renders.
  */
-export async function seedMusicLibrary(force = false): Promise<{ created: number; skipped: number }> {
-  let created = 0;
-  let skipped = 0;
+/**
+ * Delete duplicate original rows (same name + isOriginal), keeping the oldest
+ * — or one pinned by a video if the group contains a pinned track. Guarding
+ * against a legacy race where two concurrent GET /api/music calls interleaved
+ * findFirst→create and double-seeded the tail of the library.
+ */
+async function dedupeOriginals(): Promise<number> {
+  const rows = await db.musicTrack.findMany({
+    where: { isOriginal: true },
+    orderBy: { createdAt: "asc" },
+  });
+  const byName = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const arr = byName.get(r.name) ?? [];
+    arr.push(r);
+    byName.set(r.name, arr);
+  }
+  let removed = 0;
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    const pinned = await db.video.findFirst({
+      where: { musicTrackId: { in: group.map((g) => g.id) } },
+      select: { musicTrackId: true },
+    });
+    const keepId = pinned?.musicTrackId ?? group[0].id;
+    for (const g of group) {
+      if (g.id === keepId) continue;
+      await db.musicTrack.delete({ where: { id: g.id } });
+      removed += 1;
+    }
+  }
+  return removed;
+}
 
-  for (const def of ORIGINAL_LIBRARY) {
-    const existing = await db.musicTrack.findFirst({ where: { name: def.name, isOriginal: true } });
-    if (existing && !force) {
-      // Row exists but file vanished (fresh clone / partial cleanup) → re-synthesize.
-      if (!fs.existsSync(trackAbsolutePath(existing))) {
+// Single-flight: every GET /api/music seeds, so concurrent opens must share
+// ONE pass — the old findFirst→create race double-seeded the library tail.
+let seedChain: Promise<{ created: number; skipped: number }> | null = null;
+let seedCompleted = false;
+
+export function seedMusicLibrary(
+  force = false
+): Promise<{ created: number; skipped: number }> {
+  // A completed pass in this process makes re-seeding a no-op (the route's
+  // repair path — vanished files — already ran in that pass).
+  if (!force && seedCompleted) return Promise.resolve({ created: 0, skipped: 0 });
+  // Join an in-flight pass instead of racing it.
+  if (seedChain) return seedChain;
+  seedChain = (async () => {
+    const removed = await dedupeOriginals();
+    if (removed > 0) console.log(`[music] removed ${removed} duplicate original tracks`);
+    let created = 0;
+    let skipped = 0;
+
+    for (const def of ORIGINAL_LIBRARY) {
+      const existing = await db.musicTrack.findFirst({ where: { name: def.name, isOriginal: true } });
+      if (existing && !force) {
+        // Row exists but file vanished (fresh clone / partial cleanup) → re-synthesize.
+        if (!fs.existsSync(trackAbsolutePath(existing))) {
+          const made = await synthesizeOriginal(def);
+          await db.musicTrack.update({ where: { id: existing.id }, data: { ...made, isActive: true } });
+          created += 1;
+        } else skipped += 1;
+        continue;
+      }
+      if (existing && force) {
         const made = await synthesizeOriginal(def);
         await db.musicTrack.update({ where: { id: existing.id }, data: { ...made, isActive: true } });
         created += 1;
-      } else skipped += 1;
-      continue;
-    }
-    if (existing && force) {
+        continue;
+      }
       const made = await synthesizeOriginal(def);
-      await db.musicTrack.update({ where: { id: existing.id }, data: { ...made, isActive: true } });
+      await db.musicTrack.create({
+        data: {
+          name: def.name,
+          moods: def.moods.join(","),
+          genre: def.genre,
+          durationSec: made.durationSec,
+          filePath: made.filePath,
+          fileSizeBytes: made.bytes,
+          isOriginal: true,
+          licenseType: "TubeForge Original (synthesized)",
+          commercialUse: true,
+          attributionRequired: false,
+          licenseEvidence: "Generated in-app from pure sine synthesis — no third-party samples or recordings.",
+          contentIdNotes: "None — 100% original synthesis cannot match any Content ID fingerprint.",
+          isActive: true,
+        },
+      });
       created += 1;
-      continue;
     }
-    const made = await synthesizeOriginal(def);
-    await db.musicTrack.create({
-      data: {
-        name: def.name,
-        moods: def.moods.join(","),
-        genre: def.genre,
-        durationSec: made.durationSec,
-        filePath: made.filePath,
-        fileSizeBytes: made.bytes,
-        isOriginal: true,
-        licenseType: "TubeForge Original (synthesized)",
-        commercialUse: true,
-        attributionRequired: false,
-        licenseEvidence: "Generated in-app from pure sine synthesis — no third-party samples or recordings.",
-        contentIdNotes: "None — 100% original synthesis cannot match any Content ID fingerprint.",
-        isActive: true,
-      },
-    });
-    created += 1;
-  }
 
-  return { created, skipped };
+    seedCompleted = true;
+    return { created, skipped };
+  })().finally(() => {
+    seedChain = null;
+  });
+  return seedChain;
 }
 
 // ---------------------------------------------------------------------------

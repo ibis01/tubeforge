@@ -36,6 +36,7 @@ import {
   buildTransitionGraph,
   shiftSegmentsForBlend,
   fadeblackWindows,
+  planBlendGroups,
   type TransitionSettings,
 } from "./transitions";
 
@@ -104,8 +105,16 @@ async function run(
     return stdout.toString() || stderr.toString();
   } catch (err) {
     const e = err as { stderr?: string; message?: string };
-    const tail = (e.stderr ?? e.message ?? "").split("\n").slice(-6).join("\n");
-    throw new Error(`${bin} failed: ${tail.slice(0, 600)}`);
+    // x264 writes its progress frames with \r, so everything since the last
+    // \n lands in ONE giant line and the real error sits at its very end.
+    // Normalize \r to \n, then keep the tail — from the END, not the front
+    // (the banner/options lines can exceed 500 chars on their own).
+    const lines = (e.stderr ?? e.message ?? "")
+      .replace(/\r/g, "\n")
+      .split("\n")
+      .filter((l) => l.trim().length > 0);
+    const tail = lines.slice(-5).join(" | ").slice(-500);
+    throw new Error(`${bin} failed: ${tail}`);
   }
 }
 
@@ -396,11 +405,15 @@ async function concatSegments(segPaths: string[], outPath: string): Promise<void
 }
 
 /**
- * Stitch segments with real transitions: one chained xfade (video) +
- * acrossfade (audio) pass over every segment. Costs a full re-encode (the
- * price of blending), encoded with the same settings the segments use so
- * downstream passes (subtitles/music, Shorts cutter) see identical streams.
- * Falls back to the stream-copy concat for "cut" or single-segment renders.
+ * Stitch segments with real transitions: chained xfade (video) + acrossfade
+ * (audio). A full N-input chain buffers frames for every not-yet-consumed
+ * input — measured at 2.4–3.1 GB RSS for 12×1080p inputs, which the kernel
+ * OOM-kills in a 4 GB container — so blending runs in bounded GROUPS
+ * (planBlendGroups, ≤BLEND_GROUP_MAX inputs per ffmpeg pass), then blends
+ * the group outputs, recursing until one master remains. Group intermediates
+ * re-encode at crf 16 (near-transparent) so at most one extra generation
+ * touches any frame before the final join. Falls back to the stream-copy
+ * concat for "cut" or single-segment renders.
  */
 async function stitchSegments(opts: {
   segPaths: string[];
@@ -408,26 +421,77 @@ async function stitchSegments(opts: {
   transition: TransitionSettings;
   outPath: string;
 }): Promise<void> {
-  const graph = buildTransitionGraph(
+  const graph0 = buildTransitionGraph(
     opts.durationsSec,
     opts.transition.style,
     opts.transition.durationSec
   );
-  if (!graph) {
+  if (!graph0) {
     await concatSegments(opts.segPaths, opts.outPath);
     return;
   }
-  const args: string[] = [];
-  for (const p of opts.segPaths) args.push("-i", p);
-  args.push(
-    "-filter_complex", `${graph.video};${graph.audio}`,
-    "-map", "[v]", "-map", "[a]",
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-    "-pix_fmt", "yuv420p",
-    "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
-    "-y", opts.outPath
-  );
-  await run("ffmpeg", args);
+  const { style, durationSec: d } = opts.transition;
+  const tmp = (i: number, round: number) =>
+    opts.outPath.replace(/\.mp4$/, `.blend-r${round}-${i}.mp4`);
+
+  // Round 0 inputs are the real segments; later rounds blend group outputs.
+  let round = 0;
+  let paths = opts.segPaths.slice();
+  let durations = opts.durationsSec.slice();
+
+  while (paths.length > 1) {
+    const groups = planBlendGroups(durations, d);
+    const nextPaths: string[] = [];
+    const nextDurations: number[] = [];
+    const singlePass = groups.length === 1 && groups[0].to - groups[0].from + 1 === paths.length;
+
+    for (const [gi, g] of groups.entries()) {
+      const groupPaths = paths.slice(g.from, g.to + 1);
+      const groupDurations = durations.slice(g.from, g.to + 1);
+      if (groupPaths.length === 1) {
+        // Pass-through: no blend needed inside a lone segment group.
+        nextPaths.push(groupPaths[0]);
+        nextDurations.push(groupDurations[0]);
+        continue;
+      }
+      const graph = buildTransitionGraph(groupDurations, style, d);
+      if (!graph) throw new Error("blend group too small for xfade");
+      // The last group of the last round writes the real output; every other
+      // pass writes a near-lossless intermediate.
+      const isFinal =
+        singlePass && gi === groups.length - 1;
+      const outPath = isFinal ? opts.outPath : tmp(gi, round);
+      const args: string[] = [];
+      for (const p of groupPaths) args.push("-i", p);
+      args.push(
+        "-filter_complex", `${graph.video};${graph.audio}`,
+        "-map", "[v]", "-map", "[a]",
+        // Intermediates at crf 16 (near-transparent) — only the final master
+        // uses the delivery crf 20 the downstream passes expect.
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", isFinal ? "20" : "16",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", isFinal ? "160k" : "256k",
+        "-ar", "48000", "-ac", "2",
+        "-y", outPath
+      );
+      await run("ffmpeg", args);
+      nextPaths.push(outPath);
+      nextDurations.push(g.outDurationSec);
+    }
+
+    // Clean up the previous round's intermediates (never the real segments).
+    if (round > 0) {
+      for (const p of paths) fs.rmSync(p, { force: true });
+    }
+    paths = nextPaths;
+    durations = nextDurations;
+    round += 1;
+  }
+
+  // Single-segment input: no blend needed at all — the segment IS the base.
+  if (paths.length === 1 && paths[0] !== opts.outPath) {
+    fs.copyFileSync(paths[0], opts.outPath);
+  }
 }
 
 /**

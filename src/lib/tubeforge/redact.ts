@@ -51,7 +51,11 @@ export function redactText(input: string): string {
         ? out.replace(re, replacement)
         : out.replace(re, replacement);
   }
-  return out.slice(0, MAX_LEN);
+  // Secrets are scrubbed BEFORE truncating, so the tail is safe to keep —
+  // and the tail is where the real diagnosis lives (ffmpeg/stack traces end
+  // with their error line; the head is banners and progress spam).
+  if (out.length > MAX_LEN) out = "…" + out.slice(-(MAX_LEN - 1));
+  return out;
 }
 
 /**
