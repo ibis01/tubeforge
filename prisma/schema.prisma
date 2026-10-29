@@ -187,6 +187,27 @@ model Setting {
   updatedAt DateTime @updatedAt
 }
 
+// Voice cloning — a speaker's voice recreated from a short (3-30s) sample via
+// the Zhipu GLM-TTS-Clone API. providerVoiceId (voice_clone_…) is what the TTS
+// call sends in its `voice` field; it only speaks on the SAME platform account
+// that created it. auditionWav caches the clone-time preview audio (base64) so
+// the UI can replay "how the clone sounds" without a fresh TTS call.
+model VoiceProfile {
+  id              String   @id @default(cuid())
+  name            String
+  provider        String   @default("zhipu") // platform that holds the cloned voice
+  providerVoiceId String // voice_clone_20240315_143052_001
+  sourceLabel     String? // original sample file name / URL label
+  durationSec     Float? // length of the source sample
+  auditionWav     String? // base64 WAV returned by the clone call (short preview)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([provider])
+}
+
 // Background-music library — every track carries its license record so a
 // published video can always answer "is this safe to monetize?". The
 // TubeForge-original beds are synthesized in-app (zero third-party samples);

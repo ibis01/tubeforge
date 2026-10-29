@@ -10,8 +10,9 @@ import { createHash } from "crypto";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import { getCapability } from "./providers/settings";
-import { sanitizeVoice, ttsSynthesize, voiceCatalog } from "./providers/tts";
+import { sanitizeVoice, ttsSynthesize, voiceCatalog, isClonedVoiceId } from "./providers/tts";
 import { aiCall } from "./budget";
+import { listVoiceProfiles } from "./voice-clone";
 
 export const VOICE_PREVIEW_TEXT =
   "Hi! Quick voice preview. If you pick me, this is exactly how I'll narrate your next video — clear, confident, and easy to follow.";
@@ -35,12 +36,19 @@ function diskPath(key: string) {
   return path.join(PREVIEW_DIR, `${hash}.wav`);
 }
 
-/** Audition-able catalog check: does the ACTIVE tts provider know this voice? */
+/** Audition-able catalog check: does the ACTIVE tts provider know this voice?
+ *  Cloned ids count as known when the active provider is zhipu AND the
+ *  profile still exists (DB lookup) — a deleted clone previews as unknown
+ *  instead of mysteriously falling back to the default voice. */
 export async function resolvePreviewVoice(voice: string) {
   const config = await getCapability("tts");
   const model = config.provider === "openai" ? config.model.trim() || "tts-1" : config.model.trim();
   const catalog = voiceCatalog(config.provider, model);
-  const known = catalog.some((v) => v.id === voice);
+  let known = catalog.some((v) => v.id === voice);
+  if (!known && config.provider === "zhipu" && isClonedVoiceId(voice)) {
+    const clones = await listVoiceProfiles();
+    known = clones.some((c) => c.id === voice);
+  }
   return {
     config,
     model,

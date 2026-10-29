@@ -160,6 +160,15 @@ export const TTS_PROVIDERS: ProviderMeta[] = [
     note: "7 built-in studio voices.",
   },
   {
+    id: "zhipu",
+    kind: "native",
+    label: "Zhipu GLM-TTS (voice cloning)",
+    defaultBaseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    keyUrl: "https://bigmodel.cn/usercenter/proj-mgmt/apikeys",
+    models: [{ id: "glm-tts", hint: "same 7 studio voices + your cloned voices" }],
+    note: "Clone any voice from a 3-second sample (Video → Voice → Clone), then narrate with it. Same studio voices as Z.ai plus every voice you clone.",
+  },
+  {
     id: "openai",
     kind: "openai",
     label: "OpenAI TTS",

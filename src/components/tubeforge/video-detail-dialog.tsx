@@ -24,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { StatusBadge, formatDuration, timeAgo, useVoices, VoiceSelectWithPreview } from "@/components/tubeforge/shared";
+import { StatusBadge, formatDuration, timeAgo, useVoices, VoiceSelectWithPreview, VOICES_CHANGED_EVENT } from "@/components/tubeforge/shared";
 import { MusicPickerCard, type MusicPickerValue } from "@/components/tubeforge/music-controls";
 import { MotionControlsCard, type MotionPickerValue } from "@/components/tubeforge/motion-controls";
 import { TransitionControlsCard, type TransitionPickerValue } from "@/components/tubeforge/transition-controls";
@@ -90,6 +90,8 @@ import {
   Bot,
   ChevronDown,
   Wand2,
+  Play,
+  Square,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -183,11 +185,23 @@ export function VideoDetailDialog({
 
   // Bring-your-own-voice state — swap TTS voices for uploaded / internet audio
   const [voicePanelOpen, setVoicePanelOpen] = useState(false);
-  const [voiceMode, setVoiceMode] = useState<"tts" | "upload" | "url">("tts");
+  const [voiceMode, setVoiceMode] = useState<"tts" | "upload" | "url" | "clone">("tts");
   const [voiceUrl, setVoiceUrl] = useState("");
   const [voiceFile, setVoiceFile] = useState<File | null>(null);
   const [pickedVoice, setPickedVoice] = useState<string>(video?.voice ?? "jam");
-  const { voices } = useVoices();
+  const { voices, canClone } = useVoices();
+
+  // Voice cloning (Zhipu GLM-TTS-Clone) — clone a voice from a short sample,
+  // then narrate with it like any studio voice.
+  const [cloneFile, setCloneFile] = useState<File | null>(null);
+  const [cloneName, setCloneName] = useState("");
+  const [cloneSampleText, setCloneSampleText] = useState("");
+  const [cloning, setCloning] = useState(false);
+  const [cloneProfiles, setCloneProfiles] = useState<
+    { id: string; name: string; providerVoiceId: string; durationSec: number | null; hasAudition: boolean; createdAt: string }[]
+  >([]);
+  const [auditionPlaying, setAuditionPlaying] = useState<string | null>(null);
+  const auditionRef = useRef<HTMLAudioElement | null>(null);
 
   // Keep the picked voice inside the ACTIVE provider's catalog (switching the
   // voiceover provider in Settings can invalidate the stored voice).
@@ -348,6 +362,65 @@ export function VideoDetailDialog({
       cancelled = true;
     };
   }, [video?.id]);
+
+  // ---------- Voice cloning: upload a sample → narrate in that voice ----------
+  // Cloning happens synchronously on the server (sample → Zhipu → voice id,
+  // typically 10-30s); the button shows progress the whole time.
+  // Hooks must live BEFORE the `if (!video) return null;` early return.
+
+  const loadCloneProfiles = useCallback(async () => {
+    try {
+      const res = await fetch("/api/voices", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      setCloneProfiles(data.profiles ?? []);
+    } catch {
+      /* the panel shows a retry on next open */
+    }
+  }, []);
+
+  // (Re)load the cloned-voice list whenever the clone tab is opened.
+  useEffect(() => {
+    if (voiceMode === "clone" && voicePanelOpen) loadCloneProfiles();
+  }, [voiceMode, voicePanelOpen, loadCloneProfiles]);
+
+  const stopAudition = useCallback(() => {
+    auditionRef.current?.pause();
+    auditionRef.current = null;
+    setAuditionPlaying(null);
+  }, []);
+
+  const playAudition = useCallback(
+    async (profileId: string) => {
+      if (auditionPlaying === profileId) {
+        stopAudition();
+        return;
+      }
+      stopAudition();
+      try {
+        const res = await fetch(`/api/voices/${profileId}/audition`, { cache: "no-store" });
+        if (!res.ok) throw new Error("No cached audition — use the ▶ next to the voice instead");
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.onended = () => {
+          URL.revokeObjectURL(url);
+          setAuditionPlaying(null);
+        };
+        auditionRef.current = audio;
+        setAuditionPlaying(profileId);
+        await audio.play();
+      } catch (e) {
+        setAuditionPlaying(null);
+        toast({
+          title: "Could not play the audition",
+          description: e instanceof Error ? e.message : "Unknown error",
+          variant: "destructive",
+        });
+      }
+    },
+    [auditionPlaying, stopAudition]
+  );
 
   if (!video) return null;
 
@@ -656,6 +729,66 @@ export function VideoDetailDialog({
       await refreshVideo(video.id);
     } finally {
       setBusy(null);
+    }
+  };
+
+  // ---------- Voice cloning actions (hooks live above the early return) ----------
+
+  const doClone = async () => {
+    if (cloning || !cloneFile) return;
+    setCloning(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", cloneFile);
+      if (cloneName.trim()) fd.append("name", cloneName.trim());
+      if (cloneSampleText.trim()) fd.append("sampleText", cloneSampleText.trim());
+      const res = await fetch("/api/voices/clone", { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Voice cloning failed");
+
+      // Every open voice picker re-fetches and shows the new voice.
+      window.dispatchEvent(new Event(VOICES_CHANGED_EVENT));
+      setPickedVoice(data.profile.providerVoiceId);
+      setCloneFile(null);
+      setCloneName("");
+      setCloneSampleText("");
+      setVoiceMode("tts"); // jump straight to picking it for this video
+      await loadCloneProfiles();
+      toast({
+        title: `Voice "${data.profile.name}" cloned`,
+        description: data.audition?.available
+          ? "Pick it under AI voices and hit Generate voice — it narrates in the cloned timbre."
+          : "Clone ready — pick it under AI voices and hit Generate voice.",
+      });
+    } catch (e) {
+      toast({
+        title: "Cloning failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setCloning(false);
+    }
+  };
+
+  const deleteClone = async (profileId: string, name: string) => {
+    if (cloning) return;
+    try {
+      const res = await fetch(`/api/voices/${profileId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error ?? "Could not delete the voice");
+      }
+      window.dispatchEvent(new Event(VOICES_CHANGED_EVENT));
+      await loadCloneProfiles();
+      if (auditionPlaying === profileId) stopAudition();
+      toast({ title: `Voice "${name}" deleted`, description: "Videos already rendered keep their audio." });
+    } catch (e) {
+      toast({
+        title: "Delete failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
     }
   };
 
@@ -1588,9 +1721,10 @@ export function VideoDetailDialog({
 
           {voicePanelOpen && (
             <div className="px-3 pb-3 space-y-2.5 border-t border-white/8 pt-3">
-              <div className="grid grid-cols-3 gap-1.5">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                 {([
                   { id: "tts", label: "AI voices", icon: Bot },
+                  { id: "clone", label: "Clone", icon: Wand2 },
                   { id: "upload", label: "Upload", icon: Upload },
                   { id: "url", label: "From URL", icon: Link2 },
                 ] as const).map((m) => (
@@ -1663,6 +1797,116 @@ export function VideoDetailDialog({
                     {busy === "voice" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <AudioLines className="h-3.5 w-3.5" />}
                     {busy === "voice" ? "Attaching…" : "Use this recording"}
                   </Button>
+                </div>
+              )}
+
+              {voiceMode === "clone" && (
+                <div className="space-y-2.5">
+                  {!canClone ? (
+                    <p className="text-[11px] leading-relaxed text-amber-300/90 rounded-lg border border-amber-400/20 bg-amber-400/8 px-2.5 py-2">
+                      Voice cloning runs on the <b>Zhipu GLM-TTS</b> provider — switch to it in
+                      Settings → AI Providers → Voiceover and paste a bigmodel.cn API key,
+                      then come back here to clone any voice from a 3–30s recording.
+                    </p>
+                  ) : (
+                    <>
+                      <label className="flex items-center gap-2 rounded-lg border border-dashed border-white/15 bg-white/3 px-3 py-2.5 cursor-pointer hover:bg-white/6 transition-colors">
+                        <Wand2 className="h-3.5 w-3.5 text-primary shrink-0" />
+                        <span className="text-xs text-muted-foreground truncate">
+                          {cloneFile ? cloneFile.name : "Pick a 3–30s voice sample (mp3, wav, m4a…)"}
+                        </span>
+                        <input
+                          type="file"
+                          accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.oga,.opus,.flac,.webm,.mp4"
+                          className="sr-only"
+                          disabled={cloning}
+                          onChange={(e) => setCloneFile(e.target.files?.[0] ?? null)}
+                        />
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input
+                          value={cloneName}
+                          onChange={(e) => setCloneName(e.target.value)}
+                          placeholder='Voice name (e.g. "My voice")'
+                          className="bg-white/5 h-9 text-xs"
+                          disabled={cloning}
+                        />
+                        <Input
+                          value={cloneSampleText}
+                          onChange={(e) => setCloneSampleText(e.target.value)}
+                          placeholder="What the sample says (optional, improves fidelity)"
+                          className="bg-white/5 h-9 text-xs"
+                          disabled={cloning}
+                        />
+                      </div>
+                      <Button
+                        size="sm"
+                        className="w-full bg-brand-gradient hover:opacity-90 font-medium"
+                        disabled={cloning || !cloneFile}
+                        onClick={doClone}
+                      >
+                        {cloning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+                        {cloning ? "Cloning the voice…" : "Clone this voice"}
+                      </Button>
+                      <p className="text-[10px] text-muted-foreground leading-relaxed">
+                        The sample is sent to Zhipu GLM-TTS-Clone and becomes a reusable narration
+                        voice (list below + the AI voices picker). Only clone voices you own or
+                        have permission to use.
+                      </p>
+
+                      {cloneProfiles.length > 0 && (
+                        <div className="space-y-1.5 pt-1">
+                          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                            Cloned voices
+                          </p>
+                          <div className="max-h-40 overflow-y-auto space-y-1 pr-0.5">
+                            {cloneProfiles.map((p) => (
+                              <div
+                                key={p.id}
+                                className="flex items-center gap-2 rounded-lg border border-white/8 bg-white/3 px-2.5 py-1.5"
+                              >
+                                <button
+                                  type="button"
+                                  disabled={!p.hasAudition || cloning}
+                                  onClick={() => playAudition(p.id)}
+                                  title={p.hasAudition ? "Hear the clone" : "No cached audition — use ▶ in the picker"}
+                                  className={clsx(
+                                    "grid h-6 w-6 shrink-0 place-items-center rounded-full border transition-colors",
+                                    p.hasAudition
+                                      ? auditionPlaying === p.id
+                                        ? "border-primary/60 bg-primary/20 text-primary"
+                                        : "border-white/10 bg-white/8 text-muted-foreground hover:bg-white/15 hover:text-foreground"
+                                      : "opacity-40"
+                                  )}
+                                >
+                                  {auditionPlaying === p.id ? (
+                                    <Square className="h-2.5 w-2.5 fill-current" />
+                                  ) : (
+                                    <Play className="h-3 w-3 fill-current" />
+                                  )}
+                                </button>
+                                <span className="text-xs truncate flex-1" title={p.providerVoiceId}>
+                                  {p.name}
+                                  {p.durationSec ? (
+                                    <span className="text-muted-foreground"> · {p.durationSec.toFixed(0)}s sample</span>
+                                  ) : null}
+                                </span>
+                                <button
+                                  type="button"
+                                  disabled={cloning}
+                                  onClick={() => deleteClone(p.id, p.name)}
+                                  title="Delete this cloned voice"
+                                  className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-white/10 bg-white/8 text-muted-foreground hover:bg-red-500/15 hover:text-red-300 transition-colors"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
 

@@ -15,29 +15,41 @@ import type { LucideIcon } from "lucide-react";
 import { clsx } from "clsx";
 
 /** Voice catalog of the ACTIVE voiceover provider (Z.ai or OpenAI-compatible).
- *  Falls back to the built-in Z.ai list until the endpoint answers. */
+ *  Falls back to the built-in Z.ai list until the endpoint answers.
+ *  Cloned voices arrive merged in the same payload (zhipu provider) and every
+ *  picker live-updates when a voice is cloned or deleted. */
+export const VOICES_CHANGED_EVENT = "tubeforge:voices-changed";
+
 export function useVoices() {
   const [voices, setVoices] = useState<{ id: string; label: string }[]>(() =>
     VOICES.map((v) => ({ id: v.id, label: v.label }))
   );
   const [provider, setProvider] = useState("zai");
+  const [canClone, setCanClone] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/settings/voices", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (cancelled || !d?.voices?.length) return;
-        setVoices(d.voices);
-        setProvider(d.provider ?? "zai");
-      })
-      .catch(() => {});
+    const load = () => {
+      fetch("/api/settings/voices", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (cancelled || !d?.voices?.length) return;
+          setVoices(d.voices);
+          setProvider(d.provider ?? "zai");
+          setCanClone(Boolean(d.canClone));
+        })
+        .catch(() => {});
+    };
+    load();
+    // A fresh clone (or a delete) re-fetches so every open picker updates.
+    window.addEventListener(VOICES_CHANGED_EVENT, load);
     return () => {
       cancelled = true;
+      window.removeEventListener(VOICES_CHANGED_EVENT, load);
     };
   }, []);
 
-  return { voices, provider };
+  return { voices, provider, canClone };
 }
 
 export function StatusBadge({

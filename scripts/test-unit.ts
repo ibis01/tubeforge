@@ -39,6 +39,17 @@ import {
 } from "../src/lib/tubeforge/audiomix";
 import { isMusicMoodId, moodTags, NICHE_MOODS } from "../src/lib/tubeforge/music";
 import { parseSrt, runQcReport } from "../src/lib/tubeforge/qc";
+import {
+  isClonedVoiceId,
+  sanitizeVoice,
+  voiceCatalog,
+} from "../src/lib/tubeforge/providers/tts";
+import {
+  cleanCloneName,
+  isValidSampleUrl,
+  MAX_SAMPLE_SEC,
+  MIN_SAMPLE_SEC,
+} from "../src/lib/tubeforge/voice-clone";
 
 const execFileAsync = promisify(execFile);
 
@@ -507,6 +518,68 @@ await test("NICHE_MOODS: every niche maps to non-empty tag lists", () => {
     ok(Array.isArray(tags) && tags.length > 0, `${niche} must map to tags`);
     for (const t of tags) ok(typeof t === "string" && t.length > 0, `${niche}: bad tag ${JSON.stringify(t)}`);
   }
+});
+
+// ---------- suite: voice cloning (pure units) ----------
+
+suiteStart("voice-clone — cloned-voice ids + name/URL hygiene");
+
+await test("isClonedVoiceId: only the platform prefix counts", () => {
+  ok(isClonedVoiceId("voice_clone_20240315_143052_001"), "platform prefix must match");
+  ok(!isClonedVoiceId("jam"), "stock studio voice is not a clone");
+  ok(!isClonedVoiceId("Voice_Clone_x"), "prefix match is case-sensitive");
+  ok(!isClonedVoiceId(""), "empty is not a clone");
+  ok(!isClonedVoiceId("voice_cloney"), "near-miss prefix rejected");
+});
+
+await test("sanitizeVoice: zhipu keeps cloned ids, other providers fall back", () => {
+  const cloneId = "voice_clone_20240315_143052_001";
+  eq(sanitizeVoice("zhipu", cloneId), cloneId, "zhipu must pass cloned ids through");
+  eq(sanitizeVoice("zhipu", "jam"), "jam", "stock ids unchanged");
+  eq(sanitizeVoice("zhipu", "nope"), "jam", "junk falls back to the first catalog voice");
+  // A clone saved on a video must NOT leak into providers that can't speak it.
+  eq(sanitizeVoice("openai", cloneId), "alloy", "openai falls back to alloy");
+  eq(sanitizeVoice("zai", cloneId), "jam", "zai falls back to the first catalog voice");
+});
+
+await test("voiceCatalog: zhipu exposes the 7 studio voices (clones appended by the API layer)", () => {
+  const catalog = voiceCatalog("zhipu", "glm-tts");
+  eq(catalog.length, 7, "exactly the 7 studio voices");
+  ok(catalog.some((v) => v.id === "tongtong"), "default voice present");
+  ok(!catalog.some((v) => isClonedVoiceId(v.id)), "no clone ids baked into the static catalog");
+});
+
+await test("cleanCloneName: trims, strips control chars, falls back to the file name", () => {
+  eq(cleanCloneName("  My   Voice ", "whatever.mp3"), "My Voice", "whitespace collapsed");
+  eq(cleanCloneName("bad\nname\twith\u0007junk", "x.mp3"), "bad name with junk", "control chars removed");
+  eq(cleanCloneName("", "my-cool_recording.mp3"), "my cool recording", "falls back to file name");
+  eq(
+    cleanCloneName("", "voice sample.mp3"),
+    "voice sample",
+    "decoded labels (downloadSample decodes URLs upstream)",
+  );
+  eq(cleanCloneName("", ""), expectNameFallback(), "no name + no label → dated fallback");
+  eq(cleanCloneName("x".repeat(80), "x.mp3").length, 40, "capped at 40 chars");
+});
+
+function expectNameFallback() {
+  return `Voice ${new Date().toISOString().slice(0, 10)}`;
+}
+
+await test("isValidSampleUrl: http(s) only, internal hosts blocked", () => {
+  ok(isValidSampleUrl("https://cdn.example.com/voice.mp3"), "public https ok");
+  ok(isValidSampleUrl("http://example.com/a.wav"), "public http ok");
+  ok(!isValidSampleUrl("ftp://example.com/a.wav"), "only http(s)");
+  ok(!isValidSampleUrl("file:///etc/passwd"), "file scheme rejected");
+  ok(!isValidSampleUrl("https://localhost/a.mp3"), "localhost blocked");
+  ok(!isValidSampleUrl("https://box.internal/a.mp3"), ".internal blocked");
+  ok(!isValidSampleUrl("https://metadata.google.internal/x"), "cloud metadata blocked");
+  ok(!isValidSampleUrl("not a url"), "garbage rejected");
+});
+
+await test("sample limits: clone API window enforced (>= 2s, trimmed at 30s)", () => {
+  ok(MIN_SAMPLE_SEC === 2, "minimum sample length");
+  ok(MAX_SAMPLE_SEC === 30, "samples are trimmed to the documented 30s window");
 });
 
 // ---------- summary ----------

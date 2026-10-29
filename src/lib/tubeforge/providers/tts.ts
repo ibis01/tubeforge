@@ -1,6 +1,8 @@
 // Voiceover adapter — text-to-speech per the tts capability setting.
 //
 //   zai    → bundled Z.ai SDK (7 studio voices, returns WAV)
+//   zhipu  → Zhipu GLM-TTS (open.bigmodel.cn): same 7 studio voices PLUS
+//            cloned voice ids created by voice-clone.ts (voice_clone_…)
 //   openai → POST {baseUrl}/audio/speech (tts-1 / tts-1-hd / gpt-4o-mini-tts,
 //            response_format "wav" so downstream WAV merging keeps working)
 //
@@ -19,6 +21,17 @@ export interface TtsRequest {
   speed: number;
 }
 
+/** Cloned voice ids come from the Zhipu GLM-TTS-Clone API and always start
+ *  with this prefix (e.g. voice_clone_20240315_143052_001). They are valid
+ *  `voice` values for POST /audio/speech on the SAME account/key. */
+export const CLONED_VOICE_PREFIX = "voice_clone_";
+
+/** Is this id a cloned voice (not a stock studio voice)? Sync, shape-based —
+ *  adapters that need DB certainty follow up with listVoiceProfiles(). */
+export function isClonedVoiceId(voice: string): boolean {
+  return voice.startsWith(CLONED_VOICE_PREFIX);
+}
+
 /** The voice catalog for a provider (drives UI pickers + sanitization). */
 export function voiceCatalog(provider: ProviderId, model = "") {
   if (provider === "openai") {
@@ -31,15 +44,21 @@ export function voiceCatalog(provider: ProviderId, model = "") {
       : [...OPENAI_VOICES];
     return list.map((v) => ({ id: v.id, label: v.label }));
   }
+  // zai + zhipu share the same 7 studio voices; zhipu additionally accepts
+  // cloned ids (appended to the catalog by the API layer, which can hit the DB).
   return VOICES.map((v) => ({ id: v.id, label: v.label }));
 }
 
-/** Map any stored voice onto the provider's catalog. */
+/** Map any stored voice onto the provider's catalog.
+ *  Cloned voice ids are preserved for providers that can speak them
+ *  (zhipu) — switching to a provider that cannot falls back to the catalog's
+ *  first entry, exactly like a zai-only voice switching to OpenAI. */
 export function sanitizeVoice(
   provider: ProviderId,
   voice: string,
   model = "",
 ): string {
+  if (provider === "zhipu" && isClonedVoiceId(voice)) return voice;
   const catalog = voiceCatalog(provider, model);
   return catalog.some((v) => v.id === voice) ? voice : catalog[0].id;
 }
@@ -53,6 +72,9 @@ export async function ttsSynthesize(
 
   if (config.provider === "openai") {
     return openaiTts(req, config);
+  }
+  if (config.provider === "zhipu") {
+    return zhipuTts(req, config);
   }
   return zaiTts(req, config);
 }
@@ -72,6 +94,53 @@ async function zaiTts(
     response_format: "wav",
     stream: false,
   });
+  const buffer = Buffer.from(new Uint8Array(await response.arrayBuffer()));
+  if (buffer.length < 44) throw new Error("TTS returned empty audio");
+  return buffer;
+}
+
+// ---------- Zhipu GLM-TTS (open.bigmodel.cn — stock + cloned voices) ----------
+
+async function zhipuTts(
+  req: TtsRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
+  const meta = providerMeta("tts", "zhipu");
+  const baseUrl =
+    config.baseUrl?.trim() ||
+    meta?.defaultBaseUrl ||
+    "https://open.bigmodel.cn/api/paas/v4";
+  const model = config.model?.trim() || "glm-tts";
+  const key = config.apiKey?.trim();
+
+  if (!key) {
+    throw new Error(
+      "Zhipu GLM-TTS needs an API key from bigmodel.cn (Settings → AI Providers → Voiceover)",
+    );
+  }
+
+  const voice = sanitizeVoice("zhipu", req.voice, model);
+  // GLM-TTS speed range is [0.5, 2] — same clamp as the SDK path.
+  const speed = Math.min(2, Math.max(0.5, req.speed || 1));
+
+  const response = await providerFetch(
+    "Zhipu GLM-TTS",
+    joinUrl(baseUrl, "audio/speech"),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model,
+        input: req.input,
+        voice,
+        speed,
+        response_format: "wav",
+      }),
+    },
+  );
   const buffer = Buffer.from(new Uint8Array(await response.arrayBuffer()));
   if (buffer.length < 44) throw new Error("TTS returned empty audio");
   return buffer;
