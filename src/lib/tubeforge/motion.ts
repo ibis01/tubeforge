@@ -694,14 +694,17 @@ export function panEndpoints(
   return [from, to];
 }
 
-/** zoompan filter segment for one shot. */
+/** zoompan filter segment for one shot. `d` = output frames per input frame
+ * (1 for a pre-timed stream; the full shot length when the input is a single
+ * still frame — the slides compositor's canonical shape). */
 function shotZoompan(
   shot: MotionShot,
   frames: number,
   settings: MotionSettings,
   work: [number, number],
   out: [number, number],
-  fps: number
+  fps: number,
+  d = 1
 ): string {
   const last = Math.max(frames - 1, 1);
   const p = progressExpr(settings.curve, last);
@@ -764,7 +767,7 @@ function shotZoompan(
     yExpr = `${fmt(y0, 2)}+${fmt(y1 - y0, 2)}*${p}`;
   }
 
-  return `zoompan=z='${zExpr}':x='${xExpr}':y='${yExpr}':d=1:s=${ow}x${oh}:fps=${fps}`;
+  return `zoompan=z='${zExpr}':x='${xExpr}':y='${yExpr}':d=${d}:s=${ow}x${oh}:fps=${fps}`;
 }
 
 /**
@@ -824,3 +827,10 @@ export function sceneFilterGraph(opts: {
 
 /** Unused-import guard: FOCAL_CENTER is exported for tests. */
 export { FOCAL_CENTER };
+/**
+ * zoompan segment builder shared with the slides compositor — slides feed a
+ * SINGLE still frame and let zoompan `d` emit the whole shot, which avoids
+ * the looped-image demuxer entirely (large looped PNGs deadlock this ffmpeg
+ * build's teardown). Exported so the shot math stays in one place.
+ */
+export { shotZoompan as zoompanForShot };

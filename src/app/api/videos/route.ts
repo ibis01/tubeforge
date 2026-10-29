@@ -6,6 +6,8 @@ import { generateSceneScriptPackage } from "@/lib/tubeforge/story";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
 import { FORMATS, RENDER_MODES, type VideoDTO } from "@/lib/tubeforge/types";
 import { TRANSITIONS, sanitizeTransitionDuration } from "@/lib/tubeforge/transitions";
+import { isDuckIntensity } from "@/lib/tubeforge/audiomix";
+import { isMusicMoodId } from "@/lib/tubeforge/music";
 import { errorText } from "@/lib/tubeforge/redact";
 
 const TRANSITION_IDS = new Set<string>(TRANSITIONS.map((t) => t.id));
@@ -81,6 +83,13 @@ export async function POST(req: NextRequest) {
       typeof body.musicFadeOut === "number"
         ? Math.min(Math.max(body.musicFadeOut, 0.5), 8)
         : null;
+    // Auto-ducking + story-mood overrides (null → Settings defaults)
+    const musicDucking =
+      typeof body.musicDucking === "boolean" ? body.musicDucking : null;
+    const musicDuckingIntensity = isDuckIntensity(body.musicDuckingIntensity)
+      ? body.musicDuckingIntensity
+      : null;
+    const musicMood = isMusicMoodId(body.musicMood) ? body.musicMood : null;
 
     // Smart Motion (Ken Burns) overrides (null = built-in defaults)
     const MOTION_MODE_IDS = ["smart", "zoom", "pan", "off"];
@@ -131,6 +140,9 @@ export async function POST(req: NextRequest) {
         musicVolume,
         musicFadeIn,
         musicFadeOut,
+        musicDucking,
+        musicDuckingIntensity,
+        musicMood,
         motionMode,
         motionIntensity,
         motionCurve,

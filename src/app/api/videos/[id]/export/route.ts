@@ -6,6 +6,7 @@ import { buildZip, safeZipName } from "@/lib/tubeforge/zip";
 import { readMedia, listVariants } from "@/lib/tubeforge/ai";
 import { parseScenes, sceneImageFile } from "@/lib/tubeforge/story";
 import { LENGTHS, TONES, VOICES } from "@/lib/tubeforge/types";
+import { resolveMusicForVideo, isMusicEnabledForVideo } from "@/lib/tubeforge/music";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -125,7 +126,6 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
     `${base}/metadata.json`,
     JSON.stringify(
       {
-        title: video.title,
         topic: video.topic,
         niche: video.niche,
         tone: video.tone,
@@ -166,6 +166,60 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
       2
     )
   );
+
+  // CREDITS.txt — every music + footage license in one paste-ready file, so a
+  // monetized upload can always prove its soundtrack and b-roll are safe.
+  // ("a technically good video does not create copyright problems later")
+  try {
+    const musicEnabled = await isMusicEnabledForVideo(video);
+    const resolvedMusic = musicEnabled ? await resolveMusicForVideo(video) : null;
+    const creditLines: string[] = [
+      `CREDITS & LICENSES — "${video.title ?? video.topic}"`,
+      `Exported ${new Date().toISOString()}`,
+      ``,
+      `== BACKGROUND MUSIC ==`,
+    ];
+    if (!musicEnabled) {
+      creditLines.push("Music disabled for this video — no soundtrack license needed.");
+    } else if (resolvedMusic) {
+      const t = resolvedMusic.track;
+      creditLines.push(
+        `Track: "${t.name}"${t.genre ? ` (${t.genre})` : ""}`,
+        `License: ${t.licenseType}`,
+        t.sourceUrl ? `Source: ${t.sourceUrl}` : `Source: TubeForge in-app library`,
+        `Commercial use: ${t.commercialUse ? "allowed" : "NOT allowed — check before monetizing"}`,
+        `Attribution required: ${t.attributionRequired ? "YES" : "no"}`,
+        t.attributionRequired && t.attributionText ? `Credit line: ${t.attributionText}` : ``,
+        t.licenseEvidence ? `License evidence: ${t.licenseEvidence}` : ``,
+        t.contentIdNotes ? `Content ID notes: ${t.contentIdNotes}` : ``
+      );
+    } else {
+      creditLines.push(
+        "Synthesized in-app ambient bed (TubeForge original — generated from pure sine synthesis,",
+        "no third-party samples; no attribution needed, cannot match any Content ID fingerprint)."
+      );
+    }
+    const stockScenes = scenes.filter((s) => s.stock);
+    creditLines.push(``, `== STOCK FOOTAGE ==`);
+    if (stockScenes.length === 0) {
+      creditLines.push("None — all visuals are generated storyboard art.");
+    } else {
+      for (const s of stockScenes) {
+        creditLines.push(`Scene ${s.index}: ${s.stock!.credit} — ${s.stock!.pageUrl}`);
+      }
+    }
+    creditLines.push(
+      ``,
+      `== SOUND EFFECTS ==`,
+      "All accents are synthesized in-app (royalty-free by construction — no sampled SFX).",
+      ``,
+      `Paste the attribution lines above into your YouTube description when the license requires it.`
+    );
+    add(`${base}/CREDITS.txt`, creditLines.join("\n").replace(/\n==/g, "\n\n=="));
+  } catch {
+    // Credits must never block an export — a resolveMusicForVideo failure
+    // (e.g. deleted pinned track) just omits the file.
+  }
 
   // Media assets
   const voiceover = readMedia(video.id, "voiceover.wav");

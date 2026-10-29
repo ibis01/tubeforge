@@ -5,6 +5,8 @@ import { jobSnapshot } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
 import { RENDER_MODES } from "@/lib/tubeforge/types";
 import { TRANSITIONS, sanitizeTransitionDuration } from "@/lib/tubeforge/transitions";
+import { isDuckIntensity } from "@/lib/tubeforge/audiomix";
+import { isMusicMoodId } from "@/lib/tubeforge/music";
 
 const TRANSITION_IDS = new Set(TRANSITIONS.map((t) => t.id));
 
@@ -84,6 +86,13 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     data.musicFadeIn = Math.min(Math.max(body.musicFadeIn, 0.5), 8);
   if (typeof body.musicFadeOut === "number")
     data.musicFadeOut = Math.min(Math.max(body.musicFadeOut, 0.5), 8);
+  // Auto-ducking + story-mood overrides (null = follow Settings defaults)
+  if (typeof body.musicDucking === "boolean" || body.musicDucking === null)
+    data.musicDucking = body.musicDucking;
+  if (isDuckIntensity(body.musicDuckingIntensity) || body.musicDuckingIntensity === null)
+    data.musicDuckingIntensity = body.musicDuckingIntensity;
+  if (isMusicMoodId(body.musicMood) || body.musicMood === null)
+    data.musicMood = body.musicMood;
 
   // Smart Motion (Ken Burns) overrides (null = built-in defaults)
   if (typeof body.motionMode === "string" && ["smart", "zoom", "pan", "off"].includes(body.motionMode))

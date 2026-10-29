@@ -87,6 +87,9 @@ model Video {
   musicVolume Float? // 0..1 multiplier applied to the licensed track
   musicFadeIn Float? // seconds
   musicFadeOut Float? // seconds
+  musicDucking Boolean? // null = Settings default; false = constant bed under the voice
+  musicDuckingIntensity String? // subtle | standard | strong (audiomix.ts catalog)
+  musicMood String? // auto | suspenseful | cinematic | emotional | uplifting | calm
 
   // Smart Motion (Ken Burns) per-video overrides; null = built-in defaults
   // (smart scene-aware mode, 12% zoom intensity, smooth easing, direction

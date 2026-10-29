@@ -23,6 +23,7 @@ import path from "path";
 import { promisify } from "util";
 import { db } from "@/lib/db";
 import type { MusicTrack } from "@prisma/client";
+import { sanitizeDuckIntensity, type DuckIntensity } from "./audiomix";
 
 const execFileAsync = promisify(execFile);
 
@@ -47,6 +48,8 @@ export interface MusicSettings {
   volume: number; // 0..1 slider (mapped onto the bed gain)
   fadeInSec: number;
   fadeOutSec: number;
+  ducking: boolean; // auto-duck the bed under the voice
+  duckingIntensity: DuckIntensity; // subtle | standard | strong
 }
 
 const DEFAULT_SETTINGS: MusicSettings = {
@@ -56,16 +59,20 @@ const DEFAULT_SETTINGS: MusicSettings = {
   volume: 0.5,
   fadeInSec: 1.5,
   fadeOutSec: 2.5,
+  ducking: true,
+  duckingIntensity: "standard",
 };
 
 export async function getMusicSettings(): Promise<MusicSettings> {
-  const [enabled, mode, trackId, volume, fadeIn, fadeOut] = await Promise.all([
+  const [enabled, mode, trackId, volume, fadeIn, fadeOut, ducking, duckingIntensity] = await Promise.all([
     getSetting("music.enabled"),
     getSetting("music.mode"),
     getSetting("music.trackId"),
     getSetting("music.volume"),
     getSetting("music.fadeInSec"),
     getSetting("music.fadeOutSec"),
+    getSetting("music.ducking"),
+    getSetting("music.duckingIntensity"),
   ]);
   return {
     enabled: enabled === null ? DEFAULT_SETTINGS.enabled : enabled === "true",
@@ -74,7 +81,24 @@ export async function getMusicSettings(): Promise<MusicSettings> {
     volume: Number.isFinite(Number(volume)) && volume !== null ? Number(volume) : DEFAULT_SETTINGS.volume,
     fadeInSec: Number.isFinite(Number(fadeIn)) && fadeIn !== null ? Number(fadeIn) : DEFAULT_SETTINGS.fadeInSec,
     fadeOutSec: Number.isFinite(Number(fadeOut)) && fadeOut !== null ? Number(fadeOut) : DEFAULT_SETTINGS.fadeOutSec,
+    ducking: ducking === null ? DEFAULT_SETTINGS.ducking : ducking === "true",
+    duckingIntensity: sanitizeDuckIntensity(duckingIntensity ?? DEFAULT_SETTINGS.duckingIntensity),
   };
+}
+
+/** Sound-effect cues on/off (Settings → Sound; default on, conservative mix). */
+export async function getSfxEnabled(): Promise<boolean> {
+  const v = await getSetting("sfx.enabled");
+  return v === null ? true : v === "true";
+}
+
+/**
+ * Is music ON for this render at all? Distinct from track resolution:
+ * false → NO bed whatsoever; true + no matching track → synthesized drone.
+ */
+export async function isMusicEnabledForVideo(video: { musicEnabled: boolean | null }): Promise<boolean> {
+  if (video.musicEnabled !== null) return video.musicEnabled;
+  return (await getMusicSettings()).enabled;
 }
 
 // ---------------------------------------------------------------------------
@@ -162,6 +186,32 @@ export const NICHE_MOODS: Record<string, string[]> = {
   Technology: ["technology", "clean"],
   Mysteries: ["mysteries", "dark"],
 };
+
+/**
+ * Story-mood presets (the "music that matches the story" control) live in
+ * types.ts (client-safe); the id → library-tag mapping lives HERE next to
+ * the tag vocabulary. A preset that matches nothing falls back to the niche
+ * pick — a mood request must never silence the bed.
+ */
+const MUSIC_MOOD_TAGS: Record<string, string[]> = {
+  suspenseful: ["mysteries", "dark"],
+  cinematic: ["cinematic", "epic", "history"],
+  emotional: ["psychology", "soft", "motivation"],
+  uplifting: ["uplifting", "motivation", "bright", "funfacts"],
+  calm: ["soft", "airy", "minimal", "neutral"],
+};
+
+const MUSIC_MOOD_IDS = new Set<string>(["auto", ...Object.keys(MUSIC_MOOD_TAGS)]);
+
+/** Valid mood preset id? (PATCH + create validation) */
+export function isMusicMoodId(v: unknown): v is string {
+  return typeof v === "string" && MUSIC_MOOD_IDS.has(v);
+}
+
+/** The library tags a mood preset asks for ([] for "auto"/unknown). */
+export function moodTags(id: string | null | undefined): string[] {
+  return (id && MUSIC_MOOD_TAGS[id]) || [];
+}
 
 interface OriginalTrackDef {
   slug: string;
@@ -582,27 +632,42 @@ export async function ingestUploadedTrack(buffer: Buffer, meta: UploadTrackMeta)
 const moodTagsOf = (t: MusicTrack): string[] =>
   t.moods.toLowerCase().split(",").map((m) => m.trim()).filter(Boolean);
 
-/** Pick the best active track for a niche: tag match, prefer loop-free length. */
-export async function autoPickTrack(niche: string | null | undefined, videoDurationSec: number | null): Promise<MusicTrack | null> {
+/** Pick the best active track for a niche: tag match, prefer loop-free length.
+ * `moodId` (a MUSIC_MOODS preset) overrides the niche's tag set when it finds
+ * at least one match — the story mood wins, the niche is the fallback. */
+export async function autoPickTrack(
+  niche: string | null | undefined,
+  videoDurationSec: number | null,
+  moodId?: string | null
+): Promise<MusicTrack | null> {
+  const active = await db.musicTrack.findMany({ where: { isActive: true } });
+  if (active.length === 0) return null;
+
+  const pick = (tags: Set<string>): MusicTrack | null => {
+    const scored = active
+      .map((t) => {
+        const trackTags = moodTagsOf(t);
+        const matches = trackTags.filter((m) => tags.has(m)).length;
+        const need = videoDurationSec ?? 0;
+        const loopFree = t.durationSec >= need ? 1 : 0;
+        return { t, matches, loopFree, duration: t.durationSec };
+      })
+      .sort((a, b) => b.matches - a.matches || b.loopFree - a.loopFree || b.duration - a.duration);
+    return scored.length > 0 && scored[0].matches > 0 ? scored[0].t : null;
+  };
+
+  // Story-mood preset first, then the niche mapping, then any active track.
+  const mood = moodId && moodId !== "auto" ? moodTags(moodId) : [];
+  if (mood.length > 0) {
+    const byMood = pick(new Set([...mood, "documentary"]));
+    if (byMood) return byMood;
+  }
   const tags = new Set(
     (niche && NICHE_MOODS[niche]
       ? NICHE_MOODS[niche]
       : ["documentary", "cinematic"]).concat(["documentary"])
   );
-  const active = await db.musicTrack.findMany({ where: { isActive: true } });
-  if (active.length === 0) return null;
-
-  const scored = active
-    .map((t) => {
-      const trackTags = moodTagsOf(t);
-      const matches = trackTags.filter((m) => tags.has(m)).length;
-      const need = videoDurationSec ?? 0;
-      const loopFree = t.durationSec >= need ? 1 : 0;
-      return { t, matches, loopFree, duration: t.durationSec };
-    })
-    .sort((a, b) => b.matches - a.matches || b.loopFree - a.loopFree || b.duration - a.duration);
-
-  return scored.length > 0 && scored[0].matches > 0 ? scored[0].t : active.sort((a, b) => b.durationSec - a.durationSec)[0] ?? null;
+  return pick(tags) ?? active.sort((a, b) => b.durationSec - a.durationSec)[0] ?? null;
 }
 
 export interface ResolvedMusic {
@@ -610,6 +675,7 @@ export interface ResolvedMusic {
   gain: number; // linear volume applied to the normalized track
   fadeInSec: number;
   fadeOutSec: number;
+  duckIntensity: DuckIntensity; // "off" = constant bed under the voice
   why: string; // human explanation ("auto-matched Motivation → Sunrise Drive")
 }
 
@@ -617,10 +683,25 @@ export interface ResolvedMusic {
 const sliderToGain = (slider: number) => Math.max(0, Math.min(1, slider)) * 0.3;
 
 /**
+ * Resolve the effective ducking for one render: per-video override → Settings
+ * default. A per-video `musicDucking: false` (or ducking off in Settings)
+ * means a CONSTANT bed — the mix engine still normalizes loudness.
+ */
+export async function resolveDuckingForVideo(video: {
+  musicDucking: boolean | null;
+  musicDuckingIntensity: string | null;
+}): Promise<DuckIntensity> {
+  const settings = await getMusicSettings();
+  const enabled = video.musicDucking ?? settings.ducking;
+  if (!enabled) return "off";
+  return sanitizeDuckIntensity(video.musicDuckingIntensity ?? settings.duckingIntensity);
+}
+
+/**
  * Resolve the music config for one render:
  *   video.musicEnabled ?? settings.enabled
  *   track = video.musicTrackId (manual per-video) ?? settings.manual track ?? auto-match
- *   gain/fades = per-video overrides ?? settings defaults
+ *   gain/fades/ducking = per-video overrides ?? settings defaults
  */
 export async function resolveMusicForVideo(video: {
   musicEnabled: boolean | null;
@@ -628,12 +709,18 @@ export async function resolveMusicForVideo(video: {
   musicVolume: number | null;
   musicFadeIn: number | null;
   musicFadeOut: number | null;
+  musicDucking: boolean | null;
+  musicDuckingIntensity: string | null;
+  musicMood: string | null;
   niche: string;
   audioDuration: number | null;
 }): Promise<ResolvedMusic | null> {
   const settings = await getMusicSettings();
   const enabled = video.musicEnabled ?? settings.enabled;
   if (!enabled) return null;
+
+  const duckIntensity = await resolveDuckingForVideo(video);
+  const mood = video.musicMood && isMusicMoodId(video.musicMood) ? video.musicMood : "auto";
 
   let track: MusicTrack | null = null;
   let why = "";
@@ -647,8 +734,12 @@ export async function resolveMusicForVideo(video: {
     if (track) why = `default track “${track.name}”`;
   }
   if (!track) {
-    track = await autoPickTrack(video.niche, video.audioDuration);
-    if (track) why = `auto mood-match (${video.niche || "documentary"} → ${moodTagsOf(track)[0] ?? "ambient"})`;
+    track = await autoPickTrack(video.niche, video.audioDuration, mood);
+    if (track)
+      why =
+        mood !== "auto"
+        ? `${mood} mood → “${track.name}”`
+        : `auto mood-match (${video.niche || "documentary"} → ${moodTagsOf(track)[0] ?? "ambient"})`;
   }
   if (!track) return null; // render falls back to the inline niche drone
 
@@ -657,6 +748,7 @@ export async function resolveMusicForVideo(video: {
     gain: sliderToGain(video.musicVolume ?? settings.volume),
     fadeInSec: clampFade(video.musicFadeIn ?? settings.fadeInSec),
     fadeOutSec: clampFade(video.musicFadeOut ?? settings.fadeOutSec),
+    duckIntensity,
     why,
   };
 }

@@ -21,6 +21,7 @@ import fs from "fs";
 import path from "path";
 import { promisify } from "util";
 import { SFX_KINDS } from "./types";
+import { runProcess } from "./proc";
 
 const execFileAsync = promisify(execFile);
 
@@ -83,8 +84,9 @@ export async function ensureSfx(kind: string): Promise<string | null> {
   if (fs.existsSync(outPath) && fs.statSync(outPath).size > 1000) return outPath;
 
   // Render mono source graph, then resample/upmix on output — keeps every
-  // recipe identical in level across the catalog.
-  await execFileAsync(
+  // recipe identical in level across the catalog. (Zombie-aware runner —
+  // see proc.ts.)
+  await runProcess(
     "ffmpeg",
     [
       "-filter_complex", recipe,
@@ -92,11 +94,10 @@ export async function ensureSfx(kind: string): Promise<string | null> {
       "-c:a", "pcm_s16le",
       "-y", outPath,
     ],
-    { timeout: 30_000, maxBuffer: 1024 * 1024 }
+    { timeoutMs: 30_000 }
   ).catch((err) => {
-    const e = err as { stderr?: string; message?: string };
     throw new Error(
-      `SFX synthesis failed for "${kind}": ${(e.stderr ?? e.message ?? "").split("\n").slice(-4).join(" ").slice(0, 300)}`
+      `SFX synthesis failed for "${kind}": ${String((err as Error).message ?? err).slice(0, 300)}`
     );
   });
 

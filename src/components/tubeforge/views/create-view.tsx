@@ -57,6 +57,7 @@ import {
   LayoutGrid,
   Clapperboard,
   Film,
+  Presentation,
   ListVideo,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -152,6 +153,9 @@ export function CreateView() {
     volume: null,
     fadeIn: null,
     fadeOut: null,
+    ducking: null,
+    duckingIntensity: null,
+    mood: null,
   });
   const [motion, setMotion] = useState<MotionPickerValue>({
     mode: null,
@@ -290,6 +294,9 @@ export function CreateView() {
           musicVolume: music.volume,
           musicFadeIn: music.fadeIn,
           musicFadeOut: music.fadeOut,
+          musicDucking: music.ducking,
+          musicDuckingIntensity: music.duckingIntensity,
+          musicMood: music.mood,
           motionMode: motion.mode,
           motionIntensity: motion.intensity,
           motionCurve: motion.curve,
@@ -388,9 +395,13 @@ export function CreateView() {
         bumpRefresh();
 
         if (autopilot && isStory) {
-          // Story pipeline: storyboard → (stock b-roll) → voiceover → thumbnail → render
-          const boarded = await runStage("storyboard", () => startStoryboard(v.id));
-          if (!boarded) return;
+          // Story pipeline: storyboard (skipped for slides) → (stock b-roll) →
+          // voiceover → thumbnail → render. Keynote slides design their own
+          // deck at render time — no image generation pass needed.
+          if (renderMode !== "slides") {
+            const boarded = await runStage("storyboard", () => startStoryboard(v.id));
+            if (!boarded) return;
+          }
 
           if (renderMode === "stock") {
             const stocked = await runStage("stock", () => startStock(v.id));
@@ -631,7 +642,7 @@ export function CreateView() {
                   {sceneCount} scenes · {LENGTHS.find((l) => l.id === length)?.label ?? length}
                 </Badge>
               </div>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 {RENDER_MODES.map((m) => (
                   <button
                     key={m.id}
@@ -650,6 +661,8 @@ export function CreateView() {
                         <Zap className="h-3.5 w-3.5 text-amber-300" />
                       ) : m.id === "stock" ? (
                         <Film className="h-3.5 w-3.5 text-emerald-300" />
+                      ) : m.id === "slides" ? (
+                        <Presentation className="h-3.5 w-3.5 text-violet-300" />
                       ) : (
                         <Clapperboard className="h-3.5 w-3.5 text-sky-300" />
                       )}
@@ -663,6 +676,13 @@ export function CreateView() {
                 <p className="text-[11px] text-sky-300/90 leading-relaxed">
                   Auto-Pilot renders the full animated video — every scene is
                   animated via image-to-video (~4 min per scene, tracked live).
+                </p>
+              )}
+              {renderMode === "slides" && (
+                <p className="text-[11px] text-violet-300/90 leading-relaxed">
+                  Auto-Pilot designs a keynote slide deck from your script — one
+                  huge-typography beat per scene, rendered vertical 9:16 with no
+                  image generation. Pairs best with hard-cut transitions.
                 </p>
               )}
               {renderMode === "stock" && (

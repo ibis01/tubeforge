@@ -70,6 +70,7 @@ import {
   UserRound,
   LayoutGrid,
   Clapperboard,
+  Presentation,
   RefreshCw,
   Zap,
   Eye,
@@ -131,6 +132,9 @@ export function VideoDetailDialog({
     volume: null,
     fadeIn: null,
     fadeOut: null,
+    ducking: null,
+    duckingIntensity: null,
+    mood: null,
   });
   const musicPatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Per-video Smart Motion (Ken Burns) overrides — same debounced PATCH pattern.
@@ -228,6 +232,9 @@ export function VideoDetailDialog({
       volume: video.musicVolume ?? null,
       fadeIn: video.musicFadeIn ?? null,
       fadeOut: video.musicFadeOut ?? null,
+      ducking: video.musicDucking ?? null,
+      duckingIntensity: video.musicDuckingIntensity ?? null,
+      mood: video.musicMood && video.musicMood !== "auto" ? video.musicMood : null,
     });
     setMotionDraft({
       mode: video.motionMode ?? null,
@@ -697,6 +704,9 @@ export function VideoDetailDialog({
           musicVolume: v.volume,
           musicFadeIn: v.fadeIn,
           musicFadeOut: v.fadeOut,
+          musicDucking: v.ducking,
+          musicDuckingIntensity: v.duckingIntensity,
+          musicMood: v.mood,
         }),
       });
     }, 600);
@@ -1024,7 +1034,8 @@ export function VideoDetailDialog({
   );
 
   // ---------- Video tab ----------
-  const renderDisabledReason = !video.hasStoryboard
+  // Keynote slides design their own deck — storyboard art is optional there.
+  const renderDisabledReason = !video.hasStoryboard && video.renderMode !== "slides"
     ? "Generate the storyboard first"
     : !video.hasVoiceover
       ? "Generate the voiceover first"
@@ -1051,6 +1062,8 @@ export function VideoDetailDialog({
               <div className="flex items-center gap-1.5">
                 {m.id === "kenburns" ? (
                   <Zap className="h-3.5 w-3.5 text-amber-300" />
+                ) : m.id === "slides" ? (
+                  <Presentation className="h-3.5 w-3.5 text-violet-300" />
                 ) : (
                   <Clapperboard className="h-3.5 w-3.5 text-sky-300" />
                 )}
@@ -1091,7 +1104,12 @@ export function VideoDetailDialog({
         </div>
 
         {/* Per-video soundtrack — track pin, volume, fades (debounced PATCH) */}
-        <MusicPickerCard value={musicDraft} onChange={onMusicChange} />
+        <MusicPickerCard
+          value={musicDraft}
+          onChange={onMusicChange}
+          videoId={video.id}
+          canPreview={video.hasVoiceover}
+        />
 
         {/* Per-video Smart Motion — mode, intensity, easing, variation */}
         <MotionControlsCard

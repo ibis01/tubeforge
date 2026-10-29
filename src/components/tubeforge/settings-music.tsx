@@ -4,7 +4,7 @@
 // licensed track library with license badges + previews, upload dialog with
 // full license metadata, and re-synthesis of the TubeForge originals.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,12 +36,14 @@ import {
   RefreshCw,
   Trash2,
   FileAudio,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
   useMusicLibrary,
   saveMusicSettings,
   TrackPreviewButton,
+  DUCK_LEVELS,
   type MusicTrackDTO,
 } from "@/components/tubeforge/music-controls";
 
@@ -247,6 +249,19 @@ function UploadDialog({ onUploaded }: { onUploaded: () => void }) {
 export function MusicLibrarySection() {
   const { tracks, settings, loading, reload, setSettings } = useMusicLibrary();
   const [seeding, setSeeding] = useState(false);
+  const [sfxOn, setSfxOn] = useState<boolean | null>(null);
+
+  // SFX toggle state comes from the settings map (GET /api/settings).
+  useEffect(() => {
+    if (sfxOn !== null) return;
+    void fetch("/api/settings", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { settings?: Record<string, string> } | null) => {
+        if (d?.settings && "sfx.enabled" in d.settings)
+          setSfxOn(d.settings["sfx.enabled"] === "true");
+      })
+      .catch(() => {});
+  }, [sfxOn]);
 
   const patch = async (p: Parameters<typeof saveMusicSettings>[0]) => {
     setSettings((s) => (s ? { ...s, ...p } : s));
@@ -396,6 +411,48 @@ export function MusicLibrarySection() {
                 aria-label="Default fade in and out"
               />
             </div>
+          </div>
+
+          {/* Auto-ducking defaults + SFX toggle */}
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-white/5 pt-3">
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Switch
+                checked={settings.ducking}
+                onCheckedChange={(v) => void patch({ ducking: v })}
+                aria-label="Auto-ducking on by default"
+              />
+              Auto-duck under narration
+            </label>
+            {settings.ducking && (
+              <div className="flex gap-1 rounded-lg border border-white/10 p-0.5">
+                {DUCK_LEVELS.map((l) => (
+                  <button
+                    key={l.id}
+                    type="button"
+                    onClick={() => void patch({ duckingIntensity: l.id })}
+                    aria-pressed={settings.duckingIntensity === l.id}
+                    className={`px-2.5 py-0.5 text-[10px] rounded-md transition-colors ${
+                      settings.duckingIntensity === l.id
+                        ? "bg-primary/20 text-primary"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <label className="flex items-center gap-2 text-xs text-muted-foreground ml-auto">
+              <Switch
+                checked={sfxOn ?? true}
+                onCheckedChange={(v) => {
+                  setSfxOn(v);
+                  void saveMusicSettings({ "sfx.enabled": v });
+                }}
+                aria-label="Sound-effect cues"
+              />
+              <Zap className="h-3 w-3" /> SFX cues
+            </label>
           </div>
         </div>
       )}

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { parseScenes } from "@/lib/tubeforge/story";
 import { renderVideo } from "@/lib/tubeforge/render";
-import { resolveMusicForVideo, trackAbsolutePath } from "@/lib/tubeforge/music";
+import { resolveMusicForVideo, resolveDuckingForVideo, getSfxEnabled, trackAbsolutePath } from "@/lib/tubeforge/music";
 import { qcForVideo } from "@/lib/tubeforge/qc";
 import {
   startJob,
@@ -76,7 +76,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: 409 }
     );
 
-  if (!video.hasStoryboard)
+  const body = await req.json().catch(() => ({}));
+
+  // Keynote slides design their own deck — storyboard art is optional there.
+  if (!video.hasStoryboard && body?.mode !== "slides")
     return NextResponse.json(
       { error: "Generate the storyboard first — there is no scene art yet" },
       { status: 400 }
@@ -87,9 +90,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
-  const body = await req.json().catch(() => ({}));
-  const mode = ["animated", "stock"].includes(body?.mode) ? body.mode : "kenburns";
-  const subtitles = body?.subtitles !== false; // default: burn captions
+  // Keynote slides: captions duplicate the slide headlines — default OFF.
+  const mode = ["animated", "stock", "slides"].includes(body?.mode) ? body.mode : "kenburns";
+  const subtitles = body?.subtitles ?? mode !== "slides"; // slides default: no burned captions
   const smartCaptions = body?.smartCaptions !== false; // default: ASR-synced cues (Phase 4)
   const music = body?.music !== false; // default: ambient bed
   const sceneLimitRaw = Number(body?.sceneLimit);
@@ -99,21 +102,31 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       : undefined;
 
   // Resolve the library track (null → synthesized drone fallback in render.ts).
+  // Ducking follows the per-video override → Settings default (music.ts).
   const resolved = music ? await resolveMusicForVideo(video) : null;
+  const duckFallback = music ? await resolveDuckingForVideo(video) : "standard";
+  const sfx = await getSfxEnabled();
   const musicTrack = resolved
     ? {
         filePath: trackAbsolutePath(resolved.track),
         gain: resolved.gain,
         fadeInSec: resolved.fadeInSec,
         fadeOutSec: resolved.fadeOutSec,
+        duckIntensity: resolved.duckIntensity,
       }
     : null;
 
   // Scene transitions: per-video override (null = built-in crossfade 0.5s).
-  const transition = sanitizeTransition({
-    style: video.transitionStyle,
-    durationSec: video.transitionDuration,
-  });
+  // Slides beats read like slide changes — hard cuts are the format's native
+  // grammar, so an unset transition defaults to "cut" for this mode.
+  const transition = sanitizeTransition(
+    mode === "slides" && video.transitionStyle === null
+      ? { style: "cut", durationSec: video.transitionDuration }
+      : {
+          style: video.transitionStyle,
+          durationSec: video.transitionDuration,
+        }
+  );
 
   // Clear any stale error before the job starts.
   await db.video.update({ where: { id }, data: { error: null } });
@@ -129,6 +142,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         music,
         musicNiche: video.niche,
         musicTrack,
+        musicDuck: duckFallback,
+        sfx,
         sceneLimit,
         motion: {
           mode: (video.motionMode ?? "smart") as "smart" | "zoom" | "pan" | "off",
@@ -137,6 +152,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           vary: video.motionVary ?? true,
         },
         motionContext: { tone: video.tone, niche: video.niche },
+        topic: video.topic,
         transition,
         onProgress: (current, total, label) => {
           // Cancellation checkpoint: fires between scenes/long steps.
@@ -149,7 +165,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         // Quality gate — verify the file actually plays, is in sync, on level.
         // Transition-aware: fadeblack dips are designed beats, not defects.
         setJobProgress(id, "render", scenes.length + 1, scenes.length + 1, "Running quality checks");
-        const report = await qcForVideo(id, result.durationSec, video.audioDuration, result.blackWindows);
+        const report = await qcForVideo(
+          id,
+          result.durationSec,
+          video.audioDuration,
+          result.blackWindows,
+          result.aspect
+        );
         await db.video.update({
           where: { id },
           data: {
@@ -165,9 +187,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
             stage: "render",
             level: report.passed ? "info" : "warn",
             message:
-              `Video rendered (${mode === "animated" ? "full AI animation" : mode === "stock" ? "stock b-roll" : "Ken Burns"}, ` +
+              `Video rendered (${mode === "animated" ? "full AI animation" : mode === "stock" ? "stock b-roll" : mode === "slides" ? "keynote slides" : "Ken Burns"}, ` +
               `${Math.round(result.durationSec)}s) — ` +
               `${music ? (resolved ? `music: ${resolved.why}` : "music: synthesized bed") : "no music"}, ` +
+              `${music && resolved ? `ducking ${resolved.duckIntensity}, ` : ""}` +
               `${transitionSummary(transition.style, transition.durationSec)}, ` +
               `QC ${report.passed ? "passed" : "flagged " + report.checks.filter((c) => !c.pass).length + " check(s)"}`,
           },

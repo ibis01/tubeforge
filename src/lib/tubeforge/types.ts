@@ -67,6 +67,13 @@ export const RENDER_MODES = [
     eta: "≈ 2–5 min",
   },
   {
+    id: "slides",
+    label: "Keynote slides",
+    icon: "Presentation",
+    desc: "Vertical 9:16 kinetic-typography explainer — one designed slide per beat (huge headlines, counters, spec cards), cut like a deck, no image gen needed",
+    eta: "≈ 1–3 min",
+  },
+  {
     id: "animated",
     label: "Full AI animation",
     icon: "Clapperboard",
@@ -151,6 +158,24 @@ export function sanitizeSceneStyle(v: unknown): SceneArtStyleId {
 export function sceneStylePrompt(style: string | null | undefined): string {
   return SCENE_ART_STYLES.find((s) => s.id === sanitizeSceneStyle(style))?.prompt ?? "";
 }
+
+/**
+ * Story-mood presets for the background-music picker (the "music that
+ * matches the story" control). Each id maps onto the library's mood-tag
+ * vocabulary in music.ts; "auto" defers to the niche mapping. Lives here
+ * (not music.ts) so client components can share the list without pulling
+ * in the database.
+ */
+export const MUSIC_MOODS = [
+  { id: "auto", label: "Auto — match the niche" },
+  { id: "suspenseful", label: "Suspenseful" },
+  { id: "cinematic", label: "Cinematic" },
+  { id: "emotional", label: "Emotional" },
+  { id: "uplifting", label: "Uplifting" },
+  { id: "calm", label: "Calm" },
+] as const;
+
+export type MusicMoodId = (typeof MUSIC_MOODS)[number]["id"];
 
 /** A single story beat — narration drives TTS, visual drives storyboard art. */
 export interface Scene {
@@ -322,6 +347,9 @@ export interface VideoDTO {
   musicVolume: number | null;
   musicFadeIn: number | null;
   musicFadeOut: number | null;
+  musicDucking: boolean | null;
+  musicDuckingIntensity: string | null; // subtle | standard | strong
+  musicMood: string | null; // auto | suspenseful | cinematic | emotional | uplifting | calm
   // Smart Motion (Ken Burns) per-video overrides; null = built-in defaults
   motionMode: string | null; // smart | zoom | pan | off
   motionIntensity: number | null; // 0..30 (% zoom amplitude, default 12)

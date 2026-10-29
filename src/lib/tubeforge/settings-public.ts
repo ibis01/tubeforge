@@ -36,6 +36,10 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   "music.volume": "0.5",
   "music.fadeInSec": "1.5",
   "music.fadeOutSec": "2.5",
+  "music.ducking": "true", // auto-duck the bed under the voice
+  "music.duckingIntensity": "standard", // subtle | standard | strong
+  // Sound-effect cues (sfx.ts synthesis; conservative mix levels by design)
+  "sfx.enabled": "true",
 };
 
 const PUBLIC_SETTING_KEYS = new Set(Object.keys(DEFAULT_SETTINGS));

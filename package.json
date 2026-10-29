@@ -12,7 +12,7 @@
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
     "typecheck": "tsc --noEmit",
-    "test": "bun scripts/test-unit.ts && bun scripts/test-net-guard.ts",
+    "test": "bun scripts/test-unit.ts && bun scripts/test-net-guard.ts && bun scripts/test-audio-regression.ts",
     "test:live": "bun scripts/test-auth-optin.ts",
     "check": "bun run typecheck && bun run lint && bun run test",
     "verify": "node scripts/verify.mjs",

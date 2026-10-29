@@ -19,8 +19,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Music2, Play, BadgeCheck, Sparkles } from "lucide-react";
+import { Music2, Play, BadgeCheck, Sparkles, Headphones } from "lucide-react";
 import { toast } from "sonner";
+import { MUSIC_MOODS } from "@/lib/tubeforge/types";
+
+/** Ducking intensity ids (server catalog in audiomix.ts — mirrored for UI). */
+export const DUCK_LEVELS = [
+  { id: "subtle", label: "Subtle" },
+  { id: "standard", label: "Standard" },
+  { id: "strong", label: "Strong" },
+] as const;
 
 export interface MusicTrackDTO {
   id: string;
@@ -52,6 +60,8 @@ export interface MusicSettingsDTO {
   volume: number;
   fadeInSec: number;
   fadeOutSec: number;
+  ducking: boolean;
+  duckingIntensity: string;
 }
 
 export function useMusicLibrary() {
@@ -80,7 +90,7 @@ export function useMusicLibrary() {
 }
 
 /** Save music.* settings keys (partial updates). */
-export async function saveMusicSettings(patch: Partial<MusicSettingsDTO>) {
+export async function saveMusicSettings(patch: Partial<MusicSettingsDTO> & { "sfx.enabled"?: boolean }) {
   const res = await fetch("/api/settings", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -93,6 +103,9 @@ export async function saveMusicSettings(patch: Partial<MusicSettingsDTO>) {
           "music.volume": patch.volume,
           "music.fadeInSec": patch.fadeInSec,
           "music.fadeOutSec": patch.fadeOutSec,
+          "music.ducking": patch.ducking,
+          "music.duckingIntensity": patch.duckingIntensity,
+          "sfx.enabled": patch["sfx.enabled"],
         }).filter(([, v]) => v !== undefined)
       )
     ),
@@ -169,23 +182,31 @@ export interface MusicPickerValue {
   volume: number | null;
   fadeIn: number | null;
   fadeOut: number | null;
+  ducking: boolean | null;
+  duckingIntensity: string | null;
+  mood: string | null;
 }
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
 
 /**
  * Per-video music card: default/auto follows Settings; "Custom" pins a track
- * and volume/fades on the video row. Compact enough for the Create form and
- * the video detail dialog.
+ * and volume/fades/ducking on the video row. Compact enough for the Create form
+ * and the video detail dialog. `videoId` (detail dialog only) adds a 12-second
+ * MIX preview — the real narration + ducked bed + normalization contract.
  */
 export function MusicPickerCard({
   value,
   onChange,
   compact = false,
+  videoId,
+  canPreview = false,
 }: {
   value: MusicPickerValue;
   onChange: (v: MusicPickerValue) => void;
   compact?: boolean;
+  videoId?: string;
+  canPreview?: boolean;
 }) {
   const { tracks, settings, loading } = useMusicLibrary();
   const pinned = tracks.find((t) => t.id === value.trackId) ?? null;
@@ -193,6 +214,9 @@ export function MusicPickerCard({
   // Default = follow global settings; show what that would do.
   const globalAuto = settings?.mode === "auto";
   const effectiveEnabled = value.enabled ?? settings?.enabled ?? true;
+  const effectiveDucking = value.ducking ?? settings?.ducking ?? true;
+  const effectiveIntensity =
+    value.duckingIntensity ?? settings?.duckingIntensity ?? "standard";
 
   return (
     <Card className="glass border-white/10 p-4 space-y-4">
@@ -255,6 +279,29 @@ export function MusicPickerCard({
           </div>
 
           <div className="space-y-2.5">
+            {/* Story mood — steers the AUTO track pick (hidden when pinned). */}
+            {!pinned && (
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] text-muted-foreground w-14 shrink-0">Mood</span>
+                <Select
+                  value={value.mood ?? "auto"}
+                  onValueChange={(v) => onChange({ ...value, mood: v === "auto" ? null : v })}
+                >
+                  <SelectTrigger className="flex-1 h-8 text-xs" aria-label="Story mood for auto track pick">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MUSIC_MOODS.map((m) => (
+                      <SelectItem key={m.id} value={m.id} className="text-xs">
+                        {m.id === "auto" ? <Sparkles className="h-3 w-3 text-primary inline mr-1.5" /> : null}
+                        {m.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             <div className="flex items-center gap-3">
               <span className="text-[11px] text-muted-foreground w-14 shrink-0">Volume</span>
               <Slider
@@ -270,6 +317,36 @@ export function MusicPickerCard({
                 {Math.round((value.volume ?? settings?.volume ?? 0.5) * 100)}%
               </span>
             </div>
+
+            {/* Auto-ducking — the bed dips while the narrator speaks. */}
+            <div className="flex items-center gap-3">
+              <span className="text-[11px] text-muted-foreground w-14 shrink-0">Ducking</span>
+              <Switch
+                checked={effectiveDucking}
+                onCheckedChange={(v) => onChange({ ...value, ducking: v })}
+                aria-label="Auto-duck music under the narration"
+              />
+              {effectiveDucking && (
+                <div className="flex gap-1 ml-auto rounded-lg border border-white/10 p-0.5">
+                  {DUCK_LEVELS.map((l) => (
+                    <button
+                      key={l.id}
+                      type="button"
+                      onClick={() => onChange({ ...value, duckingIntensity: l.id })}
+                      aria-pressed={effectiveIntensity === l.id}
+                      className={`px-2 py-0.5 text-[10px] rounded-md transition-colors ${
+                        effectiveIntensity === l.id
+                          ? "bg-primary/20 text-primary"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {l.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {!compact && (
               <div className="flex items-center gap-3">
                 <span className="text-[11px] text-muted-foreground w-14 shrink-0">Fade in/out</span>
@@ -292,6 +369,17 @@ export function MusicPickerCard({
             )}
           </div>
 
+          {videoId && (
+            <div className="flex items-center gap-2 pt-0.5">
+              <MixPreviewButton videoId={videoId} disabled={!canPreview} />
+              {!canPreview && (
+                <span className="text-[10px] text-muted-foreground">
+                  Generate the voiceover first
+                </span>
+              )}
+            </div>
+          )}
+
           <p className="text-[10px] text-muted-foreground">
             Every track carries a license record — originals are synthesized in-app (zero Content ID risk).
             {pinned?.license.attributionRequired && pinned.license.attributionText
@@ -301,5 +389,81 @@ export function MusicPickerCard({
         </>
       )}
     </Card>
+  );
+}
+
+/**
+ * Mix preview — plays a 12-second window of the REAL final audio (scene
+ * narration + resolved track, ducked and normalized exactly like the render)
+ * straight from /api/videos/[id]/audio-preview. Disabled until the
+ * voiceover exists.
+ */
+export function MixPreviewButton({ videoId, disabled }: { videoId: string; disabled?: boolean }) {
+  const [loading, setLoading] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => () => audioRef.current?.pause(), []);
+
+  const toggle = async () => {
+    const cur = audioRef.current;
+    if (cur && !cur.paused) {
+      cur.pause();
+      setPlaying(false);
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/videos/${videoId}/audio-preview?start=0&duration=12`, { cache: "no-store" });
+      if (!res.ok) {
+        const d = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(d.error ?? "Preview failed");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => {
+        setPlaying(false);
+        URL.revokeObjectURL(url);
+      };
+      await audio.play();
+      setPlaying(true);
+      const why = res.headers.get("X-Music-Why");
+      const duck = res.headers.get("X-Music-Duck");
+      if (why)
+        toast.success("Mix preview ready", {
+          description: `${decodeURIComponent(why)} · ducking ${duck ?? "standard"} · −16 LUFS normalized`,
+        });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Mix preview failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="h-8 text-xs rounded-full border-white/15"
+      onClick={toggle}
+      disabled={disabled || loading}
+      aria-label="Play a 12-second mix preview"
+    >
+      {loading ? (
+        "Mixing…"
+      ) : playing ? (
+        <span className="tf-eq" aria-hidden>
+          <span />
+          <span />
+          <span />
+        </span>
+      ) : (
+        <Headphones className="h-3.5 w-3.5" />
+      )}
+      Preview mix
+    </Button>
   );
 }

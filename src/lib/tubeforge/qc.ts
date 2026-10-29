@@ -4,11 +4,16 @@
 // this battery and records a JSON report on the video row:
 //   1. playability   — has an H.264 video stream + AAC audio stream
 //   2. duration      — video duration vs the narration length (sync sanity)
-//   3. loudness      — integrated LUFS within [-19, -9] (target -14, YouTube)
-//   4. peak headroom — max sample ≤ -0.5 dB (no clipping)
-//   5. black frames  — zero black intervals ≥ 0.25 s
-//   6. dead air      — no fully-silent run ≥ 1.5 s (voice OR bed always up)
-//   7. captions      — SRT cues monotonic, non-overlapping, inside duration
+//   3. loudness      — integrated LUFS near the -16 delivery target (audiomix)
+//   4. true peak     — ≤ -1 dBTP (0.2 dB AAC-overshoot tolerance)
+//   5. loudness range— LRA within consistency bounds (no pumping levels)
+//   6. black frames  — zero black intervals ≥ 0.25 s
+//   7. dead air      — no fully-silent run ≥ 1.5 s (voice OR bed always up)
+//   8. frozen frames — freezedetect (exact freezes) AND a sampled static-shot
+//                      pass (visually-unchanged runs — the pacing review's
+//                      "opening scene unchanged for 15 s" class of defect)
+//   9. captions      — SRT cues monotonic, non-overlapping, inside duration
+//  10. tail fade     — ends on a fade, not an abrupt cut
 //
 // The render never fails because of QC — the report drives the QC badge in
 // the UI so a human can inspect before export/upload.
@@ -17,6 +22,14 @@ import { execFile } from "child_process";
 import fs from "fs";
 import path from "path";
 import { promisify } from "util";
+import {
+  measureLoudness,
+  detectStaticRuns,
+  staticRunsDetail,
+  LUFS_PASS_WINDOW,
+  LRA_WARN,
+  MIX_TARGETS,
+} from "./audiomix";
 
 const execFileAsync = promisify(execFile);
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
@@ -97,19 +110,12 @@ async function tailVolume(file: string, durationSec: number): Promise<number | n
   }
 }
 
-/** EBU R128 integrated loudness of the mixed track. */
-async function loudnessPass(file: string): Promise<number | null> {
-  try {
-    const { stderr } = await execFileAsync(
-      "ffmpeg",
-      ["-hide_banner", "-nostats", "-i", file, "-af", "ebur128=framelog=quiet", "-f", "null", "-"],
-      { timeout: 8 * 60 * 1000, maxBuffer: 32 * 1024 * 1024 }
-    );
-    const m = stderr.toString().match(/I:\s*(-?\d+(?:\.\d+)?)\s*LUFS/);
-    return m ? Number(m[1]) : null;
-  } catch {
-    return null;
-  }
+/** EBU R128 loudness of the mixed track (legacy helper kept for callers that
+ * only need the integrated value — the full measurement comes from
+ * audiomix.measureLoudness). */
+export async function loudnessPass(file: string): Promise<number | null> {
+  const m = await measureLoudness(file);
+  return m ? m.integratedLUFS : null;
 }
 
 interface SrtCue { start: number; end: number }
@@ -133,10 +139,19 @@ function parseSrt(text: string): SrtCue[] {
   return cues;
 }
 
+/** Frame geometry expectations — vertical is a first-class format now. */
+export type QcAspect = "16:9" | "9:16";
+
+const ASPECT_TARGET: Record<QcAspect, { w: number; h: number; label: string }> = {
+  "16:9": { w: 1920, h: 1080, label: "16:9 frame" },
+  "9:16": { w: 1080, h: 1920, label: "9:16 vertical frame" },
+};
+
 /**
  * Run the QC battery. `opts.videoDuration` is the render's measured duration
  * (ground truth); `opts.narrationSec` is the voiceover length for the sync
- * comparison. Never throws — a crashed check reports as failed.
+ * comparison. `opts.expectedAspect` matches the render mode's geometry
+ * (slides mode ships 9:16). Never throws — a crashed check reports as failed.
  */
 export async function runQcReport(opts: {
   mp4Path: string;
@@ -145,7 +160,11 @@ export async function runQcReport(opts: {
   srtPath: string | null;
   /** Designed black-dip windows (fadeblack transitions) exempt from the black-frame check. */
   expectedBlack?: [number, number][];
+  /** Frame geometry this render was built for (default "16:9"). */
+  expectedAspect?: QcAspect;
 }): Promise<QcReport> {
+  const aspect: QcAspect = opts.expectedAspect === "9:16" ? "9:16" : "16:9";
+  const aspectSpec = ASPECT_TARGET[aspect];
   const checks: QcCheck[] = [];
   const exists = fs.existsSync(opts.mp4Path);
   const expectedBlack = opts.expectedBlack ?? [];
@@ -225,22 +244,48 @@ export async function runQcReport(opts: {
 
     if (dimensions?.width && dimensions?.height) {
       const ratio = dimensions.width / dimensions.height;
-      const ok = Math.abs(ratio - 16 / 9) <= 0.02;
+      const [tw, th] = [aspectSpec.w, aspectSpec.h];
+      const ok = Math.abs(ratio - tw / th) <= 0.02;
       checks.push({
         id: "aspect",
-        label: "16:9 frame (no squeeze/crop defects)",
+        label: `${aspectSpec.label} (no squeeze/crop defects)`,
         pass: ok,
         value: `${dimensions.width}x${dimensions.height}`,
       });
     }
 
     const maxVol = stderr.match(/max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/);
-    const peak = maxVol ? Number(maxVol[1]) : null;
+    const samplePeak = maxVol ? Number(maxVol[1]) : null;
+
+    // 3–7) Loudness family — one loudnorm analysis pass (I / true peak / LRA)
+    // replaces the old ebur128 + volumedetect pair, and measures TRUE peak
+    // (inter-sample), not just the sample peak.
+    const lm = await measureLoudness(opts.mp4Path);
     checks.push({
-      id: "peak",
-      label: "No clipping (peak ≤ -0.5 dB)",
-      pass: peak !== null && peak <= -0.5,
-      value: peak === null ? "not measured" : `${peak.toFixed(1)} dBFS`,
+      id: "loudness",
+      label: `Broadcast loudness (${MIX_TARGETS.integratedLUFS} LUFS target)`,
+      pass: lm !== null && lm.integratedLUFS >= LUFS_PASS_WINDOW[0] && lm.integratedLUFS <= LUFS_PASS_WINDOW[1],
+      value: lm === null ? "not measured" : `${lm.integratedLUFS.toFixed(1)} LUFS`,
+      detail:
+        lm === null
+          ? (samplePeak !== null ? `sample peak ${samplePeak.toFixed(1)} dBFS (loudness pass failed)` : "")
+          : `window ${LUFS_PASS_WINDOW[0]}…${LUFS_PASS_WINDOW[1]} LUFS`,
+    });
+    checks.push({
+      id: "true-peak",
+      label: "True peak ≤ -1 dBTP (no clipping after encode)",
+      pass: lm !== null && lm.truePeakDBTP <= MIX_TARGETS.truePeakDBTP + 0.2,
+      value: lm === null
+        ? samplePeak === null ? "not measured" : `sample ${samplePeak.toFixed(1)} dBFS`
+        : `${lm.truePeakDBTP.toFixed(1)} dBTP`,
+      detail: "0.2 dB tolerance covers AAC inter-sample overshoot",
+    });
+    checks.push({
+      id: "loudness-range",
+      label: "Consistent volume (loudness range)",
+      pass: lm === null ? true : lm.lra <= LRA_WARN,
+      value: lm === null ? "not measured" : `LRA ${lm.lra.toFixed(1)} LU`,
+      detail: lm === null ? "" : `flagged above ${LRA_WARN} LU`,
     });
 
     // Dead air: silence runs ≥1.5s fully inside the video (ignore lead-in/out).
@@ -255,13 +300,20 @@ export async function runQcReport(opts: {
       detail: silences.slice(0, 4).map((s) => `at ${s.toFixed(1)}s`).join(", "),
     });
 
-    // 7) Loudness — separate EBU R128 pass.
-    const lufs = await loudnessPass(opts.mp4Path);
+    // 8) Visual pacing — sampled static-shot detection (freezedetect above
+    // only catches EXACT freezes; a motionless Ken Burns crop or static
+    // stock clip reads as "nothing happens" while evading it).
+    const staticPass = await detectStaticRuns(opts.mp4Path);
     checks.push({
-      id: "loudness",
-      label: "Broadcast loudness (-14 LUFS target)",
-      pass: lufs !== null && lufs >= -19 && lufs <= -9,
-      value: lufs === null ? "not measured" : `${lufs.toFixed(1)} LUFS`,
+      id: "static-shots",
+      label: "Visual pacing — no long static stretches",
+      pass: staticPass.measured && staticPass.runs.length === 0,
+      value: !staticPass.measured
+        ? "not measured"
+        : staticPass.runs.length === 0
+          ? "visual change throughout"
+          : `${staticPass.runs.length} static run${staticPass.runs.length > 1 ? "s" : ""}`,
+      detail: staticRunsDetail(staticPass.runs),
     });
 
     // 7b) Abrupt ending — the final 0.4 s should sit in a fade/silence, not
@@ -313,7 +365,8 @@ export function qcForVideo(
   videoId: string,
   videoDuration: number,
   narrationSec: number | null,
-  expectedBlack?: [number, number][]
+  expectedBlack?: [number, number][],
+  expectedAspect?: QcAspect
 ): Promise<QcReport> {
   return runQcReport({
     mp4Path: path.join(UPLOAD_ROOT, videoId, "final.mp4"),
@@ -321,5 +374,6 @@ export function qcForVideo(
     narrationSec,
     srtPath: path.join(UPLOAD_ROOT, videoId, "subtitles.srt"),
     expectedBlack,
+    expectedAspect,
   });
 }

@@ -21,7 +21,26 @@ import { buildSmartSrt } from "./captions";
 import { getZAI, videoDir } from "./ai";
 import { aiCall } from "./budget";
 import { ensureSfx } from "./sfx";
+import {
+  voiceSplitChain,
+  bedChain,
+  droneBedChain,
+  duckChain,
+  mixTail,
+  measureLoudness,
+  normalizationFilter,
+  sanitizeDuckIntensity,
+  type DuckIntensity,
+} from "./audiomix";
 import { getCapability, VIDEO_DEFAULT_MODEL } from "./providers/settings";
+import { runProcess } from "./proc";
+import {
+  planSlides,
+  renderSlidePngs,
+  slidePngPath,
+  slideMotionPlan,
+  slideSegmentGraph,
+} from "./slides";
 import {
   planSceneMovements,
   sceneFilterGraph,
@@ -44,15 +63,21 @@ const execFileAsync = promisify(execFile);
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
 const FPS = 30;
-const LEAD_SEC = 0.35; // silence before narration starts in each scene
-const TAIL_SEC = 0.85; // breathing room after narration ends
-const MIN_SEG_SEC = 2.0;
+export const LEAD_SEC = 0.35; // silence before narration starts in each scene
+export const TAIL_SEC = 0.85; // breathing room after narration ends
+export const MIN_SEG_SEC = 2.0;
 // Readability first: white text on a near-opaque black outline + soft drop
-// shadow keeps captions legible over both bright skies and dark interiors,
-// and the slightly larger face with extra bottom margin keeps the line clear
-// of the action-safe edge (P1 subtitle-quality feedback).
+// shadow keeps captions legible over both bright skies and dark interiors.
+// Face size tuned for PHONE playback (the 2.7-min review's "captions are
+// relatively small" note): measured on a 1080p test frame, FontSize 22
+// renders ~58 px of glyph height ≈ 5.4% of frame height — the Netflix-style
+// comfort zone — while the 138 px bottom margin stays far inside the
+// action-safe edge.
 const SUBTITLE_STYLE =
-  "FontName=Noto Sans SC,FontSize=17,PrimaryColour=&H00FFFFFF,OutlineColour=&H20000000,BorderStyle=1,Outline=2.2,Shadow=1,Alignment=2,MarginV=34";
+  "FontName=Noto Sans SC,FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H20000000,BorderStyle=1,Outline=2.4,Shadow=1.1,Alignment=2,MarginV=36";
+/** Vertical-frame caption style (slides mode opt-in) — inside the Shorts safe zone. */
+const SUBTITLE_STYLE_VERTICAL =
+  "FontName=Noto Sans SC,FontSize=19,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H8C000000,BorderStyle=1,Outline=2.2,Shadow=0,Alignment=2,MarginV=190";
 /** Subtle finishing grade — a touch of contrast/saturation + soft vignette. */
 const GRADE = "eq=contrast=1.05:saturation=1.08,vignette=PI/5";
 
@@ -62,17 +87,23 @@ export interface ResolvedTrack {
   gain: number; // linear bed gain (track is anchored at -16 LUFS)
   fadeInSec: number;
   fadeOutSec: number;
+  /** How hard the bed ducks under the voice (audiomix.ts catalog). */
+  duckIntensity: DuckIntensity;
 }
 
 export interface RenderOptions {
   videoId: string;
   scenes: Scene[];
-  mode: "kenburns" | "animated" | "stock";
+  mode: "kenburns" | "animated" | "stock" | "slides";
   burnSubtitles: boolean;
   smartCaptions: boolean; // audio-synced cues (silence + ASR alignment) vs one caption per scene
   music: boolean;
   musicNiche?: string; // selects the per-niche music bed profile (drone fallback)
   musicTrack?: ResolvedTrack | null; // library track — wins over the drone when set
+  /** Ducking intensity for the synthesized-drone fallback path. */
+  musicDuck?: DuckIntensity;
+  /** Sound-effect cues on/off (Settings → Sound; default on). */
+  sfx?: boolean;
   sceneLimit?: number; // render only the first N scenes (preview render)
   /** Smart Motion settings (null/undefined = defaults — Smart Motion on, 12%). */
   motion?: MotionSettings | null;
@@ -80,6 +111,8 @@ export interface RenderOptions {
   transition?: TransitionSettings | null;
   /** Video-level context so scene classification can read tone/niche. */
   motionContext?: SceneContext;
+  /** Video topic — drives the slide deck's art direction (slides mode). */
+  topic?: string;
   onProgress?: (current: number, total: number, label: string) => void;
 }
 
@@ -87,35 +120,24 @@ export interface RenderResult {
   fileName: "final.mp4" | "preview.mp4";
   durationSec: number;
   fileBytes: number;
+  /** Frame geometry — "9:16" for keynote-slide renders, "16:9" otherwise. */
+  aspect: "16:9" | "9:16";
   /** Designed black-dip windows (fadeblack blends) for the transition-aware QC gate. */
   blackWindows?: [number, number][];
 }
 
-/** Run ffmpeg/ffprobe, surfacing the useful tail of stderr on failure. */
+/** Run ffmpeg/ffprobe, surfacing the useful tail of stderr on failure.
+ * Uses the zombie-aware runner (proc.ts): under bun, after Playwright has
+ * lived in this process, the runtime intermittently stops reaping children —
+ * ffmpeg finishes but execFile's promise never resolves. runProcess decides
+ * completion itself, so a hung reaper can't stall a render. */
 async function run(
   bin: string,
   args: string[],
   timeoutMs = 10 * 60 * 1000
 ): Promise<string> {
-  try {
-    const { stdout, stderr } = await execFileAsync(bin, args, {
-      timeout: timeoutMs,
-      maxBuffer: 10 * 1024 * 1024,
-    });
-    return stdout.toString() || stderr.toString();
-  } catch (err) {
-    const e = err as { stderr?: string; message?: string };
-    // x264 writes its progress frames with \r, so everything since the last
-    // \n lands in ONE giant line and the real error sits at its very end.
-    // Normalize \r to \n, then keep the tail — from the END, not the front
-    // (the banner/options lines can exceed 500 chars on their own).
-    const lines = (e.stderr ?? e.message ?? "")
-      .replace(/\r/g, "\n")
-      .split("\n")
-      .filter((l) => l.trim().length > 0);
-    const tail = lines.slice(-5).join(" | ").slice(-500);
-    throw new Error(`${bin} failed: ${tail}`);
-  }
+  const { stdout, stderr } = await runProcess(bin, args, { timeoutMs });
+  return stdout || stderr;
 }
 
 /** Media duration in seconds via ffprobe. */
@@ -283,7 +305,7 @@ export function musicProfileForNiche(niche: string | undefined | null): MusicPro
 }
 
 /** Build the aevalsrc expression for a profile's breathing pad. */
-function droneSource(profile: MusicProfile): string {
+export function droneSource(profile: MusicProfile): string {
   const tones = profile.partials
     .map(([f, g]) => `${g.toFixed(4)}*sin(2*PI*${f}*t)`)
     .join("+");
@@ -298,9 +320,10 @@ async function buildSegment(opts: {
   videoId: string;
   scene: Scene;
   dur: number;
-  mode: "kenburns" | "animated" | "stock";
+  mode: "kenburns" | "animated" | "stock" | "slides";
   motion: MotionSettings;
   plan?: MotionScenePlan;
+  sfx: boolean;
   outPath: string;
 }): Promise<void> {
   const { scene, dur, mode, motion, plan, outPath } = opts;
@@ -318,6 +341,37 @@ async function buildSegment(opts: {
     "-y", outPath,
   ];
 
+  // Keynote slides: the designed PNG IS the frame — 9:16 geometry, the
+  // pipeline's finishing grade would only muddy its tuned palette. The still
+  // enters ONCE and zoompan emits the shot (no looped-image demuxer — large
+  // looped PNGs deadlock this ffmpeg build's teardown).
+  if (mode === "slides") {
+    const slidePath = slidePngPath(opts.videoId, scene.index);
+    if (!fs.existsSync(slidePath))
+      throw new Error(`Scene ${scene.index} has no slide image — the slide deck step was skipped`);
+    const vChain = slideSegmentGraph({
+      dur,
+      plan:
+        plan ?? {
+          sceneType: "standard",
+          move: "Static hold",
+          shots: [{ kind: "hold", zStart: 1, zEnd: 1, focal: { x: 0.5, y: 0.5 }, travel: 0, sec: 99 }],
+          staticImage: true,
+        },
+      settings: motion,
+      fps: FPS,
+    });
+    const aChain = await sceneAudioChain(opts.videoId, scene, leadMs, opts.sfx, dur);
+    await run("ffmpeg", [
+      "-i", slidePath,
+      "-i", wav,
+      ...(await sfxInputs(opts.sfx, scene)),
+      "-filter_complex", `${vChain};${aChain}`,
+      ...common,
+    ]);
+    return;
+  }
+
   if (mode === "stock") {
     // Hybrid: matched stock footage when the scene has a clip on disk,
     // otherwise fall through to the Smart Motion art path below.
@@ -325,11 +379,11 @@ async function buildSegment(opts: {
       ? path.join(dir, scene.stock.file)
       : null;
     if (clip && fs.existsSync(clip)) {
-      const aChain = await sceneAudioChain(opts.videoId, scene, leadMs);
+      const aChain = await sceneAudioChain(opts.videoId, scene, leadMs, opts.sfx, dur);
       await run("ffmpeg", [
         "-stream_loop", "-1", "-t", dur.toFixed(3), "-i", clip,
         "-i", wav,
-        ...(await sfxInputs(opts.videoId, scene)),
+        ...(await sfxInputs(opts.sfx, scene)),
         "-filter_complex", `[0:v]${GRADE}[v];${aChain}`,
         ...common,
       ]);
@@ -348,21 +402,21 @@ async function buildSegment(opts: {
       aspect: "16:9",
       grade: GRADE,
     });
-    const aChain = await sceneAudioChain(opts.videoId, scene, leadMs);
+    const aChain = await sceneAudioChain(opts.videoId, scene, leadMs, opts.sfx, dur);
     await run("ffmpeg", [
       "-loop", "1", "-framerate", String(FPS), "-t", dur.toFixed(3), "-i", img,
       "-i", wav,
-      ...(await sfxInputs(opts.videoId, scene)),
+      ...(await sfxInputs(opts.sfx, scene)),
       "-filter_complex", `${vChain};${aChain}`,
       ...common,
     ]);
   } else {
     const clip = await ensureSceneClip(opts.videoId, scene);
-    const aChain = await sceneAudioChain(opts.videoId, scene, leadMs);
+    const aChain = await sceneAudioChain(opts.videoId, scene, leadMs, opts.sfx, dur);
     await run("ffmpeg", [
       "-stream_loop", "-1", "-t", dur.toFixed(3), "-i", clip,
       "-i", wav,
-      ...(await sfxInputs(opts.videoId, scene)),
+      ...(await sfxInputs(opts.sfx, scene)),
       "-filter_complex", `[0:v]${GRADE}[v];${aChain}`,
       ...common,
     ]);
@@ -372,14 +426,19 @@ async function buildSegment(opts: {
 /**
  * Audio graph for one scene: narration delayed to its lead-in, optionally
  * mixed with the scene's synthesized SFX cue fired right at the cut.
+ * `sfx` = false (Settings → Sound) silences every cue for the render.
+ * The voice pad is FINITE (apad whole_dur) — every stream in the graph then
+ * ends on its own, so the ffmpeg process always tears down cleanly.
  */
 async function sceneAudioChain(
   videoId: string,
   scene: Scene,
-  leadMs: number
+  leadMs: number,
+  sfx: boolean,
+  totalSec: number
 ): Promise<string> {
-  const voice = `[1:a]adelay=${leadMs}:all=1,apad[voice]`;
-  const sfxPath = await ensureSfx(scene.sfx);
+  const voice = `[1:a]adelay=${leadMs}:all=1,apad=whole_dur=${totalSec.toFixed(3)}[voice]`;
+  const sfxPath = sfx ? await ensureSfx(scene.sfx) : null;
   if (!sfxPath) return `${voice};[voice]anull[a]`;
   // SFX lands 40 ms after the cut so the impact sits with the first frame,
   // not in the file's leading edge; ride ~9 dB under the narration — these
@@ -390,9 +449,9 @@ async function sceneAudioChain(
     `[voice][sfx]amix=inputs=2:duration=first:normalize=0:weights='1 0.35'[a]`;
 }
 
-/** ffmpeg input args for the scene's SFX cue (empty when the scene has none). */
-async function sfxInputs(videoId: string, scene: Scene): Promise<string[]> {
-  const sfxPath = await ensureSfx(scene.sfx);
+/** ffmpeg input args for the scene's SFX cue (empty when disabled/none). */
+async function sfxInputs(sfx: boolean, scene: Scene): Promise<string[]> {
+  const sfxPath = sfx ? await ensureSfx(scene.sfx) : null;
   return sfxPath ? ["-i", sfxPath] : [];
 }
 
@@ -495,9 +554,19 @@ async function stitchSegments(opts: {
 }
 
 /**
- * Final pass — burn subtitles and/or lay a soft ambient music bed under the
- * narration, with faststart for instant web playback. Skips re-encoding when
- * neither effect is requested.
+ * Final pass — burn subtitles and lay the ducked music bed under the
+ * narration, ALWAYS loudness-normalized to the delivery targets.
+ *
+ * Three stages (audiomix.ts contract), fixing the -24.6 LUFS hole where a
+ * narration-only render shipped raw TTS audio:
+ *   A. Build the pre-normalization mix (WAV next to the base, auto-cleaned):
+ *      music → voice split + ducked bed + amix; no music → measure the base
+ *      audio directly.
+ *   B. Measure it — one loudnorm analysis pass (I / TP / LRA / threshold).
+ *   C. Normalize + finish — subtitles burn + LINEAR two-pass loudnorm
+ *      (-16 LUFS, -1 dBTP) + safety limiter → AAC. Dynamic single-pass only
+ *      when measurement was impossible (pure silence), so the output is
+ *      never raw.
  */
 async function finalize(opts: {
   base: string;
@@ -506,94 +575,92 @@ async function finalize(opts: {
   music: boolean;
   musicNiche?: string;
   musicTrack?: ResolvedTrack | null;
+  musicDuck?: DuckIntensity;
   srtPath: string | null;
   scenes: Scene[];
   segments: { start: number; duration: number }[];
+  /** Caption look — vertical style for 9:16 renders (undefined = 16:9 default). */
+  subtitleStyle?: string;
 }): Promise<void> {
   const { base, out, burnSubtitles, music } = opts;
+  const workDir = path.dirname(base);
 
   // Library track with a readable file wins; otherwise the synthesized drone.
   const track =
     music && opts.musicTrack && fs.existsSync(opts.musicTrack.filePath)
       ? opts.musicTrack
       : null;
-
-  if (!burnSubtitles && !music) {
-    // Pure remux — put the moov atom up front for streaming playback.
-    await run("ffmpeg", ["-i", base, "-c", "copy", "-movflags", "+faststart", "-y", out]);
-    return;
-  }
-
+  const duck = sanitizeDuckIntensity(track?.duckIntensity ?? opts.musicDuck);
   const total = await probeDuration(base);
-  const filters: string[] = [];
 
-  if (burnSubtitles && opts.srtPath) {
-    filters.push(
-      `[0:v]subtitles=f='${opts.srtPath}':force_style='${SUBTITLE_STYLE}'[v]`
-    );
-  } else {
-    filters.push("[0:v]null[v]");
-  }
-
+  // ---- Stage A: the pre-normalization mix ----
+  const mixWav = path.join(workDir, "mix.wav");
   if (music) {
-    // Bed chain: loop the track to length (or synthesize the niche drone),
-    // trim, fade, then DUCK under the voice via sidechain compression — the
-    // bed swells in narration gaps and drops hard while anyone speaks
-    // (broadcast-style). loudnorm to YouTube's -14 LUFS + a safety limiter.
+    const args: string[] = ["-i", base];
+    const filters: string[] = [voiceSplitChain()];
     if (track) {
       const fadeIn = Math.min(track.fadeInSec, Math.max(total / 3, 0.2));
       const fadeOut = Math.min(track.fadeOutSec, Math.max(total / 3, 0.2));
+      args.push("-stream_loop", "-1", "-i", track.filePath);
       filters.push(
-        "[0:a]aformat=channel_layouts=stereo,asplit=2[voice][sc]",
-        `[1:a]aformat=channel_layouts=stereo,atrim=duration=${total.toFixed(3)},asetpts=N/SR/TB,` +
-          `volume=${track.gain.toFixed(3)},afade=t=in:d=${fadeIn.toFixed(2)},` +
-          `afade=t=out:st=${Math.max(total - fadeOut, 0).toFixed(2)}:d=${fadeOut.toFixed(2)}[music]`,
-        `[music][sc]sidechaincompress=threshold=0.03:ratio=9:attack=25:release=450[mduck]`,
-        // loudnorm upsamples internally (up to 192 kHz) — aresample brings the
-        // final track back to the pipeline's 48 kHz before the AAC encode,
-        // otherwise exports ship as 96 kHz audio (some players/platforms
-        // choke, and QC loudness passes slow down).
-        `[voice][mduck]amix=inputs=2:duration=first:normalize=0:weights='1 1',` +
-          `loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.95,aresample=48000[a]`
+        bedChain({ totalSec: total, gain: track.gain, fadeInSec: fadeIn, fadeOutSec: fadeOut }),
+        duckChain(duck),
+        mixTail(1, 1)
       );
     } else {
       const profile = musicProfileForNiche(opts.musicNiche);
-      filters.push(
-        "[0:a]aformat=channel_layouts=stereo,asplit=2[voice][sc]",
-        `[1:a]aformat=channel_layouts=stereo,lowpass=f=${profile.lowpassHz},afade=t=in:d=3,` +
-          `afade=t=out:st=${Math.max(total - 4, 0).toFixed(2)}:d=4[music]`,
-        `[music][sc]sidechaincompress=threshold=0.03:ratio=9:attack=25:release=450[mduck]`,
-        `[voice][mduck]amix=inputs=2:duration=first:normalize=0:weights='1 0.85',` +
-          `loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.95,aresample=48000[a]`
-      );
-    }
-  } else {
-    filters.push("[0:a]anull[a]");
-  }
-
-  const args = ["-i", base];
-  if (music) {
-    if (track) {
-      // Loop the library track enough times to cover the video; atrim +
-      // amix(duration=first) bound the actual output.
-      args.push("-stream_loop", "-1", "-i", track.filePath);
-    } else {
       args.push(
-        "-f", "lavfi", "-t", total.toFixed(3), "-i", droneSource(musicProfileForNiche(opts.musicNiche))
+        "-f", "lavfi", "-t", total.toFixed(3), "-i", droneSource(profile)
+      );
+      filters.push(
+        droneBedChain({ totalSec: total, lowpassHz: profile.lowpassHz, fadeInSec: 3, fadeOutSec: 4 }),
+        duckChain(duck),
+        mixTail(1, 0.85)
       );
     }
+    await run("ffmpeg", [
+      ...args,
+      "-filter_complex", filters.join(";"),
+      "-map", "[mix]",
+      "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
+      "-y", mixWav,
+    ]);
   }
 
-  args.push(
-    "-filter_complex", filters.join(";"),
-    "-map", "[v]", "-map", "[a]"
-  );
-  if (burnSubtitles)
-    args.push("-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p");
-  else args.push("-c:v", "copy");
-  args.push("-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", "-y", out);
+  // ---- Stage B: measure (the mix, or the base audio when music is off) ----
+  const measured = await measureLoudness(music ? mixWav : base);
 
-  await run("ffmpeg", args, 15 * 60 * 1000);
+  // ---- Stage C: subtitles + normalization + encode ----
+  // Subtitle burn re-encodes video through the filter graph; without a burn
+  // the video is STREAM-COPIED — a `[0:v]null[v]` graph fed to `-c:v copy`
+  // is illegal ffmpeg (filtering + streamcopy are mutually exclusive, and the
+  // copy also saved the no-caption path a pointless full re-encode).
+  const burn = burnSubtitles && Boolean(opts.srtPath);
+  const stageC = burn
+    ? ([
+        "-filter_complex",
+        `[0:v]subtitles=f='${opts.srtPath}':force_style='${opts.subtitleStyle ?? SUBTITLE_STYLE}'[v];[1:a]${normalizationFilter(measured)}[a]`,
+        "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+      ] as string[])
+    : ([
+        "-filter_complex", `[1:a]${normalizationFilter(measured)}[a]`,
+        "-map", "0:v:0", "-map", "[a]",
+        "-c:v", "copy",
+      ] as string[]);
+
+  await run(
+    "ffmpeg",
+    [
+      "-i", base,
+      "-i", music ? mixWav : base,
+      ...stageC,
+      "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+      "-movflags", "+faststart", "-y", out,
+    ],
+    15 * 60 * 1000
+  );
+  fs.rmSync(mixWav, { force: true });
 }
 
 /** Read the final or preview MP4 (or a byte range of it). */
@@ -621,9 +688,11 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
 
   if (scenes.length === 0) throw new Error("No scenes to render");
 
-  // Validate inputs up-front with actionable messages.
+  // Validate inputs up-front with actionable messages. Slides mode does not
+  // need storyboard art (the deck is designed from the script) — narration
+  // timing is still mandatory in every mode.
   for (const scene of scenes) {
-    if (!fs.existsSync(path.join(dir, sceneImageFile(scene.index))))
+    if (opts.mode !== "slides" && !fs.existsSync(path.join(dir, sceneImageFile(scene.index))))
       throw new Error(`Scene ${scene.index} has no storyboard image — generate the storyboard first`);
     if (!fs.existsSync(path.join(dir, sceneWavFile(scene.index))))
       throw new Error(`Scene ${scene.index} has no voiceover — generate the voiceover first`);
@@ -652,6 +721,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     // Smart Motion — one camera plan per scene, sized to each scene's real
     // duration (defaults to Smart Motion on when settings are absent).
     // Stock mode: only the fallback scenes (no footage) need a camera plan.
+    // Slides mode: deterministic gentle push plans (no LLM camera pass).
     const motion = sanitizeMotion(opts.motion ?? null);
     const needsPlan =
       opts.mode === "kenburns" ||
@@ -660,13 +730,42 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     const plans =
       opts.mode === "animated"
         ? []
-        : needsPlan
-          ? planSceneMovements(scenes, motion, {
-              aspect: "16:9",
-              ctx: opts.motionContext,
-              durationsSec: durations,
-            })
-          : [];
+        : opts.mode === "slides"
+          ? scenes.map((s) => slideMotionPlan(s, motion))
+          : needsPlan
+            ? planSceneMovements(scenes, motion, {
+                aspect: "16:9",
+                ctx: opts.motionContext,
+                durationsSec: durations,
+              })
+            : [];
+
+    // 1.5) Keynote slides — design the deck (LLM, cached) and screenshot it.
+    // (Cancellation rides the same onProgress checkpoints as every stage —
+    // the deck render itself is ~1 s per slide, no mid-pass checkpoint.)
+    if (opts.mode === "slides") {
+      report(scenes.length, "Designing slide deck");
+      const deck = await planSlides(opts.videoId, scenes, {
+        topic: opts.topic ?? null,
+        niche: opts.motionContext?.niche ?? null,
+        tone: opts.motionContext?.tone ?? null,
+      });
+      try {
+        await renderSlidePngs(
+          opts.videoId,
+          scenes.map((scene, i) => ({ scene, spec: deck.specs[i] })),
+          {
+            onProgress: (_done, _total, label) => {
+              opts.onProgress?.(scenes.length + 1, scenes.length + 1, label);
+            },
+          }
+        );
+      } catch (err) {
+        throw new Error(
+          `Slide rendering failed — Playwright/Chromium is required for keynote slides (${String(err).slice(0, 160)})`
+        );
+      }
+    }
 
     // 2) One segment per scene (visual + narration audio, exact duration).
     const segPaths: string[] = [];
@@ -686,6 +785,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         mode: opts.mode,
         motion,
         plan: plans[i],
+        sfx: opts.sfx !== false,
         outPath: segPath,
       });
       segPaths.push(segPath);
@@ -745,9 +845,11 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       music: opts.music,
       musicNiche: opts.musicNiche,
       musicTrack: opts.musicTrack,
+      musicDuck: opts.musicDuck,
       srtPath,
       scenes,
       segments,
+      subtitleStyle: opts.mode === "slides" ? SUBTITLE_STYLE_VERTICAL : undefined,
     });
 
     // Always refresh the exported caption track for the ZIP (full render only).
@@ -763,6 +865,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       fileName: outName,
       durationSec,
       fileBytes: fs.statSync(outPath).size,
+      aspect: opts.mode === "slides" ? "9:16" : "16:9",
       blackWindows:
         trans.style === "fadeblack" && scenes.length > 1
           ? fadeblackWindows(durations, trans.durationSec)
