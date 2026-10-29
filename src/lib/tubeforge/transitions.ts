@@ -127,6 +127,25 @@ export function transitionTotalDuration(
   return Math.max(sum - (durationsSec.length - 1) * sanitizeTransitionDuration(durationSec), 0);
 }
 
+/**
+ * Expected black-dip windows on the BLENDED timeline when the style dips
+ * through black (fadeblack). The QC gate exempts black frames inside these
+ * windows — a "Dip to Black" transition is a designed beat, not a defect.
+ * Window: [offset − 0.15, offset + d + 0.15] — generous to cover encoder
+ * timing jitter around the plateau.
+ */
+export function fadeblackWindows(
+  durationsSec: number[],
+  durationSec: number
+): [number, number][] {
+  if (durationsSec.length < 2) return [];
+  const d = sanitizeTransitionDuration(durationSec);
+  return transitionOffsets(durationsSec, d).map((off) => [
+    Math.max(off - 0.15, 0),
+    off + d + 0.15,
+  ]);
+}
+
 // ---------- filter graph (pure string builder) ----------
 
 export interface TransitionGraph {

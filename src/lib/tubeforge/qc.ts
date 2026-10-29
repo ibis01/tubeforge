@@ -54,7 +54,7 @@ async function ffprobeJson(file: string) {
   };
 }
 
-/** One combined ffmpeg analysis pass: black frames + volume + silence. */
+/** One combined ffmpeg analysis pass: black frames + frozen frames + volume + silence. */
 async function analyzePass(file: string) {
   try {
     const { stderr } = await execFileAsync(
@@ -62,7 +62,7 @@ async function analyzePass(file: string) {
       [
         "-hide_banner", "-nostats",
         "-i", file,
-        "-vf", "blackdetect=d=0.25:pix_th=0.10",
+        "-vf", "blackdetect=d=0.25:pix_th=0.10,freezedetect=n=0.004:d=0.30",
         "-af", "volumedetect,silencedetect=n=-40dB:d=1.5",
         "-f", "null", "-",
       ],
@@ -72,6 +72,28 @@ async function analyzePass(file: string) {
   } catch (err) {
     const e = err as { stderr?: string };
     return e.stderr ?? "";
+  }
+}
+
+/** Mean volume (dBFS) of the file's final 0.4 s — abrupt-ending detector. */
+async function tailVolume(file: string, durationSec: number): Promise<number | null> {
+  if (!Number.isFinite(durationSec) || durationSec < 3) return null;
+  try {
+    const { stderr } = await execFileAsync(
+      "ffmpeg",
+      [
+        "-hide_banner", "-nostats",
+        "-ss", Math.max(0, durationSec - 0.4).toFixed(3),
+        "-i", file,
+        "-af", "volumedetect",
+        "-f", "null", "-",
+      ],
+      { timeout: 3 * 60 * 1000, maxBuffer: 8 * 1024 * 1024 }
+    );
+    const m = stderr.toString().match(/mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/);
+    return m ? Number(m[1]) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -121,12 +143,19 @@ export async function runQcReport(opts: {
   videoDuration: number;
   narrationSec: number | null;
   srtPath: string | null;
+  /** Designed black-dip windows (fadeblack transitions) exempt from the black-frame check. */
+  expectedBlack?: [number, number][];
 }): Promise<QcReport> {
   const checks: QcCheck[] = [];
   const exists = fs.existsSync(opts.mp4Path);
+  const expectedBlack = opts.expectedBlack ?? [];
+
+  const isDesignedBlack = (start: number): boolean =>
+    expectedBlack.some(([lo, hi]) => start >= lo - 0.1 && start <= hi + 0.1);
 
   // 1) Playability — streams + duration readable.
   let duration = opts.videoDuration;
+  let dimensions: { width?: number; height?: number } | null = null;
   if (exists) {
     try {
       const info = await ffprobeJson(opts.mp4Path);
@@ -134,6 +163,7 @@ export async function runQcReport(opts: {
       const hasAudio = Boolean(info.streams?.some((s) => s.codec_type === "audio" && s.codec_name === "aac"));
       const probed = Number(info.format?.duration ?? 0);
       if (Number.isFinite(probed) && probed > 0) duration = probed;
+      dimensions = info.streams?.find((s) => s.codec_type === "video") ?? null;
       checks.push({
         id: "playable",
         label: "Plays as a valid MP4 (H.264 video + AAC audio)",
@@ -167,14 +197,42 @@ export async function runQcReport(opts: {
     // 3–6) Combined analysis pass.
     const stderr = await analyzePass(opts.mp4Path);
 
-    const blacks = [...stderr.matchAll(/\[blackdetect[^\]]*\]\s*black_start:(\d+(?:\.\d+)?)/g)];
+    const blacks = [...stderr.matchAll(/\[blackdetect[^\]]*\]\s*black_start:(\d+(?:\.\d+)?)/g)]
+      .map((m) => Number(m[1]));
+    const unexpected = blacks.filter((t) => !isDesignedBlack(t));
     checks.push({
       id: "black-frames",
-      label: "No black frames",
-      pass: blacks.length === 0,
-      value: blacks.length === 0 ? "none detected" : `${blacks.length} black interval${blacks.length > 1 ? "s" : ""}`,
-      detail: blacks.slice(0, 5).map((m) => `at ${m[1]}s`).join(", "),
+      label: "No unexplained black frames",
+      pass: unexpected.length === 0,
+      value: unexpected.length === 0
+        ? blacks.length > expectedBlack.length
+          ? `${expectedBlack.length} designed transition dip${expectedBlack.length === 1 ? "" : "s"} only`
+          : "none detected"
+        : `${unexpected.length} unexplained interval${unexpected.length > 1 ? "s" : ""}`,
+      detail: unexpected.slice(0, 5).map((s) => `at ${s}s`).join(", ") ||
+        (blacks.length ? `all ${blacks.length} inside designed fadeblack windows` : ""),
     });
+
+    const freezes = [...stderr.matchAll(/\[freezedetect[^\]]*\]\s*freeze_start:(\d+(?:\.\d+)?)/g)]
+      .map((m) => Number(m[1]));
+    checks.push({
+      id: "frozen-frames",
+      label: "No frozen imagery (motion everywhere)",
+      pass: freezes.length === 0,
+      value: freezes.length === 0 ? "none detected" : `${freezes.length} frozen run${freezes.length > 1 ? "s" : ""}`,
+      detail: freezes.slice(0, 4).map((s) => `at ${s}s`).join(", "),
+    });
+
+    if (dimensions?.width && dimensions?.height) {
+      const ratio = dimensions.width / dimensions.height;
+      const ok = Math.abs(ratio - 16 / 9) <= 0.02;
+      checks.push({
+        id: "aspect",
+        label: "16:9 frame (no squeeze/crop defects)",
+        pass: ok,
+        value: `${dimensions.width}x${dimensions.height}`,
+      });
+    }
 
     const maxVol = stderr.match(/max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/);
     const peak = maxVol ? Number(maxVol[1]) : null;
@@ -204,6 +262,17 @@ export async function runQcReport(opts: {
       label: "Broadcast loudness (-14 LUFS target)",
       pass: lufs !== null && lufs >= -19 && lufs <= -9,
       value: lufs === null ? "not measured" : `${lufs.toFixed(1)} LUFS`,
+    });
+
+    // 7b) Abrupt ending — the final 0.4 s should sit in a fade/silence, not
+    // mid-beat. Music beds fade out by design; a hard audio cut reads as a
+    // glitch (and YouTube viewers notice).
+    const tail = await tailVolume(opts.mp4Path, duration);
+    checks.push({
+      id: "tail-fade",
+      label: "Ends on a fade, not an abrupt cut",
+      pass: tail === null ? true : tail <= -25,
+      value: tail === null ? "too short to measure" : `final 0.4s at ${tail.toFixed(1)} dB mean`,
     });
   }
 
@@ -240,11 +309,17 @@ export async function runQcReport(opts: {
 }
 
 /** Standard QC for a rendered video (paths under uploads/<videoId>/). */
-export function qcForVideo(videoId: string, videoDuration: number, narrationSec: number | null): Promise<QcReport> {
+export function qcForVideo(
+  videoId: string,
+  videoDuration: number,
+  narrationSec: number | null,
+  expectedBlack?: [number, number][]
+): Promise<QcReport> {
   return runQcReport({
     mp4Path: path.join(UPLOAD_ROOT, videoId, "final.mp4"),
     videoDuration,
     narrationSec,
     srtPath: path.join(UPLOAD_ROOT, videoId, "subtitles.srt"),
+    expectedBlack,
   });
 }

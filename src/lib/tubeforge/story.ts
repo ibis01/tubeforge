@@ -643,7 +643,15 @@ function srtTime(sec: number): string {
   return `${pad(h)}:${pad(m)}:${pad(s)},${pad(milli, 3)}`;
 }
 
-/** SRT built from explicit per-scene [start, duration] pairs (used by the compositor). */
+/**
+ * SRT built from explicit per-scene [start, duration] pairs (used by the compositor).
+ *
+ * Overlap guard: on a BLENDED timeline the next scene's caption starts d
+ * seconds before this segment's original end (the blend window is shared), so
+ * raw start+duration windows overlap by exactly the transition length. Each
+ * cue is capped at the next cue's start minus a 50 ms refresh gap — QC's
+ * caption check (and burned-in readability) require non-overlapping cues.
+ */
 export function buildSrtFromSegments(
   scenes: Scene[],
   segments: { start: number; duration: number }[]
@@ -653,8 +661,14 @@ export function buildSrtFromSegments(
     const seg = segments[i];
     if (!seg) return;
     const caption = scene.caption || scene.title;
+    let end = seg.start + seg.duration;
+    const next = segments[i + 1];
+    if (next && next.start - 0.05 < end) {
+      // Overlap with the next cue — cap, but keep a readable minimum.
+      end = Math.max(next.start - 0.05, seg.start + 0.4);
+    }
     parts.push(
-      `${i + 1}\n${srtTime(seg.start)} --> ${srtTime(seg.start + seg.duration)}\n${caption}\n`
+      `${i + 1}\n${srtTime(seg.start)} --> ${srtTime(Math.max(end, seg.start + 0.4))}\n${caption}\n`
     );
   });
   return parts.join("\n");

@@ -6,7 +6,7 @@ import { generateVoiceover, readMedia } from "@/lib/tubeforge/ai";
 import { generateSceneVoiceovers, parseScenes } from "@/lib/tubeforge/story";
 import { ingestCustomAudio, MAX_AUDIO_BYTES, isValidAudioUrl } from "@/lib/tubeforge/voice";
 import { deriveStatus } from "@/lib/tubeforge/status";
-import { startJob, setJobProgress } from "@/lib/tubeforge/jobs";
+import { startJob, setJobProgress, isJobRunning } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
 import { errorText } from "@/lib/tubeforge/redact";
 
@@ -104,8 +104,25 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
+  // Stage interlock: rendering while the voiceover is being regenerated would
+  // mix OLD scene WAVs (already re-spoken) with NEW ones mid-write — the
+  // same class of bug as reading a stale hasVoiceover flag.
+  if (isJobRunning(id, "render"))
+    return NextResponse.json(
+      { error: "A render is still running on this video — wait for it to finish before regenerating the voiceover" },
+      { status: 409 }
+    );
+
   // Clear any stale error from a previous failed attempt before polling starts.
-  await db.video.update({ where: { id }, data: { error: null } });
+  // ALSO drop the stale hasVoiceover/audioDuration flags UPFRONT: this job
+  // rewrites every scene WAV, and clients polling for "hasVoiceover" would
+  // otherwise report completion from the PREVIOUS run while the new audio is
+  // still being spoken (which lets a render start mid-rewrite on half-old,
+  // half-new narration — observed live in the E2E re-cert).
+  await db.video.update({
+    where: { id },
+    data: { error: null, hasVoiceover: false, audioDuration: null },
+  });
 
   const accepted = await startJob(id, "voiceover", async () => {
     try {
@@ -210,10 +227,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
   });
 
-  // 202 Accepted — job already running (dedupe) or just started.
+  // 202 Accepted — job already running (dedupe) or just started. The response
+  // mirrors the CLEARED state so no client ever sees the stale flags.
+  const cleared = { ...video, hasVoiceover: false, audioDuration: null };
   return NextResponse.json(
     {
-      video: serializeVideo(video, null, { includeScenes: true }),
+      video: serializeVideo(cleared, null, { includeScenes: true }),
       accepted: true,
       generating: true,
     },

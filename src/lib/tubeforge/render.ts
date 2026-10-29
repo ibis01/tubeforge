@@ -35,6 +35,7 @@ import {
   sanitizeTransition,
   buildTransitionGraph,
   shiftSegmentsForBlend,
+  fadeblackWindows,
   type TransitionSettings,
 } from "./transitions";
 
@@ -45,8 +46,12 @@ const FPS = 30;
 const LEAD_SEC = 0.35; // silence before narration starts in each scene
 const TAIL_SEC = 0.85; // breathing room after narration ends
 const MIN_SEG_SEC = 2.0;
+// Readability first: white text on a near-opaque black outline + soft drop
+// shadow keeps captions legible over both bright skies and dark interiors,
+// and the slightly larger face with extra bottom margin keeps the line clear
+// of the action-safe edge (P1 subtitle-quality feedback).
 const SUBTITLE_STYLE =
-  "FontName=Noto Sans SC,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H64000000,BorderStyle=1,Outline=1.4,Shadow=0,Alignment=2,MarginV=30";
+  "FontName=Noto Sans SC,FontSize=17,PrimaryColour=&H00FFFFFF,OutlineColour=&H20000000,BorderStyle=1,Outline=2.2,Shadow=1,Alignment=2,MarginV=34";
 /** Subtle finishing grade — a touch of contrast/saturation + soft vignette. */
 const GRADE = "eq=contrast=1.05:saturation=1.08,vignette=PI/5";
 
@@ -81,6 +86,8 @@ export interface RenderResult {
   fileName: "final.mp4" | "preview.mp4";
   durationSec: number;
   fileBytes: number;
+  /** Designed black-dip windows (fadeblack blends) for the transition-aware QC gate. */
+  blackWindows?: [number, number][];
 }
 
 /** Run ffmpeg/ffprobe, surfacing the useful tail of stderr on failure. */
@@ -478,8 +485,12 @@ async function finalize(opts: {
           `volume=${track.gain.toFixed(3)},afade=t=in:d=${fadeIn.toFixed(2)},` +
           `afade=t=out:st=${Math.max(total - fadeOut, 0).toFixed(2)}:d=${fadeOut.toFixed(2)}[music]`,
         `[music][sc]sidechaincompress=threshold=0.03:ratio=9:attack=25:release=450[mduck]`,
+        // loudnorm upsamples internally (up to 192 kHz) — aresample brings the
+        // final track back to the pipeline's 48 kHz before the AAC encode,
+        // otherwise exports ship as 96 kHz audio (some players/platforms
+        // choke, and QC loudness passes slow down).
         `[voice][mduck]amix=inputs=2:duration=first:normalize=0:weights='1 1',` +
-          `loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.95[a]`
+          `loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.95,aresample=48000[a]`
       );
     } else {
       const profile = musicProfileForNiche(opts.musicNiche);
@@ -489,7 +500,7 @@ async function finalize(opts: {
           `afade=t=out:st=${Math.max(total - 4, 0).toFixed(2)}:d=4[music]`,
         `[music][sc]sidechaincompress=threshold=0.03:ratio=9:attack=25:release=450[mduck]`,
         `[voice][mduck]amix=inputs=2:duration=first:normalize=0:weights='1 0.85',` +
-          `loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.95[a]`
+          `loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.95,aresample=48000[a]`
       );
     }
   } else {
@@ -516,7 +527,7 @@ async function finalize(opts: {
   if (burnSubtitles)
     args.push("-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p");
   else args.push("-c:v", "copy");
-  args.push("-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-y", out);
+  args.push("-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", "-y", out);
 
   await run("ffmpeg", args, 15 * 60 * 1000);
 }
@@ -688,6 +699,10 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       fileName: outName,
       durationSec,
       fileBytes: fs.statSync(outPath).size,
+      blackWindows:
+        trans.style === "fadeblack" && scenes.length > 1
+          ? fadeblackWindows(durations, trans.durationSec)
+          : [],
     };
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

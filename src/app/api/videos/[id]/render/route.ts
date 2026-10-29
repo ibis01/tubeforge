@@ -64,6 +64,18 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { error: "Video has no scenes — generate the scene script first" },
       { status: 400 }
     );
+
+  // Stage interlock FIRST (before the hasVoiceover validation, which trips
+  // during a regen because the voiceover route clears its flags upfront):
+  // the compositor reads every scene WAV to time the cuts — a concurrent
+  // voiceover regen would feed it half-old, half-new narration (seen live:
+  // mixed stub-tone + re-spoken audio in one render).
+  if (isJobRunning(id, "voiceover"))
+    return NextResponse.json(
+      { error: "The voiceover is still regenerating — wait for it to finish before rendering" },
+      { status: 409 }
+    );
+
   if (!video.hasStoryboard)
     return NextResponse.json(
       { error: "Generate the storyboard first — there is no scene art yet" },
@@ -135,8 +147,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
       if (result.fileName === "final.mp4") {
         // Quality gate — verify the file actually plays, is in sync, on level.
+        // Transition-aware: fadeblack dips are designed beats, not defects.
         setJobProgress(id, "render", scenes.length + 1, scenes.length + 1, "Running quality checks");
-        const report = await qcForVideo(id, result.durationSec, video.audioDuration);
+        const report = await qcForVideo(id, result.durationSec, video.audioDuration, result.blackWindows);
         await db.video.update({
           where: { id },
           data: {
