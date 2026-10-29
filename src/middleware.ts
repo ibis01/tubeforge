@@ -19,6 +19,9 @@
 // explicitly opts out with TUBEFORGE_REQUIRE_LOCK=0. Recovery paths:
 //   bun run auth:reset               (unlock from the server)
 //   bun run auth:enable <password>   (lock from the server, headless)
+// Serverless (Vercel): set TUBEFORGE_AUTH_SECRET + TUBEFORGE_LOCK=1 to turn
+// the gate on (the flag file is unwritable there), then complete the one-time
+// setup screen in the browser to claim the owner password.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -58,6 +61,13 @@ const LOCK_FLAG = path.join(process.cwd(), "db", "auth.lock");
 // existsSync is a microsecond-scale syscall — check it live on every API
 // request so toggling the lock in Settings takes effect on the very next call.
 function lockFlagActive(): boolean {
+  // Serverless (Vercel & co.): the runtime filesystem is read-only/ephemeral,
+  // so a flag file can never be written there at runtime — and even a
+  // committed file would be un-toggleable without a redeploy. TUBEFORGE_LOCK=1
+  // marks the deployment as locked explicitly (pair it with
+  // TUBEFORGE_AUTH_SECRET); unlike a runtime-written file it also survives
+  // cold starts. Local development stays file-driven and unaffected.
+  if (process.env.TUBEFORGE_LOCK === "1") return true;
   try {
     return fs.existsSync(LOCK_FLAG);
   } catch {
