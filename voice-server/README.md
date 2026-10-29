@@ -6,10 +6,9 @@ MIT license — safe for monetized channels).
 
 Verified hardware: AMD Ryzen 7 8845HS (CPU-only), 32 GB RAM — works fine.
 
-> **Don't want your PC involved?** Deploy this exact server to a **free
-> Hugging Face Space** instead — permanent public URL, no credit card.
-> See [`hf-space/README.md`](hf-space/README.md). Free-tier trade-offs:
-> 2-4× slower and it sleeps when idle for ~2 days.
+> **Don't want your PC involved?** Two $0 cloud options:
+> - **Oracle Cloud Always Free VM** — 24/7, no sleep, fastest of the three hosts → [`oracle/README.md`](oracle/README.md)
+> - **Hugging Face Space** — easiest, but 2-4× slower and sleeps when idle → [`hf-space/README.md`](hf-space/README.md)
 
 ## One-time setup (Windows, ~10 minutes)
 

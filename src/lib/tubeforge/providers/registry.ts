@@ -178,7 +178,7 @@ export const TTS_PROVIDERS: ProviderMeta[] = [
       { id: "chatterbox", hint: "English — MIT, commercial-OK (recommended)" },
       { id: "chatterbox-multilingual", hint: "23 languages" },
     ],
-    note: "Free forever: runs the open-source Chatterbox model on YOUR computer or on a free Hugging Face Space (see voice-server/README.md and voice-server/hf-space/README.md). Laptop: run voice_server.py + `cloudflared tunnel --url http://localhost:8931`, paste that URL as Base URL. Space: paste its https://<you>-tubeforge-voice.hf.space URL. Either way, set your --key / VOICE_KEY secret as the API key. CPU speed — slower than paid APIs, but $0 and unlimited.",
+    note: "Free forever: open-source Chatterbox (MIT) on a host you control — your PC (voice-server/README.md), an Oracle Cloud Always Free VM, 24/7 (voice-server/oracle/README.md), or a free Hugging Face Space (voice-server/hf-space/README.md). Paste the host's URL as Base URL and its secret (--key / VOICE_KEY) as the API key. CPU speed — slower than paid APIs, but $0, no rate limits.",
   },
   {
     id: "openai",
