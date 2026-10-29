@@ -20,7 +20,7 @@ let passed = 0;
 let failed = 0;
 const ok = (cond, label) => {
   console.log(`${cond ? "PASS" : "FAIL"}  ${label}`);
-  cond ? passed++ : failed++;
+  if (cond) passed++; else failed++;
 };
 
 async function jfetch(path, opts = {}) {

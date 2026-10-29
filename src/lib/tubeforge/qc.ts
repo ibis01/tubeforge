@@ -17,6 +17,15 @@
 //
 // The render never fails because of QC — the report drives the QC badge in
 // the UI so a human can inspect before export/upload.
+//
+// Every check carries a THREE-STATE status:
+//   "pass"       — measured and within bounds
+//   "fail"       — measured and out of bounds
+//   "unmeasured" — the analysis could not run (ffmpeg crashed, timed out,
+//                  file unreadable, clip too short to sample)
+// A check that never ran must never read as clean: "unmeasured" fails the
+// overall report so the badge keeps asking a human to look. (Before this
+// distinction, a crashed analysis pass silently reported a spotless file.)
 
 import { execFile } from "child_process";
 import fs from "fs";
@@ -34,12 +43,36 @@ import {
 const execFileAsync = promisify(execFile);
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
+export type QcStatus = "pass" | "fail" | "unmeasured";
+
 export interface QcCheck {
   id: string;
   label: string;
+  /** Authoritative result: measured-and-ok / measured-and-bad / could-not-run. */
+  status: QcStatus;
+  /** Legacy convenience — true only when status === "pass". Older reports
+   * stored just this flag, and unmeasured checks slipped through as `true`. */
   pass: boolean;
   value: string;
   detail?: string;
+}
+
+/** Build a check with the derived legacy flag (one source of truth). */
+function check(
+  id: string,
+  label: string,
+  status: QcStatus,
+  value: string,
+  detail?: string
+): QcCheck {
+  return {
+    id,
+    label,
+    status,
+    pass: status === "pass",
+    value,
+    ...(detail !== undefined ? { detail } : {}),
+  };
 }
 
 export interface QcReport {
@@ -67,8 +100,10 @@ async function ffprobeJson(file: string) {
   };
 }
 
-/** One combined ffmpeg analysis pass: black frames + frozen frames + volume + silence. */
-async function analyzePass(file: string) {
+/** One combined ffmpeg analysis pass: black frames + frozen frames + volume + silence.
+ * `ok: false` means ffmpeg exited non-zero — whatever stderr came back is
+ * PARTIAL, so the detectors below must report "unmeasured", never "clean". */
+async function analyzePass(file: string): Promise<{ stderr: string; ok: boolean }> {
   try {
     const { stderr } = await execFileAsync(
       "ffmpeg",
@@ -81,10 +116,10 @@ async function analyzePass(file: string) {
       ],
       { timeout: 8 * 60 * 1000, maxBuffer: 32 * 1024 * 1024 }
     );
-    return stderr.toString();
+    return { stderr: stderr.toString(), ok: true };
   } catch (err) {
     const e = err as { stderr?: string };
-    return e.stderr ?? "";
+    return { stderr: e.stderr ?? "", ok: false };
   }
 }
 
@@ -120,7 +155,7 @@ export async function loudnessPass(file: string): Promise<number | null> {
 
 interface SrtCue { start: number; end: number }
 
-function parseSrt(text: string): SrtCue[] {
+export function parseSrt(text: string): SrtCue[] {
   const toSec = (ts: string): number => {
     const m = ts.trim().match(/(\d+):(\d+):(\d+)[,.](\d+)/);
     if (!m) return -1;
@@ -183,75 +218,104 @@ export async function runQcReport(opts: {
       const probed = Number(info.format?.duration ?? 0);
       if (Number.isFinite(probed) && probed > 0) duration = probed;
       dimensions = info.streams?.find((s) => s.codec_type === "video") ?? null;
-      checks.push({
-        id: "playable",
-        label: "Plays as a valid MP4 (H.264 video + AAC audio)",
-        pass: hasVideo && hasAudio,
-        value: hasVideo && hasAudio ? `${duration.toFixed(1)}s readable` : "stream missing",
-      });
+      checks.push(
+        check(
+          "playable",
+          "Plays as a valid MP4 (H.264 video + AAC audio)",
+          hasVideo && hasAudio ? "pass" : "fail",
+          hasVideo && hasAudio ? `${duration.toFixed(1)}s readable` : "stream missing"
+        )
+      );
     } catch (err) {
-      checks.push({
-        id: "playable", label: "Plays as a valid MP4", pass: false,
-        value: "ffprobe failed", detail: String(err).slice(0, 200),
-      });
+      checks.push(
+        check("playable", "Plays as a valid MP4", "fail", "ffprobe failed", String(err).slice(0, 200))
+      );
     }
   } else {
-    checks.push({ id: "playable", label: "Output file exists", pass: false, value: "final.mp4 missing" });
+    checks.push(check("playable", "Output file exists", "fail", "final.mp4 missing"));
   }
 
   // 2) Duration vs narration — audio/video sync sanity.
   if (opts.narrationSec && opts.narrationSec > 0) {
     const drift = duration - opts.narrationSec;
     const tolerance = Math.max(8, opts.narrationSec * 0.2);
-    checks.push({
-      id: "duration",
-      label: "Video length matches the narration",
-      pass: Math.abs(drift) <= tolerance,
-      value: `video ${duration.toFixed(1)}s vs narration ${opts.narrationSec.toFixed(1)}s`,
-      detail: `drift ${drift >= 0 ? "+" : ""}${drift.toFixed(1)}s (tolerance ±${tolerance.toFixed(0)}s — scene lead-ins add a few seconds)`,
-    });
+    checks.push(
+      check(
+        "duration",
+        "Video length matches the narration",
+        Math.abs(drift) <= tolerance ? "pass" : "fail",
+        `video ${duration.toFixed(1)}s vs narration ${opts.narrationSec.toFixed(1)}s`,
+        `drift ${drift >= 0 ? "+" : ""}${drift.toFixed(1)}s (tolerance ±${tolerance.toFixed(0)}s — scene lead-ins add a few seconds)`
+      )
+    );
   }
 
   if (exists) {
-    // 3–6) Combined analysis pass.
-    const stderr = await analyzePass(opts.mp4Path);
+    // 3–6) Combined analysis pass. A crash here (ok=false) leaves partial
+    // stderr — every detector below MUST answer "unmeasured", not "clean".
+    const analysis = await analyzePass(opts.mp4Path);
+    const stderr = analysis.stderr;
+    const analysisRan = analysis.ok;
 
-    const blacks = [...stderr.matchAll(/\[blackdetect[^\]]*\]\s*black_start:(\d+(?:\.\d+)?)/g)]
+    // ffmpeg 7.x prefixes these log lines with the frame-metadata key
+    // ("lavfi.blackdetect.") and varies the spacing after the colon — the
+    // pattern tolerates both so the check works across ffmpeg versions.
+    const blacks = [...stderr.matchAll(/\[blackdetect[^\]]*\]\s*(?:lavfi\.blackdetect\.)?black_start:\s*(\d+(?:\.\d+)?)/g)]
       .map((m) => Number(m[1]));
     const unexpected = blacks.filter((t) => !isDesignedBlack(t));
-    checks.push({
-      id: "black-frames",
-      label: "No unexplained black frames",
-      pass: unexpected.length === 0,
-      value: unexpected.length === 0
-        ? blacks.length > expectedBlack.length
-          ? `${expectedBlack.length} designed transition dip${expectedBlack.length === 1 ? "" : "s"} only`
-          : "none detected"
-        : `${unexpected.length} unexplained interval${unexpected.length > 1 ? "s" : ""}`,
-      detail: unexpected.slice(0, 5).map((s) => `at ${s}s`).join(", ") ||
-        (blacks.length ? `all ${blacks.length} inside designed fadeblack windows` : ""),
-    });
+    if (!analysisRan) {
+      checks.push(
+        check("black-frames", "No unexplained black frames", "unmeasured", "analysis failed",
+          "ffmpeg could not complete the scan — this check did not run")
+      );
+    } else {
+      checks.push(
+        check(
+          "black-frames",
+          "No unexplained black frames",
+          unexpected.length === 0 ? "pass" : "fail",
+          unexpected.length === 0
+            ? blacks.length > expectedBlack.length
+              ? `${expectedBlack.length} designed transition dip${expectedBlack.length === 1 ? "" : "s"} only`
+              : "none detected"
+            : `${unexpected.length} unexplained interval${unexpected.length > 1 ? "s" : ""}`,
+          unexpected.slice(0, 5).map((s) => `at ${s}s`).join(", ") ||
+            (blacks.length ? `all ${blacks.length} inside designed fadeblack windows` : "")
+        )
+      );
+    }
 
-    const freezes = [...stderr.matchAll(/\[freezedetect[^\]]*\]\s*freeze_start:(\d+(?:\.\d+)?)/g)]
+    const freezes = [...stderr.matchAll(/\[freezedetect[^\]]*\]\s*(?:lavfi\.freezedetect\.)?freeze_start:\s*(\d+(?:\.\d+)?)/g)]
       .map((m) => Number(m[1]));
-    checks.push({
-      id: "frozen-frames",
-      label: "No frozen imagery (motion everywhere)",
-      pass: freezes.length === 0,
-      value: freezes.length === 0 ? "none detected" : `${freezes.length} frozen run${freezes.length > 1 ? "s" : ""}`,
-      detail: freezes.slice(0, 4).map((s) => `at ${s}s`).join(", "),
-    });
+    if (!analysisRan) {
+      checks.push(
+        check("frozen-frames", "No frozen imagery (motion everywhere)", "unmeasured", "analysis failed",
+          "ffmpeg could not complete the scan — this check did not run")
+      );
+    } else {
+      checks.push(
+        check(
+          "frozen-frames",
+          "No frozen imagery (motion everywhere)",
+          freezes.length === 0 ? "pass" : "fail",
+          freezes.length === 0 ? "none detected" : `${freezes.length} frozen run${freezes.length > 1 ? "s" : ""}`,
+          freezes.slice(0, 4).map((s) => `at ${s}s`).join(", ")
+        )
+      );
+    }
 
     if (dimensions?.width && dimensions?.height) {
       const ratio = dimensions.width / dimensions.height;
       const [tw, th] = [aspectSpec.w, aspectSpec.h];
       const ok = Math.abs(ratio - tw / th) <= 0.02;
-      checks.push({
-        id: "aspect",
-        label: `${aspectSpec.label} (no squeeze/crop defects)`,
-        pass: ok,
-        value: `${dimensions.width}x${dimensions.height}`,
-      });
+      checks.push(
+        check(
+          "aspect",
+          `${aspectSpec.label} (no squeeze/crop defects)`,
+          ok ? "pass" : "fail",
+          `${dimensions.width}x${dimensions.height}`
+        )
+      );
     }
 
     const maxVol = stderr.match(/max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/);
@@ -261,71 +325,94 @@ export async function runQcReport(opts: {
     // replaces the old ebur128 + volumedetect pair, and measures TRUE peak
     // (inter-sample), not just the sample peak.
     const lm = await measureLoudness(opts.mp4Path);
-    checks.push({
-      id: "loudness",
-      label: `Broadcast loudness (${MIX_TARGETS.integratedLUFS} LUFS target)`,
-      pass: lm !== null && lm.integratedLUFS >= LUFS_PASS_WINDOW[0] && lm.integratedLUFS <= LUFS_PASS_WINDOW[1],
-      value: lm === null ? "not measured" : `${lm.integratedLUFS.toFixed(1)} LUFS`,
-      detail:
+    checks.push(
+      check(
+        "loudness",
+        `Broadcast loudness (${MIX_TARGETS.integratedLUFS} LUFS target)`,
         lm === null
-          ? (samplePeak !== null ? `sample peak ${samplePeak.toFixed(1)} dBFS (loudness pass failed)` : "")
-          : `window ${LUFS_PASS_WINDOW[0]}…${LUFS_PASS_WINDOW[1]} LUFS`,
-    });
-    checks.push({
-      id: "true-peak",
-      label: "True peak ≤ -1 dBTP (no clipping after encode)",
-      pass: lm !== null && lm.truePeakDBTP <= MIX_TARGETS.truePeakDBTP + 0.2,
-      value: lm === null
-        ? samplePeak === null ? "not measured" : `sample ${samplePeak.toFixed(1)} dBFS`
-        : `${lm.truePeakDBTP.toFixed(1)} dBTP`,
-      detail: "0.2 dB tolerance covers AAC inter-sample overshoot",
-    });
-    checks.push({
-      id: "loudness-range",
-      label: "Consistent volume (loudness range)",
-      pass: lm === null ? true : lm.lra <= LRA_WARN,
-      value: lm === null ? "not measured" : `LRA ${lm.lra.toFixed(1)} LU`,
-      detail: lm === null ? "" : `flagged above ${LRA_WARN} LU`,
-    });
+          ? "unmeasured"
+          : lm.integratedLUFS >= LUFS_PASS_WINDOW[0] && lm.integratedLUFS <= LUFS_PASS_WINDOW[1] ? "pass" : "fail",
+        lm === null ? "not measured" : `${lm.integratedLUFS.toFixed(1)} LUFS`,
+        lm === null
+          ? (samplePeak !== null ? `sample peak ${samplePeak.toFixed(1)} dBFS (loudness pass failed)` : "loudness analysis failed")
+          : `window ${LUFS_PASS_WINDOW[0]}…${LUFS_PASS_WINDOW[1]} LUFS`
+      )
+    );
+    checks.push(
+      check(
+        "true-peak",
+        "True peak ≤ -1 dBTP (no clipping after encode)",
+        lm === null ? "unmeasured" : lm.truePeakDBTP <= MIX_TARGETS.truePeakDBTP + 0.2 ? "pass" : "fail",
+        lm === null
+          ? samplePeak === null ? "not measured" : `sample ${samplePeak.toFixed(1)} dBFS`
+          : `${lm.truePeakDBTP.toFixed(1)} dBTP`,
+        lm === null ? "loudness analysis failed" : "0.2 dB tolerance covers AAC inter-sample overshoot"
+      )
+    );
+    checks.push(
+      check(
+        "loudness-range",
+        "Consistent volume (loudness range)",
+        lm === null ? "unmeasured" : lm.lra <= LRA_WARN ? "pass" : "fail",
+        lm === null ? "not measured" : `LRA ${lm.lra.toFixed(1)} LU`,
+        lm === null ? "loudness analysis failed" : `flagged above ${LRA_WARN} LU`
+      )
+    );
 
     // Dead air: silence runs ≥1.5s fully inside the video (ignore lead-in/out).
-    const silences = [...stderr.matchAll(/\[silencedetect[^\]]*\]\s*silence_start:(\d+(?:\.\d+)?)/g)]
+    const silences = [...stderr.matchAll(/\[silencedetect[^\]]*\]\s*(?:lavfi\.silencedetect\.)?silence_start:\s*(\d+(?:\.\d+)?)/g)]
       .map((m) => Number(m[1]))
       .filter((s) => s > 1 && s < duration - 2);
-    checks.push({
-      id: "dead-air",
-      label: "No dead air (voice or music always present)",
-      pass: silences.length === 0,
-      value: silences.length === 0 ? "none" : `${silences.length} silent run${silences.length > 1 ? "s" : ""}`,
-      detail: silences.slice(0, 4).map((s) => `at ${s.toFixed(1)}s`).join(", "),
-    });
+    if (!analysisRan) {
+      checks.push(
+        check("dead-air", "No dead air (voice or music always present)", "unmeasured", "analysis failed",
+          "ffmpeg could not complete the scan — this check did not run")
+      );
+    } else {
+      checks.push(
+        check(
+          "dead-air",
+          "No dead air (voice or music always present)",
+          silences.length === 0 ? "pass" : "fail",
+          silences.length === 0 ? "none" : `${silences.length} silent run${silences.length > 1 ? "s" : ""}`,
+          silences.slice(0, 4).map((s) => `at ${s.toFixed(1)}s`).join(", ")
+        )
+      );
+    }
 
     // 8) Visual pacing — sampled static-shot detection (freezedetect above
     // only catches EXACT freezes; a motionless Ken Burns crop or static
     // stock clip reads as "nothing happens" while evading it).
     const staticPass = await detectStaticRuns(opts.mp4Path);
-    checks.push({
-      id: "static-shots",
-      label: "Visual pacing — no long static stretches",
-      pass: staticPass.measured && staticPass.runs.length === 0,
-      value: !staticPass.measured
-        ? "not measured"
-        : staticPass.runs.length === 0
-          ? "visual change throughout"
-          : `${staticPass.runs.length} static run${staticPass.runs.length > 1 ? "s" : ""}`,
-      detail: staticRunsDetail(staticPass.runs),
-    });
+    checks.push(
+      check(
+        "static-shots",
+        "Visual pacing — no long static stretches",
+        !staticPass.measured ? "unmeasured" : staticPass.runs.length === 0 ? "pass" : "fail",
+        !staticPass.measured
+          ? "not measured"
+          : staticPass.runs.length === 0
+            ? "visual change throughout"
+            : `${staticPass.runs.length} static run${staticPass.runs.length > 1 ? "s" : ""}`,
+        staticRunsDetail(staticPass.runs)
+      )
+    );
 
     // 7b) Abrupt ending — the final 0.4 s should sit in a fade/silence, not
     // mid-beat. Music beds fade out by design; a hard audio cut reads as a
     // glitch (and YouTube viewers notice).
     const tail = await tailVolume(opts.mp4Path, duration);
-    checks.push({
-      id: "tail-fade",
-      label: "Ends on a fade, not an abrupt cut",
-      pass: tail === null ? true : tail <= -25,
-      value: tail === null ? "too short to measure" : `final 0.4s at ${tail.toFixed(1)} dB mean`,
-    });
+    checks.push(
+      check(
+        "tail-fade",
+        "Ends on a fade, not an abrupt cut",
+        tail === null ? "unmeasured" : tail <= -25 ? "pass" : "fail",
+        tail === null ? "not measured" : `final 0.4s at ${tail.toFixed(1)} dB mean`,
+        tail === null
+          ? "final 0.4s unreadable or clip too short — fade state unknown"
+          : "flagged above -25 dB mean"
+      )
+    );
   }
 
   // 8) Caption sanity — when an SRT ships alongside.
@@ -340,20 +427,24 @@ export async function runQcReport(opts: {
         }
       }
       const inRange = cues.length === 0 || cues[cues.length - 1].end <= duration + 0.5;
-      checks.push({
-        id: "captions",
-        label: "Captions timed to the video",
-        pass: cues.length > 0 && monotonic && inRange,
-        value: `${cues.length} cues`,
-        detail: cues.length === 0 ? "empty SRT" : !monotonic ? "overlapping cues" : !inRange ? "cues run past the end" : "in order",
-      });
+      checks.push(
+        check(
+          "captions",
+          "Captions timed to the video",
+          cues.length > 0 && monotonic && inRange ? "pass" : "fail",
+          `${cues.length} cues`,
+          cues.length === 0 ? "empty SRT" : !monotonic ? "overlapping cues" : !inRange ? "cues run past the end" : "in order"
+        )
+      );
     } catch {
-      checks.push({ id: "captions", label: "Captions timed to the video", pass: false, value: "SRT unreadable" });
+      checks.push(check("captions", "Captions timed to the video", "fail", "SRT unreadable"));
     }
   }
 
   return {
-    passed: checks.every((c) => c.pass),
+    // The report is clean only when EVERY check actually ran AND passed —
+    // an unmeasured check keeps the overall badge red/amber for a human.
+    passed: checks.length > 0 && checks.every((c) => c.status === "pass"),
     checkedAt: new Date().toISOString(),
     durationSec: Math.round(duration * 10) / 10,
     checks,

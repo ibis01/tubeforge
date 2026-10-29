@@ -30,7 +30,7 @@ import { MotionControlsCard, type MotionPickerValue } from "@/components/tubefor
 import { TransitionControlsCard, type TransitionPickerValue } from "@/components/tubeforge/transition-controls";
 import { BrandKitCard } from "@/components/tubeforge/brand-kit";
 import { SceneEditorDialog } from "@/components/tubeforge/scene-editor";
-import { CircleCheck, CircleX, Ban, Brush } from "lucide-react";
+import { CircleCheck, CircleX, CircleHelp, Ban, Brush } from "lucide-react";
 import {
   pollVoiceover,
   pollThumbnail,
@@ -92,6 +92,12 @@ import {
   Wand2,
 } from "lucide-react";
 import { clsx } from "clsx";
+
+/** QC checks store a three-state status (qc.ts); older reports predate it.
+ * Fall back to the legacy boolean so pre-upgrade reports still render. */
+function qcCheckStatus(c: { status?: "pass" | "fail" | "unmeasured"; pass: boolean }) {
+  return c.status ?? (c.pass ? "pass" : "fail");
+}
 
 interface StoryboardResponse {
   scenes: SceneDTO[];
@@ -1312,7 +1318,13 @@ export function VideoDetailDialog({
               ) : (
                 <>
                   <CircleX className="h-2.5 w-2.5 mr-1" />
-                  {video.qc.checks.filter((c) => !c.pass).length} flagged
+                  {(() => {
+                    const fails = video.qc.checks.filter((c) => qcCheckStatus(c) === "fail").length;
+                    const unmeasured = video.qc.checks.filter((c) => qcCheckStatus(c) === "unmeasured").length;
+                    return [fails && `${fails} flagged`, unmeasured && `${unmeasured} not measured`]
+                      .filter(Boolean)
+                      .join(" · ");
+                  })()}
                 </>
               )}
             </Badge>
@@ -1320,8 +1332,10 @@ export function VideoDetailDialog({
           <ul className="space-y-1.5">
             {video.qc.checks.map((c) => (
               <li key={c.id} className="flex items-start gap-2 text-[11px]">
-                {c.pass ? (
+                {qcCheckStatus(c) === "pass" ? (
                   <CircleCheck className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                ) : qcCheckStatus(c) === "unmeasured" ? (
+                  <CircleHelp className="h-3.5 w-3.5 text-zinc-400 shrink-0 mt-0.5" />
                 ) : (
                   <CircleX className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
                 )}

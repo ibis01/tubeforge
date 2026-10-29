@@ -18,7 +18,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
-    "check": "bun run typecheck && bun run lint"
+    "test": "bun scripts/test-unit.ts",
+    "check": "bun run typecheck && bun run lint && bun run test"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

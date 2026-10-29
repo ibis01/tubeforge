@@ -29,7 +29,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0, failed = 0;
 const ok = (cond, label, detail = "") => {
   console.log(`${cond ? "PASS" : "FAIL"}  ${label}${detail ? `  [${detail}]` : ""}`);
-  cond ? passed++ : failed++;
+  if (cond) passed++; else failed++;
 };
 
 async function jfetch(p, opts = {}) {

@@ -417,9 +417,14 @@ export interface VideoDTO {
   updatedAt: string;
 }
 
+export type QcStatusDTO = "pass" | "fail" | "unmeasured";
+
 export interface QcCheckDTO {
   id: string;
   label: string;
+  /** Authoritative three-state result (qc.ts): measured-ok / measured-bad / could-not-run. */
+  status: QcStatusDTO;
+  /** Legacy flag — true only when measured AND within bounds. */
   pass: boolean;
   value: string;
   detail?: string;
