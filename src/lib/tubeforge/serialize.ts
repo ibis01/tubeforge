@@ -8,6 +8,7 @@ import path from "path";
 import type { Video } from "@prisma/client";
 import type { VideoDTO, VideoStatus } from "./types";
 import { parseScenes, serializeScenes } from "./story";
+import { hasBrandLogo } from "./slides";
 
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
@@ -91,6 +92,9 @@ export function serializeVideo(
     motionVary: v.motionVary,
     transitionStyle: v.transitionStyle,
     transitionDuration: v.transitionDuration,
+    brandAccent: v.brandAccent,
+    brandHasLogo: isStory && hasBrandLogo(v.id),
+    brandLogoOn: v.brandLogoOn ?? true,
     qc: parseQc(v.qcReport),
     stats: opts.stats ?? null,
     createdAt: v.createdAt.toISOString(),

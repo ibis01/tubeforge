@@ -4,6 +4,7 @@ import { parseScenes } from "@/lib/tubeforge/story";
 import { renderVideo } from "@/lib/tubeforge/render";
 import { resolveMusicForVideo, resolveDuckingForVideo, getSfxEnabled, trackAbsolutePath } from "@/lib/tubeforge/music";
 import { qcForVideo } from "@/lib/tubeforge/qc";
+import { slideBrandFor } from "@/lib/tubeforge/slides";
 import {
   startJob,
   isJobRunning,
@@ -128,6 +129,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         }
   );
 
+  // Brand kit (keynote slides): accent recolor + corner logo badge.
+  const brand = mode === "slides" ? slideBrandFor(id, video.brandAccent, video.brandLogoOn) : null;
+
   // Clear any stale error before the job starts.
   await db.video.update({ where: { id }, data: { error: null } });
 
@@ -154,6 +158,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         motionContext: { tone: video.tone, niche: video.niche },
         topic: video.topic,
         transition,
+        brand,
         onProgress: (current, total, label) => {
           // Cancellation checkpoint: fires between scenes/long steps.
           if (isJobCancelled(id, "render")) throw new JobCancelledError();

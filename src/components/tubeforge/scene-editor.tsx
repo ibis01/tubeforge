@@ -30,14 +30,36 @@ import {
   Brush,
   ImageUp,
   Loader2,
+  Presentation,
   RefreshCw,
   Save,
   Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
-import { SCENE_ART_STYLES, type SceneDTO } from "@/lib/tubeforge/types";
+import { SCENE_ART_STYLES, type SceneDTO, type SlideDTO } from "@/lib/tubeforge/types";
 
 type Busy = "save" | "regen" | "edit" | "upload" | null;
+
+/** Friendly labels for the slide layout catalog (slides.ts SLIDE_LAYOUTS). */
+const SLIDE_LAYOUT_LABELS: Record<string, string> = {
+  statement: "Statement",
+  icon: "Icon",
+  photo: "Photo card",
+  counter: "Counter",
+  bars: "Comparison bars",
+  card: "Spec card",
+  steps: "Steps",
+  price: "Price chip",
+};
+
+/** Dot colors for the slide accent catalog (mirrors slides.ts ACCENT_HEX). */
+const SLIDE_ACCENT_HEX: Record<string, string> = {
+  yellow: "#FFC918",
+  green: "#00A64F",
+  red: "#FF3B30",
+  blue: "#0A7CFF",
+  mono: "#0D0D0F",
+};
 
 /** Two-tone gradient swatch per art style — a quick visual signature for
  *  the palette grid (UI-only; the prompt text stays the source of truth). */
@@ -63,6 +85,10 @@ export function SceneEditorDialog({
   open,
   onOpenChange,
   onUpdated,
+  renderMode = "kenburns",
+  slide = null,
+  slideBusy = false,
+  onRerollSlide,
 }: {
   videoId: string;
   scene: SceneDTO | null;
@@ -70,6 +96,14 @@ export function SceneEditorDialog({
   onOpenChange: (v: boolean) => void;
   /** Called after ANY successful change so the parent refreshes storyboard + video. */
   onUpdated: () => void;
+  /** Video render mode — "slides" unlocks the slide design section. */
+  renderMode?: string;
+  /** This scene's designed slide (null = deck not designed yet). */
+  slide?: SlideDTO | null;
+  /** True while the slide design re-roll job is in flight. */
+  slideBusy?: boolean;
+  /** Re-design just this slide (fresh AI take) — parent owns the job + polling. */
+  onRerollSlide?: () => void;
 }) {
   const [visual, setVisual] = useState("");
   const [mood, setMood] = useState("");
@@ -219,14 +253,107 @@ export function SceneEditorDialog({
             Scene {scene.index} Studio — {scene.title}
           </DialogTitle>
           <DialogDescription className="text-xs">
-            Shape this scene&apos;s art to your taste — style, prompt, AI edits or
-            your own image. Narration is never touched.
+            {renderMode === "slides"
+              ? "Shape this scene's slide and its art — re-roll the design, restyle, edit the prompt, or upload your own image."
+              : "Shape this scene's art to your taste — style, prompt, AI edits or your own image. Narration is never touched."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-5">
+          {/* Slide design (keynote slides mode) — what viewers actually see */}
+          {renderMode === "slides" && (
+            <div className="space-y-2 rounded-xl border border-violet-500/20 bg-violet-500/5 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Presentation className="h-3.5 w-3.5 text-violet-300 shrink-0" />
+                  <Label className="text-xs">Slide design</Label>
+                  {slide && (
+                    <span className="text-[10px] text-muted-foreground truncate">
+                      · {SLIDE_LAYOUT_LABELS[slide.layout] ?? slide.layout}
+                    </span>
+                  )}
+                </div>
+                {slide && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={anyBusy || slideBusy || !onRerollSlide}
+                    onClick={onRerollSlide}
+                    className="h-7 text-[11px] border-white/15 bg-white/4"
+                    title="Ask the art director for a fresh take on this one slide — the rest of the deck keeps its design"
+                  >
+                    {slideBusy ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3 w-3" />
+                    )}
+                    Re-roll design
+                  </Button>
+                )}
+              </div>
+              {slide ? (
+                <>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/4 px-1.5 py-0.5 text-[9px] text-muted-foreground">
+                      <span
+                        aria-hidden
+                        className="h-2 w-2 rounded-full"
+                        style={{ background: SLIDE_ACCENT_HEX[slide.accent] ?? "#FFC918" }}
+                      />
+                      {slide.accent}
+                    </span>
+                    {slide.badge && (
+                      <span className="rounded-md border border-white/10 bg-white/4 px-1.5 py-0.5 text-[9px] text-muted-foreground uppercase">
+                        badge: {slide.badge}
+                      </span>
+                    )}
+                    {slide.useImage && (
+                      <span className="rounded-md border border-white/10 bg-white/4 px-1.5 py-0.5 text-[9px] text-muted-foreground">
+                        uses this scene&apos;s art
+                      </span>
+                    )}
+                  </div>
+                  <div className="relative rounded-xl overflow-hidden border border-white/10">
+                    {slide.hasPng ? (
+                      <img
+                        src={slide.pngUrl ?? ""}
+                        alt={`Slide ${slide.index}: ${slide.headline}`}
+                        className="w-full aspect-video object-cover object-top"
+                      />
+                    ) : (
+                      <div className="w-full aspect-video bg-white/4 flex flex-col items-center justify-center gap-2">
+                        {slideBusy ? (
+                          <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                        ) : (
+                          <Presentation className="h-5 w-5 text-muted-foreground" />
+                        )}
+                        <span className="text-[10px] text-muted-foreground">
+                          Preview appears after the next render
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground/80">
+                    Headline: “{slide.headline}” — re-rolling keeps the narration, changes only this slide&apos;s design.
+                  </p>
+                </>
+              ) : (
+                <p className="text-[10px] text-muted-foreground">
+                  The deck is designed when the video renders (or on your first
+                  re-roll) — one designed slide per scene, timed to the narration.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Current art */}
-          <div className="relative rounded-xl overflow-hidden border border-white/10">
+          <div className="space-y-1.5">
+            {renderMode === "slides" && (
+              <Label className="text-xs text-muted-foreground">
+                Scene art{slide?.useImage ? " — used by this slide's photo card" : " — feeds the storyboard"}
+              </Label>
+            )}
+            <div className="relative rounded-xl overflow-hidden border border-white/10">
             {scene.hasImage ? (
               <img
                 src={scene.imageUrl ?? ""}
@@ -243,6 +370,7 @@ export function SceneEditorDialog({
                 stock clip plays in this scene
               </span>
             )}
+            </div>
           </div>
 
           {/* Art style palette */}

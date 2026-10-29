@@ -1,26 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
 import { db } from "@/lib/db";
 import { parseScenes, storyboardComplete, replaceSceneImage } from "@/lib/tubeforge/story";
-import { errorText } from "@/lib/tubeforge/redact";
+import { invalidateRenderedArtifacts } from "@/lib/tubeforge/render";
 
 type Ctx = { params: Promise<{ id: string }> };
-
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
-
-/** DELETE artifacts that become stale when scene art changes. */
-function invalidateRenders(videoId: string) {
-  const dir = path.join(UPLOAD_ROOT, videoId);
-  for (const f of ["final.mp4", "preview.mp4", "subtitles.srt"]) {
-    fs.rmSync(path.join(dir, f), { force: true });
-  }
-  if (fs.existsSync(dir)) {
-    for (const f of fs.readdirSync(dir)) {
-      if (/^scene-\d{2}\.mp4$/.test(f)) fs.rmSync(path.join(dir, f), { force: true });
-    }
-  }
-}
 
 /**
  * POST — Scene Studio upload: replace ONE scene's storyboard image with the
@@ -72,8 +55,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: message }, { status });
   }
 
-  // The uploaded art IS the storyboard frame now — derived artifacts are stale.
-  invalidateRenders(id);
+  // The uploaded art IS the storyboard frame now — derived artifacts are stale
+  // (slide PNGs too: photo-layout slides embed the scene art).
+  invalidateRenderedArtifacts(id, { slidePngs: true });
   await db.video.update({
     where: { id },
     data: {

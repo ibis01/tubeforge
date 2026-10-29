@@ -358,6 +358,10 @@ export interface VideoDTO {
   // Scene transitions per-video overrides; null = built-in default (fade 0.5s)
   transitionStyle: string | null; // transitions.ts catalog id ("cut" = hard cuts)
   transitionDuration: number | null; // blend length seconds (0.2..1.5)
+  // Brand kit (keynote slides) — accent recolor + corner logo badge
+  brandAccent: string | null; // #rrggbb, null = built-in per-slide catalog accents
+  brandHasLogo: boolean; // a brand-logo.* file exists for this video
+  brandLogoOn: boolean; // false only when the badge was explicitly switched off
   // Post-render quality gate (qc.ts) — parsed report or null
   qc: QcReportDTO | null;
   // Latest synced performance (Phase 5, null before the first sync)
@@ -372,6 +376,19 @@ export interface QcCheckDTO {
   pass: boolean;
   value: string;
   detail?: string;
+}
+
+/** One designed slide of the keynote deck (render mode "slides"). */
+export interface SlideDTO {
+  index: number; // scene index the slide illustrates
+  layout: string; // slides.ts SLIDE_LAYOUTS id
+  accent: string; // slides.ts SLIDE_ACCENTS id (may be overridden by the brand kit)
+  badge: string | null;
+  headline: string;
+  useImage: boolean; // photo layout — embeds the scene's storyboard art
+  hasPng: boolean; // rendered slide-NN.png exists (deck was screenshotted)
+  pngUrl: string | null;
+  generating: boolean; // per-slide design re-roll in flight
 }
 
 export interface QcReportDTO {

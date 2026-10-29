@@ -105,6 +105,13 @@ model Video {
   transitionStyle    String? // fade | cut | … (transitions.ts catalog)
   transitionDuration Float? // blend length, 0.2..1.5 s
 
+  // Brand kit (keynote slides) — accent recolors every slide's highlight
+  // system (null = the built-in per-slide catalog accents); brandLogoOn
+  // toggles the corner logo badge on every slide (null = on when a logo
+  // exists). The logo file itself lives at uploads/<videoId>/brand-logo.*.
+  brandAccent  String? // #rrggbb, null = catalog accents
+  brandLogoOn  Boolean? // null = show badge whenever a logo is uploaded
+
   // Post-render quality gate — JSON report from qc.ts: streams, duration,
   // loudness, peaks, black frames, SRT sanity.
   qcReport     String?

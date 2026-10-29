@@ -40,6 +40,8 @@ import {
   slidePngPath,
   slideMotionPlan,
   slideSegmentGraph,
+  invalidateSlidePngs,
+  type SlideBrand,
 } from "./slides";
 import {
   planSceneMovements,
@@ -113,6 +115,8 @@ export interface RenderOptions {
   motionContext?: SceneContext;
   /** Video topic — drives the slide deck's art direction (slides mode). */
   topic?: string;
+  /** Brand kit overrides for keynote slides (accent recolor + logo badge). */
+  brand?: SlideBrand | null;
   onProgress?: (current: number, total: number, label: string) => void;
 }
 
@@ -124,6 +128,29 @@ export interface RenderResult {
   aspect: "16:9" | "9:16";
   /** Designed black-dip windows (fadeblack blends) for the transition-aware QC gate. */
   blackWindows?: [number, number][];
+}
+
+/**
+ * DELETE artifacts that become stale when the storyboard, slide designs, or
+ * brand kit change: rendered MP4s, subtitles, animated scene clips and
+ * (optionally) the cached slide PNGs. Routes call this after any visual
+ * mutation so a stale video can never be served or marked hasVideo.
+ */
+export function invalidateRenderedArtifacts(
+  videoId: string,
+  opts: { slidePngs?: boolean } = {}
+): void {
+  const dir = path.join(UPLOAD_ROOT, videoId);
+  for (const f of ["final.mp4", "preview.mp4", "subtitles.srt"]) {
+    fs.rmSync(path.join(dir, f), { force: true });
+  }
+  // Animated scene clips are derived from scene art — they are stale too.
+  if (fs.existsSync(dir)) {
+    for (const f of fs.readdirSync(dir)) {
+      if (/^scene-\d{2}\.mp4$/.test(f)) fs.rmSync(path.join(dir, f), { force: true });
+    }
+  }
+  if (opts.slidePngs) invalidateSlidePngs(videoId);
 }
 
 /** Run ffmpeg/ffprobe, surfacing the useful tail of stderr on failure.
@@ -755,6 +782,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
           opts.videoId,
           scenes.map((scene, i) => ({ scene, spec: deck.specs[i] })),
           {
+            brand: opts.brand ?? null,
             onProgress: (_done, _total, label) => {
               opts.onProgress?.(scenes.length + 1, scenes.length + 1, label);
             },

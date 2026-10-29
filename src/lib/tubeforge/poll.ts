@@ -307,6 +307,35 @@ export async function pollScene(
   }
 }
 
+export interface SlideListResponse {
+  slides: import("./types").SlideDTO[] | null; // null = deck not designed yet
+  error?: string | null;
+}
+
+/** Poll a single-slide design re-roll until its job flag clears. */
+export async function pollSlide(
+  videoId: string,
+  sceneIndex: number,
+  opts: PollOpts = {}
+): Promise<SlideListResponse> {
+  const interval = opts.intervalMs ?? 2500;
+  const timeout = opts.timeoutMs ?? 4 * 60 * 1000;
+  const deadline = Date.now() + timeout;
+
+  for (;;) {
+    const res = await fetch(`/api/videos/${videoId}/slides`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data: SlideListResponse = await res.json();
+    const slide = (data.slides ?? []).find((s) => s.index === sceneIndex);
+    if (!slide || !slide.generating) return data;
+
+    if (Date.now() > deadline)
+      throw new Error("Slide redesign is taking unusually long — check back shortly.");
+
+    await sleep(interval);
+  }
+}
+
 interface CharacterResponse {
   character?: CharacterDTO;
   error?: string;

@@ -25,6 +25,13 @@
 // The visual language is tuned against the reference format: near-white
 // radial studio backdrop, near-black ink, one accent per slide, one focal
 // element per beat, no clutter. Sound stays in the existing audiomix engine.
+//
+// Brand kit (per-video): an accent hex recolors EVERY slide's highlight
+// system at composer level (CSS custom properties — no deck re-design, no
+// re-billing, instant preview of a rebrand), and an uploaded logo gets a
+// small corner badge on every slide when enabled. A single slide's design
+// can also be re-rolled (fresh LLM take) without touching the rest of the
+// deck — see rerollSlideSpec().
 
 import fs from "fs";
 import path from "path";
@@ -54,6 +61,74 @@ export type SlideLayout = (typeof SLIDE_LAYOUTS)[number];
 
 export const SLIDE_ACCENTS = ["yellow", "green", "red", "blue", "mono"] as const;
 export type SlideAccent = (typeof SLIDE_ACCENTS)[number];
+
+// ---------------------------------------------------------------------------
+// Brand kit — accent override + corner logo badge (composer-level)
+// ---------------------------------------------------------------------------
+
+/** Per-video brand overrides applied when the slide HTML is composed. */
+export interface SlideBrand {
+  /** #rrggbb — replaces every catalog accent (mono/ink stays ink). */
+  accentHex: string | null;
+  /** Absolute file:// URL of the uploaded logo — badge shown when set. */
+  logoUrl: string | null;
+}
+
+/** Normalize a user/LLM color to #rrggbb (3-digit expands); junk → null. */
+export function sanitizeBrandAccent(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/.exec(v.trim().toLowerCase());
+  if (!m) return null;
+  const hex = m[1];
+  return `#${hex.length === 3 ? hex.split("").map((c) => c + c).join("") : hex}`;
+}
+
+/** Ink color that stays readable on top of a brand fill (yellow → dark, blue → white). */
+export function readableInk(hex: string): string {
+  const full = sanitizeBrandAccent(hex);
+  if (!full) return "#0D0D0F";
+  const h = full.slice(1);
+  const r = parseInt(h.slice(0, 2), 16) / 255;
+  const g = parseInt(h.slice(2, 4), 16) / 255;
+  const b = parseInt(h.slice(4, 6), 16) / 255;
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return lum > 0.55 ? "#0D0D0F" : "#FFFFFF";
+}
+
+/** :root custom properties that recolor the accent system (empty → catalog). */
+export function brandCssVars(brand: SlideBrand | null): string {
+  if (!brand?.accentHex) return "";
+  return `:root{--brand:${brand.accentHex};--brand-ink:${readableInk(brand.accentHex)};}`;
+}
+
+/** The video's uploaded logo file (any supported ext), null when absent. */
+export function brandLogoFile(videoId: string): string | null {
+  const dir = videoDir(videoId);
+  for (const ext of ["png", "webp", "svg"]) {
+    const p = path.join(dir, `brand-logo.${ext}`);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+export function hasBrandLogo(videoId: string): boolean {
+  return brandLogoFile(videoId) !== null;
+}
+
+/** Resolve a video row's brand fields into the composer shape (null = catalog). */
+export function slideBrandFor(
+  videoId: string,
+  brandAccent: string | null,
+  brandLogoOn: boolean | null
+): SlideBrand | null {
+  const accentHex = sanitizeBrandAccent(brandAccent);
+  const logoFile = brandLogoOn === false ? null : brandLogoFile(videoId);
+  if (!accentHex && !logoFile) return null;
+  return {
+    accentHex,
+    logoUrl: logoFile ? `file://${logoFile}` : null,
+  };
+}
 
 export const SLIDE_ICONS = [
   "laptop", "phone", "chip", "gamepad", "calendar", "battery", "flame",
@@ -435,6 +510,90 @@ ${scenesBrief(scenes)}`,
 }
 
 // ---------------------------------------------------------------------------
+// Per-slide re-roll — fresh design for ONE scene (Scene Studio)
+// ---------------------------------------------------------------------------
+
+export interface SlideRerollResult {
+  spec: SlideSpec;
+  source: "llm" | "fallback";
+}
+
+const sceneImageName = (index: number) =>
+  `scene-${String(index).padStart(2, "0")}.png`;
+
+/**
+ * Design ONE slide fresh, without touching the rest of the deck. The LLM gets
+ * the scene brief plus the previous design (explicitly told to differ), so a
+ * re-roll is a genuinely new take — not the same spec re-served. Falls back
+ * to the deterministic planner with a rotated accent when the LLM is
+ * unavailable, so the button always yields a visible change. Never throws.
+ */
+export async function rerollSlideSpec(
+  scene: Scene,
+  ctx: SlidePlanContext,
+  previous: SlideSpec | null,
+  opts: { hasImage: boolean } = { hasImage: false }
+): Promise<SlideRerollResult> {
+  const previousBrief = previous
+    ? `PREVIOUS DESIGN for this scene (you are replacing it — give a FRESH take: a different layout or different accent/highlight treatment, still true to the narration): layout=${previous.layout}, accent=${previous.accent}, badge=${previous.badge ?? "none"}, headline="${previous.headline}"\n`
+    : "";
+  try {
+    const raw = await aiCall("llm", "single slide redesign", () =>
+      chatComplete({
+        system: PLAN_SYSTEM,
+        user: `Topic: "${ctx.topic ?? ""}"
+Niche: ${ctx.niche ?? "general"}
+Tone: ${ctx.tone ?? "informative"}
+
+${PLAN_RULES}
+${previousBrief}
+Design EXACTLY ONE slide for the scene below. Return a STRICT JSON object (NOT an array) with exactly these keys:
+layout, accent, badge, headline, accentWord, highlight, strike, footer, icon, number, unit, subLabel, bars, cardTitle, cardLines, steps, priceLabel, priceValue, source, useImage
+Use null/[]/false for unused keys. No extra keys, no commentary.
+
+SCENE:
+${scenesBrief([scene])}`,
+      })
+    );
+    const parsed = parseJsonLoose(raw);
+    const obj = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (obj && typeof obj === "object") {
+      const spec = sanitizeSlideSpec(obj);
+      // The LLM cannot see the disk — reconcile photo art availability.
+      if (spec.layout === "photo") spec.useImage = opts.hasImage;
+      return { spec, source: "llm" };
+    }
+  } catch {
+    // fall through to the deterministic planner
+  }
+
+  const spec = fallbackSlideForScene(scene, { hasImage: opts.hasImage, topic: ctx.topic });
+  // Rotate the accent off the previous one so even the no-LLM path differs.
+  const rotate: SlideAccent[] = ["yellow", "blue", "green", "red", "mono"];
+  const prevIdx = previous ? rotate.indexOf(previous.accent) : -1;
+  spec.accent = rotate[(prevIdx + 1 + rotate.length) % rotate.length];
+  return { spec, source: "fallback" };
+}
+
+/**
+ * Persist one re-designed slide back into slides.json (array is aligned with
+ * the video's scene order, mirroring planSlides/render.ts). Returns the full
+ * updated deck, or null when no deck exists yet (call planSlides first).
+ */
+export function saveSlideSpecAt(
+  videoId: string,
+  deckPosition: number,
+  spec: SlideSpec
+): SlideSpec[] | null {
+  const deck = loadSlideDeck(videoId);
+  if (!deck || deckPosition < 0 || deckPosition >= deck.length) return null;
+  deck[deckPosition] = spec;
+  fs.mkdirSync(videoDir(videoId), { recursive: true });
+  fs.writeFileSync(slidesJsonPath(videoId), JSON.stringify(deck, null, 2));
+  return deck;
+}
+
+// ---------------------------------------------------------------------------
 // HTML composer (pure — unit-tested)
 // ---------------------------------------------------------------------------
 
@@ -471,7 +630,7 @@ body {
 }
 .stage { width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:0 90px; position:relative; }
 .badge {
-  display:inline-block; background:${ACCENT_HEX.yellow}; color:#0D0D0F;
+  display:inline-block; background:var(--brand, ${ACCENT_HEX.yellow}); color:var(--brand-ink, #0D0D0F);
   font-weight:700; font-size:34px; letter-spacing:0.12em;
   padding:14px 40px; border-radius:999px; margin-bottom:56px;
 }
@@ -480,8 +639,12 @@ body {
   text-align:center; text-wrap:balance;
 }
 .headline .accent { padding:2px 22px; border-radius:14px; }
-.hl-yellow .accent, .hl .accent { background:${ACCENT_HEX.yellow}; color:#0D0D0F; }
+.hl-yellow .accent, .hl .accent { background:var(--brand, ${ACCENT_HEX.yellow}); color:var(--brand-ink, #0D0D0F); }
 .strike { text-decoration:line-through; text-decoration-color:${ACCENT_HEX.red}; text-decoration-thickness:14px; }
+.brand-badge {
+  position:absolute; top:54px; right:64px; height:76px; max-width:300px;
+  object-fit:contain; object-position:right center;
+}
 .footer {
   font-size:30px; font-weight:600; letter-spacing:0.22em; text-transform:uppercase;
   color:#8B8B92; text-align:center; margin-top:48px;
@@ -506,7 +669,7 @@ body {
 .bar-row .bar-value { font-size:38px; font-weight:700; letter-spacing:0.02em; }
 .bar-track { height:30px; border-radius:999px; background:#E6E6EA; overflow:hidden; }
 .bar-fill { height:100%; border-radius:999px; background:#0D0D0F; }
-.bar-fill.hot { background:${ACCENT_HEX.red}; }
+.bar-fill.hot { background:var(--brand, ${ACCENT_HEX.red}); }
 .spec-card {
   background:#101014; color:#fff; border-radius:56px; padding:88px 80px;
   width:100%; max-width:900px; display:flex; flex-direction:column; gap:56px; margin-top:72px;
@@ -523,12 +686,12 @@ body {
 .step-row .label { font-size:42px; font-weight:700; letter-spacing:-0.01em; }
 .step-row .n { font-size:32px; color:#B4B4BA; font-weight:600; font-variant-numeric:tabular-nums; }
 .price-chip {
-  background:${ACCENT_HEX.yellow}; border-radius:48px; padding:48px 88px;
+  background:var(--brand, ${ACCENT_HEX.yellow}); border-radius:48px; padding:48px 88px;
   display:flex; flex-direction:column; align-items:center; margin-top:56px;
-  box-shadow:0 30px 80px rgba(255,201,24,0.35);
+  box-shadow:0 30px 80px color-mix(in srgb, var(--brand, ${ACCENT_HEX.yellow}) 35%, transparent);
 }
-.price-chip .from { font-size:36px; font-weight:600; color:#0D0D0F; opacity:0.75; }
-.price-chip .value { font-size:104px; font-weight:700; letter-spacing:-0.02em; color:#0D0D0F; line-height:1.05; }
+.price-chip .from { font-size:36px; font-weight:600; color:var(--brand-ink, #0D0D0F); opacity:0.75; }
+.price-chip .value { font-size:104px; font-weight:700; letter-spacing:-0.02em; color:var(--brand-ink, #0D0D0F); line-height:1.05; }
 `;
 
 /** Minimal inline stroke pictograms (no assets, scale-free, print-crisp). */
@@ -551,8 +714,12 @@ const ICON_PATHS: Record<SlideIcon, string> = {
   wifi: `<path d="M2.5 9.5a14 14 0 0 1 19 0M6 13a9 9 0 0 1 12 0M9.5 16.4a4.3 4.3 0 0 1 5 0"/><circle cx="12" cy="19.3" r="1.2" fill="currentColor" stroke="none"/>`,
 };
 
-function iconSvg(icon: SlideIcon, accent: SlideAccent): string {
-  const stroke = icon === "flame" ? ACCENT_HEX.red : icon === "bolt" ? ACCENT_HEX.yellow : "#0D0D0F";
+function iconSvg(icon: SlideIcon, accent: SlideAccent, brand: SlideBrand | null = null): string {
+  // Brand kit: every accent-colored pictogram follows the brand accent; the
+  // mono/ink default stays ink. Red keeps the flame's heat semantics ONLY
+  // when no brand is set.
+  const semantic = icon === "flame" ? ACCENT_HEX.red : icon === "bolt" ? ACCENT_HEX.yellow : "#0D0D0F";
+  const stroke = brand?.accentHex && accent !== "mono" ? brand.accentHex : semantic;
   return `<svg viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[icon]}</svg>`;
 }
 
@@ -566,9 +733,12 @@ export function esc(s: string): string {
 }
 
 /** Wrap the accent word in its span (or highlight the whole headline). */
-export function renderHeadline(spec: SlideSpec): string {
+export function renderHeadline(spec: SlideSpec, brand: SlideBrand | null = null): string {
   const h = esc(spec.headline);
   const cls = spec.highlight ? "hl" : "";
+  // Brand kit: the accent color collapses to the brand hex (mono stays ink).
+  const accentHex =
+    brand?.accentHex && spec.accent !== "mono" ? brand.accentHex : ACCENT_HEX[spec.accent];
   if (spec.accentWord) {
     const target = spec.accentWord.toLowerCase();
     // Find the word in the ALREADY-ESCAPED headline (escapes never create or
@@ -576,14 +746,17 @@ export function renderHeadline(spec: SlideSpec): string {
     const idx = h.toLowerCase().indexOf(esc(spec.accentWord).toLowerCase());
     if (idx >= 0) {
       const wordEsc = h.slice(idx, idx + spec.accentWord.length);
-      const color = spec.highlight ? "" : `color:${ACCENT_HEX[spec.accent]};`;
+      const color = spec.highlight ? "" : `color:${accentHex};`;
       return h.replace(
         wordEsc,
         `<span class="accent ${cls}" style="${color}">${wordEsc}</span>`
       );
     }
   }
-  if (spec.highlight) return `<span class="accent" style="background:${ACCENT_HEX[spec.accent]};color:${spec.accent === "yellow" || spec.accent === "mono" ? "#0D0D0F" : "#fff"}">${h}</span>`;
+  if (spec.highlight) {
+    const ink = brand?.accentHex ? readableInk(brand.accentHex) : spec.accent === "yellow" || spec.accent === "mono" ? "#0D0D0F" : "#fff";
+    return `<span class="accent" style="background:${accentHex};color:${ink}">${h}</span>`;
+  }
   return h;
 }
 
@@ -600,16 +773,21 @@ function barsHtml(spec: SlideSpec): string {
 }
 
 /** spec → complete standalone HTML document at 1080x1920. */
-export function slideHtml(spec: SlideSpec, imageUrl: string | null = null): string {
+export function slideHtml(
+  spec: SlideSpec,
+  imageUrl: string | null = null,
+  brand: SlideBrand | null = null
+): string {
   const badge = spec.badge ? `<div class="badge">${esc(spec.badge)}</div>` : "";
   const footer = spec.footer ? `<div class="footer">${esc(spec.footer)}</div>` : "";
   const source = spec.source ? `<div class="source">${esc(spec.source)}</div>` : "";
+  const logo = brand?.logoUrl ? `<img class="brand-badge" src="${esc(brand.logoUrl)}" alt=""/>` : "";
   const headlineStyle = `font-size:${headlineFontPx(spec.headline.length)}px;`;
-  const headline = `<div class="headline${spec.strike ? " strike" : ""}" style="${headlineStyle}">${renderHeadline(spec)}</div>`;
+  const headline = `<div class="headline${spec.strike ? " strike" : ""}" style="${headlineStyle}">${renderHeadline(spec, brand)}</div>`;
 
   let focal = "";
   if (spec.layout === "icon" && spec.icon) {
-    focal = `<div class="icon-wrap">${iconSvg(spec.icon, spec.accent)}</div>`;
+    focal = `<div class="icon-wrap">${iconSvg(spec.icon, spec.accent, brand)}</div>`;
   } else if (spec.layout === "photo" && imageUrl) {
     focal = `<div class="photo-card"><img src="${esc(imageUrl)}"/></div>`;
   } else if ((spec.layout === "counter" || spec.layout === "bars") && spec.number) {
@@ -631,7 +809,7 @@ export function slideHtml(spec: SlideSpec, imageUrl: string | null = null): stri
       ${spec.priceLabel ? `<div class="from">${esc(spec.priceLabel)}</div>` : ""}
       <div class="value">${esc(spec.priceValue)}</div>
     </div>
-    ${spec.icon ? `<div class="icon-wrap" style="margin-top:72px">${iconSvg(spec.icon, spec.accent)}</div>` : ""}`;
+    ${spec.icon ? `<div class="icon-wrap" style="margin-top:72px">${iconSvg(spec.icon, spec.accent, brand)}</div>` : ""}`;
   }
 
   // Layouts whose focal element is missing degrade to a statement slide —
@@ -639,8 +817,9 @@ export function slideHtml(spec: SlideSpec, imageUrl: string | null = null): stri
   const effective = focal ? spec.layout : "statement";
 
   return `<!doctype html>
-<html><head><meta charset="utf-8"><style>${BASE_CSS}</style></head>
+<html><head><meta charset="utf-8"><style>${brandCssVars(brand)}${BASE_CSS}</style></head>
 <body data-layout="${effective}">
+${logo}
 <div class="stage">
   ${badge}
   ${headline}
@@ -662,20 +841,49 @@ export function slidePngPath(videoId: string, sceneIndex: number): string {
   return path.join(videoDir(videoId), `slide-${String(sceneIndex).padStart(2, "0")}.png`);
 }
 
+/** The rendered slide PNG (what viewers actually see), null before a render. */
+export function readSlideImage(videoId: string, sceneIndex: number): Buffer | null {
+  try {
+    return fs.readFileSync(slidePngPath(videoId, sceneIndex));
+  } catch {
+    return null;
+  }
+}
+
+/** Delete every cached slide PNG — brand/art changes re-screenshot at render. */
+export function invalidateSlidePngs(videoId: string): void {
+  const dir = videoDir(videoId);
+  if (!fs.existsSync(dir)) return;
+  for (const f of fs.readdirSync(dir)) {
+    if (/^slide-\d{2}\.png$/.test(f)) fs.rmSync(path.join(dir, f), { force: true });
+  }
+}
+
 /**
  * Screenshot the deck. One browser for the whole batch (launch is ~300 ms);
  * each slide is an isolated page so a broken spec can't poison the rest.
  * Items pair each spec with its scene (PNG cache key = scene index, matching
  * the scene-NN.png art naming). Returns the list of written PNG paths.
+ * `brand` recolors accents + stamps the logo badge into every composed HTML.
+ *
+ * The HTML is written to a temp file next to the art and OPENED via file://
+ * (page.goto) instead of setContent: Chromium blocks file:// subresources on
+ * about:blank pages, which silently blanked the brand logo AND the photo-
+ * layout scene art. file → file image loads are allowed.
  */
 export async function renderSlidePngs(
   videoId: string,
   items: { scene: Scene; spec: SlideSpec }[],
-  opts: { force?: boolean; onProgress?: (done: number, total: number, label: string) => void } = {}
+  opts: {
+    force?: boolean;
+    brand?: SlideBrand | null;
+    onProgress?: (done: number, total: number, label: string) => void;
+  } = {}
 ): Promise<string[]> {
   const { chromium } = await import("playwright");
   const browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   const written: string[] = [];
+  const tmpHtml = path.join(videoDir(videoId), `slide-tmp-${Date.now()}.html`);
   try {
     const context = await browser.newContext({
       viewport: SLIDE_VIEWPORT,
@@ -692,14 +900,17 @@ export async function renderSlidePngs(
       const imageUrl = spec.useImage
         ? `file://${path.join(videoDir(videoId), `scene-${String(scene.index).padStart(2, "0")}.png`)}`
         : null;
+      fs.mkdirSync(videoDir(videoId), { recursive: true });
+      fs.writeFileSync(tmpHtml, slideHtml(spec, imageUrl, opts.brand ?? null));
       const page = await context.newPage();
-      await page.setContent(slideHtml(spec, imageUrl), { waitUntil: "load" });
+      await page.goto(`file://${tmpHtml}`, { waitUntil: "load" });
       await page.waitForTimeout(30); // font shaping settle
       await page.screenshot({ path: outPath, clip: { x: 0, y: 0, width: 1080, height: 1920 } });
       await page.close();
       written.push(outPath);
     }
   } finally {
+    fs.rmSync(tmpHtml, { force: true });
     await browser.close();
   }
   return written;

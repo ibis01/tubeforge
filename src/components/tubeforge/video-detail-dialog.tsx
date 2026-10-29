@@ -28,6 +28,7 @@ import { StatusBadge, formatDuration, timeAgo, useVoices, VoiceSelectWithPreview
 import { MusicPickerCard, type MusicPickerValue } from "@/components/tubeforge/music-controls";
 import { MotionControlsCard, type MotionPickerValue } from "@/components/tubeforge/motion-controls";
 import { TransitionControlsCard, type TransitionPickerValue } from "@/components/tubeforge/transition-controls";
+import { BrandKitCard } from "@/components/tubeforge/brand-kit";
 import { SceneEditorDialog } from "@/components/tubeforge/scene-editor";
 import { CircleCheck, CircleX, Ban, Brush } from "lucide-react";
 import {
@@ -37,6 +38,7 @@ import {
   pollStoryboard,
   pollRender,
   pollScene,
+  pollSlide,
   pollVerify,
   pollComments,
   pollUpload,
@@ -51,6 +53,7 @@ import {
   type VideoDTO,
   type VariantDTO,
   type SceneDTO,
+  type SlideDTO,
   type VerifyReportDTO,
   type CommentsKitDTO,
   type YouTubeStatusDTO,
@@ -119,6 +122,10 @@ export function VideoDetailDialog({
   // Storyboard state
   const [scenes, setScenes] = useState<SceneDTO[]>([]);
   const [boardGenerating, setBoardGenerating] = useState(false);
+
+  // Keynote slides state — the designed deck (render mode "slides" only).
+  // null = the deck hasn't been designed yet (no render / re-roll so far).
+  const [slides, setSlides] = useState<SlideDTO[] | null>(null);
 
   // Render state
   const [renderMode, setRenderMode] = useState<string>("kenburns");
@@ -206,6 +213,19 @@ export function VideoDetailDialog({
     }
   }, []);
 
+  // Keynote slides — deck DTOs (slide designs + PNG previews). Non-fatal:
+  // the storyboard grid falls back to scene art whenever this is null.
+  const reloadSlides = useCallback(async (videoId: string) => {
+    try {
+      const res = await fetch(`/api/videos/${videoId}/slides`, { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as { slides?: SlideDTO[] | null };
+      setSlides(data.slides ?? null);
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
+
   const refreshVideo = useCallback(
     async (videoId: string) => {
       const res = await fetch(`/api/videos/${videoId}`, { cache: "no-store" });
@@ -222,6 +242,7 @@ export function VideoDetailDialog({
     if (!video?.id) {
       setVariants([]);
       setScenes([]);
+      setSlides(null);
       return;
     }
     let cancelled = false;
@@ -301,6 +322,7 @@ export function VideoDetailDialog({
       .catch(() => {});
     if (video.format === "story") {
       reloadScenes(video.id);
+      if (video.renderMode === "slides") reloadSlides(video.id);
       // Adopt any render already in flight (survives dialog re-opens).
       fetch(`/api/videos/${video.id}/render`, { cache: "no-store" })
         .then((r) => (r.ok ? r.json() : null))
@@ -676,6 +698,7 @@ export function VideoDetailDialog({
       });
       await pollScene(video.id, index);
       await reloadScenes(video.id);
+      if (renderMode === "slides") await reloadSlides(video.id);
       await refreshVideo(video.id);
       toast({ title: `Scene ${index} re-rolled`, description: `“${title}” has new art.` });
       bumpRefresh();
@@ -686,6 +709,39 @@ export function VideoDetailDialog({
         variant: "destructive",
       });
       await reloadScenes(video.id);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Per-slide design re-roll (keynote slides) — one fresh AI take on ONE
+  // slide; the rest of the deck, the narration and the scene art stay put.
+  const rerollSlide = async (index: number, title: string) => {
+    if (busy) return;
+    setBusy(`slide-${index}`);
+    try {
+      const res = await fetch(`/api/videos/${video.id}/slides`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scene: index }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error ?? "Slide redesign failed");
+      await pollSlide(video.id, index);
+      await reloadSlides(video.id);
+      await refreshVideo(video.id);
+      toast({
+        title: `Slide ${index} re-designed`,
+        description: `“${title}” has a fresh layout — render to bake it into the video.`,
+      });
+      bumpRefresh();
+    } catch (e) {
+      toast({
+        title: "Slide redesign failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+      await reloadSlides(video.id);
     } finally {
       setBusy(null);
     }
@@ -933,13 +989,24 @@ export function VideoDetailDialog({
         </div>
       ) : (
         <div className="grid sm:grid-cols-2 gap-3">
-          {scenes.map((s) => (
+          {scenes.map((s) => {
+            const slide = slides?.find((sl) => sl.index === s.index) ?? null;
+            // Keynote slides: the composed slide is what viewers see — show it
+            // when it exists, fall back to the raw scene art otherwise.
+            const showSlideTile = renderMode === "slides" && slide?.hasPng;
+            return (
             <div
               key={s.index}
               className="rounded-xl border border-white/10 bg-white/3 overflow-hidden flex flex-col"
             >
               <div className="relative">
-                {s.hasImage ? (
+                {showSlideTile ? (
+                  <img
+                    src={slide.pngUrl ?? ""}
+                    alt={`Slide ${s.index}: ${slide.headline}`}
+                    className="w-full aspect-video object-cover object-top"
+                  />
+                ) : s.hasImage ? (
                   <img
                     src={s.imageUrl ?? ""}
                     alt={`Scene ${s.index}: ${s.title}`}
@@ -958,7 +1025,12 @@ export function VideoDetailDialog({
                 <Badge className="absolute top-2 left-2 bg-black/70 text-white border-none text-[10px] px-1.5 h-5">
                   SCENE {s.index}
                 </Badge>
-                {s.hostInScene && (
+                {showSlideTile && (
+                  <Badge className="absolute top-2 right-2 bg-violet-500/80 text-white border-none text-[9px] px-1.5 h-5 gap-0.5">
+                    <Presentation className="h-2.5 w-2.5" /> SLIDE
+                  </Badge>
+                )}
+                {s.hostInScene && !showSlideTile && (
                   <Badge className="absolute top-2 right-2 bg-primary/80 text-white border-none text-[9px] px-1.5 h-5 gap-0.5">
                     <UserRound className="h-2.5 w-2.5" /> HOST
                   </Badge>
@@ -971,7 +1043,7 @@ export function VideoDetailDialog({
               </div>
               <div className="p-3 flex-1 flex flex-col gap-2">
                 <div>
-                  <p className="text-sm font-medium">{s.title}</p>
+                  <p className="text-sm font-medium">{showSlideTile ? slide.headline || s.title : s.title}</p>
                   <p className="text-[11px] text-muted-foreground leading-snug mt-0.5 line-clamp-3">
                     {s.narration}
                   </p>
@@ -996,7 +1068,7 @@ export function VideoDetailDialog({
                     </Badge>
                   )}
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="flex flex-wrap items-center gap-1">
                   <Button
                     variant="ghost"
                     size="sm"
@@ -1008,6 +1080,23 @@ export function VideoDetailDialog({
                     <Brush className="h-3 w-3" />
                     Edit scene
                   </Button>
+                  {renderMode === "slides" && slide && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={Boolean(busy) || slide.generating}
+                      onClick={() => rerollSlide(s.index, s.title)}
+                      className="h-7 text-[11px] text-violet-200/90 hover:text-foreground hover:bg-white/6 w-fit px-2"
+                      title="Fresh design for this one slide — layout, accent and headline treatment"
+                    >
+                      {busy === `slide-${s.index}` || slide.generating ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Presentation className="h-3 w-3" />
+                      )}
+                      Re-roll slide
+                    </Button>
+                  )}
                   {s.hasImage && (
                     <Button
                       variant="ghost"
@@ -1021,13 +1110,14 @@ export function VideoDetailDialog({
                       ) : (
                         <RefreshCw className="h-3 w-3" />
                       )}
-                      Re-roll
+                      Re-roll art
                     </Button>
                   )}
                 </div>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -1125,6 +1215,20 @@ export function VideoDetailDialog({
 
         {/* Per-video scene transitions — style + blend length (debounced PATCH) */}
         <TransitionControlsCard value={transitionDraft} onChange={onTransitionChange} disabled={Boolean(busy)} />
+
+        {/* Brand kit (keynote slides) — accent recolor + corner logo badge */}
+        {renderMode === "slides" && (
+          <BrandKitCard
+            videoId={video.id}
+            value={{
+              accent: video.brandAccent,
+              hasLogo: video.brandHasLogo,
+              showLogo: video.brandLogoOn,
+            }}
+            onSaved={() => void refreshVideo(video.id)}
+            disabled={Boolean(busy)}
+          />
+        )}
 
         <div className="flex flex-wrap gap-2">
           <Button
@@ -2265,7 +2369,15 @@ export function VideoDetailDialog({
         }}
         onUpdated={() => {
           void reloadScenes(video.id);
+          if (renderMode === "slides") void reloadSlides(video.id);
           bumpRefresh();
+        }}
+        renderMode={renderMode}
+        slide={slides?.find((sl) => sl.index === editingScene) ?? null}
+        slideBusy={busy === `slide-${editingScene}`}
+        onRerollSlide={() => {
+          const scene = scenes.find((s) => s.index === editingScene);
+          if (scene) void rerollSlide(scene.index, scene.title);
         }}
       />
     </Dialog>

@@ -1,28 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
 import { db } from "@/lib/db";
 import { generateStoryboard, generateSceneImage, editSceneImage, serializeScenes, storyboardComplete, parseScenes } from "@/lib/tubeforge/story";
 import { startJob, isJobRunning, isJobCancelled, lastJobError, setJobProgress, JobCancelledError } from "@/lib/tubeforge/jobs";
 import { errorText } from "@/lib/tubeforge/redact";
+import { invalidateRenderedArtifacts } from "@/lib/tubeforge/render";
 
 type Ctx = { params: Promise<{ id: string }> };
-
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
-
-/** DELETE artifacts that become stale when the storyboard changes. */
-function invalidateRenders(videoId: string) {
-  const dir = path.join(UPLOAD_ROOT, videoId);
-  for (const f of ["final.mp4", "preview.mp4", "subtitles.srt"]) {
-    fs.rmSync(path.join(dir, f), { force: true });
-  }
-  // Animated scene clips are derived from scene art — they are stale too.
-  if (fs.existsSync(dir)) {
-    for (const f of fs.readdirSync(dir)) {
-      if (/^scene-\d{2}\.mp4$/.test(f)) fs.rmSync(path.join(dir, f), { force: true });
-    }
-  }
-}
 
 /** GET — the storyboard (scene list with image availability + per-scene job flags). */
 export async function GET(_req: NextRequest, ctx: Ctx) {
@@ -117,7 +100,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           });
           await generateSceneImage({ videoId: id, scene, character: castOpts });
         }
-        invalidateRenders(id);
+        invalidateRenderedArtifacts(id, { slidePngs: true });
         await db.video.update({
           where: { id },
           data: {
@@ -171,7 +154,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           setJobProgress(id, "storyboard", i + 1, total, `Painting scene ${i + 1} of ${total}`),
       });
 
-      invalidateRenders(id);
+      invalidateRenderedArtifacts(id, { slidePngs: true });
       await db.video.update({
         where: { id },
         data: {

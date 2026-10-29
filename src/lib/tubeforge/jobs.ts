@@ -20,6 +20,7 @@ export type JobKind =
   | "storyboard"
   | "render"
   | "scene" // single storyboard scene re-roll
+  | "slide" // single keynote slide design re-roll (Scene Studio)
   | "verify" // ASR narration check
   | "comments" // engagement kit (pinned comment + replies)
   | "upload" // YouTube OAuth upload
@@ -78,6 +79,7 @@ const STAGE_LABEL: Record<string, string> = {
   storyboard: "storyboard",
   render: "video render",
   scene: "storyboard scene",
+  slide: "slide design",
   verify: "narration check",
   comments: "engagement kit",
   upload: "YouTube upload",
@@ -111,7 +113,7 @@ async function runRecovery(): Promise<void> {
       });
 
       // Surface the interruption where the UI already looks for errors.
-      if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "verify", "comments", "upload", "short", "convert", "script", "stock"].includes(row.kind)) {
+      if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "slide", "verify", "comments", "upload", "short", "convert", "script", "stock"].includes(row.kind)) {
         const videoId = baseEntityId(row.entityId);
         const video = await db.video.findUnique({ where: { id: videoId } });
         // Only set the error if the artifact never landed (completed after the row went stale).
@@ -122,6 +124,7 @@ async function runRecovery(): Promise<void> {
             (row.kind === "variants" && video.hasThumbnail) ||
             (row.kind === "storyboard" && video.hasStoryboard) ||
             (row.kind === "scene" && video.hasStoryboard) ||
+            (row.kind === "slide" && video.hasVideo) ||
             (row.kind === "render" && video.hasVideo) ||
             (row.kind === "comments" && Boolean(video.commentsKit)) ||
             (row.kind === "upload" && Boolean(video.youtubeUrl)) ||
