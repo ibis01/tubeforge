@@ -10,6 +10,9 @@ tiny HTTP API that TubeForge calls for narration:
                                                           the server with --key)
                   -> audio/wav bytes (24 kHz)
 
+                  `speed` 0.5-2.0 changes tempo without changing pitch
+                  (1.5 = one and a half times as fast).
+
     GET /health   -> {"ok": true, "model": ..., "device": ...}
 
 Runs on CPU (no NVIDIA GPU needed). First launch downloads the model
@@ -29,12 +32,14 @@ as the Base URL, and the same --key value as the API key.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
 import binascii
 import os
 import re
 import sys
 import tempfile
+import threading
 import time
 
 # FastAPI/uvicorn/torch imports happen lazily in main() so `--help` and
@@ -48,7 +53,17 @@ MAX_VOICE_B64 = 4_000_000    # ~3 MB wav — way above our 30 s / 24 kHz samples
 CHUNK_CHARS = 280            # Chatterbox quality degrades on very long text
 SILENCE_SEC = 0.12
 
-_state = {"model": None, "kind": MODEL_EN, "device": "cpu", "sr": SAMPLE_RATE}
+_state = {
+    "model": None,
+    "kind": MODEL_EN,
+    "device": "cpu",
+    "sr": SAMPLE_RATE,
+    "busy": False,   # True while a synthesis is running
+}
+
+# Chatterbox forwards are NOT safe to run concurrently on one model instance —
+# every synthesis is serialized through this lock (requests queue up).
+_synth_lock = threading.Lock()
 
 
 def log(msg: str) -> None:
@@ -120,6 +135,32 @@ def synthesize(text: str, prompt_path, language: str):
     return audio
 
 
+def time_stretch(audio, speed: float):
+    """Pitch-preserving tempo change (speed > 1 = faster). librosa ships with
+    Chatterbox; if it is somehow missing we return the audio unchanged."""
+    try:
+        import librosa
+        import numpy as np
+        import torch
+
+        y = audio.squeeze(0).numpy().astype("float32")
+        stretched = librosa.effects.time_stretch(y=y, rate=float(speed))
+        return torch.from_numpy(np.ascontiguousarray(stretched)).unsqueeze(0)
+    except Exception as exc:
+        log(f"speed adjustment skipped ({exc})")
+        return audio
+
+
+def synthesize_locked(text: str, prompt_path, language: str, speed: float):
+    """One synthesis at a time; runs on a worker thread so the HTTP event
+    loop (and /health) stay responsive during long CPU jobs."""
+    with _synth_lock:
+        audio = synthesize(text, prompt_path, language)
+        if abs(speed - 1.0) >= 0.01:
+            audio = time_stretch(audio, speed)
+    return audio
+
+
 def wav_bytes(audio) -> bytes:
     import io
 
@@ -154,6 +195,7 @@ def build_app(key, language: str):
             "model": _state["kind"],
             "device": _state["device"],
             "warm": _state["model"] is not None,
+            "busy": _state["busy"],
         }
 
     @app.post("/tts")
@@ -174,6 +216,12 @@ def build_app(key, language: str):
         if len(text) > MAX_TEXT_CHARS:
             raise HTTPException(status_code=400, detail=f"text over {MAX_TEXT_CHARS} chars — split it")
 
+        try:
+            speed = float(body.get("speed") or 1.0)
+        except (TypeError, ValueError):
+            speed = 1.0
+        speed = min(2.0, max(0.5, speed))
+
         voice_b64 = str(body.get("voice") or "").strip()
         prompt_path = None
         try:
@@ -185,7 +233,10 @@ def build_app(key, language: str):
                 except (binascii.Error, ValueError):
                     raise HTTPException(status_code=400, detail="voice is not valid base64 wav")
             try:
-                audio = synthesize(text, prompt_path, language)
+                _state["busy"] = True
+                audio = await asyncio.to_thread(
+                    synthesize_locked, text, prompt_path, language, speed
+                )
             except HTTPException:
                 raise
             except Exception as exc:  # model-level failure
@@ -193,6 +244,7 @@ def build_app(key, language: str):
                 raise HTTPException(status_code=500, detail=f"synthesis failed: {exc}")
             return Response(content=wav_bytes(audio), media_type="audio/wav")
         finally:
+            _state["busy"] = False
             if prompt_path:
                 try:
                     os.unlink(prompt_path)
@@ -248,8 +300,6 @@ def main() -> None:
     log(f"device: {_state['device']} (use --device cpu to force CPU)")
 
     app = build_app(args.key.strip() or None, args.lang)
-
-    import threading
 
     def warm() -> None:
         try:
