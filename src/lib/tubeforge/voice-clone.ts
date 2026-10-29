@@ -51,6 +51,17 @@ export interface VoiceProfileDTO {
   createdAt: string;
 }
 
+/** Providers that can clone a voice from an uploaded sample.
+ *  zhipu    — the sample goes to the Zhipu GLM-TTS-Clone platform
+ *  selfhost — the (normalized) sample is stored on the VoiceProfile row and
+ *             re-sent to the user's voice_server.py on every synthesis */
+export const CLONE_PROVIDERS = ["zhipu", "selfhost"] as const;
+export type CloneProvider = (typeof CLONE_PROVIDERS)[number];
+
+export function isCloneProvider(provider: string): provider is CloneProvider {
+  return (CLONE_PROVIDERS as readonly string[]).includes(provider);
+}
+
 export function toVoiceProfileDTO(row: {
   id: string;
   name: string;
@@ -73,13 +84,16 @@ export function toVoiceProfileDTO(row: {
   };
 }
 
-/** All cloned voices (newest first) — appended to voice pickers. */
-export async function listVoiceProfiles(): Promise<
+/** All cloned voices (newest first) — appended to voice pickers.
+ *  Pass a provider to scope to the profiles it can actually speak. */
+export async function listVoiceProfiles(
+  provider?: string,
+): Promise<
   { id: string; label: string; dto: VoiceProfileDTO }[]
 > {
   try {
     const rows = await db.voiceProfile.findMany({
-      where: { isActive: true },
+      where: { isActive: true, ...(provider ? { provider } : {}) },
       orderBy: { createdAt: "desc" },
     });
     return rows.map((row) => ({
@@ -286,7 +300,9 @@ export async function cloneVoice(opts: {
   name?: string;
   sampleText?: string; // optional transcript of the sample (improves fidelity)
   auditionText?: string; // what the clone-time preview says
+  provider: CloneProvider; // which clone pipeline to use
 }): Promise<CloneResult> {
+  if (opts.provider === "selfhost") return cloneVoiceSelfhost(opts);
   const { baseUrl, key } = await zhipuConfig();
 
   // 1) Obtain + prepare the sample.
@@ -379,6 +395,62 @@ export async function cloneVoice(opts: {
   });
 
   return { profile: toVoiceProfileDTO(row), auditionWav };
+}
+
+/**
+ * Self-hosted "clone": there is no platform call — validate + normalize the
+ * sample exactly like the Zhipu path (mono 24 kHz PCM-16 WAV, ≤30 s), store it
+ * base64 on the row, and mint a voice_clone_… id. Every synthesis then POSTs
+ * the sample to the user's voice_server.py (Chatterbox), which speaks in that
+ * voice. Voice samples never leave the user's machine beyond their own server.
+ */
+async function cloneVoiceSelfhost(opts: {
+  source: { kind: "upload"; buffer: Buffer; filename: string } | { kind: "url"; url: string };
+  name?: string;
+}): Promise<CloneResult> {
+  let raw: Buffer;
+  let sourceLabel: string;
+  if (opts.source.kind === "upload") {
+    raw = opts.source.buffer;
+    sourceLabel = opts.source.filename.slice(0, 80) || "uploaded sample";
+  } else {
+    if (!isValidSampleUrl(opts.source.url))
+      throw new Error("That is not a valid http(s) audio link");
+    const dl = await downloadSample(opts.source.url);
+    raw = dl.buffer;
+    sourceLabel = dl.filename;
+  }
+
+  const extMatch = /\.[a-z0-9]{1,5}$/i.exec(sourceLabel);
+  const { wav, durationSec } = await prepareSample(raw, extMatch?.[0] ?? ".bin");
+  const name = cleanCloneName(opts.name ?? "", sourceLabel);
+
+  const row = await db.voiceProfile.create({
+    data: {
+      name,
+      provider: "selfhost",
+      providerVoiceId: `voice_clone_sh_${Date.now().toString(36)}${randomUUID().slice(0, 6)}`,
+      sourceLabel,
+      durationSec,
+      sampleWav: wav.toString("base64"),
+    },
+  });
+
+  return { profile: toVoiceProfileDTO(row), auditionWav: null };
+}
+
+/** The stored sample (base64) for a cloned voice — self-hosted synthesis
+ *  sends it to the user's voice server on every call. */
+export async function getSampleWavByVoiceId(voiceId: string): Promise<string | null> {
+  try {
+    const row = await db.voiceProfile.findFirst({
+      where: { providerVoiceId: voiceId },
+      select: { sampleWav: true },
+    });
+    return row?.sampleWav ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** Delete a cloned voice locally + best-effort on the platform. */

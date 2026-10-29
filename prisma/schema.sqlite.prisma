@@ -204,6 +204,7 @@ model VoiceProfile {
   sourceLabel     String? // original sample file name / URL label
   durationSec     Float? // length of the source sample
   auditionWav     String? // base64 WAV returned by the clone call (short preview)
+  sampleWav       String? // base64 normalized sample — self-hosted clones re-send it per synthesis
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

@@ -169,6 +169,18 @@ export const TTS_PROVIDERS: ProviderMeta[] = [
     note: "Clone any voice from a 3-second sample (Video → Voice → Clone), then narrate with it. Same studio voices as Z.ai plus every voice you clone.",
   },
   {
+    id: "selfhost",
+    kind: "native",
+    label: "My Machine (self-hosted clone)",
+    defaultBaseUrl: "http://localhost:8931",
+    keyUrl: "https://github.com/resemble-ai/chatterbox",
+    models: [
+      { id: "chatterbox", hint: "English — MIT, commercial-OK (recommended)" },
+      { id: "chatterbox-multilingual", hint: "23 languages" },
+    ],
+    note: "Free forever: runs the open-source Chatterbox model on YOUR computer. One-time setup: run voice-server/voice_server.py (see voice-server/README.md), expose it with `cloudflared tunnel --url http://localhost:8931`, paste that https URL here as the Base URL and your --key secret as the API key. Cloning runs at CPU speed — slower than paid APIs, but $0 and private.",
+  },
+  {
     id: "openai",
     kind: "openai",
     label: "OpenAI TTS",

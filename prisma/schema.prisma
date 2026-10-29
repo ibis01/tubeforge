@@ -187,11 +187,15 @@ model Setting {
   updatedAt DateTime @updatedAt
 }
 
-// Voice cloning — a speaker's voice recreated from a short (3-30s) sample via
-// the Zhipu GLM-TTS-Clone API. providerVoiceId (voice_clone_…) is what the TTS
-// call sends in its `voice` field; it only speaks on the SAME platform account
-// that created it. auditionWav caches the clone-time preview audio (base64) so
-// the UI can replay "how the clone sounds" without a fresh TTS call.
+// Voice cloning — a speaker's voice recreated from a short (3-30s) sample.
+// provider "zhipu": recreated via the Zhipu GLM-TTS-Clone API —
+// providerVoiceId (voice_clone_…) is what the TTS call sends in its `voice`
+// field; it only speaks on the SAME platform account that created it.
+// provider "selfhost": the normalized sample itself is stored (sampleWav,
+// base64) and re-sent to the user's voice_server.py (Chatterbox) on every
+// synthesis — the "clone" lives on the user's own machine.
+// auditionWav caches the clone-time preview audio (base64) so the UI can
+// replay "how the clone sounds" without a fresh TTS call.
 model VoiceProfile {
   id              String   @id @default(cuid())
   name            String
@@ -200,6 +204,7 @@ model VoiceProfile {
   sourceLabel     String? // original sample file name / URL label
   durationSec     Float? // length of the source sample
   auditionWav     String? // base64 WAV returned by the clone call (short preview)
+  sampleWav       String? // base64 normalized sample — self-hosted clones re-send it per synthesis
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

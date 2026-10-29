@@ -539,6 +539,11 @@ await test("sanitizeVoice: zhipu keeps cloned ids, other providers fall back", (
   eq(sanitizeVoice("zhipu", "nope"), "jam", "junk falls back to the first catalog voice");
   // A clone saved on a video must NOT leak into providers that can't speak it.
   eq(sanitizeVoice("openai", cloneId), "alloy", "openai falls back to alloy");
+  // Self-hosted speaks its own clones the same way zhipu does.
+  const shClone = "voice_clone_sh_abc123";
+  eq(sanitizeVoice("selfhost", shClone), shClone, "selfhost passes cloned ids through");
+  eq(sanitizeVoice("selfhost", "jam"), "jam", "selfhost stock ids unchanged");
+  eq(sanitizeVoice("zai", shClone), "jam", "zai must not receive selfhost clone ids");
   eq(sanitizeVoice("zai", cloneId), "jam", "zai falls back to the first catalog voice");
 });
 

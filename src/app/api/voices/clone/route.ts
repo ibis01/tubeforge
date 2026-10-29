@@ -13,23 +13,23 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getCapability } from "@/lib/tubeforge/providers/settings";
-import { cloneVoice } from "@/lib/tubeforge/voice-clone";
+import { cloneVoice, isCloneProvider } from "@/lib/tubeforge/voice-clone";
 import { errorText } from "@/lib/tubeforge/redact";
 
 export async function POST(req: NextRequest) {
   // Fail fast with a pointed message when the provider isn't set up — better
   // than a 500 from deep inside the clone flow.
   const config = await getCapability("tts");
-  if (config.provider !== "zhipu") {
+  if (!isCloneProvider(config.provider)) {
     return NextResponse.json(
       {
         error:
-          "Voice cloning runs on the Zhipu GLM-TTS provider — Settings → AI Providers → Voiceover → pick \"Zhipu GLM-TTS (voice cloning)\" and paste your bigmodel.cn key",
+          "Voice cloning needs a clone-capable voiceover provider — Settings → AI Providers → Voiceover → pick “Zhipu GLM-TTS (voice cloning)” (bigmodel.cn key) or “My Machine (self-hosted)” (free, runs on your PC)",
       },
       { status: 409 }
     );
   }
-  if (!config.apiKey?.trim()) {
+  if (config.provider === "zhipu" && !config.apiKey?.trim()) {
     return NextResponse.json(
       {
         error:
@@ -76,6 +76,7 @@ export async function POST(req: NextRequest) {
       name,
       sampleText,
       auditionText,
+      provider: config.provider,
     });
     return NextResponse.json({
       ok: true,

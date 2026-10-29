@@ -45,8 +45,8 @@ export async function resolvePreviewVoice(voice: string) {
   const model = config.provider === "openai" ? config.model.trim() || "tts-1" : config.model.trim();
   const catalog = voiceCatalog(config.provider, model);
   let known = catalog.some((v) => v.id === voice);
-  if (!known && config.provider === "zhipu" && isClonedVoiceId(voice)) {
-    const clones = await listVoiceProfiles();
+  if (!known && (config.provider === "zhipu" || config.provider === "selfhost") && isClonedVoiceId(voice)) {
+    const clones = await listVoiceProfiles(config.provider);
     known = clones.some((c) => c.id === voice);
   }
   return {

@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS "VoiceProfile" (
   "sourceLabel" TEXT,
   "durationSec" DOUBLE PRECISION,
   "auditionWav" TEXT,
+  "sampleWav" TEXT,
   "isActive" BOOLEAN NOT NULL DEFAULT true,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -41,6 +42,11 @@ CREATE INDEX IF NOT EXISTS "VoiceProfile_provider_idx" ON "VoiceProfile"("provid
 `;
 await client.query(ddl);
 console.log("VoiceProfile DDL applied ✓");
+
+// sampleWav (2026-10 self-hosted cloning) — idempotent for tables created
+// before the column existed.
+await client.query(`ALTER TABLE "VoiceProfile" ADD COLUMN IF NOT EXISTS "sampleWav" TEXT;`);
+console.log("VoiceProfile.sampleWav ensured ✓");
 
 // ── 2026-10 merge follow-up: the 7 nullable Video columns (idempotent) ──
 const alters = `

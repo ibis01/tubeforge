@@ -14,6 +14,7 @@ import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta, OPENAI_VOICES, type ProviderId } from "./registry";
 import { VOICES } from "../types";
 import { joinUrl, providerFetch } from "./http";
+import { getSampleWavByVoiceId } from "../voice-clone";
 
 export interface TtsRequest {
   input: string;
@@ -51,14 +52,15 @@ export function voiceCatalog(provider: ProviderId, model = "") {
 
 /** Map any stored voice onto the provider's catalog.
  *  Cloned voice ids are preserved for providers that can speak them
- *  (zhipu) — switching to a provider that cannot falls back to the catalog's
- *  first entry, exactly like a zai-only voice switching to OpenAI. */
+ *  (zhipu, selfhost) — switching to a provider that cannot falls back to the
+ *  catalog's first entry, exactly like a zai-only voice switching to OpenAI. */
 export function sanitizeVoice(
   provider: ProviderId,
   voice: string,
   model = "",
 ): string {
-  if (provider === "zhipu" && isClonedVoiceId(voice)) return voice;
+  if ((provider === "zhipu" || provider === "selfhost") && isClonedVoiceId(voice))
+    return voice;
   const catalog = voiceCatalog(provider, model);
   return catalog.some((v) => v.id === voice) ? voice : catalog[0].id;
 }
@@ -75,6 +77,9 @@ export async function ttsSynthesize(
   }
   if (config.provider === "zhipu") {
     return zhipuTts(req, config);
+  }
+  if (config.provider === "selfhost") {
+    return selfhostTts(req, config);
   }
   return zaiTts(req, config);
 }
@@ -143,6 +148,62 @@ async function zhipuTts(
   );
   const buffer = Buffer.from(new Uint8Array(await response.arrayBuffer()));
   if (buffer.length < 44) throw new Error("TTS returned empty audio");
+  return buffer;
+}
+
+// ---------- Self-hosted (voice_server.py — Chatterbox on the user's PC) ----------
+
+async function selfhostTts(
+  req: TtsRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
+  const meta = providerMeta("tts", "selfhost");
+  const baseUrl =
+    config.baseUrl?.trim() ||
+    meta?.defaultBaseUrl ||
+    "http://localhost:8931";
+  const key = config.apiKey?.trim();
+
+  // Cloned voices ride on their stored sample; stock studio voices fall back
+  // to the server's built-in default voice (empty `voice` field).
+  const voice = req.voice?.trim() || "";
+  let sampleB64: string | null = null;
+  if (isClonedVoiceId(voice)) {
+    sampleB64 = await getSampleWavByVoiceId(voice);
+    if (!sampleB64)
+      throw new Error(
+        "That cloned voice's sample is missing — re-clone it (its row predates self-hosted cloning)",
+      );
+  }
+
+  let response;
+  try {
+    response = await providerFetch(
+      "Self-hosted voice server",
+      joinUrl(baseUrl, "tts"),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(key ? { "X-Voice-Key": key } : {}),
+        },
+        body: JSON.stringify({
+          text: req.input,
+          voice: sampleB64 ?? "",
+          speed: req.speed,
+        }),
+      },
+    );
+  } catch (err) {
+    throw new Error(
+      `Your voice server at ${baseUrl} is unreachable — is it running (and the cloudflared tunnel up)? (${(err as Error).message})`,
+    );
+  }
+  const buffer = Buffer.from(new Uint8Array(await response.arrayBuffer()));
+  if (buffer.length < 44)
+    throw new Error(
+      `Your voice server returned no audio (HTTP ${response.status}) — check its console window for errors`,
+    );
   return buffer;
 }
 

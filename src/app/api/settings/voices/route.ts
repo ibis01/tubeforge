@@ -7,7 +7,7 @@ import { NextResponse } from "next/server";
 import { getCapability } from "@/lib/tubeforge/providers/settings";
 import { voiceCatalog } from "@/lib/tubeforge/providers/tts";
 import { providerMeta } from "@/lib/tubeforge/providers/registry";
-import { listVoiceProfiles } from "@/lib/tubeforge/voice-clone";
+import { isCloneProvider, listVoiceProfiles } from "@/lib/tubeforge/voice-clone";
 
 export async function GET() {
   const config = await getCapability("tts");
@@ -17,16 +17,16 @@ export async function GET() {
       : config.model?.trim();
   const voices = voiceCatalog(config.provider, model);
 
-  // Cloned voices only speak on the platform that created them.
-  const cloned =
-    config.provider === "zhipu" ? await listVoiceProfiles() : [];
+  // Cloned voices only speak on the provider that created them.
+  const cloneable = isCloneProvider(config.provider);
+  const cloned = cloneable ? await listVoiceProfiles(config.provider) : [];
 
   const meta = providerMeta("tts", config.provider);
   return NextResponse.json({
     provider: config.provider,
     model,
     voices: [...voices, ...cloned.map((c) => ({ id: c.id, label: c.label }))],
-    canClone: config.provider === "zhipu",
+    canClone: cloneable,
     note: meta?.note ?? "",
   });
 }
