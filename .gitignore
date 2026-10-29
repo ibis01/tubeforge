@@ -85,3 +85,6 @@ package-lock.json
 
 # runtime pid file (server state, not source)
 .zscripts/dev.pid
+
+# local screenshot scratch
+/.zshots/
