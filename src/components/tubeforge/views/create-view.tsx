@@ -78,14 +78,14 @@ const STAGE_DEFS: Record<
 > = {
   script: {
     label: "AI Script + Metadata",
-    desc: "GLM writes title, script, description, tags",
-    storyDesc: "GLM writes a scene-by-scene script with camera moves",
+    desc: "AI writes title, script, description, tags",
+    storyDesc: "AI writes a scene-by-scene script with camera moves",
     icon: FileText,
   },
   storyboard: {
     label: "Storyboard",
     desc: "",
-    storyDesc: "CogView paints every scene (host identity locked)",
+    storyDesc: "AI paints every scene (host identity locked)",
     icon: LayoutGrid,
   },
   stock: {
@@ -102,8 +102,8 @@ const STAGE_DEFS: Record<
   },
   thumbnail: {
     label: "Thumbnail",
-    desc: "CogView paints a click-worthy 16:9 cover",
-    storyDesc: "CogView paints a click-worthy 16:9 cover",
+    desc: "AI paints a click-worthy 16:9 cover",
+    storyDesc: "AI paints a click-worthy 16:9 cover",
     icon: ImageIcon,
   },
   render: {
@@ -124,7 +124,10 @@ async function api<T>(url: string, opts?: RequestInit): Promise<T> {
       headers: { "Content-Type": "application/json", ...(opts?.headers ?? {}) },
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+    if (!res.ok)
+      throw new Error(
+        (data as { error?: string }).error ?? `HTTP ${res.status}`,
+      );
     return data as T;
   } finally {
     clearTimeout(timer);
@@ -139,6 +142,8 @@ export function CreateView() {
   const setPrefillTopic = useAppStore((s) => s.setPrefillTopic);
 
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [aiConfig, setAiConfig] = useState<any>(null);
+
   const [topic, setTopic] = useState("");
   const [niche, setNiche] = useState<string>("Motivation");
   const [tone, setTone] = useState<string>("informative");
@@ -170,7 +175,9 @@ export function CreateView() {
   const [channelId, setChannelId] = useState<string>("none");
   const [channels, setChannels] = useState<{ id: string; name: string }[]>([]);
   const [characterId, setCharacterId] = useState<string>("none");
-  const [characters, setCharacters] = useState<{ id: string; name: string; voice: string; hasPortrait: boolean }[]>([]);
+  const [characters, setCharacters] = useState<
+    { id: string; name: string; voice: string; hasPortrait: boolean }[]
+  >([]);
   const [autoVoice, setAutoVoice] = useState(true);
   const [autoThumb, setAutoThumb] = useState(true);
   const [format, setFormat] = useState<string>("story");
@@ -212,21 +219,42 @@ export function CreateView() {
       })
       .catch(() => undefined)
       .finally(() => setSettingsLoaded(true));
+
+    // Load AI Provider config to fix the red warning text
+    fetch("/api/settings/ai")
+      .then((r) => r.json())
+      .then((d) => setAiConfig(d))
+      .catch(() => undefined);
+
     fetch("/api/channels")
       .then((r) => r.json())
-      .then((d) => setChannels((d.channels ?? []).map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }))))
+      .then((d) =>
+        setChannels(
+          (d.channels ?? []).map((c: { id: string; name: string }) => ({
+            id: c.id,
+            name: c.name,
+          })),
+        ),
+      )
       .catch(() => undefined);
     fetch("/api/characters")
       .then((r) => r.json())
       .then((d) =>
         setCharacters(
-          (d.characters ?? []).map((c: { id: string; name: string; voice: string; hasPortrait: boolean }) => ({
-            id: c.id,
-            name: c.name,
-            voice: c.voice,
-            hasPortrait: c.hasPortrait,
-          }))
-        )
+          (d.characters ?? []).map(
+            (c: {
+              id: string;
+              name: string;
+              voice: string;
+              hasPortrait: boolean;
+            }) => ({
+              id: c.id,
+              name: c.name,
+              voice: c.voice,
+              hasPortrait: c.hasPortrait,
+            }),
+          ),
+        ),
       )
       .catch(() => undefined);
   }, []);
@@ -234,12 +262,17 @@ export function CreateView() {
   // Prefill topic from other views
   useEffect(() => {
     if (prefillTopic) {
-      setTopic(prefillTopic);
-      setPrefillTopic(null);
+      // Defer state updates to avoid "setState synchronously within an effect" warning
+      const timer = setTimeout(() => {
+        setTopic(prefillTopic);
+        setPrefillTopic(null);
+      }, 0);
+      return () => clearTimeout(timer);
     }
   }, [prefillTopic, setPrefillTopic]);
 
-  const busy = anyRunning || runningRef.current;
+  // ✅ FIX: Do not read runningRef.current during render
+  const busy = anyRunning;
 
   // Casting a character adopts their voice so narration matches the persona.
   const castCharacter = characters.find((c) => c.id === characterId) ?? null;
@@ -250,7 +283,10 @@ export function CreateView() {
   };
 
   const runStage = useCallback(
-    async (stage: Stage, fn: () => Promise<VideoDTO>): Promise<VideoDTO | null> => {
+    async (
+      stage: Stage,
+      fn: () => Promise<VideoDTO>,
+    ): Promise<VideoDTO | null> => {
       setStageState((s) => ({ ...s, [stage]: "running" }));
       setError(null);
       try {
@@ -270,7 +306,7 @@ export function CreateView() {
         return null;
       }
     },
-    [toast]
+    [toast],
   );
 
   const createVideo = useCallback(
@@ -311,17 +347,19 @@ export function CreateView() {
   const startVoiceover = useCallback(
     (id: string) =>
       api(`/api/videos/${id}/voiceover`, { method: "POST" }).then(() =>
-        pollVoiceover(id, { timeoutMs: isStory ? 15 * 60 * 1000 : 6 * 60 * 1000 })
+        pollVoiceover(id, {
+          timeoutMs: isStory ? 15 * 60 * 1000 : 6 * 60 * 1000,
+        }),
       ),
-    [isStory]
+    [isStory],
   );
 
   const startThumbnail = useCallback(
     (id: string) =>
       api(`/api/videos/${id}/thumbnail`, { method: "POST" }).then(() =>
-        pollThumbnail(id)
+        pollThumbnail(id),
       ),
-    []
+    [],
   );
 
   const startStoryboard = useCallback((id: string) => {
@@ -360,15 +398,18 @@ export function CreateView() {
     }).then(() =>
       pollRender(
         id,
-        (s) => s.progress && setRenderLabel(`${s.progress.label} (${s.progress.current}/${s.progress.total})`),
+        (s) =>
+          s.progress &&
+          setRenderLabel(
+            `${s.progress.label} (${s.progress.current}/${s.progress.total})`,
+          ),
         {
           timeoutMs: mode === "animated" ? 60 * 60 * 1000 : 15 * 60 * 1000,
-        }
+        },
       ).then(async () => {
-        // Refresh the video DTO to pick up videoUrl + videoDuration.
         const d = await api<{ video: VideoDTO }>(`/api/videos/${id}`);
         return d.video;
-      })
+      }),
     );
   }, []);
 
@@ -409,11 +450,15 @@ export function CreateView() {
           }
 
           if (autopilot && autoVoice) {
-            const voiced = await runStage("voiceover", () => startVoiceover(v.id));
+            const voiced = await runStage("voiceover", () =>
+              startVoiceover(v.id),
+            );
             if (!voiced) return;
 
             if (autopilot && autoThumb) {
-              const thumbed = await runStage("thumbnail", () => startThumbnail(v.id));
+              const thumbed = await runStage("thumbnail", () =>
+                startThumbnail(v.id),
+              );
               if (!thumbed) return;
 
               if (renderMode === "animated") {
@@ -427,9 +472,10 @@ export function CreateView() {
             }
           }
         } else {
-          // Classic pipeline: voiceover → thumbnail
           if (autopilot && autoVoice) {
-            const voiced = await runStage("voiceover", () => startVoiceover(v.id));
+            const voiced = await runStage("voiceover", () =>
+              startVoiceover(v.id),
+            );
             if (!voiced) return;
             if (autopilot && autoThumb) {
               await runStage("thumbnail", () => startThumbnail(voiced.id));
@@ -441,7 +487,8 @@ export function CreateView() {
           toast({
             title: "Auto-Pilot complete",
             description:
-              isStory && (renderMode === "kenburns" || renderMode === "animated")
+              isStory &&
+              (renderMode === "kenburns" || renderMode === "animated")
                 ? "Your rendered video is ready to review and upload."
                 : "Your video package is ready to review and publish.",
           });
@@ -468,7 +515,7 @@ export function CreateView() {
       autoThumb,
       bumpRefresh,
       toast,
-    ]
+    ],
   );
 
   const resumeStage = useCallback(
@@ -478,20 +525,26 @@ export function CreateView() {
       setAnyRunning(true);
       try {
         if (stage === "storyboard") {
-          const boarded = await runStage("storyboard", () => startStoryboard(video.id));
+          const boarded = await runStage("storyboard", () =>
+            startStoryboard(video.id),
+          );
           if (boarded) bumpRefresh();
         } else if (stage === "stock") {
           const stocked = await runStage("stock", () => startStock(video.id));
           if (stocked) bumpRefresh();
         } else if (stage === "voiceover") {
-          const voiced = await runStage("voiceover", () => startVoiceover(video.id));
+          const voiced = await runStage("voiceover", () =>
+            startVoiceover(video.id),
+          );
           if (voiced) bumpRefresh();
         } else if (stage === "thumbnail") {
-          const thumbed = await runStage("thumbnail", () => startThumbnail(video.id));
+          const thumbed = await runStage("thumbnail", () =>
+            startThumbnail(video.id),
+          );
           if (thumbed) bumpRefresh();
         } else if (stage === "render") {
           const rendered = await runStage("render", () =>
-            startRender(video.id, renderMode)
+            startRender(video.id, renderMode),
           );
           if (rendered) bumpRefresh();
         }
@@ -543,7 +596,12 @@ export function CreateView() {
     [topic, batchRunning, batchCount, niche, tone, length, voice, speed, thumbStyle, channelId, characterId, format, renderMode, toast, bumpRefresh, setView]
   );
 
-  const tags = video?.tags ? video.tags.split(",").map((t) => t.trim()).filter(Boolean) : [];
+  const tags = video?.tags
+    ? video.tags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean)
+    : [];
   const stages: Stage[] = isStory
     ? renderMode === "stock"
       ? ["script", "storyboard", "stock", "voiceover", "thumbnail", "render"]
@@ -558,8 +616,16 @@ export function CreateView() {
           stageState[s] === "done" ||
           (s === "voiceover" && (!autoVoice || video?.hasVoiceover)) ||
           (s === "thumbnail" && (!autoThumb || video?.hasThumbnail)) ||
-          (s === "render" && (renderMode === "animated" || video?.hasVideo))
+          (s === "render" && (renderMode === "animated" || video?.hasVideo)),
       );
+
+  // Check if the TTS provider is missing an API key (ignoring localhost)
+  const ttsConfig = aiConfig?.capabilities?.tts;
+  const isLocalTts =
+    ttsConfig?.baseUrl?.includes("localhost") ||
+    ttsConfig?.baseUrl?.includes("127.0.0.1");
+  const missingTtsKey =
+    ttsConfig?.provider === "openai" && !ttsConfig?.hasKey && !isLocalTts;
 
   return (
     <div className="grid lg:grid-cols-12 gap-5">
@@ -571,7 +637,9 @@ export function CreateView() {
           </div>
           <div>
             <h2 className="font-semibold leading-tight">Video Blueprint</h2>
-            <p className="text-xs text-muted-foreground">One topic is all Auto-Pilot needs</p>
+            <p className="text-xs text-muted-foreground">
+              One topic is all Auto-Pilot needs
+            </p>
           </div>
         </div>
 
@@ -603,7 +671,6 @@ export function CreateView() {
             </div>
           </div>
 
-          {/* Format — classic narration vs scene-based story */}
           <div className="space-y-1.5">
             <Label>Production format</Label>
             <div className="grid grid-cols-2 gap-2">
@@ -617,7 +684,7 @@ export function CreateView() {
                     "rounded-xl border p-3 text-left transition-all",
                     format === f.id
                       ? "border-primary/50 bg-primary/8 glow-red-soft"
-                      : "border-white/10 bg-white/3 hover:border-white/25"
+                      : "border-white/10 bg-white/3 hover:border-white/25",
                   )}
                 >
                   <div className="flex items-center gap-1.5">
@@ -628,7 +695,9 @@ export function CreateView() {
                     )}
                     <span className="text-sm font-medium">{f.label}</span>
                   </div>
-                  <p className="text-[11px] text-muted-foreground mt-1 leading-snug">{f.desc}</p>
+                  <p className="text-[11px] text-muted-foreground mt-1 leading-snug">
+                    {f.desc}
+                  </p>
                 </button>
               ))}
             </div>
@@ -638,8 +707,12 @@ export function CreateView() {
             <div className="space-y-1.5 rounded-xl border border-white/10 bg-white/3 p-3">
               <div className="flex items-center justify-between">
                 <Label>Render mode</Label>
-                <Badge variant="outline" className="border-white/15 bg-white/5 text-muted-foreground text-[10px]">
-                  {sceneCount} scenes · {LENGTHS.find((l) => l.id === length)?.label ?? length}
+                <Badge
+                  variant="outline"
+                  className="border-white/15 bg-white/5 text-muted-foreground text-[10px]"
+                >
+                  {sceneCount} scenes ·{" "}
+                  {LENGTHS.find((l) => l.id === length)?.label ?? length}
                 </Badge>
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -653,7 +726,7 @@ export function CreateView() {
                       "rounded-lg border p-2.5 text-left transition-all",
                       renderMode === m.id
                         ? "border-primary/50 bg-primary/8"
-                        : "border-white/10 bg-white/3 hover:border-white/25"
+                        : "border-white/10 bg-white/3 hover:border-white/25",
                     )}
                   >
                     <div className="flex items-center gap-1.5">
@@ -668,7 +741,9 @@ export function CreateView() {
                       )}
                       <span className="text-[13px] font-medium">{m.label}</span>
                     </div>
-                    <p className="text-[10px] text-muted-foreground mt-1 leading-snug">{m.desc}</p>
+                    <p className="text-[10px] text-muted-foreground mt-1 leading-snug">
+                      {m.desc}
+                    </p>
                   </button>
                 ))}
               </div>
@@ -761,7 +836,11 @@ export function CreateView() {
             </div>
             <div className="space-y-1.5">
               <Label>Channel (optional)</Label>
-              <Select value={channelId} onValueChange={setChannelId} disabled={busy}>
+              <Select
+                value={channelId}
+                onValueChange={setChannelId}
+                disabled={busy}
+              >
                 <SelectTrigger className="bg-white/5">
                   <SelectValue placeholder="Unassigned" />
                 </SelectTrigger>
@@ -777,7 +856,11 @@ export function CreateView() {
             </div>
             <div className="space-y-1.5">
               <Label>Cast (optional)</Label>
-              <Select value={characterId} onValueChange={applyCastVoice} disabled={busy}>
+              <Select
+                value={characterId}
+                onValueChange={applyCastVoice}
+                disabled={busy}
+              >
                 <SelectTrigger className="bg-white/5">
                   <SelectValue placeholder="No recurring host" />
                 </SelectTrigger>
@@ -785,15 +868,17 @@ export function CreateView() {
                   <SelectItem value="none">No recurring host</SelectItem>
                   {characters.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
-                      {c.name}{c.hasPortrait ? " ●" : ""}
+                      {c.name}
+                      {c.hasPortrait ? " ●" : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               {castCharacter && (
                 <p className="text-[11px] text-emerald-300/90 leading-relaxed">
-                  {castCharacter.name} hosts this video — identity is stamped into the
-                  storyboard and thumbnail, and the voice defaults to their persona.
+                  {castCharacter.name} hosts this video — identity is stamped
+                  into the storyboard and thumbnail, and the voice defaults to
+                  their persona.
                 </p>
               )}
             </div>
@@ -807,18 +892,28 @@ export function CreateView() {
               voices={voices}
               disabled={busy}
             />
-            <p className="text-[10px] text-muted-foreground leading-relaxed">
-              Tap the <span className="text-primary">▶</span> next to a voice to hear how it
-              sounds before picking. Not feeling these voices? After creating, open the video&apos;s
-              Package tab → <span className="text-foreground/80">Change the voice</span> to
-              upload your own audio or paste a voice link from the internet.
-            </p>
+            {missingTtsKey ? (
+              <p className="text-[10px] text-red-400 font-medium leading-relaxed">
+                No API key set for the openai voiceover provider (Settings → AI
+                Providers)
+              </p>
+            ) : (
+              <p className="text-[10px] text-muted-foreground leading-relaxed">
+                Tap the <span className="text-primary">▶</span> next to a voice
+                to hear how it sounds before picking. Not feeling these voices?
+                After creating, open the video&apos;s Package tab →{" "}
+                <span className="text-foreground/80">Change the voice</span> to
+                upload your own audio or paste a voice link from the internet.
+              </p>
+            )}
           </div>
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label>Speech speed</Label>
-              <span className="text-xs font-medium tabular-nums text-primary">{speed.toFixed(1)}x</span>
+              <span className="text-xs font-medium tabular-nums text-primary">
+                {speed.toFixed(1)}x
+              </span>
             </div>
             <Slider
               value={[speed]}
@@ -833,7 +928,11 @@ export function CreateView() {
 
           <div className="space-y-1.5">
             <Label>Thumbnail style</Label>
-            <Select value={thumbStyle} onValueChange={setThumbStyle} disabled={busy}>
+            <Select
+              value={thumbStyle}
+              onValueChange={setThumbStyle}
+              disabled={busy}
+            >
               <SelectTrigger className="bg-white/5">
                 <SelectValue />
               </SelectTrigger>
@@ -847,7 +946,11 @@ export function CreateView() {
             </Select>
           </div>
 
-          <MusicPickerCard value={music} onChange={setMusic} compact={isStory} />
+          <MusicPickerCard
+            value={music}
+            onChange={setMusic}
+            compact={isStory}
+          />
 
           <div className="pt-1.5 flex flex-col gap-2">
             <Button
@@ -952,7 +1055,14 @@ export function CreateView() {
             )}
           </div>
 
-          <ol className={clsx("grid gap-3", stages.length > 3 ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5" : "sm:grid-cols-3")}>
+          <ol
+            className={clsx(
+              "grid gap-3",
+              stages.length > 3
+                ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5"
+                : "sm:grid-cols-3",
+            )}
+          >
             {stages.map((stage, i) => {
               const state = stageState[stage];
               const def = STAGE_DEFS[stage];
@@ -961,20 +1071,23 @@ export function CreateView() {
                   key={stage}
                   className={clsx(
                     "rounded-xl border p-3.5 transition-all duration-300",
-                    state === "done" && "border-emerald-500/25 bg-emerald-500/6",
-                    state === "running" && "border-primary/40 bg-primary/8 glow-red-soft",
+                    state === "done" &&
+                      "border-emerald-500/25 bg-emerald-500/6",
+                    state === "running" &&
+                      "border-primary/40 bg-primary/8 glow-red-soft",
                     state === "error" && "border-red-500/30 bg-red-500/6",
-                    state === "idle" && "border-white/8 bg-white/3"
+                    state === "idle" && "border-white/8 bg-white/3",
                   )}
                 >
                   <div className="flex items-center justify-between">
                     <div
                       className={clsx(
                         "h-8 w-8 rounded-lg flex items-center justify-center shrink-0",
-                        state === "done" && "bg-emerald-500/15 text-emerald-300",
+                        state === "done" &&
+                          "bg-emerald-500/15 text-emerald-300",
                         state === "running" && "bg-primary/15 text-primary",
                         state === "error" && "bg-red-500/15 text-red-300",
-                        state === "idle" && "bg-white/6 text-muted-foreground"
+                        state === "idle" && "bg-white/6 text-muted-foreground",
                       )}
                     >
                       {state === "running" ? (
@@ -1031,8 +1144,8 @@ export function CreateView() {
             </div>
             <p className="mt-4 font-medium">No production run yet</p>
             <p className="text-sm text-muted-foreground mt-1.5 max-w-sm leading-relaxed">
-              Configure the blueprint on the left and launch Auto-Pilot. Results will
-              stream in here stage by stage.
+              Configure the blueprint on the left and launch Auto-Pilot. Results
+              will stream in here stage by stage.
             </p>
           </Card>
         )}
@@ -1041,7 +1154,7 @@ export function CreateView() {
           <Card className="glass rounded-2xl p-5 space-y-3">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin text-primary" />
-              GLM is writing your script…
+              AI is writing your script…
             </div>
             <Skeleton className="h-6 w-3/4 bg-white/5" />
             <Skeleton className="h-4 w-full bg-white/5" />
@@ -1070,7 +1183,10 @@ export function CreateView() {
                     </p>
                   </div>
                   {video.channelName && (
-                    <Badge variant="outline" className="border-white/15 bg-white/5 text-muted-foreground">
+                    <Badge
+                      variant="outline"
+                      className="border-white/15 bg-white/5 text-muted-foreground"
+                    >
                       {video.channelName}
                     </Badge>
                   )}
@@ -1159,10 +1275,11 @@ export function CreateView() {
                       Voiceover · {formatDuration(video.audioDuration)}
                     </p>
                     <span className="text-[11px] text-muted-foreground">
-                      {voices.find((v) => v.id === video.voice)?.label ?? VOICES.find((v) => v.id === video.voice)?.label ?? video.voice}
+                      {voices.find((v) => v.id === video.voice)?.label ??
+                        VOICES.find((v) => v.id === video.voice)?.label ??
+                        video.voice}
                     </span>
                   </div>
-                  { }
                   <audio
                     controls
                     preload="metadata"
@@ -1181,7 +1298,10 @@ export function CreateView() {
                   {isStory ? "Scene Narration" : "Full Script"}
                 </p>
                 {video.description && (
-                  <Badge variant="outline" className="border-white/15 bg-white/5 text-muted-foreground">
+                  <Badge
+                    variant="outline"
+                    className="border-white/15 bg-white/5 text-muted-foreground"
+                  >
                     SEO description included
                   </Badge>
                 )}
@@ -1220,7 +1340,9 @@ export function CreateView() {
             ) &&
               video.status !== "published" && (
                 <Card className="glass rounded-2xl p-5">
-                  <p className="text-sm font-medium mb-1">Continue the pipeline</p>
+                  <p className="text-sm font-medium mb-1">
+                    Continue the pipeline
+                  </p>
                   <p className="text-xs text-muted-foreground mb-3">
                     Finish the remaining stages to complete this video.
                   </p>
@@ -1253,8 +1375,14 @@ export function CreateView() {
                         size="sm"
                         disabled={busy}
                         onClick={() => resumeStage("voiceover")}
-                        className={clsx(isStory && video.hasStoryboard ? "bg-brand-gradient hover:opacity-90 font-medium" : "border-white/15 bg-white/4")}
-                        variant={isStory && video.hasStoryboard ? "default" : "outline"}
+                        className={clsx(
+                          isStory && video.hasStoryboard
+                            ? "bg-brand-gradient hover:opacity-90 font-medium"
+                            : "border-white/15 bg-white/4",
+                        )}
+                        variant={
+                          isStory && video.hasStoryboard ? "default" : "outline"
+                        }
                       >
                         <Mic className="h-3.5 w-3.5" />
                         Generate Voiceover
@@ -1272,18 +1400,21 @@ export function CreateView() {
                         Generate Thumbnail
                       </Button>
                     )}
-                    {isStory && !video.hasVideo && video.hasStoryboard && video.hasVoiceover && (
-                      <Button
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => resumeStage("render")}
-                        variant="outline"
-                        className="border-white/15 bg-white/4"
-                      >
-                        <Clapperboard className="h-3.5 w-3.5" />
-                        Render Video
-                      </Button>
-                    )}
+                    {isStory &&
+                      !video.hasVideo &&
+                      video.hasStoryboard &&
+                      video.hasVoiceover && (
+                        <Button
+                          size="sm"
+                          disabled={busy}
+                          onClick={() => resumeStage("render")}
+                          variant="outline"
+                          className="border-white/15 bg-white/4"
+                        >
+                          <Clapperboard className="h-3.5 w-3.5" />
+                          Render Video
+                        </Button>
+                      )}
                   </div>
                 </Card>
               )}

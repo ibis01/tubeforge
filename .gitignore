@@ -1,4 +1,4 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# See https://help.github.com/articles/ignoring-files/ for more information about ignoring files.
 
 # dependencies
 node_modules
@@ -70,18 +70,15 @@ server.log
 # local-only workspace dirs
 /upload/
 /forensics/
-/scripts/
 # packaging artifacts
 public/tubeforge-local.zip
 public/tubeforge/
 *.tar
+
 # editor / OS
 .vscode/
 .idea/
 Thumbs.db
-
-# bun is the single package manager (bun.lock) — keep npm metadata out
-package-lock.json
 
 # runtime pid file (server state, not source)
 .zscripts/dev.pid

@@ -1,15 +1,3 @@
-// Text-generation adapter — one call site, four providers.
-//
-//   zai       → the bundled Z.ai SDK (shared singleton, global credentials)
-//   openai    → POST {baseUrl}/chat/completions   (OpenAI, OpenRouter, Groq,
-//               DeepSeek, Ollama, LM Studio — anything OpenAI-shaped)
-//   anthropic → POST {baseUrl}/v1/messages
-//   gemini    → POST {baseUrl}/v1beta/models/{model}:generateContent
-//
-// All call sites pass a clean { system, user } pair; each provider maps it to
-// its own wire format. Z.ai keeps the exact legacy request shape (leading
-// assistant message + thinking disabled) so behavior is unchanged.
-
 import { getZAI } from "../ai";
 import { DEFAULT_CHAT_MODEL } from "../types";
 import { getCapability, type CapabilityConfig } from "./settings";
@@ -33,15 +21,34 @@ interface GeminiResponse {
   candidates?: { content?: { parts?: { text?: string }[] } }[];
 }
 
+// Providers that speak OpenAI's wire format — one handler covers all of them.
+const OPENAI_COMPATIBLE = new Set([
+  "openai",
+  "mistral",
+  "groq",
+  "deepseek",
+  "xai",
+  "openrouter",
+  "together",
+  "fireworks",
+  "perplexity",
+  "cohere",
+  "azure-openai",
+  "ollama",
+  "lmstudio",
+  "vllm",
+]);
+
 export async function chatComplete(
   req: ChatRequest,
-  overrides?: Partial<CapabilityConfig>
+  overrides?: Partial<CapabilityConfig>,
 ): Promise<string> {
   const config = await getCapability("chat", overrides);
+  const provider = config.provider;
 
-  switch (config.provider) {
-    case "openai":
-      return openaiChat(req, config);
+  if (OPENAI_COMPATIBLE.has(provider)) return openaiChat(req, config);
+
+  switch (provider) {
     case "anthropic":
       return anthropicChat(req, config);
     case "gemini":
@@ -52,9 +59,12 @@ export async function chatComplete(
   }
 }
 
-// ---------- Z.ai (SDK — unchanged legacy shape) ----------
+// ---------- Z.ai (SDK — legacy shape, model-aware thinking) ----------
 
-async function zaiChat(req: ChatRequest, config: CapabilityConfig): Promise<string> {
+async function zaiChat(
+  req: ChatRequest,
+  config: CapabilityConfig,
+): Promise<string> {
   const zai = await getZAI();
   const model = config.model?.trim() || DEFAULT_CHAT_MODEL;
   const completion = await zai.chat.completions.create({
@@ -63,8 +73,6 @@ async function zaiChat(req: ChatRequest, config: CapabilityConfig): Promise<stri
       { role: "assistant", content: req.system },
       { role: "user", content: req.user },
     ],
-    // GLM-4.7 / GLM-5.3 models FORCE thinking — sending "disabled" there
-    // errors with code 1210. Everything else accepts the fast direct mode.
     thinking: /^glm-(4\.7|5\.3)/.test(model)
       ? { type: "enabled" }
       : { type: "disabled" },
@@ -72,46 +80,70 @@ async function zaiChat(req: ChatRequest, config: CapabilityConfig): Promise<stri
   return completion.choices[0]?.message?.content ?? "";
 }
 
-// ---------- OpenAI-compatible ----------
+// ---------- OpenAI-compatible (covers ~14 providers) ----------
 
-async function openaiChat(req: ChatRequest, config: CapabilityConfig): Promise<string> {
-  const meta = providerMeta("chat", "openai")!;
-  const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
-  const model = config.model?.trim() || "gpt-4o-mini";
+async function openaiChat(
+  req: ChatRequest,
+  config: CapabilityConfig,
+): Promise<string> {
+  const meta = providerMeta("chat", config.provider);
+  const baseUrl =
+    config.baseUrl?.trim() ||
+    meta?.defaultBaseUrl ||
+    "https://api.openai.com/v1";
+  const model = config.model?.trim() || meta?.models[0]?.id || "gpt-4o-mini";
   const key = config.apiKey?.trim();
-  if (!key) throw new Error("OpenAI-compatible chat needs an API key (Settings → AI Providers)");
 
-  const data = await providerFetchJson<OpenAiChatResponse>("OpenAI-compatible", joinUrl(baseUrl, "chat/completions"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
+  // FIXED: This now works because meta has requiresKey in the new registry.ts
+  const requiresKey = meta?.requiresKey !== false;
+
+  // Local servers (Ollama / LM Studio / vLLM) don't need a key — skip the check.
+  if (!key && requiresKey) {
+    const who = meta?.label ?? config.provider;
+    throw new Error(`${who} needs an API key (Settings → AI Providers)`);
+  }
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  // Only attach auth when we actually have a key — some local servers
+  // reject an empty `Authorization:` header outright.
+  if (key) headers.Authorization = `Bearer ${key}`;
+
+  const data = await providerFetchJson<OpenAiChatResponse>(
+    meta?.label ?? "OpenAI-compatible",
+    joinUrl(baseUrl, "chat/completions"),
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: req.system },
+          { role: "user", content: req.user },
+        ],
+      }),
     },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: req.system },
-        { role: "user", content: req.user },
-      ],
-      // NOTE: no `thinking` field — that is Z.ai-specific and strict OpenAI
-      // servers reject unknown parameters with a 400.
-    }),
-  });
+  );
   return data.choices?.[0]?.message?.content ?? "";
 }
 
 // ---------- Anthropic ----------
 
-async function anthropicChat(req: ChatRequest, config: CapabilityConfig): Promise<string> {
+async function anthropicChat(
+  req: ChatRequest,
+  config: CapabilityConfig,
+): Promise<string> {
   const meta = providerMeta("chat", "anthropic")!;
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const model = config.model?.trim() || "claude-sonnet-4-5";
   const key = config.apiKey?.trim();
-  if (!key) throw new Error("Anthropic needs an API key (Settings → AI Providers)");
+  if (!key)
+    throw new Error("Anthropic needs an API key (Settings → AI Providers)");
 
   let url = joinUrl(baseUrl, "v1/messages");
   if (/\/v1$/.test(baseUrl.trim().replace(/\/+$/, ""))) {
-    url = joinUrl(baseUrl, "messages"); // user already included /v1
+    url = joinUrl(baseUrl, "messages");
   }
 
   const data = await providerFetchJson<AnthropicResponse>("Anthropic", url, {
@@ -123,7 +155,7 @@ async function anthropicChat(req: ChatRequest, config: CapabilityConfig): Promis
     },
     body: JSON.stringify({
       model,
-      max_tokens: 8192, // required by Anthropic — roomy enough for full scripts
+      max_tokens: 8192,
       system: req.system,
       messages: [{ role: "user", content: req.user }],
     }),
@@ -137,14 +169,21 @@ async function anthropicChat(req: ChatRequest, config: CapabilityConfig): Promis
 
 // ---------- Google Gemini ----------
 
-async function geminiChat(req: ChatRequest, config: CapabilityConfig): Promise<string> {
+async function geminiChat(
+  req: ChatRequest,
+  config: CapabilityConfig,
+): Promise<string> {
   const meta = providerMeta("chat", "gemini")!;
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const model = config.model?.trim() || "gemini-2.5-flash";
   const key = config.apiKey?.trim();
-  if (!key) throw new Error("Gemini needs an API key (Settings → AI Providers)");
+  if (!key)
+    throw new Error("Gemini needs an API key (Settings → AI Providers)");
 
-  const url = joinUrl(baseUrl, `v1beta/models/${encodeURIComponent(model)}:generateContent`);
+  const url = joinUrl(
+    baseUrl,
+    `v1beta/models/${encodeURIComponent(model)}:generateContent`,
+  );
 
   const data = await providerFetchJson<GeminiResponse>("Gemini", url, {
     method: "POST",
@@ -157,7 +196,7 @@ async function geminiChat(req: ChatRequest, config: CapabilityConfig): Promise<s
       contents: [{ role: "user", parts: [{ text: req.user }] }],
       generationConfig: {
         maxOutputTokens: 8192,
-        responseMimeType: "application/json", // every TubeForge prompt wants JSON
+        responseMimeType: "application/json",
       },
     }),
   });

@@ -341,7 +341,7 @@ export async function convertClassicToScenes(opts: {
 
   // 3) Clear stale render artifacts (a previous story lifecycle could linger).
   for (const f of ["final.mp4", "preview.mp4", "subtitles.srt", "short.mp4", "short-thumb.png"]) {
-    fs.rmSync(path.join(dir, f), { force: true });
+    fs.rmSync(path.join( dir, f), { force: true });
   }
 
   // 4) Flip the video to story format. Storyboard + video flags reset; the

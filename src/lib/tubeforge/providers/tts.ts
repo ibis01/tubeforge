@@ -35,7 +35,11 @@ export function voiceCatalog(provider: ProviderId, model = "") {
 }
 
 /** Map any stored voice onto the provider's catalog. */
-export function sanitizeVoice(provider: ProviderId, voice: string, model = ""): string {
+export function sanitizeVoice(
+  provider: ProviderId,
+  voice: string,
+  model = "",
+): string {
   const catalog = voiceCatalog(provider, model);
   return catalog.some((v) => v.id === voice) ? voice : catalog[0].id;
 }
@@ -43,7 +47,7 @@ export function sanitizeVoice(provider: ProviderId, voice: string, model = ""): 
 /** Synthesize speech; always returns WAV bytes. */
 export async function ttsSynthesize(
   req: TtsRequest,
-  overrides?: Partial<CapabilityConfig>
+  overrides?: Partial<CapabilityConfig>,
 ): Promise<Buffer> {
   const config = await getCapability("tts", overrides);
 
@@ -55,7 +59,10 @@ export async function ttsSynthesize(
 
 // ---------- Z.ai (SDK — unchanged legacy shape) ----------
 
-async function zaiTts(req: TtsRequest, config: CapabilityConfig): Promise<Buffer> {
+async function zaiTts(
+  req: TtsRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
   const zai = await getZAI();
   const voice = sanitizeVoice("zai", req.voice);
   const response = await zai.audio.tts.create({
@@ -70,24 +77,48 @@ async function zaiTts(req: TtsRequest, config: CapabilityConfig): Promise<Buffer
   return buffer;
 }
 
-// ---------- OpenAI-compatible ----------
+// ---------- OpenAI-compatible (OpenAI / TTSFM / etc) ----------
 
-async function openaiTts(req: TtsRequest, config: CapabilityConfig): Promise<Buffer> {
-  const meta = providerMeta("tts", "openai")!;
-  const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
+async function openaiTts(
+  req: TtsRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
+  const meta = providerMeta("tts", config.provider);
+  const baseUrl =
+    config.baseUrl?.trim() ||
+    meta?.defaultBaseUrl ||
+    "https://api.openai.com/v1";
   const model = config.model?.trim() || "tts-1";
   const key = config.apiKey?.trim();
-  if (!key) throw new Error("OpenAI-compatible TTS needs an API key (Settings → AI Providers)");
+
+  // FIX: Skip the API key check if the provider is local (like TTSFM) or explicitly requires no key
+  const isLocal =
+    baseUrl.includes("localhost") || baseUrl.includes("127.0.0.1");
+  const requiresKey = meta?.requiresKey !== false && !isLocal;
+
+  if (!key && requiresKey) {
+    throw new Error(
+      "OpenAI-compatible TTS needs an API key (Settings → AI Providers)",
+    );
+  }
 
   const voice = sanitizeVoice("openai", req.voice, model);
   const speed = Math.min(4, Math.max(0.25, req.speed || 1)); // OpenAI range
+
+  // FIX: Only send the Authorization header if we actually have a key
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (key) {
+    headers.Authorization = `Bearer ${key}`;
+  }
 
   const response = await providerFetch(
     "OpenAI-compatible TTS",
     joinUrl(baseUrl, "audio/speech"),
     {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      headers,
       body: JSON.stringify({
         model,
         voice,
@@ -95,7 +126,7 @@ async function openaiTts(req: TtsRequest, config: CapabilityConfig): Promise<Buf
         speed,
         response_format: "wav",
       }),
-    }
+    },
   );
   const buffer = Buffer.from(new Uint8Array(await response.arrayBuffer()));
   if (buffer.length < 44) throw new Error("TTS returned empty audio");

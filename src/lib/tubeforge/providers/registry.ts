@@ -3,12 +3,15 @@
 
 import { CHAT_MODELS } from "../types";
 
-export type ProviderId = "zai" | "openai" | "anthropic" | "gemini" | "pollinations";
 export type CapabilityId = "chat" | "tts" | "image" | "video";
 
+export type ProviderKind = "zai" | "openai" | "anthropic" | "gemini" | "native";
+export type ProviderId = string;
+
 export interface ProviderMeta {
-  id: ProviderId;
+  id: string;
   label: string;
+  kind: ProviderKind;
   /** Default endpoint — used when the user leaves the base URL blank. */
   defaultBaseUrl: string;
   /** Where to sign up / grab an API key. */
@@ -16,12 +19,15 @@ export interface ProviderMeta {
   /** Suggested models — the field stays free-text so any model id works. */
   models: { id: string; hint?: string }[];
   note?: string;
+  /** Local servers (Ollama, LM Studio, vLLM) don't need an API key. */
+  requiresKey?: boolean;
 }
 
-/** Text generation: scripts, research, engagement kits, character bibles. */
+// ───────────────────────────── CHAT ─────────────────────────────
 export const CHAT_PROVIDERS: ProviderMeta[] = [
   {
     id: "zai",
+    kind: "zai",
     label: "Z.ai (GLM)",
     defaultBaseUrl: "https://api.z.ai/api/paas/v4",
     keyUrl: "https://z.ai/model-api",
@@ -30,7 +36,8 @@ export const CHAT_PROVIDERS: ProviderMeta[] = [
   },
   {
     id: "openai",
-    label: "OpenAI-compatible (OpenAI, OpenRouter, Groq, DeepSeek, Ollama…)",
+    kind: "openai",
+    label: "OpenAI",
     defaultBaseUrl: "https://api.openai.com/v1",
     keyUrl: "https://platform.openai.com/api-keys",
     models: [
@@ -40,10 +47,10 @@ export const CHAT_PROVIDERS: ProviderMeta[] = [
       { id: "gpt-4.1" },
       { id: "o4-mini", hint: "reasoning model" },
     ],
-    note: "Works with any server that speaks the OpenAI /chat/completions dialect.",
   },
   {
     id: "anthropic",
+    kind: "anthropic",
     label: "Anthropic (Claude)",
     defaultBaseUrl: "https://api.anthropic.com",
     keyUrl: "https://console.anthropic.com/settings/keys",
@@ -51,27 +58,101 @@ export const CHAT_PROVIDERS: ProviderMeta[] = [
       { id: "claude-sonnet-4-5", hint: "recommended" },
       { id: "claude-opus-4-1" },
       { id: "claude-haiku-4-5", hint: "fast + affordable" },
-      { id: "claude-3-7-sonnet-latest" },
     ],
   },
   {
     id: "gemini",
+    kind: "gemini",
     label: "Google (Gemini)",
     defaultBaseUrl: "https://generativelanguage.googleapis.com",
     keyUrl: "https://aistudio.google.com/apikey",
     models: [
-      { id: "gemini-2.5-flash", hint: "recommended — generous free tier" },
+      { id: "gemini-2.5-flash", hint: "recommended" },
       { id: "gemini-2.5-pro" },
-      { id: "gemini-2.0-flash" },
     ],
-    note: "API keys from Google AI Studio include a free quota.",
+  },
+  {
+    id: "groq",
+    kind: "openai",
+    label: "Groq (Llama & Mixtral)",
+    defaultBaseUrl: "https://api.groq.com/openai/v1",
+    keyUrl: "https://console.groq.com/keys",
+    models: [
+      { id: "llama-3.3-70b-versatile", hint: "flagship" },
+      { id: "llama-3.1-8b-instant", hint: "ultra-fast" },
+    ],
+  },
+  {
+    id: "deepseek",
+    kind: "openai",
+    label: "DeepSeek",
+    defaultBaseUrl: "https://api.deepseek.com/v1",
+    keyUrl: "https://platform.deepseek.com/api_keys",
+    models: [
+      { id: "deepseek-chat", hint: "V3 general" },
+      { id: "deepseek-reasoner", hint: "R1 reasoning" },
+    ],
+  },
+  {
+    id: "mistral",
+    kind: "openai",
+    label: "Mistral",
+    defaultBaseUrl: "https://api.mistral.ai/v1",
+    keyUrl: "https://console.mistral.ai/api-keys/",
+    models: [{ id: "mistral-large-latest" }, { id: "pixtral-large-latest" }],
+  },
+  {
+    id: "xai",
+    kind: "openai",
+    label: "xAI Grok",
+    defaultBaseUrl: "https://api.x.ai/v1",
+    keyUrl: "https://console.x.ai/",
+    models: [{ id: "grok-4" }, { id: "grok-3" }],
+  },
+  {
+    id: "openrouter",
+    kind: "openai",
+    label: "OpenRouter",
+    defaultBaseUrl: "https://openrouter.ai/api/v1",
+    keyUrl: "https://openrouter.ai/keys",
+    models: [
+      { id: "openai/gpt-4o" },
+      { id: "anthropic/claude-sonnet-4.5" },
+      { id: "meta-llama/llama-3.3-70b-instruct" },
+    ],
+  },
+  {
+    id: "ollama",
+    kind: "openai",
+    label: "Ollama (local)",
+    defaultBaseUrl: "http://localhost:11434/v1",
+    keyUrl: "https://ollama.com/download",
+    models: [
+      { id: "llama3.2" },
+      { id: "qwen2.5" },
+      { id: "mistral" },
+      { id: "deepseek-r1" },
+    ],
+    note: "Runs locally. No API key needed.",
+    requiresKey: false,
+  },
+  {
+    id: "lmstudio",
+    kind: "openai",
+    label: "LM Studio (local)",
+    defaultBaseUrl: "http://localhost:1234/v1",
+    keyUrl: "https://lmstudio.ai/",
+    models: [],
+    note: "Local GGUF models. No key needed.",
+    requiresKey: false,
   },
 ];
 
-/** Voiceover TTS + narration ASR (audio tasks share one provider choice). */
+// ───────────────────────────── TTS ─────────────────────────────
 export const TTS_PROVIDERS: ProviderMeta[] = [
   {
     id: "zai",
+    kind: "zai",
     label: "Z.ai TTS",
     defaultBaseUrl: "https://api.z.ai/api/paas/v4",
     keyUrl: "https://z.ai/model-api",
@@ -80,7 +161,8 @@ export const TTS_PROVIDERS: ProviderMeta[] = [
   },
   {
     id: "openai",
-    label: "OpenAI-compatible (OpenAI /audio/speech)",
+    kind: "openai",
+    label: "OpenAI TTS",
     defaultBaseUrl: "https://api.openai.com/v1",
     keyUrl: "https://platform.openai.com/api-keys",
     models: [
@@ -88,14 +170,22 @@ export const TTS_PROVIDERS: ProviderMeta[] = [
       { id: "tts-1-hd", hint: "higher fidelity" },
       { id: "gpt-4o-mini-tts", hint: "newest, most voices" },
     ],
-    note: "Only servers that expose /audio/speech (OpenAI itself or a mirror).",
+  },
+  {
+    id: "elevenlabs",
+    kind: "native",
+    label: "ElevenLabs",
+    defaultBaseUrl: "https://api.elevenlabs.io/v1",
+    keyUrl: "https://elevenlabs.io/app/settings/api-keys",
+    models: [{ id: "eleven_multilingual_v2" }, { id: "eleven_turbo_v2_5" }],
   },
 ];
 
-/** Thumbnails, storyboard scenes, portraits, pose sheets. */
+// ───────────────────────────── IMAGE ─────────────────────────────
 export const IMAGE_PROVIDERS: ProviderMeta[] = [
   {
     id: "zai",
+    kind: "zai",
     label: "Z.ai CogView",
     defaultBaseUrl: "https://api.z.ai/api/paas/v4",
     keyUrl: "https://z.ai/model-api",
@@ -104,6 +194,7 @@ export const IMAGE_PROVIDERS: ProviderMeta[] = [
   },
   {
     id: "pollinations",
+    kind: "native",
     label: "Pollinations.ai (free, no key)",
     defaultBaseUrl: "https://image.pollinations.ai",
     keyUrl: "https://enter.pollinations.ai",
@@ -113,29 +204,100 @@ export const IMAGE_PROVIDERS: ProviderMeta[] = [
       { id: "flux-realism", hint: "photorealistic" },
     ],
     note: "No API key. Free tier is 1 image / 45s / IP (a 16-scene storyboard takes ~12 min). Buy a pollen key for unlimited at enter.pollinations.ai. No identity-locked edits (host scenes fall back to prompt-seeded generation).",
+    requiresKey: false,
   },
   {
     id: "openai",
-    label: "OpenAI-compatible (DALL·E / gpt-image)",
+    kind: "native",
+    label: "OpenAI Images",
     defaultBaseUrl: "https://api.openai.com/v1",
     keyUrl: "https://platform.openai.com/api-keys",
     models: [
-      { id: "dall-e-3", hint: "vivid; edits unsupported" },
-      { id: "gpt-image-1", hint: "supports image edits (host likeness)" },
+      { id: "gpt-image-1", hint: "supports image edits" },
+      { id: "dall-e-3", hint: "classic" },
     ],
-    note: "Only servers that expose /images/generations in OpenAI shape.",
+  },
+  {
+    id: "stability",
+    kind: "native",
+    label: "Stability AI",
+    defaultBaseUrl: "https://api.stability.ai",
+    keyUrl: "https://platform.stability.ai/account/keys",
+    models: [{ id: "sd3.5-large" }, { id: "sd3.5-medium" }],
+  },
+  {
+    id: "fal",
+    kind: "native",
+    label: "fal.ai (Flux)",
+    defaultBaseUrl: "https://fal.run",
+    keyUrl: "https://fal.ai/dashboard/keys",
+    models: [{ id: "fal-ai/flux-pro/v1.1" }, { id: "fal-ai/flux/dev" }],
+  },
+  {
+    id: "replicate",
+    kind: "native",
+    label: "Replicate",
+    defaultBaseUrl: "https://api.replicate.com/v1",
+    keyUrl: "https://replicate.com/account/api-tokens",
+    models: [
+      { id: "black-forest-labs/flux-1.1-pro", hint: "FLUX Pro" },
+      { id: "stability-ai/sdxl", hint: "SDXL" },
+    ],
   },
 ];
 
-/** Scene animation (image-to-video). CogVideoX is the only engine wired in. */
+// ───────────────────────────── VIDEO ─────────────────────────────
 export const VIDEO_PROVIDERS: ProviderMeta[] = [
   {
     id: "zai",
-    label: "Z.ai CogVideoX (only option)",
+    kind: "zai",
+    label: "Z.ai CogVideoX",
     defaultBaseUrl: "https://api.z.ai/api/paas/v4",
     keyUrl: "https://z.ai/model-api",
     models: [{ id: "cogvideox-3", hint: "5s 1080p clips" }],
     note: "Ken Burns render mode needs no AI video at all.",
+  },
+  {
+    id: "fal",
+    kind: "native",
+    label: "fal.ai Video (Free Credits)",
+    defaultBaseUrl: "https://fal.run",
+    keyUrl: "https://fal.ai/dashboard/keys",
+    models: [
+      // Correct endpoint for SVD (no suffix)
+      { id: "fal-ai/fast-svd", hint: "Stable Video Diffusion" },
+      // Reliable, widely-used alternative
+      {
+        id: "fal-ai/minimax/video-01/image-to-video",
+        hint: "MiniMax Hailuo Video",
+      },
+    ],
+    note: "Includes free starting credits. Fast generation.",
+  },
+  {
+    id: "replicate",
+    kind: "native",
+    label: "Replicate Video (Free Credits)",
+    defaultBaseUrl: "https://api.replicate.com/v1",
+    keyUrl: "https://replicate.com/account/api-tokens",
+    models: [{ id: "minimax/video-01", hint: "Hailuo Video" }],
+    note: "Includes $5 free credits on signup.",
+  },
+  {
+    id: "runway",
+    kind: "native",
+    label: "Runway",
+    defaultBaseUrl: "https://api.dev.runwayml.com/v1",
+    keyUrl: "https://dev.runwayml.com/",
+    models: [{ id: "gen4_turbo" }, { id: "gen3a_turbo" }],
+  },
+  {
+    id: "luma",
+    kind: "native",
+    label: "Luma Dream Machine",
+    defaultBaseUrl: "https://api.lumalabs.ai/dream-machine/v1",
+    keyUrl: "https://lumalabs.ai/dream-machine/api/keys",
+    models: [{ id: "ray-2" }, { id: "ray-flash-2" }],
   },
 ];
 
@@ -172,7 +334,12 @@ export const CAPABILITY_META: Record<
   },
 };
 
-// ---------- Voice catalogs ----------
+export function providerMeta(
+  capability: CapabilityId,
+  id: string,
+): ProviderMeta | undefined {
+  return PROVIDERS_BY_CAPABILITY[capability].find((p) => p.id === id);
+}
 
 /** OpenAI TTS voices. The classic six work on every tts model. */
 export const OPENAI_VOICES = [
@@ -182,15 +349,4 @@ export const OPENAI_VOICES = [
   { id: "onyx", label: "Onyx — deep, authoritative", classic: true },
   { id: "nova", label: "Nova — bright, energetic", classic: true },
   { id: "shimmer", label: "Shimmer — warm, friendly", classic: true },
-  { id: "ash", label: "Ash — raspy, confident", classic: false },
-  { id: "coral", label: "Coral — lively, upbeat", classic: false },
-  { id: "sage", label: "Sage — soft, thoughtful", classic: false },
-  { id: "ballad", label: "Ballad — emotional, gentle", classic: false },
 ] as const;
-
-export function providerMeta(
-  capability: CapabilityId,
-  id: string
-): ProviderMeta | undefined {
-  return PROVIDERS_BY_CAPABILITY[capability].find((p) => p.id === id);
-}

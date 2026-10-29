@@ -1,0 +1,246 @@
+// LOCAL-DEVELOPMENT MIRROR of schema.prisma — provider swapped to SQLite.
+// Keep field definitions in sync with schema.prisma (the PostgreSQL,
+// deployment-default schema). See SETUP.md "Local development (SQLite)".
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Channel {
+  id          String   @id @default(cuid())
+  name        String
+  niche       String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  videos      Video[]
+}
+
+model Character {
+  id             String   @id @default(cuid())
+  name           String
+  role           String?
+  personality    String?
+  appearance     String?
+  identityAnchor String?
+  voice          String   @default("jam")
+  artStyle       String   @default("cinematic")
+  hasPortrait    Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  videos         Video[]
+}
+
+model Video {
+  id            String    @id @default(cuid())
+  title         String?
+  topic         String
+  niche         String
+  tone          String    @default("informative")
+  length        String    @default("medium")
+  script        String?
+  description   String?
+  tags          String?
+  status        String    @default("draft")
+  voice         String    @default("jam")
+  ttsSpeed      Float     @default(1.0)
+  thumbStyle    String    @default("cinematic")
+
+  // Bring-your-own-voice — "tts" = built-in AI voices, "custom" = user-provided
+  // audio (uploaded file or downloaded from an internet URL)
+  voiceSource   String    @default("tts")
+  voiceLabel    String? // display name of the custom voice (file name / URL)
+
+  // Story engine (Phase 2) — "script" = classic narration, "story" = scene-based
+  format        String    @default("script")
+  renderMode    String    @default("kenburns")
+  scenes        String?   // JSON array of Scene {title, narration, visual, camera, mood, caption, hostInScene}
+  hasStoryboard Boolean   @default(false)
+  hasVideo      Boolean   @default(false)
+  videoDuration Float?
+
+  hasVoiceover  Boolean   @default(false)
+  hasThumbnail  Boolean   @default(false)
+  audioDuration Float?
+  wordCount     Int?
+  error         String?
+  channelId     String?
+  channel       Channel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  characterId   String?
+  character     Character? @relation(fields: [characterId], references: [id], onDelete: SetNull)
+  verifyReport String? // JSON ASR narration-check report (Phase 3)
+  commentsKit  String? // JSON engagement kit: pinned comment + replies + strategy (Phase 4)
+  youtubeUrl   String? // https://youtu.be/<id> after a successful OAuth upload (Phase 4)
+  publishedAt  DateTime? // real publish date reported by YouTube (Phase 5 analytics)
+
+  // Auto-Short (Phase 5) — 9:16 vertical cut rendered from the final video
+  hasShort     Boolean  @default(false)
+  shortScene   Int? // scene index the short was cut from (null = auto-picked)
+  shortDuration Float? @default(0)
+
+  // Background music (per-video overrides; null = fall back to Settings defaults)
+  musicEnabled Boolean? // null = use the global default (Settings -> Background Music)
+  musicTrackId String? // manual pick (overrides auto mood-matching)
+  musicVolume Float? // 0..1 multiplier applied to the licensed track
+  musicFadeIn Float? // seconds
+  musicFadeOut Float? // seconds
+  musicDucking Boolean? // null = Settings default; false = constant bed under the voice
+  musicDuckingIntensity String? // subtle | standard | strong (audiomix.ts catalog)
+  musicMood String? // auto | suspenseful | cinematic | emotional | uplifting | calm
+
+  // Smart Motion (Ken Burns) per-video overrides; null = built-in defaults
+  // (smart scene-aware mode, 12% zoom intensity, smooth easing, direction
+  // variation on — see src/lib/tubeforge/motion.ts)
+  motionMode      String? // smart | zoom | pan | off
+  motionIntensity Int? // 0..30 (% zoom amplitude)
+  motionCurve     String? // smooth | linear
+  motionVary      Boolean?
+
+  // Scene transitions (per-video overrides; null = built-in default fade).
+  // style ids live in src/lib/tubeforge/transitions.ts (fade, fadeblack, …,
+  // "cut" = hard cuts); duration is the blend length in seconds.
+  transitionStyle    String? // fade | cut | … (transitions.ts catalog)
+  transitionDuration Float? // blend length, 0.2..1.5 s
+
+  // Brand kit (keynote slides) — accent recolors every slide's highlight
+  // system (null = the built-in per-slide catalog accents); brandLogoOn
+  // toggles the corner logo badge on every slide (null = on when a logo
+  // exists). The logo file itself lives at uploads/<videoId>/brand-logo.*.
+  brandAccent  String? // #rrggbb, null = catalog accents
+  brandLogoOn  Boolean? // null = show badge whenever a logo is uploaded
+
+  // Post-render quality gate — JSON report from qc.ts: streams, duration,
+  // loudness, peaks, black frames, SRT sanity.
+  qcReport     String?
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  activities    Activity[]
+  slots         ScheduleSlot[]
+  stats         VideoStat[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Activity {
+  id        String   @id @default(cuid())
+  videoId   String?
+  video     Video?   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  stage     String
+  message   String
+  level     String   @default("info")
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model ResearchSession {
+  id        String   @id @default(cuid())
+  niche     String
+  query     String
+  ideas     String // JSON-serialized array of ResearchIdeaDTO
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([createdAt])
+}
+
+model ScheduleSlot {
+  id        String   @id @default(cuid())
+  videoId   String?
+  video     Video?   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  channelId String?
+  title     String
+  slotDate  DateTime // publish day (midnight, local calendar day)
+  timeOfDay String   @default("18:00")
+  note      String?
+  done      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slotDate])
+}
+
+// Phase 5 — performance snapshots pulled from the YouTube Data API for
+// published videos. One row per (video, sync) so the analytics view can chart
+// growth deltas between syncs and the Topic Radar can learn from winners.
+model VideoStat {
+  id        String   @id @default(cuid())
+  videoId   String
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  views     Int      @default(0)
+  likes     Int      @default(0)
+  comments  Int      @default(0)
+  favorites Int      @default(0)
+  snapshotAt DateTime @default(now())
+
+  @@index([videoId, snapshotAt])
+}
+
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// Background-music library — every track carries its license record so a
+// published video can always answer "is this safe to monetize?". The
+// TubeForge-original beds are synthesized in-app (zero third-party samples);
+// users can upload their OWN licensed tracks with full attribution metadata.
+model MusicTrack {
+  id            String   @id @default(cuid())
+  name          String
+  // Comma-separated mood/niche tags used by the auto-selection engine, e.g.
+  // "motivation,uplifting" — niches map onto these tags (see music.ts).
+  moods         String   @default("")
+  genre         String?
+  durationSec   Float    @default(0)
+  filePath      String // relative path under uploads/, e.g. "_music/uplifting-aurora.wav"
+  fileSizeBytes Int      @default(0)
+  isOriginal    Boolean  @default(false) // synthesized by TubeForge — no third-party audio
+
+  // --- Copyright / license record (kept for every track, shown in UI) ---
+  licenseType   String   @default("TubeForge Original") // e.g. "YouTube Audio Library", "CC BY 4.0", "Commercial license"
+  sourceUrl     String? // where it came from
+  commercialUse Boolean  @default(true)
+  attributionRequired Boolean @default(false)
+  attributionText String? // exact credit line to paste into the description
+  licenseEvidence String? // URL or note proving the license (screenshot, license page)
+  downloadedAt  DateTime @default(now())
+  contentIdNotes String? // known Content ID claims / restrictions, if any
+
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+// Phase 3 — persistent job registry: survives server restarts so interrupted
+// stages can be detected ("running" rows from a dead process) and surfaced
+// to users instead of silently vanishing like the old in-memory maps.
+model Job {
+  id        String    @id @default(cuid())
+  kind      String // voiceover | thumbnail | variants | portrait | poses | storyboard | render | scene | verify
+  entityId  String // video id, character id, or "<videoId>#scene<N>"
+  status    String    @default("running") // running | done | failed | interrupted
+  progress  Float? // 0..1
+  label     String? // human progress label ("Rendering scene 3 of 6")
+  error     String?
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([entityId, kind])
+  @@index([status])
+  @@index([startedAt])
+}

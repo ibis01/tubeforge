@@ -10,7 +10,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { resetZAIClient } from "@/lib/tubeforge/ai";
-import { createZaiForTest, readZaiCredentials, syncZaiConfigFile, ZAI_SETTING_KEYS } from "@/lib/tubeforge/zai-config";
+import {
+  createZaiForTest,
+  readZaiCredentials,
+  syncZaiConfigFile,
+  ZAI_SETTING_KEYS,
+} from "@/lib/tubeforge/zai-config";
 import {
   getCapability,
   saveCapability,
@@ -23,12 +28,16 @@ import {
   CAPABILITY_META,
   type CapabilityId,
 } from "@/lib/tubeforge/providers/registry";
-import { DEFAULT_CHAT_MODEL, DEFAULT_ZAI_BASE_URL } from "@/lib/tubeforge/types";
+import {
+  DEFAULT_CHAT_MODEL,
+  DEFAULT_ZAI_BASE_URL,
+} from "@/lib/tubeforge/types";
 import { chatComplete } from "@/lib/tubeforge/providers/chat";
 import { visionComplete } from "@/lib/tubeforge/providers/vision";
 import { ttsSynthesize } from "@/lib/tubeforge/providers/tts";
 import { imageEdit, imageGenerate } from "@/lib/tubeforge/providers/image";
 import { errorText } from "@/lib/tubeforge/redact";
+import { imageToVideo } from "@/lib/tubeforge/providers/video";
 
 const CAPABILITIES: CapabilityId[] = ["chat", "tts", "image", "video"];
 
@@ -52,7 +61,10 @@ export async function GET() {
     capabilities: caps,
     meta: CAPABILITY_META,
     providers: PROVIDERS_BY_CAPABILITY,
-    defaults: { chatModel: DEFAULT_CHAT_MODEL, zaiBaseUrl: DEFAULT_ZAI_BASE_URL },
+    defaults: {
+      chatModel: DEFAULT_CHAT_MODEL,
+      zaiBaseUrl: DEFAULT_ZAI_BASE_URL,
+    },
   });
 }
 
@@ -64,7 +76,8 @@ export async function PUT(req: NextRequest) {
     if (body.scope === "zai" || (!body.scope && !body.capability)) {
       const updates: { key: string; value: string }[] = [];
       const baseUrl = String(body.baseUrl ?? "").trim();
-      if (baseUrl) updates.push({ key: ZAI_SETTING_KEYS.baseUrl, value: baseUrl });
+      if (baseUrl)
+        updates.push({ key: ZAI_SETTING_KEYS.baseUrl, value: baseUrl });
       const apiKey = String(body.apiKey ?? "").trim();
       if (apiKey) updates.push({ key: ZAI_SETTING_KEYS.apiKey, value: apiKey });
       if (updates.length === 0) {
@@ -92,16 +105,21 @@ export async function PUT(req: NextRequest) {
     // ---- Scope 2: one capability's provider ----
     const capability = String(body.capability ?? "") as CapabilityId;
     if (!CAPABILITIES.includes(capability)) {
-      return NextResponse.json({ error: "Unknown capability" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Unknown capability" },
+        { status: 400 },
+      );
     }
     const patch: Partial<CapabilityConfig> = {};
     if (body.provider !== undefined) {
       const provider = String(body.provider).trim();
-      const allowed: string[] = PROVIDERS_BY_CAPABILITY[capability].map((p) => p.id);
+      const allowed: string[] = PROVIDERS_BY_CAPABILITY[capability].map(
+        (p) => p.id,
+      );
       if (!allowed.includes(provider)) {
         return NextResponse.json(
           { error: `Provider "${provider}" can't handle ${capability}` },
-          { status: 400 }
+          { status: 400 },
         );
       }
       patch.provider = provider as CapabilityConfig["provider"];
@@ -116,11 +134,13 @@ export async function PUT(req: NextRequest) {
     // "Use the same account as Script writing" — adopt the chat provider's
     // saved credentials (provider + endpoint + key) for this capability.
     if (body.copyCredsFrom) {
-      const source = await getCapability(String(body.copyCredsFrom) as CapabilityId);
+      const source = await getCapability(
+        String(body.copyCredsFrom) as CapabilityId,
+      );
       if (!source.apiKey) {
         return NextResponse.json(
           { error: "The script provider has no saved key yet — save it first" },
-          { status: 400 }
+          { status: 400 },
         );
       }
       patch.provider = source.provider;
@@ -151,7 +171,8 @@ export async function POST(req: NextRequest) {
   const provider = String(body.provider ?? "").trim();
   const overrides: Partial<CapabilityConfig> = {};
   if (provider) overrides.provider = provider as CapabilityConfig["provider"];
-  if (body.baseUrl !== undefined) overrides.baseUrl = String(body.baseUrl).trim();
+  if (body.baseUrl !== undefined)
+    overrides.baseUrl = String(body.baseUrl).trim();
   if (body.model !== undefined) overrides.model = String(body.model).trim();
   if (body.visionModel !== undefined)
     overrides.visionModel = String(body.visionModel).trim();
@@ -162,22 +183,31 @@ export async function POST(req: NextRequest) {
   try {
     // Z.ai with an UNSAVED key needs the throwaway-client flow (the shared
     // SDK only reads the saved config).
-    if ((provider === "zai" || (!provider && capability !== "tts" && capability !== "image")) && apiKeyOverride) {
+    if (
+      (provider === "zai" ||
+        (!provider &&
+          capability !== "tts" &&
+          capability !== "image" &&
+          capability !== "video")) &&
+      apiKeyOverride
+    ) {
       const zai = await createZaiForTest({
         baseUrl: overrides.baseUrl,
         apiKey: apiKeyOverride,
       });
       const savedChat = await getCapability("chat");
       const model =
-        overrides.model?.trim() || savedChat.model?.trim() || DEFAULT_CHAT_MODEL;
+        overrides.model?.trim() ||
+        savedChat.model?.trim() ||
+        DEFAULT_CHAT_MODEL;
       const completion = await zai.chat.completions.create({
         model,
         messages: [{ role: "user", content: "Reply with exactly: ok" }],
         thinking: { type: "disabled" },
       });
       const reply =
-        (completion as { choices?: { message?: { content?: string } }[] })?.choices?.[0]
-          ?.message?.content ?? "(empty response)";
+        (completion as { choices?: { message?: { content?: string } }[] })
+          ?.choices?.[0]?.message?.content ?? "(empty response)";
       return NextResponse.json({
         ok: true,
         capability,
@@ -195,7 +225,7 @@ export async function POST(req: NextRequest) {
             user: "Reply with exactly: ok",
             imagePngBase64: TINY_PNG_BASE64,
           },
-          overrides
+          overrides,
         );
         return NextResponse.json({
           ok: true,
@@ -208,7 +238,7 @@ export async function POST(req: NextRequest) {
         const voice = String(body.voice ?? "").trim();
         const buffer = await ttsSynthesize(
           { input: "Connection test.", voice, speed: 1 },
-          overrides
+          overrides,
         );
         return NextResponse.json({
           ok: true,
@@ -238,13 +268,14 @@ export async function POST(req: NextRequest) {
               imagePngBase64: TINY_PNG_BASE64,
               size: "1024x1024",
             },
-            overrides
+            overrides,
           );
           if (!buffer) {
             return NextResponse.json({
               ok: true,
               capability,
-              reply: "Connected — but this model can't edit images (falls back to fresh generation)",
+              reply:
+                "Connected — but this model can't edit images (falls back to fresh generation)",
               latencyMs: Date.now() - started,
             });
           }
@@ -256,8 +287,12 @@ export async function POST(req: NextRequest) {
           });
         }
         const buffer = await imageGenerate(
-          { prompt: "A solid teal circle centered on a white background, minimal.", size: "1344x768" },
-          overrides
+          {
+            prompt:
+              "A solid teal circle centered on a white background, minimal.",
+            size: "1344x768",
+          },
+          overrides,
         );
         return NextResponse.json({
           ok: true,
@@ -266,6 +301,33 @@ export async function POST(req: NextRequest) {
           latencyMs: Date.now() - started,
         });
       }
+      // ---------- ADDED VIDEO TEST ----------
+      case "video": {
+        const isFree = provider === "zai" || provider === "huggingface";
+        if (!isFree && !body.confirmCost) {
+          return NextResponse.json({
+            ok: false,
+            needsConfirm: true,
+            error:
+              "Video tests generate real clips and may cost money — confirm to run it",
+          });
+        }
+        const buffer = await imageToVideo(
+          {
+            prompt: "A slow cinematic camera pan",
+            imagePngBase64: TINY_PNG_BASE64,
+          },
+          overrides,
+        );
+        return NextResponse.json({
+          ok: true,
+          capability,
+          bytes: buffer.length,
+          reply: `Generated video clip (${(buffer.length / 1024).toFixed(0)} KB)`,
+          latencyMs: Date.now() - started,
+        });
+      }
+      // ---------------------------------------
       case "chat":
       default: {
         const raw = await chatComplete(
@@ -273,7 +335,7 @@ export async function POST(req: NextRequest) {
             system: "You are a connection tester. Answer in plain text.",
             user: "Reply with exactly: ok",
           },
-          overrides
+          overrides,
         );
         const model =
           overrides.model?.trim() ||

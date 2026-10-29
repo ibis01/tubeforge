@@ -19,7 +19,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { VOICES, NICHES, TONES, LENGTHS, THUMB_STYLES, CHAT_MODELS, DEFAULT_CHAT_MODEL, DEFAULT_ZAI_BASE_URL, type JobDTO, type YouTubeStatusDTO } from "@/lib/tubeforge/types";
+import {
+  VOICES,
+  NICHES,
+  TONES,
+  LENGTHS,
+  THUMB_STYLES,
+  CHAT_MODELS,
+  DEFAULT_CHAT_MODEL,
+  DEFAULT_ZAI_BASE_URL,
+  type JobDTO,
+  type YouTubeStatusDTO,
+} from "@/lib/tubeforge/types";
 import { MusicLibrarySection } from "@/components/tubeforge/settings-music";
 import { SecurityAccessCard } from "@/components/tubeforge/security-card";
 import {
@@ -46,7 +57,10 @@ import {
   FlaskConical,
   PenLine,
 } from "lucide-react";
-import { useVoices, VoiceSelectWithPreview } from "@/components/tubeforge/shared";
+import {
+  useVoices,
+  VoiceSelectWithPreview,
+} from "@/components/tubeforge/shared";
 import {
   PROVIDERS_BY_CAPABILITY,
   CAPABILITY_META,
@@ -70,10 +84,22 @@ const KIND_META: Record<string, { label: string; icon: typeof Mic }> = {
 };
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
-  running: { label: "Running", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30" },
-  done: { label: "Done", cls: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30" },
-  failed: { label: "Failed", cls: "bg-red-500/15 text-red-400 border-red-500/30" },
-  interrupted: { label: "Interrupted", cls: "bg-orange-500/15 text-orange-400 border-orange-500/30" },
+  running: {
+    label: "Running",
+    cls: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  },
+  done: {
+    label: "Done",
+    cls: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  },
+  failed: {
+    label: "Failed",
+    cls: "bg-red-500/15 text-red-400 border-red-500/30",
+  },
+  interrupted: {
+    label: "Interrupted",
+    cls: "bg-orange-500/15 text-orange-400 border-orange-500/30",
+  },
 };
 
 function formatDuration(ms: number | null): string {
@@ -118,30 +144,72 @@ export function SettingsView() {
   const [ytConnecting, setYtConnecting] = useState(false);
   const [ytCopied, setYtCopied] = useState(false);
 
-  // AI providers — shared AI credentials + one provider per task capability
+  // AI providers — global Z.ai credentials + one provider per task capability
   const [zaiCreds, setZaiCreds] = useState({
     baseUrl: DEFAULT_ZAI_BASE_URL,
     apiKey: "",
     hasKey: false,
     maskedKey: "",
   });
-  const [prov, setProv] = useState<Record<CapabilityId, {
-    provider: string;
-    baseUrl: string;
-    apiKey: string;
-    model: string;
-    visionModel: string;
-    hasKey: boolean;
-    maskedKey: string;
-  }>>({
-    chat: { provider: "zai", baseUrl: "", apiKey: "", model: DEFAULT_CHAT_MODEL, visionModel: "", hasKey: false, maskedKey: "" },
-    tts: { provider: "zai", baseUrl: "", apiKey: "", model: "", visionModel: "", hasKey: false, maskedKey: "" },
-    image: { provider: "zai", baseUrl: "", apiKey: "", model: "", visionModel: "", hasKey: false, maskedKey: "" },
-    video: { provider: "zai", baseUrl: "", apiKey: "", model: "cogvideox-3", visionModel: "", hasKey: false, maskedKey: "" },
+  const [prov, setProv] = useState<
+    Record<
+      CapabilityId,
+      {
+        provider: string;
+        baseUrl: string;
+        apiKey: string;
+        model: string;
+        visionModel: string;
+        hasKey: boolean;
+        maskedKey: string;
+      }
+    >
+  >({
+    chat: {
+      provider: "zai",
+      baseUrl: "",
+      apiKey: "",
+      model: DEFAULT_CHAT_MODEL,
+      visionModel: "",
+      hasKey: false,
+      maskedKey: "",
+    },
+    tts: {
+      provider: "zai",
+      baseUrl: "",
+      apiKey: "",
+      model: "",
+      visionModel: "",
+      hasKey: false,
+      maskedKey: "",
+    },
+    image: {
+      provider: "zai",
+      baseUrl: "",
+      apiKey: "",
+      model: "",
+      visionModel: "",
+      hasKey: false,
+      maskedKey: "",
+    },
+    video: {
+      provider: "zai",
+      baseUrl: "",
+      apiKey: "",
+      model: "cogvideox-3",
+      visionModel: "",
+      hasKey: false,
+      maskedKey: "",
+    },
   });
   const [provSaving, setProvSaving] = useState(false);
   const [provTesting, setProvTesting] = useState<string | null>(null);
-  const [provTests, setProvTests] = useState<Record<string, { ok: boolean; text: string; needsConfirm?: boolean } | undefined>>({});
+  const [provTests, setProvTests] = useState<
+    Record<
+      string,
+      { ok: boolean; text: string; needsConfirm?: boolean } | undefined
+    >
+  >({});
 
   const loadYouTube = useCallback(async () => {
     try {
@@ -217,9 +285,15 @@ export function SettingsView() {
       })
       .catch(() => undefined)
       .finally(() => setLoaded(true));
-    void loadJobs();
-    void loadYouTube();
-    void loadAi();
+
+    // Defer these calls by 0ms to avoid "setState synchronously within an effect" warnings
+    const timer = setTimeout(() => {
+      void loadJobs();
+      void loadYouTube();
+      void loadAi();
+    }, 0);
+
+    return () => clearTimeout(timer);
   }, [loadJobs, loadYouTube, loadAi]);
 
   const handleSave = async () => {
@@ -269,7 +343,8 @@ export function SettingsView() {
       await loadYouTube();
       toast({
         title: "Credentials saved",
-        description: "Register the callback URL below in Google Cloud Console, then connect the channel.",
+        description:
+          "Register the callback URL below in Google Cloud Console, then connect the channel.",
       });
     } catch (e) {
       toast({
@@ -289,11 +364,13 @@ export function SettingsView() {
       // Server builds the consent URL + CSRF state; opens in a new tab.
       const res = await fetch("/api/youtube/connect", { method: "POST" });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Could not start the connection");
+      if (!res.ok)
+        throw new Error(data.error ?? "Could not start the connection");
       window.open(data.authUrl, "_blank", "noopener,noreferrer");
       toast({
         title: "Consent page opened",
-        description: "Complete the Google consent in the new tab — the channel shows up here when you return.",
+        description:
+          "Complete the Google consent in the new tab — the channel shows up here when you return.",
       });
       // Refresh state when the user likely returns from consent.
       setTimeout(() => void loadYouTube(), 15_000);
@@ -314,7 +391,10 @@ export function SettingsView() {
       const res = await fetch("/api/youtube/disconnect", { method: "POST" });
       if (!res.ok) throw new Error("Disconnect failed");
       await loadYouTube();
-      toast({ title: "Channel disconnected", description: "Uploads are disabled until you reconnect." });
+      toast({
+        title: "Channel disconnected",
+        description: "Uploads are disabled until you reconnect.",
+      });
     } catch (e) {
       toast({
         title: "Disconnect failed",
@@ -340,7 +420,7 @@ export function SettingsView() {
     if (provSaving) return;
     setProvSaving(true);
     try {
-      // 1) Shared AI credentials (only when the user typed something).
+      // 1) Global Z.ai credentials (only when the user typed something).
       if (zaiCreds.apiKey.trim() || zaiCreds.baseUrl.trim()) {
         const res = await fetch("/api/settings/ai", {
           method: "PUT",
@@ -353,7 +433,7 @@ export function SettingsView() {
         });
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
-          throw new Error(d.error ?? `Shared credentials: HTTP ${res.status}`);
+          throw new Error(d.error ?? `Z.ai credentials: HTTP ${res.status}`);
         }
       }
 
@@ -375,7 +455,9 @@ export function SettingsView() {
         });
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
-          throw new Error(d.error ?? `${CAPABILITY_META[cap].label}: HTTP ${res.status}`);
+          throw new Error(
+            d.error ?? `${CAPABILITY_META[cap].label}: HTTP ${res.status}`,
+          );
         }
       }
 
@@ -395,7 +477,11 @@ export function SettingsView() {
     }
   };
 
-  const testCapability = async (cap: CapabilityId, kind: string, confirmCost = false) => {
+  const testCapability = async (
+    cap: CapabilityId,
+    kind: string,
+    confirmCost = false,
+  ) => {
     if (provTesting) return;
     const row = prov[cap];
     setProvTesting(cap);
@@ -418,15 +504,31 @@ export function SettingsView() {
       if (d.ok) {
         setProvTests((t) => ({
           ...t,
-          [cap]: { ok: true, text: `${d.reply ?? "Connected"}${d.latencyMs ? ` · ${d.latencyMs} ms` : ""}` },
+          [cap]: {
+            ok: true,
+            text: `${d.reply ?? "Connected"}${d.latencyMs ? ` · ${d.latencyMs} ms` : ""}`,
+          },
         }));
       } else if (d.needsConfirm) {
-        setProvTests((t) => ({ ...t, [cap]: { ok: false, needsConfirm: true, text: d.error ?? "Confirm to run the paid test" } }));
+        setProvTests((t) => ({
+          ...t,
+          [cap]: {
+            ok: false,
+            needsConfirm: true,
+            text: d.error ?? "Confirm to run the paid test",
+          },
+        }));
       } else {
-        setProvTests((t) => ({ ...t, [cap]: { ok: false, text: d.error ?? "Connection failed" } }));
+        setProvTests((t) => ({
+          ...t,
+          [cap]: { ok: false, text: d.error ?? "Connection failed" },
+        }));
       }
     } catch {
-      setProvTests((t) => ({ ...t, [cap]: { ok: false, text: "Could not reach the server" } }));
+      setProvTests((t) => ({
+        ...t,
+        [cap]: { ok: false, text: "Could not reach the server" },
+      }));
     } finally {
       setProvTesting(null);
     }
@@ -469,10 +571,22 @@ export function SettingsView() {
     );
   }
 
-  const rateFields: { key: "aiLlmPerMin" | "aiTtsPerMin" | "aiImagePerMin" | "aiVideoPerMin"; label: string; hint: string }[] = [
-    { key: "aiLlmPerMin", label: "Text / LLM", hint: "scripts, bibles, research, VLM checks" },
+  const rateFields: {
+    key: "aiLlmPerMin" | "aiTtsPerMin" | "aiImagePerMin" | "aiVideoPerMin";
+    label: string;
+    hint: string;
+  }[] = [
+    {
+      key: "aiLlmPerMin",
+      label: "Text / LLM",
+      hint: "scripts, bibles, research, VLM checks",
+    },
     { key: "aiTtsPerMin", label: "TTS", hint: "voiceover chunks" },
-    { key: "aiImagePerMin", label: "Images", hint: "thumbnails, portraits, scenes" },
+    {
+      key: "aiImagePerMin",
+      label: "Images",
+      hint: "thumbnails, portraits, scenes",
+    },
     { key: "aiVideoPerMin", label: "Video (i2v)", hint: "CogVideoX clips" },
   ];
 
@@ -504,7 +618,9 @@ export function SettingsView() {
             </div>
             <Switch
               checked={form.autoVoiceover}
-              onCheckedChange={(v) => setForm((f) => ({ ...f, autoVoiceover: v }))}
+              onCheckedChange={(v) =>
+                setForm((f) => ({ ...f, autoVoiceover: v }))
+              }
               aria-label="Toggle automatic voiceover"
             />
           </div>
@@ -521,7 +637,9 @@ export function SettingsView() {
             </div>
             <Switch
               checked={form.autoThumbnail}
-              onCheckedChange={(v) => setForm((f) => ({ ...f, autoThumbnail: v }))}
+              onCheckedChange={(v) =>
+                setForm((f) => ({ ...f, autoThumbnail: v }))
+              }
               aria-label="Toggle automatic thumbnail"
             />
           </div>
@@ -545,7 +663,7 @@ export function SettingsView() {
           </div>
         </div>
 
-        {/* Shared AI credentials (built-in gateway) */}
+        {/* Shared Z.ai credentials */}
         <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div className="min-w-0">
@@ -557,7 +675,8 @@ export function SettingsView() {
                 </Badge>
               </p>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                One account for the built-in gateway — used by every task you leave on its default provider
+                One account for the built-in gateway — used by every task you
+                leave on its default provider
               </p>
             </div>
             {zaiCreds.hasKey && (
@@ -571,7 +690,9 @@ export function SettingsView() {
               <Label>API base URL</Label>
               <Input
                 value={zaiCreds.baseUrl}
-                onChange={(e) => setZaiCreds((f) => ({ ...f, baseUrl: e.target.value }))}
+                onChange={(e) =>
+                  setZaiCreds((f) => ({ ...f, baseUrl: e.target.value }))
+                }
                 placeholder={DEFAULT_ZAI_BASE_URL}
                 className="bg-white/5 border-white/10 text-xs font-mono h-9"
               />
@@ -580,8 +701,14 @@ export function SettingsView() {
               <Label>API key</Label>
               <Input
                 value={zaiCreds.apiKey}
-                onChange={(e) => setZaiCreds((f) => ({ ...f, apiKey: e.target.value }))}
-                placeholder={zaiCreds.hasKey ? `saved (${zaiCreds.maskedKey}) — type to replace` : "Paste your API key"}
+                onChange={(e) =>
+                  setZaiCreds((f) => ({ ...f, apiKey: e.target.value }))
+                }
+                placeholder={
+                  zaiCreds.hasKey
+                    ? `saved (${zaiCreds.maskedKey}) — type to replace`
+                    : "Paste your API key"
+                }
                 type="password"
                 className="bg-white/5 border-white/10 text-xs font-mono h-9"
               />
@@ -603,9 +730,17 @@ export function SettingsView() {
             const row = prov[cap];
             const meta = CAPABILITY_META[cap];
             const providers = PROVIDERS_BY_CAPABILITY[cap];
-            const active = providers.find((p) => p.id === row.provider) ?? providers[0];
+            const active =
+              providers.find((p) => p.id === row.provider) ?? providers[0];
             const shortLabel = active.label.split(" (")[0];
-            const CapIcon = cap === "chat" ? PenLine : cap === "tts" ? Mic : cap === "image" ? ImageIcon : Clapperboard;
+            const CapIcon =
+              cap === "chat"
+                ? PenLine
+                : cap === "tts"
+                  ? Mic
+                  : cap === "image"
+                    ? ImageIcon
+                    : Clapperboard;
             const test = provTests[cap];
             const chatRow = prov.chat;
             const canCopyChat =
@@ -615,7 +750,10 @@ export function SettingsView() {
               chatRow.hasKey;
 
             return (
-              <div key={cap} className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
+              <div
+                key={cap}
+                className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3"
+              >
                 <div className="flex items-center justify-between gap-3 flex-wrap">
                   <div className="flex items-center gap-2.5 min-w-0">
                     <div className="h-7 w-7 rounded-lg bg-white/6 flex items-center justify-center shrink-0">
@@ -623,7 +761,9 @@ export function SettingsView() {
                     </div>
                     <div className="min-w-0">
                       <p className="text-sm font-medium">{meta.label}</p>
-                      <p className="text-[11px] text-muted-foreground truncate">{meta.desc}</p>
+                      <p className="text-[11px] text-muted-foreground truncate">
+                        {meta.desc}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
@@ -650,7 +790,10 @@ export function SettingsView() {
                             [cap]: {
                               ...f[cap],
                               provider: v,
-                              model: f[cap].provider === v ? f[cap].model : fallbackModel,
+                              model:
+                                f[cap].provider === v
+                                  ? f[cap].model
+                                  : fallbackModel,
                               baseUrl: "",
                               apiKey: "",
                               hasKey: false,
@@ -665,7 +808,11 @@ export function SettingsView() {
                       </SelectTrigger>
                       <SelectContent>
                         {providers.map((p) => (
-                          <SelectItem key={p.id} value={p.id} className="text-xs">
+                          <SelectItem
+                            key={p.id}
+                            value={p.id}
+                            className="text-xs"
+                          >
                             {p.label}
                           </SelectItem>
                         ))}
@@ -681,16 +828,27 @@ export function SettingsView() {
                         <Label>Model</Label>
                         <Select
                           value={row.model}
-                          onValueChange={(v) => setProv((f) => ({ ...f, chat: { ...f.chat, model: v } }))}
+                          onValueChange={(v) =>
+                            setProv((f) => ({
+                              ...f,
+                              chat: { ...f.chat, model: v },
+                            }))
+                          }
                         >
                           <SelectTrigger className="bg-white/5 border-white/10 text-xs h-9">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
                             {CHAT_MODELS.map((m) => (
-                              <SelectItem key={m.id} value={m.id} className="text-xs">
+                              <SelectItem
+                                key={m.id}
+                                value={m.id}
+                                className="text-xs"
+                              >
                                 <span className="font-medium">{m.label}</span>
-                                <span className="text-muted-foreground ml-1.5">{m.hint}</span>
+                                <span className="text-muted-foreground ml-1.5">
+                                  {m.hint}
+                                </span>
                               </SelectItem>
                             ))}
                           </SelectContent>
@@ -701,7 +859,10 @@ export function SettingsView() {
                         <Input
                           value={row.visionModel}
                           onChange={(e) =>
-                            setProv((f) => ({ ...f, chat: { ...f.chat, visionModel: e.target.value } }))
+                            setProv((f) => ({
+                              ...f,
+                              chat: { ...f.chat, visionModel: e.target.value },
+                            }))
                           }
                           placeholder="gateway default (e.g. glm-4.6v-flash)"
                           className="bg-white/5 border-white/10 text-xs font-mono h-9"
@@ -713,7 +874,12 @@ export function SettingsView() {
                       <Label>Video model</Label>
                       <Input
                         value={row.model}
-                        onChange={(e) => setProv((f) => ({ ...f, video: { ...f.video, model: e.target.value } }))}
+                        onChange={(e) =>
+                          setProv((f) => ({
+                            ...f,
+                            video: { ...f.video, model: e.target.value },
+                          }))
+                        }
                         placeholder="cogvideox-3"
                         className="bg-white/5 border-white/10 text-xs font-mono h-9 max-w-xs"
                       />
@@ -721,7 +887,9 @@ export function SettingsView() {
                   ) : (
                     <p className="text-[11px] text-muted-foreground">
                       Uses the shared Z.ai key above
-                      {cap === "tts" ? " · 7 studio voices" : " · CogView art with identity-locked edits"}
+                      {cap === "tts"
+                        ? " · 7 studio voices"
+                        : " · CogView art with identity-locked edits"}
                     </p>
                   )
                 ) : (
@@ -732,7 +900,10 @@ export function SettingsView() {
                         <Input
                           value={row.baseUrl}
                           onChange={(e) =>
-                            setProv((f) => ({ ...f, [cap]: { ...f[cap], baseUrl: e.target.value } }))
+                            setProv((f) => ({
+                              ...f,
+                              [cap]: { ...f[cap], baseUrl: e.target.value },
+                            }))
                           }
                           placeholder={active.defaultBaseUrl}
                           className="bg-white/5 border-white/10 text-xs font-mono h-9"
@@ -758,7 +929,10 @@ export function SettingsView() {
                       <Input
                         value={row.model}
                         onChange={(e) =>
-                          setProv((f) => ({ ...f, [cap]: { ...f[cap], model: e.target.value } }))
+                          setProv((f) => ({
+                            ...f,
+                            [cap]: { ...f[cap], model: e.target.value },
+                          }))
                         }
                         placeholder={active.models[0]?.id ?? "model id"}
                         className="bg-white/5 border-white/10 text-xs font-mono h-9 max-w-xs"
@@ -770,7 +944,10 @@ export function SettingsView() {
                               key={m.id}
                               type="button"
                               onClick={() =>
-                                setProv((f) => ({ ...f, [cap]: { ...f[cap], model: m.id } }))
+                                setProv((f) => ({
+                                  ...f,
+                                  [cap]: { ...f[cap], model: m.id },
+                                }))
                               }
                               className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
                                 row.model === m.id
@@ -786,13 +963,23 @@ export function SettingsView() {
                       )}
                       {cap === "chat" && (
                         <div className="space-y-1.5 pt-1">
-                          <Label className="text-[11px]">Vision model (optional — quality gate)</Label>
+                          <Label className="text-[11px]">
+                            Vision model (optional — quality gate)
+                          </Label>
                           <Input
                             value={row.visionModel}
                             onChange={(e) =>
-                              setProv((f) => ({ ...f, chat: { ...f.chat, visionModel: e.target.value } }))
+                              setProv((f) => ({
+                                ...f,
+                                chat: {
+                                  ...f.chat,
+                                  visionModel: e.target.value,
+                                },
+                              }))
                             }
-                            placeholder={row.model || "defaults to the script model"}
+                            placeholder={
+                              row.model || "defaults to the script model"
+                            }
                             className="bg-white/5 border-white/10 text-xs font-mono h-9 max-w-xs"
                           />
                         </div>
@@ -822,37 +1009,43 @@ export function SettingsView() {
                   </div>
                 )}
 
-                {cap !== "video" && (
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={provTesting === cap}
-                      onClick={() => {
-                        if (test?.needsConfirm) testCapability(cap, cap, true);
-                        else testCapability(cap, cap);
-                      }}
-                      className="border-white/15 bg-white/6 hover:bg-white/10 h-7 text-[11px]"
-                      title={cap === "image" && row.provider !== "pollinations" ? "Generates a small real image — may cost a few cents" : "Send a tiny test request"}
-                    >
-                      {provTesting === cap ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        <FlaskConical className="h-3 w-3" />
-                      )}
-                      {test?.needsConfirm ? "Confirm — runs a paid test" : "Test"}
-                    </Button>
-                    <span className="text-[10px] text-muted-foreground">
-                      {cap === "chat"
-                        ? "pings the model with a tiny prompt"
-                        : cap === "tts"
-                          ? "speaks one short sentence"
-                          : row.provider === "pollinations"
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={provTesting === cap}
+                    onClick={() => {
+                      if (test?.needsConfirm) testCapability(cap, cap, true);
+                      else testCapability(cap, cap);
+                    }}
+                    className="border-white/15 bg-white/6 hover:bg-white/10 h-7 text-[11px]"
+                    title={
+                      cap === "image" && row.provider !== "pollinations"
+                        ? "Generates a small real image — may cost a few cents"
+                        : cap === "video"
+                          ? "Generates a short video clip — may take up to a minute"
+                          : "Send a tiny test request"
+                    }
+                  >
+                    {provTesting === cap ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <FlaskConical className="h-3 w-3" />
+                    )}
+                    {test?.needsConfirm ? "Confirm — runs a paid test" : "Test"}
+                  </Button>
+                  <span className="text-[10px] text-muted-foreground">
+                    {cap === "chat"
+                      ? "pings the model with a tiny prompt"
+                      : cap === "tts"
+                        ? "speaks one short sentence"
+                        : cap === "image"
+                          ? row.provider === "pollinations"
                             ? "generates one image — free, no key"
-                            : "generates one small image (real cost)"}
-                    </span>
-                  </div>
-                )}
+                            : "generates one small image (real cost)"
+                          : "generates a short video clip (takes 30s+)"}
+                  </span>
+                </div>
 
                 {test && (
                   <div
@@ -879,7 +1072,11 @@ export function SettingsView() {
             className="border-white/15 bg-white/6 hover:bg-white/10 font-medium h-8"
             variant="outline"
           >
-            {provSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            {provSaving ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Save className="h-3.5 w-3.5" />
+            )}
             Save &amp; apply
           </Button>
           <span className="text-[11px] text-muted-foreground">
@@ -918,16 +1115,23 @@ export function SettingsView() {
           <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/6 p-4 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               {yt.channelThumb ? (
-                <img src={yt.channelThumb} alt="Channel avatar" className="h-10 w-10 rounded-full border border-white/15" />
+                <img
+                  src={yt.channelThumb}
+                  alt="Channel avatar"
+                  className="h-10 w-10 rounded-full border border-white/15"
+                />
               ) : (
                 <div className="h-10 w-10 rounded-full bg-white/8 flex items-center justify-center">
                   <Youtube className="h-4 w-4 text-red-200" />
                 </div>
               )}
               <div className="min-w-0">
-                <p className="text-sm font-medium truncate">{yt.channelTitle ?? "Connected channel"}</p>
+                <p className="text-sm font-medium truncate">
+                  {yt.channelTitle ?? "Connected channel"}
+                </p>
                 <p className="text-[11px] text-muted-foreground">
-                  Uploads publish as {yt.privacyStatus} · uploads from the video dialog
+                  Uploads publish as {yt.privacyStatus} · uploads from the video
+                  dialog
                 </p>
               </div>
             </div>
@@ -957,7 +1161,9 @@ export function SettingsView() {
                 <Input
                   value={ytClientSecret}
                   onChange={(e) => setYtClientSecret(e.target.value)}
-                  placeholder={yt?.configured ? "saved — type to replace" : "GOCSPX-…"}
+                  placeholder={
+                    yt?.configured ? "saved — type to replace" : "GOCSPX-…"
+                  }
                   type="password"
                   className="bg-white/5 border-white/10 text-xs"
                 />
@@ -966,7 +1172,17 @@ export function SettingsView() {
 
             <div className="rounded-xl border border-white/10 bg-white/3 p-3">
               <p className="text-[11px] text-muted-foreground leading-relaxed">
-                In <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer" className="text-foreground/80 hover:text-foreground underline underline-offset-2 inline-flex items-center gap-0.5">Google Cloud Console <ExternalLink className="h-2.5 w-2.5" /></a> create an OAuth client (Web application) and add this exact authorized redirect URI:
+                In{" "}
+                <a
+                  href="https://console.cloud.google.com/apis/credentials"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-foreground/80 hover:text-foreground underline underline-offset-2 inline-flex items-center gap-0.5"
+                >
+                  Google Cloud Console <ExternalLink className="h-2.5 w-2.5" />
+                </a>{" "}
+                create an OAuth client (Web application) and add this exact
+                authorized redirect URI:
               </p>
               <div className="flex items-center gap-2 mt-2">
                 <code className="flex-1 min-w-0 truncate rounded-lg bg-black/40 border border-white/10 px-2.5 py-1.5 text-[11px] text-foreground/80">
@@ -979,7 +1195,11 @@ export function SettingsView() {
                   className="h-7 px-2.5 border-white/15 bg-white/4 shrink-0"
                   title="Copy the redirect URI"
                 >
-                  {ytCopied ? <Check className="h-3 w-3 text-emerald-300" /> : <Copy className="h-3 w-3" />}
+                  {ytCopied ? (
+                    <Check className="h-3 w-3 text-emerald-300" />
+                  ) : (
+                    <Copy className="h-3 w-3" />
+                  )}
                 </Button>
               </div>
             </div>
@@ -988,11 +1208,17 @@ export function SettingsView() {
               <Button
                 size="sm"
                 onClick={saveYtCredentials}
-                disabled={ytSaving || (!ytClientId.trim() && !ytClientSecret.trim())}
+                disabled={
+                  ytSaving || (!ytClientId.trim() && !ytClientSecret.trim())
+                }
                 className="border-white/15 bg-white/6 hover:bg-white/10 font-medium h-8"
                 variant="outline"
               >
-                {ytSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                {ytSaving ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Save className="h-3.5 w-3.5" />
+                )}
                 Save credentials
               </Button>
               <Button
@@ -1000,9 +1226,17 @@ export function SettingsView() {
                 onClick={startConnect}
                 disabled={ytConnecting || !yt?.configured}
                 className="bg-brand-gradient hover:opacity-90 text-white font-medium h-8"
-                title={yt?.configured ? "Opens the Google consent page in a new tab" : "Save your client ID and secret first"}
+                title={
+                  yt?.configured
+                    ? "Opens the Google consent page in a new tab"
+                    : "Save your client ID and secret first"
+                }
               >
-                {ytConnecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Youtube className="h-3.5 w-3.5" />}
+                {ytConnecting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Youtube className="h-3.5 w-3.5" />
+                )}
                 Connect channel
               </Button>
               <Select
@@ -1077,7 +1311,9 @@ export function SettingsView() {
             <Label>Default length</Label>
             <Select
               value={form.defaultLength}
-              onValueChange={(v) => setForm((f) => ({ ...f, defaultLength: v }))}
+              onValueChange={(v) =>
+                setForm((f) => ({ ...f, defaultLength: v }))
+              }
             >
               <SelectTrigger className="bg-white/5">
                 <SelectValue />
@@ -1099,8 +1335,8 @@ export function SettingsView() {
               voices={voices}
             />
             <p className="text-[10px] text-muted-foreground leading-relaxed">
-              Tap the <span className="text-primary">▶</span> next to a voice in the picker to hear
-              how it sounds.
+              Tap the <span className="text-primary">▶</span> next to a voice in
+              the picker to hear how it sounds.
             </p>
           </div>
           <div className="space-y-2 sm:col-span-2">
@@ -1115,7 +1351,9 @@ export function SettingsView() {
               min={0.5}
               max={2}
               step={0.1}
-              onValueChange={([v]) => setForm((f) => ({ ...f, defaultSpeed: v }))}
+              onValueChange={([v]) =>
+                setForm((f) => ({ ...f, defaultSpeed: v }))
+              }
               aria-label="Default speech speed"
             />
           </div>
@@ -1123,7 +1361,9 @@ export function SettingsView() {
             <Label>Default thumbnail style</Label>
             <Select
               value={form.defaultThumbStyle}
-              onValueChange={(v) => setForm((f) => ({ ...f, defaultThumbStyle: v }))}
+              onValueChange={(v) =>
+                setForm((f) => ({ ...f, defaultThumbStyle: v }))
+              }
             >
               <SelectTrigger className="bg-white/5">
                 <SelectValue />
@@ -1159,7 +1399,9 @@ export function SettingsView() {
               <Label>VLM quality gate</Label>
               <Select
                 value={form.qualityGate}
-                onValueChange={(v) => setForm((f) => ({ ...f, qualityGate: v }))}
+                onValueChange={(v) =>
+                  setForm((f) => ({ ...f, qualityGate: v }))
+                }
               >
                 <SelectTrigger className="bg-white/5">
                   <SelectValue />
@@ -1167,7 +1409,9 @@ export function SettingsView() {
                 <SelectContent>
                   <SelectItem value="off">Off — generate blind</SelectItem>
                   <SelectItem value="thumbnails">Thumbnails only</SelectItem>
-                  <SelectItem value="all">Thumbnails + storyboard scenes</SelectItem>
+                  <SelectItem value="all">
+                    Thumbnails + storyboard scenes
+                  </SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-[11px] text-muted-foreground">
@@ -1187,11 +1431,14 @@ export function SettingsView() {
                 min={1}
                 max={9}
                 step={1}
-                onValueChange={([v]) => setForm((f) => ({ ...f, qualityThreshold: v }))}
+                onValueChange={([v]) =>
+                  setForm((f) => ({ ...f, qualityThreshold: v }))
+                }
                 aria-label="Quality re-roll threshold"
               />
               <p className="text-[11px] text-muted-foreground">
-                Images scoring under this get one automatic re-roll (best attempt is kept).
+                Images scoring under this get one automatic re-roll (best
+                attempt is kept).
               </p>
             </div>
           </div>
@@ -1211,7 +1458,9 @@ export function SettingsView() {
             </div>
             <Switch
               checked={form.aiBudgetEnabled}
-              onCheckedChange={(v) => setForm((f) => ({ ...f, aiBudgetEnabled: v }))}
+              onCheckedChange={(v) =>
+                setForm((f) => ({ ...f, aiBudgetEnabled: v }))
+              }
               aria-label="Toggle global AI rate budget"
             />
           </div>
@@ -1226,12 +1475,17 @@ export function SettingsView() {
                   max={600}
                   value={form[r.key]}
                   onChange={(e) =>
-                    setForm((f) => ({ ...f, [r.key]: Math.max(1, Number(e.target.value) || 1) }))
+                    setForm((f) => ({
+                      ...f,
+                      [r.key]: Math.max(1, Number(e.target.value) || 1),
+                    }))
                   }
                   className="bg-white/5 tabular-nums"
                   aria-label={`${r.label} calls per minute`}
                 />
-                <p className="text-[10px] leading-tight text-muted-foreground">{r.hint}</p>
+                <p className="text-[10px] leading-tight text-muted-foreground">
+                  {r.hint}
+                </p>
               </div>
             ))}
           </div>
@@ -1276,7 +1530,9 @@ export function SettingsView() {
             className="gap-1.5 shrink-0"
             aria-label="Refresh job history"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${jobsLoading ? "animate-spin" : ""}`} />
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${jobsLoading ? "animate-spin" : ""}`}
+            />
             Refresh
           </Button>
         </div>
@@ -1289,7 +1545,10 @@ export function SettingsView() {
             </p>
           )}
           {jobs.map((job) => {
-            const meta = KIND_META[job.kind] ?? { label: job.kind, icon: LayoutGrid };
+            const meta = KIND_META[job.kind] ?? {
+              label: job.kind,
+              icon: LayoutGrid,
+            };
             const status = STATUS_META[job.status] ?? STATUS_META.done;
             const Icon = meta.icon;
             return (
@@ -1303,7 +1562,9 @@ export function SettingsView() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-sm font-medium truncate">{meta.label}</p>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-md border font-semibold ${status.cls} ${job.status === "running" ? "animate-pulse" : ""}`}>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded-md border font-semibold ${status.cls} ${job.status === "running" ? "animate-pulse" : ""}`}
+                    >
                       {status.label}
                     </span>
                   </div>
