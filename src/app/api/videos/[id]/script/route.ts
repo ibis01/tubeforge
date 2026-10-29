@@ -159,6 +159,10 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
               hadScript
                 ? " · previous voiceover, storyboard, renders and thumbnail were reset"
                 : ""
+            }${
+              pkg.verification.fixes > 0
+                ? ` · plan audit fixed ${pkg.verification.fixes} scene${pkg.verification.fixes === 1 ? "" : "s"} (script/art mismatch caught before painting)`
+                : " · plan audit: every scene matches its narration"
             }`,
           },
         });

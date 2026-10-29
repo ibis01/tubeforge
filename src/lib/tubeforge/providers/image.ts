@@ -49,6 +49,12 @@ export interface ImageRequest {
   prompt: string;
   /** App-internal size, e.g. "1344x768" (wide) or "1024x1024" (square). */
   size: string;
+  /** Optional generation seed. HONORED ONLY by Pollinations (the URL API takes
+   *  `&seed=`); z.ai + OpenAI-compatible APIs have no seed parameter, so the
+   *  field is silently ignored there. Callers pin a stable seed per character
+   *  or per video+scene to keep a recurring host recognizable across scenes —
+   *  the closest a text-to-image-only provider gets to identity locking. */
+  seed?: number;
 }
 
 export interface ImageEditRequest extends ImageRequest {
@@ -273,10 +279,15 @@ async function pollinationsImage(
   const model = config.model?.trim() || "flux";
   const { width, height } = pollinationsSize(req.size);
 
-  // Stable seed across calls — Pollinations honors `seed` for reproducibility,
-  // and a per-request random seed makes the storyboard varied without burning
-  // the user's quota on duplicates.
-  const seed = Math.floor(Math.random() * 1_000_000);
+  // Seed policy: a CALLER-PROVIDED seed is honored verbatim (identity pinning —
+  // same seed + same identity fragment + different scene prompts keeps a
+  // recurring host recognizable across scenes). No seed → random per request
+  // (thumbnail A/B variety, first-take spontaneity). Pollinations honors
+  // `seed` for reproducible generations; seeds live in [0, 2^31-1].
+  const seed =
+    typeof req.seed === "number" && Number.isFinite(req.seed)
+      ? Math.max(0, Math.min(2_147_483_647, Math.floor(req.seed)))
+      : Math.floor(Math.random() * 1_000_000);
   const promptUrl = `${baseUrl}/prompt/${encodeURIComponent(req.prompt)}`;
   const url = `${promptUrl}?width=${width}&height=${height}&model=${encodeURIComponent(
     model

@@ -78,6 +78,10 @@ export function parseScenes(json: string | null | undefined): Scene[] {
         focal: normalizeFocalToken(s.focal as string | null | undefined) ?? undefined,
         stock: parseStockRef(s.stock),
         style: s.style != null ? sanitizeSceneStyle(s.style) : undefined,
+        seedVariant:
+          Number.isInteger(s.seedVariant) && Number(s.seedVariant) >= 0
+            ? Math.min(Number(s.seedVariant), 999)
+            : undefined,
       }))
       .filter((s: Scene) => s.narration && s.visual);
   } catch {
@@ -156,6 +160,45 @@ export function normalizeScene(s: Record<string, unknown>, i: number): Scene {
   };
 }
 
+// ---------- Generation seeds (identity pinning for text-to-image providers) ----------
+
+/** Deterministic 31-bit seed from a string (FNV-1a). Same input → same seed,
+ *  different inputs → well-spread seeds; used to pin Pollinations latents so a
+ *  recurring host keeps their look across scenes without an edits API. */
+export function stableSeed(input: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    // 32-bit FNV prime multiply via BigInt-free math (imul keeps 32 bits).
+    h = Math.imul(h, 0x01000193);
+  }
+  // Fold to 31 bits (positive int32) — Pollinations-friendly seed space.
+  return (h ^ (h >>> 16)) & 0x7fffffff;
+}
+
+/** The seed for one scene's art generation.
+ *
+ *  HOST scenes with a cast character: pinned to the CHARACTER (+take) — every
+ *  host scene of the same character shares the same latent, so the verbatim
+ *  identityAnchor in the prompt + identical noise field = the closest a
+ *  text-to-image-only provider gets to "same person, different setting".
+ *
+ *  Non-host scenes: pinned to VIDEO + scene (+take) — deterministic,
+ *  reproducible storyboards (retries resume to the same image) while scene
+ *  index keeps variety. Every explicit re-roll bumps `seedVariant` so
+ *  "Regenerate" always paints a NEW take instead of the same pixels. */
+export function sceneGenerationSeed(opts: {
+  videoId: string;
+  scene: Pick<Scene, "index" | "seedVariant" | "hostInScene">;
+  character?: { id: string } | null;
+}): number {
+  const take = Math.max(0, Math.min(opts.scene.seedVariant ?? 0, 999));
+  if (opts.scene.hostInScene && opts.character?.id) {
+    return stableSeed(`host:${opts.character.id}:${take}`);
+  }
+  return stableSeed(`scene:${opts.videoId}:${opts.scene.index}:${take}`);
+}
+
 // ---------- Stage 1 — scene script ----------
 
 export interface SceneScriptPackage {
@@ -164,6 +207,9 @@ export interface SceneScriptPackage {
   tags: string[];
   scenes: Scene[];
   script: string; // narration joined by blank lines (compat + word count)
+  /** Result of the pre-storyboard plan audit (fail-open: never blocks
+   *  script generation — see verifyScenePlan). */
+  verification: { fixes: number; notes: string[] };
 }
 
 /**
@@ -194,6 +240,9 @@ export function paintableVisual(visual: string): string {
   if (!UNPAINTABLE_RE.test(visual)) return visual;
   const fix =
     "Paint this as a physical, text-free moment: real objects and people only — no charts, no writing, no numbers, no screens with readable content anywhere in frame.";
+  // Idempotent: the corrective clause itself contains \btext\b ("text-free"),
+  // so a second pass would match the regex again and double-append.
+  if (visual.includes(fix)) return visual;
   return `${visual.replace(/[.\s]+$/, "")}. ${fix}`;
 }
 
@@ -220,6 +269,137 @@ export function applyRetentionRules(scenes: Scene[]): Scene[] {
     scene.visual = paintableVisual(scene.visual);
     return scene;
   });
+}
+
+// ---------- Script-to-scene verification (pre-storyboard audit) ----------
+
+/** One surgical fix returned by the plan auditor (all fix fields optional). */
+export interface ScenePlanFix {
+  index: number;
+  reason?: string;
+  visual?: string;
+  caption?: string;
+  narration?: string;
+  hostInScene?: boolean;
+}
+
+/** Apply auditor fixes to a scene plan — PURE, unit-tested, no LLM inside.
+ *
+ *  Contract:
+ *  * unknown / out-of-range indices are dropped (never invent scenes);
+ *  * only the four auditable fields are touched — title/camera/mood/focal/
+ *    rehook/sfx (retention pacing) stay as the script LLM + rules set them;
+ *  * lengths mirror the storage clamps (visual 3..1200, caption ≤ 60,
+ *    narration non-empty); junk values drop the FIELD, not the whole fix;
+ *  * fixed narration is re-spoken (narrationToSpeech) and fixed visuals are
+ *    re-hardened (paintableVisual) — an auditor must not smuggle formulas or
+ *    chart requests back in.
+ *  Mutates + returns the scenes and reports what changed. */
+export function applyScenePlanFixes(
+  scenes: Scene[],
+  fixes: ScenePlanFix[]
+): { fixes: number; notes: string[] } {
+  const byIndex = new Map(scenes.map((s) => [s.index, s]));
+  let applied = 0;
+  const notes: string[] = [];
+
+  for (const fix of Array.isArray(fixes) ? fixes : []) {
+    if (!fix || !Number.isInteger(fix.index)) continue;
+    const scene = byIndex.get(fix.index);
+    if (!scene) continue; // auditor hallucinated a scene number — drop
+
+    let changed = false;
+    // No-op guard: a fix that echoes the scene's CURRENT value is skipped
+    // (auditors sometimes restate healthy scenes; those must not count as
+    // fixes). Visuals compare BEFORE hardening so an echo of an
+    // already-hardened prompt lands as a no-op instead of a rewrite;
+    // narrationToSpeech is idempotent, so it compares AFTER conversion.
+    if (typeof fix.visual === "string") {
+      const raw = fix.visual.trim().slice(0, 1200);
+      if (raw.length >= 3 && raw !== scene.visual) {
+        scene.visual = paintableVisual(raw);
+        changed = true;
+      }
+    }
+    if (typeof fix.caption === "string") {
+      const caption = fix.caption.trim().slice(0, 60);
+      if (caption && caption !== scene.caption) {
+        scene.caption = caption;
+        changed = true;
+      }
+    }
+    if (typeof fix.narration === "string") {
+      // narrationToSpeech IS idempotent, so compare the hardened form — an
+      // echo of the already-spoken stored narration lands as a no-op.
+      const speech = narrationToSpeech(fix.narration.trim().slice(0, 3000));
+      if (speech && speech !== scene.narration) {
+        scene.narration = speech;
+        changed = true;
+      }
+    }
+    if (typeof fix.hostInScene === "boolean" && fix.hostInScene !== scene.hostInScene) {
+      scene.hostInScene = fix.hostInScene;
+      changed = true;
+    }
+
+    if (changed) {
+      applied++;
+      notes.push(
+        `Scene ${fix.index}: ${String(fix.reason ?? "script/scene mismatch").trim().slice(0, 120)}`
+      );
+    }
+  }
+  return { fixes: applied, notes };
+}
+
+/** LLM audit pass — verifies the scene plan matches its own narration BEFORE
+ *  the expensive storyboard stage (45s+ per image on the free tier). One
+ *  chat call per script; surgical fixes only; FAIL-OPEN by contract: any
+ *  verifier error propagates to the caller, which logs + continues with the
+ *  unverified plan rather than blocking script generation. */
+export async function verifyScenePlan(opts: {
+  topic: string;
+  scenes: Scene[];
+  character?: { name: string } | null;
+}): Promise<{ fixes: number; notes: string[] }> {
+  if (opts.scenes.length < 2) return { fixes: 0, notes: [] };
+
+  const compact = opts.scenes.map((s) => ({
+    index: s.index,
+    title: s.title,
+    narration: s.narration,
+    visual: s.visual,
+    caption: s.caption,
+    hostInScene: s.hostInScene,
+  }));
+
+  const raw = await aiCall("llm", "scene plan verification", () =>
+    chatComplete({
+      system:
+        "You are a storyboard continuity auditor for faceless YouTube videos. Your job is to catch script-to-scene mismatches BEFORE expensive artwork is generated: each scene's image prompt must depict exactly what the narration says. You make surgical fixes only — you never rewrite style, tone or pacing. You always respond with STRICT JSON only — no markdown, no commentary.",
+      user: `Audit this scene plan against itself.
+
+Video topic: "${opts.topic}"
+Recurring host: ${opts.character ? `"${opts.character.name}" (a cast character who appears in scenes marked hostInScene)` : "none — hostInScene must be false everywhere"}
+
+Scene plan (JSON):
+${JSON.stringify(compact, null, 1)}
+
+AUDIT RULES:
+1. "visual" must depict the EXACT moment/fact/subject its narration speaks about — same people, same place, same action, same numbers. A generic illustration of the topic, or a visual that contradicts/omits the narration's key fact, must be rewritten as one frozen paintable moment.
+2. "visual" must stay paintable: no text, letters, numbers, charts, graphs, screens, documents, signs, formulas, no morphing/transformations. Express ideas through physical objects and people.
+3. "caption" must state THIS scene's key fact (under 45 characters, no quotes, no emojis). Fix it if it describes a different scene or is generic.
+4. "narration" may only be fixed if it contains formulas/math notation instead of spoken words, or contradicts the visual you are keeping. Otherwise leave it untouched.
+5. "hostInScene" is true ONLY when the visual clearly shows the recurring host. Flip it when the narration/visual do not feature the host.
+6. Never touch title, camera, mood, tone, pacing, scene order, or rehook structure.
+
+Return JSON exactly: {"scenes": [ ...ONLY the scenes that need fixes, each: {"index": N, "reason": "short why", then ONLY the fields to replace: "visual" and/or "caption" and/or "narration" and/or "hostInScene"} ], "ok": true}
+Return {"scenes": [], "ok": true} when every scene already matches its narration.`,
+    })
+  );
+  const parsed = parseJsonLoose(raw);
+  const fixes = Array.isArray(parsed?.scenes) ? (parsed.scenes as ScenePlanFix[]) : [];
+  return applyScenePlanFixes(opts.scenes, fixes);
 }
 
 /** GLM writes the video as N scenes with narration + visual + camera + mood per scene. */
@@ -326,10 +506,24 @@ Return JSON with exactly these keys:
   // hardened against image-model gibberish.
   const finalScenes = applyRetentionRules(scenes);
 
+  // Script-to-scene verification — audit the plan against itself BEFORE any
+  // art is painted (each storyboard image costs real provider quota). One
+  // fail-open pass: verification problems never block script generation.
+  let verification = { fixes: 0, notes: [] as string[] };
+  try {
+    verification = await verifyScenePlan({
+      topic: opts.topic,
+      scenes: finalScenes,
+      character: opts.character ? { name: opts.character.name } : null,
+    });
+  } catch (err) {
+    console.warn("[story] scene-plan verification skipped:", err);
+  }
+
   // Narration joined = the classic script field (drives word count + fallback TTS)
   const script = finalScenes.map((s) => s.narration).join("\n\n");
 
-  return { title, description, tags, scenes: finalScenes, script };
+  return { title, description, tags, scenes: finalScenes, script, verification };
 }
 
 // ---------- Stage 2 — storyboard ----------
@@ -366,6 +560,17 @@ export async function generateSceneImage(opts: {
   const imagePath = path.join(videoDir(opts.videoId), sceneImageFile(scene.index));
   const canEdit = await imageEditSupported();
 
+  // Identity pinning for text-to-image providers (Pollinations): a host scene
+  // draws the character's pinned latent, a solo scene draws the video+scene
+  // latent — deterministic takes that re-roll via seedVariant bumps. Edit-
+  // capable providers (z.ai / gpt-image-1) ignore the seed — they keep the
+  // likeness via the portrait-seeded edit below.
+  const seed = sceneGenerationSeed({
+    videoId: opts.videoId,
+    scene,
+    character: opts.character?.id ? { id: opts.character.id } : null,
+  });
+
   const produce = async () => {
     let buffer: Buffer | null = null;
     if (opts.character && portrait && canEdit) {
@@ -399,6 +604,7 @@ export async function generateSceneImage(opts: {
           imageGenerate({
             prompt: castFragment ? `${artPrompt} ${castFragment}` : artPrompt,
             size: "1344x768",
+            seed,
           }),
         { attempts: 4, baseDelayMs: 5000 }
       );

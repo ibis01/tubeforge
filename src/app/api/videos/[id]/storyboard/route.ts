@@ -106,6 +106,15 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         if (mode === "edit") {
           await editSceneImage({ videoId: id, scene, instruction });
         } else {
+          // Re-roll = a NEW take: bump the scene's generation counter BEFORE
+          // painting so the pinned seed (identity locking on text-to-image
+          // providers) yields a fresh image instead of the same pixels, then
+          // persist the bump — a later resume must not reuse the old take.
+          scene.seedVariant = Math.min((scene.seedVariant ?? 0) + 1, 999);
+          await db.video.update({
+            where: { id },
+            data: { scenes: JSON.stringify(scenes) },
+          });
           await generateSceneImage({ videoId: id, scene, character: castOpts });
         }
         invalidateRenders(id);

@@ -195,7 +195,11 @@ export async function POST(req: NextRequest) {
           data: {
             videoId: video.id,
             stage: "script",
-            message: `Scene script written — "${pkg.title}" (${pkg.scenes.length} scenes, ${wordCount(pkg.script)} words)`,
+            message: `Scene script written — "${pkg.title}" (${pkg.scenes.length} scenes, ${wordCount(pkg.script)} words)${
+              pkg.verification.fixes > 0
+                ? ` · plan audit fixed ${pkg.verification.fixes} scene${pkg.verification.fixes === 1 ? "" : "s"} (script/art mismatch caught before painting)`
+                : " · plan audit: every scene matches its narration"
+            }`,
           },
         });
 

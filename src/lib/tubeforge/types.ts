@@ -167,6 +167,9 @@ export interface Scene {
   focal?: string; // where the eye must stay (Smart Motion) — e.g. "upper-right"
   stock?: StockRef; // matched real-footage clip (render mode "stock")
   style?: string; // per-scene art style override (SCENE_ART_STYLES id; default = pipeline look)
+  seedVariant?: number; // generation-take counter — bumped on every explicit
+  // re-roll so pinned seeds (identity locking on text-to-image providers)
+  // still yield a NEW image; absent = first take (variant 0)
 }
 
 export interface SceneDTO {

@@ -228,7 +228,13 @@ export async function generateCharacterPoses(opts: {
   return { generated };
 }
 
-/** Prompt fragment that stamps the character's identity onto any scene generation. */
+/** Prompt fragment that stamps the character's identity onto any scene generation.
+ *  Image-model-native phrasing: the anchor verbatim + a hard "same exact person"
+ *  clause. On text-to-image providers (Pollinations) this fragment rides the
+ *  SAME prompt slot in every scene AND pairs with the character-pinned seed
+ *  (story.ts sceneGenerationSeed) — prompt + latent together are the closest
+ *  those providers get to an identity lock. Edit-capable providers ignore it
+ *  (they keep likeness via the portrait-seeded image edit instead). */
 export function characterSceneFragment(character: {
   name: string;
   identityAnchor: string | null;
@@ -239,5 +245,5 @@ export function characterSceneFragment(character: {
     character.appearance?.trim() ||
     "";
   if (!anchor) return "";
-  return `Featuring the recurring host "${character.name}" — invariant visual identity: ${anchor}. Keep every identifying trait exactly consistent.`;
+  return `The same recurring host character "${character.name}" appears here: ${anchor}. Depict this exact same person — identical face shape, hairstyle, facial hair, glasses and signature outfit as in every other scene of this video.`;
 }
