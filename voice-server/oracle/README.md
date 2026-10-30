@@ -49,6 +49,30 @@ ssh ubuntu@<VM-PUBLIC-IP>
 sudo bash ~/setup-oracle.sh --key pick-a-secret-phrase
 ```
 
+### No PC around? Install from your phone (OCI "Run command")
+
+Oracle's console can push the script onto the VM for you — no SSH keys, no
+terminal app, works entirely from the phone browser:
+
+1. Instance details → **Oracle Cloud Agent** tab → make sure **Compute
+   Instance Run Command** is *Enabled* (if you just switched it on, wait
+   ~1 min for the agent to pick it up).
+2. Instance details → **More actions → Run command → Create command**,
+   choose **Bash**, paste this and **Run**:
+
+   ```bash
+   set -e
+   cd /tmp
+   curl -fsSL -o voice_server.py https://raw.githubusercontent.com/ibis01/tubeforge/main/voice-server/voice_server.py
+   curl -fsSL -o setup-oracle.sh https://raw.githubusercontent.com/ibis01/tubeforge/main/voice-server/oracle/setup-oracle.sh
+   bash setup-oracle.sh --key ismail-01
+   ```
+
+   The `--key` value is your `X-Voice-Key` — change it to anything you like.
+3. Follow the command's output in the Run-command history (takes ~3–6 min;
+   first start also downloads the ~1.5 GB model). Check health any time with
+   another Run command: `curl -s http://localhost:8931/health`
+
 The script installs ffmpeg + CPU torch + Chatterbox, registers a
 **systemd service** (auto-start on boot, auto-restart on crash), opens the
 port locally, and prints your **Base URL** and **API key** at the end.
