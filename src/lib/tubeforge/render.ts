@@ -13,6 +13,7 @@
 
 import { execFile } from "child_process";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { promisify } from "util";
 import type { Scene } from "./types";
@@ -53,6 +54,7 @@ import {
   type SceneContext,
 } from "./motion";
 import {
+  BLEND_GROUP_MAX,
   sanitizeTransition,
   buildTransitionGraph,
   shiftSegmentsForBlend,
@@ -520,13 +522,20 @@ async function stitchSegments(opts: {
   const tmp = (i: number, round: number) =>
     opts.outPath.replace(/\.mp4$/, `.blend-r${round}-${i}.mp4`);
 
+  // Memory-scaled group cap: the default cap of 4 was measured ~1 GB peak RSS
+  // on the reference VM. On smaller hosts (≤6 GB total, e.g. a 4 GB sandbox
+  // or small VPS) drop to 2 — an OOM-killed pass resolves via the zombie
+  // poll with a truncated intermediate, and the next round then dies with
+  // the cryptic "moov atom not found" instead of the real cause.
+  const groupMax = os.totalmem() <= 6 * 1024 * 1024 * 1024 ? 2 : BLEND_GROUP_MAX;
+
   // Round 0 inputs are the real segments; later rounds blend group outputs.
   let round = 0;
   let paths = opts.segPaths.slice();
   let durations = opts.durationsSec.slice();
 
   while (paths.length > 1) {
-    const groups = planBlendGroups(durations, d);
+    const groups = planBlendGroups(durations, d, groupMax);
     const nextPaths: string[] = [];
     const nextDurations: number[] = [];
     const singlePass = groups.length === 1 && groups[0].to - groups[0].from + 1 === paths.length;
@@ -561,13 +570,32 @@ async function stitchSegments(opts: {
         "-y", outPath
       );
       await run("ffmpeg", args);
+      // Verify the pass actually wrote a playable file. An OOM-killed ffmpeg
+      // resolves "successfully" through the zombie poll (its stderr carries no
+      // failure signature — just truncated progress lines), leaving a file
+      // without a moov atom that fails HERE instead of in the next round with
+      // a confusing message about the wrong file.
+      try {
+        await probeDuration(outPath);
+      } catch {
+        throw new Error(
+          `Blend pass ${round}.${gi} (${style}, ${groupPaths.length} inputs) wrote an unreadable file — the machine most likely ran out of memory mid-encode. Free RAM or retry; small-RAM hosts automatically use lighter blend groups.`
+        );
+      }
       nextPaths.push(outPath);
       nextDurations.push(g.outDurationSec);
     }
 
-    // Clean up the previous round's intermediates (never the real segments).
+    // Clean up the consumed intermediates. A singleton group passes its
+    // segment through UNTOUCHED into nextPaths — deleting every previous
+    // round file would destroy it before the next round reads it (this
+    // fires with a small group cap: 3 inputs → groups of 2 + 1). Anything
+    // still referenced by the next round must survive.
     if (round > 0) {
-      for (const p of paths) fs.rmSync(p, { force: true });
+      const stillNeeded = new Set(nextPaths);
+      for (const p of paths) {
+        if (!stillNeeded.has(p)) fs.rmSync(p, { force: true });
+      }
     }
     paths = nextPaths;
     durations = nextDurations;

@@ -337,6 +337,123 @@ audio::-webkit-media-controls-panel {
   clip-path: inset(0 0 0 50%);
 }
 
+/* ============================================================
+   Ken Burns motion preview (mirrors src/lib/tubeforge/motion.ts)
+   One photographic frame animated the way the renderer actually
+   moves storyboard art: zooms scale from 1, pans ride a pre-zoom
+   so translated edges stay off-frame. The inline CSS vars map
+   the picker's live settings onto the animation:
+     --kb-zoom = intensity/100   (scale amplitude)
+     --kb-move = intensity/2 %   (translate amplitude, half the
+                                  zoom so edges never show)
+     --kb-ease = smooth easing or linear, matching the curve pick
+   ============================================================ */
+.tf-kb {
+  --tf-t: 4.5s;
+  --kb-zoom: 0.12;
+  --kb-move: 6%;
+  --kb-ease: cubic-bezier(0.45, 0, 0.25, 1);
+  position: relative;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #18181b;
+}
+.tf-kb-frame {
+  position: absolute;
+  inset: 0;
+  background-image: url("/transitions/scene-a.jpg");
+  background-size: cover;
+  background-position: center;
+  animation-duration: var(--tf-t);
+  animation-iteration-count: infinite;
+  animation-timing-function: var(--kb-ease);
+  animation-fill-mode: both;
+}
+.tf-kb-static .tf-kb-frame {
+  animation: none;
+}
+.tf-kb-zoomin .tf-kb-frame {
+  animation-name: tf-kb-zoomin;
+}
+.tf-kb-zoompair .tf-kb-frame {
+  animation-name: tf-kb-zoompair;
+}
+.tf-kb-panlr .tf-kb-frame {
+  animation-name: tf-kb-panlr;
+}
+.tf-kb-panpair .tf-kb-frame {
+  animation-name: tf-kb-panpair;
+}
+.tf-kb-smart .tf-kb-frame {
+  animation-name: tf-kb-smart;
+}
+
+@keyframes tf-kb-zoomin {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(calc(1 + var(--kb-zoom)));
+  }
+}
+/* Zoom only + vary: zoom in, then settle back out — one full breath. */
+@keyframes tf-kb-zoompair {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(calc(1 + var(--kb-zoom)));
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+/* Pan only + vary: left sweep, then right sweep. */
+@keyframes tf-kb-panlr {
+  0% {
+    transform: scale(calc(1 + var(--kb-zoom)))
+      translateX(calc(var(--kb-move) * -1));
+  }
+  50% {
+    transform: scale(calc(1 + var(--kb-zoom))) translateX(0);
+  }
+  100% {
+    transform: scale(calc(1 + var(--kb-zoom)))
+      translateX(calc(var(--kb-move)));
+  }
+}
+/* Pan only, no vary: one direction, restart on loop. */
+@keyframes tf-kb-panpair {
+  from {
+    transform: scale(calc(1 + var(--kb-zoom)))
+      translateX(calc(var(--kb-move) * -1));
+  }
+  to {
+    transform: scale(calc(1 + var(--kb-zoom)))
+      translateX(calc(var(--kb-move)));
+  }
+}
+/* Smart Motion + vary: the scene-aware feel — zoom in, drift right,
+   pull back out, tilt up. Four beats, no two alike. */
+@keyframes tf-kb-smart {
+  0% {
+    transform: scale(1) translate(0, 0);
+  }
+  25% {
+    transform: scale(calc(1 + var(--kb-zoom))) translate(0, 0);
+  }
+  50% {
+    transform: scale(calc(1 + var(--kb-zoom)))
+      translateX(calc(var(--kb-move) * -1));
+  }
+  75% {
+    transform: scale(1) translateX(calc(var(--kb-move) * -1));
+  }
+  100% {
+    transform: scale(1) translate(0, 0);
+  }
+}
+
 @keyframes tf-kf-fade {
   0%,
   30% {
@@ -583,6 +700,7 @@ audio::-webkit-media-controls-panel {
   .tf-tx .tf-tx-a,
   .tf-tx .tf-tx-b,
   .tf-tx .tf-tx-o,
+  .tf-kb .tf-kb-frame,
   .tf-eq > span {
     animation-play-state: paused !important;
   }

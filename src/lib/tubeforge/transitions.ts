@@ -229,16 +229,27 @@ export interface BlendGroup {
 
 /**
  * One round of the grouping: partition `durations` into consecutive groups of
- * at most BLEND_GROUP_MAX inputs, sized as evenly as ceil-division allows
+ * at most `groupMax` inputs, sized as evenly as ceil-division allows
  * (remainder spread from the front — 13 @ G=4 → [4,4,4,1] never happens;
  * it becomes 4 groups of 3–4). Groups of one pass through untouched in the
  * next round (they carry no blend debt of their own).
+ *
+ * `groupMax` defaults to BLEND_GROUP_MAX (measured ~1 GB peak RSS on the
+ * reference VM). Memory-constrained hosts (small VPS, dev sandboxes) pass a
+ * smaller cap — every extra chained input makes ffmpeg buffer another
+ * decoder queue, and an OOM-killed pass is what produces truncated
+ * intermediates that fail downstream with "moov atom not found".
  */
-export function planBlendGroups(durationsSec: number[], durationSec: number): BlendGroup[] {
+export function planBlendGroups(
+  durationsSec: number[],
+  durationSec: number,
+  groupMax: number = BLEND_GROUP_MAX
+): BlendGroup[] {
+  const cap = Math.max(2, Math.min(BLEND_GROUP_MAX, Math.floor(groupMax) || BLEND_GROUP_MAX));
   const n = durationsSec.length;
   if (n === 0) return [];
   const d = sanitizeTransitionDuration(durationSec);
-  const groupCount = Math.ceil(n / BLEND_GROUP_MAX);
+  const groupCount = Math.ceil(n / cap);
   // Balance sizes: base + 1 for the first (n % groupCount) groups.
   const base = Math.floor(n / groupCount);
   const extra = n % groupCount;

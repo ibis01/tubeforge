@@ -32,7 +32,7 @@ export interface RunResult {
 }
 
 const FAILURE_RE =
-  /\b(Error|Conversion failed|Invalid data|Unable to|No such file|Permission denied|Failed to|matches no streams)\b/i;
+  /\b(Error|Conversion failed|Invalid data|Unable to|No such file|Permission denied|Failed to|matches no streams|Killed|out of memory|Cannot allocate)\b/i;
 
 function procState(pid: number): string | null {
   try {

@@ -9,7 +9,14 @@
 // The renderer (src/lib/tubeforge/motion.ts) is the source of truth for the
 // semantics: smart scene-aware plans, 12% default zoom intensity, smooth
 // easing, direction variation between scenes.
+//
+// Visual preview (globals.css `.tf-kb-*`): a photographic hero strip loops
+// the current camera move — zooms scale from 1, pans ride a pre-zoom — with
+// the picker's live settings driving amplitude (--kb-zoom/--kb-move),
+// easing (--kb-ease) and direction variety, so every control has visible
+// cause and effect.
 
+import type { CSSProperties } from "react";
 import { Card } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -70,6 +77,67 @@ function intensityZone(v: number): string {
 }
 
 /**
+ * Which preview animation mirrors the current settings. Semantics follow
+ * the renderer (motion.ts): zooms scale from 1, pans ride a pre-zoom;
+ * "vary" alternates direction between moves, without it one move repeats.
+ */
+function kbAnimationClass(
+  mode: string,
+  vary: boolean
+): { cls: string; chip: string } {
+  if (mode === "off") return { cls: "tf-kb-static", chip: "static" };
+  if (mode === "zoom")
+    return vary
+      ? { cls: "tf-kb-zoompair", chip: "zoom in · zoom out" }
+      : { cls: "tf-kb-zoomin", chip: "zoom in" };
+  if (mode === "pan")
+    return vary
+      ? { cls: "tf-kb-panlr", chip: "pan left · pan right" }
+      : { cls: "tf-kb-panpair", chip: "pan left" };
+  // smart — scene-aware mix, varied by default
+  return vary
+    ? { cls: "tf-kb-smart", chip: "smart: zoom · drift · tilt" }
+    : { cls: "tf-kb-zoomin", chip: "smart: zoom in" };
+}
+
+/**
+ * Live Ken Burns preview — the photographic frame animates exactly the way
+ * the renderer will move storyboard art, driven by the picker's current
+ * settings (intensity scales the amplitude, curve picks the easing, vary
+ * alternates direction). Loops continuously like the transition hero strip.
+ */
+export function MotionStage({
+  mode,
+  intensity,
+  curve,
+  vary,
+  className,
+}: {
+  mode: string;
+  intensity: number;
+  curve: string;
+  vary: boolean;
+  className?: string;
+}) {
+  const anim = kbAnimationClass(mode, vary);
+  const zoom = Math.min(Math.max(intensity, 0), 30) / 100;
+  const style = {
+    "--kb-zoom": zoom.toFixed(3),
+    "--kb-move": `${(zoom * 50).toFixed(2)}%`,
+    "--kb-ease":
+      curve === "linear" ? "linear" : "cubic-bezier(0.45, 0, 0.25, 1)",
+  } as CSSProperties;
+  return (
+    <div className={clsx("tf-kb", anim.cls, className)} style={style} aria-hidden>
+      <div className="tf-kb-frame" />
+      <span className="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[9px] font-medium text-white pointer-events-none">
+        {anim.chip.toUpperCase()}
+      </span>
+    </div>
+  );
+}
+
+/**
  * Image Motion card. `disabled` greys everything (busy renders);
  * `appliesTo` explains the scope when the current render mode ignores it.
  */
@@ -99,6 +167,19 @@ export function MotionControlsCard({
             Ken Burns camera work over still art — focal points stay in frame
           </p>
         </div>
+      </div>
+
+      {/* Live preview — loops the current camera move so the intensity
+          slider, curve pick and vary switch all have visible cause and
+          effect, exactly like the transition hero strip. */}
+      <div className={clsx(disabled && "opacity-50")}>
+        <MotionStage
+          mode={m.mode}
+          intensity={m.intensity}
+          curve={m.curve}
+          vary={m.vary}
+          className="h-20 border border-white/10"
+        />
       </div>
 
       {/* Movement mode */}
