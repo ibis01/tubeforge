@@ -11,8 +11,9 @@
 // xfade/acrossfade pass so scenes blend with matching audio crossfades.
 //
 // Visual previews (globals.css `.tf-tx-*`): every style plays on a two-frame
-// micro-stage — indigo frame A, amber frame B — with the reveal window fixed
-// at 30–60% of the cycle. Tiles rest PAUSED at the cycle midpoint (a scannable
+// micro-stage — photographic Scene A (cool mountain dawn) underneath, Scene B
+// (warm city golden hour) on top — with the reveal window fixed at 30–60% of
+// the cycle. Tiles rest PAUSED at the cycle midpoint (a scannable
 // "frozen mid-transition" catalog), play on hover, and loop when selected.
 // The hero strip always loops the current style at the chosen blend length so
 // the slider has visible cause-and-effect.

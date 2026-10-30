@@ -188,11 +188,16 @@ audio::-webkit-media-controls-panel {
 
 /* ============================================================
    Transition preview stage (U1 polish)
-   Two abstract frames — A (indigo) underneath, B (amber/rose)
-   on top — animated through the SAME 30–60% window of the cycle
-   for every style family, so the whole grid can rest PAUSED at
-   the -45% midpoint (a scannable "frozen mid-transition"
-   catalog), run on hover, and loop continuously when selected.
+   Two real scene frames — A (cool mountain dawn, underneath)
+   and B (warm city golden hour) on top — animated through the
+   SAME 30–60% window of the cycle for every style family, so
+   the whole grid can rest PAUSED at the -45% midpoint (a
+   scannable "frozen mid-transition" catalog), run on hover,
+   and loop continuously when selected. Photographic frames
+   (generated once via the Z.ai API, served from /transitions/)
+   make the preview read like actual footage; the two palettes
+   stay hue-opposed so wipes, slides and dips stay legible at
+   tile size.
    --tf-t (cycle seconds) is set inline per stage and scales with
    the blend-length slider.
    ============================================================ */
@@ -201,17 +206,19 @@ audio::-webkit-media-controls-panel {
   position: relative;
   overflow: hidden;
   border-radius: 6px;
-  background: #312e81;
+  background: #18181b; /* fallback while frames load */
 }
 .tf-tx-frame {
   position: absolute;
   inset: 0;
+  background-size: cover;
+  background-position: center;
 }
 .tf-tx-a {
-  background: linear-gradient(135deg, #312e81 0%, #7c3aed 100%);
+  background-image: url("/transitions/scene-a.jpg");
 }
 .tf-tx-b {
-  background: linear-gradient(135deg, #b45309 0%, #e11d48 100%);
+  background-image: url("/transitions/scene-b.jpg");
 }
 .tf-tx-o {
   opacity: 0;
