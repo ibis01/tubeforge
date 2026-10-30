@@ -107,7 +107,12 @@ export function ChannelsView() {
         </p>
         <Button
           onClick={() => setDialogOpen(true)}
-          className="bg-brand-gradient hover:opacity-90 font-semibold shrink-0"
+          variant={channels.length > 0 || loading ? "default" : "outline"}
+          className={`shrink-0 ${
+            channels.length > 0 || loading
+              ? "bg-brand-gradient hover:opacity-90 font-semibold"
+              : "border-white/15 bg-white/4 text-muted-foreground hover:text-foreground"
+          }`}
         >
           <Plus className="h-4 w-4" />
           Add Channel

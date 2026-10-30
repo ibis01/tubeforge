@@ -18,6 +18,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useVoices, VoiceSelectWithPreview } from "@/components/tubeforge/shared";
 import { MusicPickerCard, type MusicPickerValue } from "@/components/tubeforge/music-controls";
 import { MotionControlsCard, type MotionPickerValue } from "@/components/tubeforge/motion-controls";
@@ -59,6 +61,8 @@ import {
   Film,
   Presentation,
   ListVideo,
+  ChevronDown,
+  Sparkles,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -113,6 +117,29 @@ const STAGE_DEFS: Record<
     icon: Clapperboard,
   },
 };
+
+/** Thin section divider + uppercase micro-label used to chunk the long
+ *  blueprint form into scannable groups (format / narration / art / destination). */
+function SectionLabel({
+  title,
+  hint,
+}: {
+  title: string;
+  hint?: string;
+}) {
+  return (
+    <div className="pt-3 mt-1 border-t border-white/8">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {title}
+      </p>
+      {hint && (
+        <p className="text-[10px] text-muted-foreground/80 mt-0.5 leading-snug">
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
 
 async function api<T>(url: string, opts?: RequestInit): Promise<T> {
   const controller = new AbortController();
@@ -198,6 +225,7 @@ export function CreateView() {
   const runningRef = useRef(false);
   const [batchCount, setBatchCount] = useState(3);
   const [batchRunning, setBatchRunning] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const isStory = format === "story";
   const sceneCount = SCENE_COUNTS[length] ?? 6;
@@ -627,6 +655,18 @@ export function CreateView() {
   const missingTtsKey =
     ttsConfig?.provider === "openai" && !ttsConfig?.hasKey && !isLocalTts;
 
+  const motionSummary =
+    motion.mode === "off"
+      ? "Static frames"
+      : motion.mode === "zoom"
+        ? "Zoom moves"
+        : motion.mode === "pan"
+          ? "Pan moves"
+          : "Smart motion";
+  const transitionSummary = `${
+    transition.style ? transition.style.replace(/-/g, " ") : "fade"
+  } transitions`;
+
   return (
     <div className="grid lg:grid-cols-12 gap-5">
       {/* Left — configuration */}
@@ -670,6 +710,11 @@ export function CreateView() {
               ))}
             </div>
           </div>
+
+          <SectionLabel
+            title="Format & rendering"
+            hint="Pick the shape of the video, then how it is rendered"
+          />
 
           <div className="space-y-1.5">
             <Label>Production format</Label>
@@ -770,23 +815,10 @@ export function CreateView() {
             </div>
           )}
 
-          {isStory && (
-            <MotionControlsCard
-              value={motion}
-              onChange={setMotion}
-              compact
-              disabled={busy}
-              note={
-                renderMode === "animated"
-                  ? "Image Motion applies to Ken Burns renders — the animated mode generates real video per scene instead."
-                  : null
-              }
-            />
-          )}
-
-          {isStory && (
-            <TransitionControlsCard value={transition} onChange={setTransition} compact disabled={busy} />
-          )}
+          <SectionLabel
+            title="Script & narration"
+            hint="What gets written and who reads it"
+          />
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
@@ -834,6 +866,142 @@ export function CreateView() {
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Narrator voice</Label>
+            <VoiceSelectWithPreview
+              value={voice}
+              onValueChange={setVoice}
+              voices={voices}
+              disabled={busy}
+            />
+            {missingTtsKey ? (
+              <Alert variant="destructive" className="py-2.5 px-3">
+                <AlertDescription className="text-xs leading-relaxed">
+                  No API key set for the openai voiceover provider — add it in
+                  Settings → AI Providers.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <p className="text-[10px] text-muted-foreground leading-relaxed">
+                Tap the <span className="text-primary">▶</span> next to a voice
+                to hear how it sounds before picking. Not feeling these voices?
+                After creating, open the video&apos;s Package tab →{" "}
+                <span className="text-foreground/80">Change the voice</span> to
+                upload your own audio or paste a voice link from the internet.
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Speech speed</Label>
+              <span className="text-xs font-medium tabular-nums text-primary">
+                {speed.toFixed(1)}x
+              </span>
+            </div>
+            <Slider
+              value={[speed]}
+              min={0.5}
+              max={2}
+              step={0.1}
+              onValueChange={([v]) => setSpeed(v)}
+              disabled={busy}
+              aria-label="Speech speed"
+            />
+          </div>
+
+          {isStory && (
+            <>
+              <SectionLabel
+                title="Art direction"
+                hint="Camera movement, transitions, thumbnail look & music"
+              />
+
+              <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
+                <div
+                  className={clsx(
+                    "rounded-xl border transition-colors",
+                    showAdvanced
+                      ? "border-primary/30 bg-primary/[0.06]"
+                      : "border-white/10 bg-white/[0.03] hover:border-white/25",
+                  )}
+                >
+                  <CollapsibleTrigger asChild>
+                    <button
+                      type="button"
+                      className="w-full flex items-center gap-2.5 px-3.5 py-3 text-left"
+                      aria-expanded={showAdvanced}
+                    >
+                      <Sparkles className="h-4 w-4 text-primary shrink-0" />
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-sm font-medium leading-tight">
+                          Camera moves & transitions
+                        </span>
+                        <span className="block text-[11px] text-muted-foreground truncate">
+                          {motionSummary} · {transitionSummary} — tap to adjust
+                        </span>
+                      </span>
+                      <ChevronDown
+                        className={clsx(
+                          "h-4 w-4 text-muted-foreground transition-transform shrink-0",
+                          showAdvanced && "rotate-180",
+                        )}
+                      />
+                    </button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="p-3.5 pt-1 space-y-4">
+                    <MotionControlsCard
+                      value={motion}
+                      onChange={setMotion}
+                      compact
+                      disabled={busy}
+                      note={
+                        renderMode === "animated"
+                          ? "Image Motion applies to Ken Burns renders — the animated mode generates real video per scene instead."
+                          : null
+                      }
+                    />
+                    <TransitionControlsCard value={transition} onChange={setTransition} compact disabled={busy} />
+                  </CollapsibleContent>
+                </div>
+              </Collapsible>
+            </>
+          )}
+
+          <div className="space-y-1.5">
+            <Label>Thumbnail style</Label>
+            <Select
+              value={thumbStyle}
+              onValueChange={setThumbStyle}
+              disabled={busy}
+            >
+              <SelectTrigger className="bg-white/5">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {THUMB_STYLES.map((t) => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <MusicPickerCard
+            value={music}
+            onChange={setMusic}
+            compact={isStory}
+          />
+
+          <SectionLabel
+            title="Destination"
+            hint="Where the video lands, and who hosts it"
+          />
+
+          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>Channel (optional)</Label>
               <Select
@@ -883,74 +1051,6 @@ export function CreateView() {
               )}
             </div>
           </div>
-
-          <div className="space-y-1.5">
-            <Label>Narrator voice</Label>
-            <VoiceSelectWithPreview
-              value={voice}
-              onValueChange={setVoice}
-              voices={voices}
-              disabled={busy}
-            />
-            {missingTtsKey ? (
-              <p className="text-[10px] text-red-400 font-medium leading-relaxed">
-                No API key set for the openai voiceover provider (Settings → AI
-                Providers)
-              </p>
-            ) : (
-              <p className="text-[10px] text-muted-foreground leading-relaxed">
-                Tap the <span className="text-primary">▶</span> next to a voice
-                to hear how it sounds before picking. Not feeling these voices?
-                After creating, open the video&apos;s Package tab →{" "}
-                <span className="text-foreground/80">Change the voice</span> to
-                upload your own audio or paste a voice link from the internet.
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label>Speech speed</Label>
-              <span className="text-xs font-medium tabular-nums text-primary">
-                {speed.toFixed(1)}x
-              </span>
-            </div>
-            <Slider
-              value={[speed]}
-              min={0.5}
-              max={2}
-              step={0.1}
-              onValueChange={([v]) => setSpeed(v)}
-              disabled={busy}
-              aria-label="Speech speed"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Thumbnail style</Label>
-            <Select
-              value={thumbStyle}
-              onValueChange={setThumbStyle}
-              disabled={busy}
-            >
-              <SelectTrigger className="bg-white/5">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {THUMB_STYLES.map((t) => (
-                  <SelectItem key={t.id} value={t.id}>
-                    {t.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <MusicPickerCard
-            value={music}
-            onChange={setMusic}
-            compact={isStory}
-          />
 
           <div className="pt-1.5 flex flex-col gap-2">
             <Button

@@ -314,18 +314,9 @@ export function CalendarView() {
             </Button>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant="outline" className="border-white/15 bg-white/5 text-muted-foreground">
+            <Badge variant="outline" className="border-white/20 bg-white/6 text-foreground/80 tabular-nums">
               {monthSlots.length} upload{monthSlots.length === 1 ? "" : "s"} this month
             </Badge>
-            <Button
-              size="sm"
-              onClick={() => openCreate(new Date())}
-              className="bg-brand-gradient hover:opacity-90 text-white font-semibold"
-            >
-              <CalendarPlus className="h-4 w-4" />
-              <span className="hidden sm:inline">New slot</span>
-              <span className="sm:hidden">Slot</span>
-            </Button>
           </div>
         </div>
 
@@ -378,7 +369,7 @@ export function CalendarView() {
             {WEEKDAYS.map((d) => (
               <div
                 key={d}
-                className="py-2.5 text-center text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
+                className="py-2.5 text-center text-[11px] font-medium uppercase tracking-wider text-foreground/75"
               >
                 {d}
               </div>
@@ -409,7 +400,7 @@ export function CalendarView() {
                           ? "bg-primary text-white font-bold"
                           : isPast
                             ? "text-muted-foreground/60"
-                            : "text-foreground/85"
+                            : "text-foreground"
                       )}
                     >
                       {format(day, "d")}

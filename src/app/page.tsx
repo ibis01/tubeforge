@@ -172,7 +172,7 @@ export default function Home() {
                 <span className="text-gradient font-semibold">TubeForge</span> ·
                 Automated faceless YouTube content engine
               </p>
-              <p>AI scripting · AI voiceover · AI thumbnails</p>
+              <p>Script · Voice · Thumbnail · Render</p>
             </div>
           </footer>
         </div>

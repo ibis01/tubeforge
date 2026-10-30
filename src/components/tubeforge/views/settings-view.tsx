@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ComponentProps } from "react";
 import { useAppStore } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import { Card } from "@/components/ui/card";
@@ -56,6 +56,8 @@ import {
   KeyRound,
   FlaskConical,
   PenLine,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import {
   useVoices,
@@ -106,6 +108,37 @@ function formatDuration(ms: number | null): string {
   if (ms == null) return "—";
   if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
   return `${(ms / 60_000).toFixed(1)}m`;
+}
+
+/** Password-style input with a reveal toggle — used for every API key and
+ *  client secret so screen-shares and shoulder-surfers never leak them. */
+function SecretInput({
+  className,
+  ...rest
+}: Omit<ComponentProps<typeof Input>, "type">) {
+  const [reveal, setReveal] = useState(false);
+  return (
+    <div className="relative">
+      <Input
+        {...rest}
+        type={reveal ? "text" : "password"}
+        className={`pr-9 ${className ?? ""}`}
+      />
+      <button
+        type="button"
+        tabIndex={-1}
+        onClick={() => setReveal((r) => !r)}
+        aria-label={reveal ? "Hide secret" : "Show secret"}
+        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground rounded-md transition-colors"
+      >
+        {reveal ? (
+          <EyeOff className="h-3.5 w-3.5" />
+        ) : (
+          <Eye className="h-3.5 w-3.5" />
+        )}
+      </button>
+    </div>
+  );
 }
 
 export function SettingsView() {
@@ -699,7 +732,7 @@ export function SettingsView() {
             </div>
             <div className="space-y-1.5">
               <Label>API key</Label>
-              <Input
+              <SecretInput
                 value={zaiCreds.apiKey}
                 onChange={(e) =>
                   setZaiCreds((f) => ({ ...f, apiKey: e.target.value }))
@@ -709,7 +742,6 @@ export function SettingsView() {
                     ? `saved (${zaiCreds.maskedKey}) — type to replace`
                     : "Paste your API key"
                 }
-                type="password"
                 className="bg-white/5 border-white/10 text-xs font-mono h-9"
               />
             </div>
@@ -912,13 +944,12 @@ export function SettingsView() {
                       {row.provider !== "pollinations" && (
                         <div className="space-y-1.5">
                           <Label>API key</Label>
-                          <Input
+                          <SecretInput
                             value={row.apiKey}
                             onChange={(e) =>
                               setProv((f) => ({ ...f, [cap]: { ...f[cap], apiKey: e.target.value } }))
                             }
                             placeholder={row.hasKey ? `saved (${row.maskedKey}) — type to replace` : `Paste your ${shortLabel} key`}
-                            type="password"
                             className="bg-white/5 border-white/10 text-xs font-mono h-9"
                           />
                         </div>
@@ -1158,13 +1189,12 @@ export function SettingsView() {
               </div>
               <div className="space-y-1.5">
                 <Label>Client secret</Label>
-                <Input
+                <SecretInput
                   value={ytClientSecret}
                   onChange={(e) => setYtClientSecret(e.target.value)}
                   placeholder={
                     yt?.configured ? "saved — type to replace" : "GOCSPX-…"
                   }
-                  type="password"
                   className="bg-white/5 border-white/10 text-xs"
                 />
               </div>
@@ -1491,22 +1521,6 @@ export function SettingsView() {
           </div>
         </div>
 
-        <Separator className="my-6 bg-white/8" />
-
-        <div className="flex justify-end">
-          <Button
-            onClick={handleSave}
-            disabled={saving}
-            className="bg-brand-gradient hover:opacity-90 font-semibold min-w-36"
-          >
-            {saving ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Save className="h-4 w-4" />
-            )}
-            Save Settings
-          </Button>
-        </div>
       </Card>
 
       <Card className="glass rounded-2xl p-5 sm:p-6">
@@ -1589,6 +1603,27 @@ export function SettingsView() {
           })}
         </div>
       </Card>
+
+      {/* Sticky save bar — always reachable, no scrolling back up */}
+      <div className="sticky bottom-4 z-20">
+        <div className="glass-strong rounded-2xl border border-white/10 shadow-2xl px-4 py-3 flex items-center justify-between gap-3">
+          <p className="text-xs text-muted-foreground hidden sm:block leading-relaxed">
+            Changes apply to new runs — existing videos keep their settings.
+          </p>
+          <Button
+            onClick={handleSave}
+            disabled={saving}
+            className="bg-brand-gradient hover:opacity-90 font-semibold min-w-36 shrink-0"
+          >
+            {saving ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+            Save Settings
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

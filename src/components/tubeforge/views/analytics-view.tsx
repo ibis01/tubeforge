@@ -144,12 +144,12 @@ export function AnalyticsView() {
                   Sync YouTube stats
                 </Button>
               ) : (
-                <Button onClick={() => setView("settings")} variant="outline" className="border-white/15 bg-white/4">
+                <Button onClick={() => setView("settings")} className="bg-brand-gradient hover:opacity-90 font-medium">
                   <Settings className="h-4 w-4" />
                   Connect YouTube in Settings
                 </Button>
               )}
-              <Button onClick={() => setView("library")} variant="outline" className="border-white/15 bg-white/4">
+              <Button onClick={() => setView("library")} variant="outline" className="border-white/15 bg-white/4 text-muted-foreground hover:text-foreground">
                 Open Library
               </Button>
             </div>

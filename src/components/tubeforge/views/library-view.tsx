@@ -94,7 +94,9 @@ export function LibraryView() {
           </TabsList>
         </Tabs>
         <p className="text-xs text-muted-foreground shrink-0">
-          {videos.length} video{videos.length === 1 ? "" : "s"}
+          {videos.length === 0
+            ? "Nothing here yet"
+            : `${videos.length} video${videos.length === 1 ? "" : "s"}`}
         </p>
       </div>
 

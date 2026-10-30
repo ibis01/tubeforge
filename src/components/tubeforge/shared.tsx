@@ -129,15 +129,15 @@ export function EmptyState({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="glass rounded-2xl p-10 flex flex-col items-center text-center">
-      <div className="h-14 w-14 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
-        <Icon className="h-6 w-6 text-muted-foreground" />
+    <div className="glass rounded-2xl p-8 sm:p-10 flex flex-col items-center text-center">
+      <div className="h-16 w-16 rounded-2xl bg-primary/10 border border-primary/25 flex items-center justify-center">
+        <Icon className="h-7 w-7 text-primary" />
       </div>
-      <p className="mt-4 font-medium">{title}</p>
+      <p className="mt-5 text-base font-medium tracking-tight">{title}</p>
       {hint && (
-        <p className="text-sm text-muted-foreground mt-1 max-w-sm leading-relaxed">{hint}</p>
+        <p className="text-sm text-muted-foreground mt-1.5 max-w-md leading-relaxed">{hint}</p>
       )}
-      {action && <div className="mt-5">{action}</div>}
+      {action && <div className="mt-6">{action}</div>}
     </div>
   );
 }

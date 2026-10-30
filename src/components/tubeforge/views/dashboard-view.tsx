@@ -114,6 +114,7 @@ export function DashboardView() {
     },
   ];
   const maxPipeline = Math.max(1, ...pipelineData.map((p) => p.value));
+  const chartTotal = stats.perDay.reduce((acc, d) => acc + d.count, 0);
 
   return (
     <div className="space-y-6">
@@ -129,7 +130,7 @@ export function DashboardView() {
         />
         <div className="relative p-5 sm:p-7 flex flex-col md:flex-row md:items-center gap-5">
           <div className="flex-1 min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-[11px] font-medium text-red-300">
+            <div className="inline-flex items-center gap-2 rounded-full border border-primary/35 bg-primary/15 px-3 py-1 text-[11px] font-medium text-red-200">
               <span className="animate-pulse-dot h-1.5 w-1.5 rounded-full bg-primary" />
               Auto-Pilot Online
             </div>
@@ -184,9 +185,9 @@ export function DashboardView() {
       {/* Needs attention + generating now (Mission Control audit points) */}
       <AttentionPanel />
 
-      <div className="grid lg:grid-cols-5 gap-4">
+      <div className="grid lg:grid-cols-5 gap-4 items-stretch">
         {/* Production chart */}
-        <Card className="glass rounded-2xl p-5 lg:col-span-3">
+        <Card className="glass rounded-2xl p-5 lg:col-span-3 h-full flex flex-col">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="font-semibold">Production Volume</h3>
@@ -195,6 +196,14 @@ export function DashboardView() {
               </p>
             </div>
           </div>
+          {chartTotal === 0 ? (
+            <div className="mt-6 h-44 rounded-xl border border-dashed border-white/12 bg-white/[0.02] flex flex-col items-center justify-center text-center px-6">
+              <p className="text-sm font-medium">No videos yet</p>
+              <p className="text-xs text-muted-foreground mt-1 leading-relaxed max-w-xs">
+                Your first generation will chart here, day by day.
+              </p>
+            </div>
+          ) : (
           <div
             className="mt-6 h-44 flex items-end gap-2 sm:gap-3"
             role="img"
@@ -227,10 +236,11 @@ export function DashboardView() {
               );
             })}
           </div>
+          )}
         </Card>
 
         {/* Pipeline breakdown */}
-        <Card className="glass rounded-2xl p-5 lg:col-span-2">
+        <Card className="glass rounded-2xl p-5 lg:col-span-2 h-full flex flex-col">
           <h3 className="font-semibold">Pipeline Breakdown</h3>
           <p className="text-xs text-muted-foreground">
             Where your videos currently sit
