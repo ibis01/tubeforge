@@ -25,7 +25,13 @@ import { getZAI } from "../ai";
 import { redactText } from "../redact";
 import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta } from "./registry";
-import { joinUrl, providerFetch, providerFetchJson, ProviderHttpError } from "./http";
+import {
+  joinUrl,
+  providerFetch,
+  providerFetchJson,
+  ProviderHttpError,
+  withTimeout,
+} from "./http";
 
 /** True when an error looks like the SDK's "result.data.map" crash. */
 function isMalformedSdkResponse(err: unknown): boolean {
@@ -34,10 +40,12 @@ function isMalformedSdkResponse(err: unknown): boolean {
 }
 
 /** Wrap an SDK image call: convert malformed-response TypeErrors into a
- *  retryable, 429-flavored error so budget.ts backs off. */
+ *  retryable, 429-flavored error so budget.ts backs off. Also races the
+ *  call against a 150s deadline — the SDK's fetches have no timeout, and
+ *  one hung call used to stall a whole storyboard. */
 async function callZaiImage<T>(label: string, fn: () => Promise<T>): Promise<T> {
   try {
-    return await fn();
+    return await withTimeout(150_000, label, fn);
   } catch (err) {
     if (isMalformedSdkResponse(err)) {
       // Upstream sent 200 but the body was missing `data` — almost always a

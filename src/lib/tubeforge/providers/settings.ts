@@ -34,20 +34,27 @@ const CAPABILITY_KEYS: Record<CapabilityId, string> = {
 
 export const VIDEO_DEFAULT_MODEL = "fal-ai/fast-svd";
 
+// Z.ai is the out-of-the-box default for every AI capability: the bundled
+// SDK client needs no key when the app runs inside a Z.ai-equipped sandbox,
+// and on a self-hosted box a free Z.ai key (z.ai/model-api — flash models
+// are free) unlocks scripts, art, voiceover and the quality gates. OpenAI
+// etc. remain one Settings → AI Providers switch away.
 function defaultFor(capability: CapabilityId): CapabilityConfig {
   switch (capability) {
     case "chat":
       return {
-        provider: "openai",
-        model: "gemini-3.8-flash",
-        visionModel: "gemini-3.8-flash",
+        provider: "zai",
+        model: DEFAULT_CHAT_MODEL,
+        visionModel: "", // zai: the gateway injects its default vision model
       };
     case "video":
+      // Ken Burns / stock render modes need no AI video; full animation can
+      // switch here once a video key is configured.
       return { provider: "fal", model: VIDEO_DEFAULT_MODEL };
     case "image":
-      return { provider: "pollinations", model: "flux" };
+      return { provider: "zai", model: "" }; // CogView via the bundled SDK
     default:
-      return { provider: "openai", model: "tts-1" };
+      return { provider: "zai", model: "" }; // tts — 7 built-in studio voices
   }
 }
 

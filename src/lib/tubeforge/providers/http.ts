@@ -6,6 +6,36 @@ import { redactText } from "../redact";
 
 const TIMEOUT_MS = 300_000; // 5 min — long LLM and image calls are normal
 
+/**
+ * Race a promise against a deadline. The bundled Z.ai SDK issues its own
+ * fetches with no timeout — one hung image/vision call would otherwise
+ * stall an entire background job (storyboard loop, quality gate) forever.
+ * The losing call keeps running but its result is discarded; the budget.ts
+ * retry layer re-attempts the work.
+ */
+export function withTimeout<T>(
+  ms: number,
+  label: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s — will retry`)),
+      ms
+    );
+    fn().then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      }
+    );
+  });
+}
+
 export function joinUrl(baseUrl: string, ...path: string[]): string {
   let url = baseUrl.trim().replace(/\/+$/, "");
   for (const p of path) url += `/${p.replace(/^\/+/, "")}`;

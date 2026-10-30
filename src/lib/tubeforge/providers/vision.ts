@@ -6,7 +6,7 @@
 import { getZAI } from "../ai";
 import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta } from "./registry";
-import { joinUrl, providerFetchJson } from "./http";
+import { joinUrl, providerFetchJson, withTimeout } from "./http";
 
 export interface VisionRequest {
   system: string;
@@ -41,22 +41,26 @@ async function zaiVision(req: VisionRequest, config: CapabilityConfig): Promise<
   const model = config.visionModel?.trim() ?? "";
   // No stored vision model → send none; the gateway injects its default
   // (preserves pre-existing sandbox behavior), hence the cast.
-  const completion = await zai.chat.completions.createVision({
-    ...(model ? { model } : {}),
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: `${req.system}\n\n${req.user}` },
-          {
-            type: "image_url",
-            image_url: { url: `data:image/png;base64,${req.imagePngBase64}` },
-          },
-        ],
-      },
-    ],
-    thinking: { type: "disabled" },
-  } as Parameters<typeof zai.chat.completions.createVision>[0]);
+  // 120s deadline: a hung vision call must never stall the quality gate
+  // (or the storyboard loop that awaits it) — the gate fails open on error.
+  const completion = await withTimeout(120_000, "Z.ai vision", () =>
+    zai.chat.completions.createVision({
+      ...(model ? { model } : {}),
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: `${req.system}\n\n${req.user}` },
+            {
+              type: "image_url",
+              image_url: { url: `data:image/png;base64,${req.imagePngBase64}` },
+            },
+          ],
+        },
+      ],
+      thinking: { type: "disabled" },
+    } as Parameters<typeof zai.chat.completions.createVision>[0])
+  );
   return completion.choices[0]?.message?.content ?? "";
 }
 
