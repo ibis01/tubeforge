@@ -10,6 +10,7 @@ import { promisify } from "util";
 import { parseJsonLoose, videoDir, splitForTts, researchBriefBlock, type ResearchBrief } from "./ai";
 import { aiCall } from "./budget";
 import { runQualityGate } from "./quality";
+import { closestPriorDistance, imageHash, sceneImageHashes } from "./arthash";
 import { mergeWavs } from "./wav";
 import { CAMERAS, SCENE_COUNTS, SFX_KINDS, sanitizeSceneStyle, sceneStylePrompt, type Scene, type StockRef } from "./types";
 import { normalizeFocalToken } from "./motion";
@@ -386,7 +387,7 @@ Scene plan (JSON):
 ${JSON.stringify(compact, null, 1)}
 
 AUDIT RULES:
-1. "visual" must depict the EXACT moment/fact/subject its narration speaks about — same people, same place, same action, same numbers. A generic illustration of the topic, or a visual that contradicts/omits the narration's key fact, must be rewritten as one frozen paintable moment.
+1. "visual" must depict the EXACT moment/fact/subject its narration speaks about — same people, same place, same action, same numbers. A generic illustration of the topic, an abstract concept with no physical subject, or a visual that contradicts/omits the narration's key fact, must be rewritten as one frozen paintable moment.
 2. "visual" must stay paintable: no text, letters, numbers, charts, graphs, screens, documents, signs, formulas, no morphing/transformations. Express ideas through physical objects and people.
 3. "caption" must state THIS scene's key fact (under 45 characters, no quotes, no emojis). Fix it if it describes a different scene or is generic.
 4. "narration" may only be fixed if it contains formulas/math notation instead of spoken words, or contradicts the visual you are keeping. Otherwise leave it untouched.
@@ -456,6 +457,7 @@ NARRATION RULES (spoken aloud by a text-to-speech voice):
 
 VISUAL RULES (each scene art is painted by an AI image model):
 - Describe ONE frozen paintable moment: concrete subject doing something, in a specific place, at a specific time of day.
+- Name the main subject with concrete nouns and give it a physical anchor — "a lighthouse keeper hauling a rope in a storm", never an abstract concept ("the idea of risk", "global markets in chaos") with nothing solid to paint.
 - NEVER ask for charts, graphs, formulas, floating numbers, letters, documents, contracts, UI screens or anything that contains writing — image models render those as garbled gibberish. Express the idea with physical objects and people instead (rising stacks of coins instead of a growth chart).
 - NEVER describe a transformation or morph ("aging from young to old", "dissolving into numbers") — pick the single most striking end-state and paint that.
 
@@ -528,10 +530,15 @@ Return JSON with exactly these keys:
 
 // ---------- Stage 2 — storyboard ----------
 
+/** dHash bits (of 64) under which two scene frames count as the same picture. */
+const DUPLICATE_HASH_BITS = 9;
+
 /**
  * Render one scene's storyboard image.
  * Host scenes + cast portrait → identity-locked image EDIT (keeps the face).
  * Everything else → fresh CogView generation from the visual prompt.
+ * After the VLM quality gate, a dHash dedupe pass re-rolls once when the
+ * frame is near-identical to a sibling scene's art.
  */
 export async function generateSceneImage(opts: {
   videoId: string;
@@ -542,7 +549,9 @@ export async function generateSceneImage(opts: {
     identityAnchor: string | null;
     appearance: string | null;
   } | null;
-}): Promise<{ fileBytes: number }> {
+  /** Hashes of sibling scene images — computed from disk when omitted. */
+  priorHashes?: Map<number, string>;
+}): Promise<{ fileBytes: number; artHash?: string }> {
   const { scene } = opts;
   // ONE dominant subject, painted literally: multi-subject prompts scatter
   // the composition and the model fills the frame with unrelated clutter.
@@ -550,7 +559,7 @@ export async function generateSceneImage(opts: {
   // A per-scene art style (Scene Studio) is woven in right after the subject
   // so the taste override steers the whole render, not just the edges.
   const styleClause = sceneStylePrompt(scene.style);
-  const artPrompt = `${scene.visual}.${styleClause ? ` ${styleClause}.` : ""} ${scene.mood}. Wide 16:9 cinematic frame, ONE dominant subject filling the frame, highly detailed, professional color grading, storytelling composition. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
+  const artPrompt = `${scene.visual}.${styleClause ? ` ${styleClause}.` : ""} ${scene.mood}. Wide 16:9 cinematic frame, ONE dominant subject filling the frame, highly detailed, professional color grading, storytelling composition. The frame must depict exactly the moment described — the named subject is the single dominant element. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
 
   const portrait =
     scene.hostInScene && opts.character?.id
@@ -571,7 +580,7 @@ export async function generateSceneImage(opts: {
     character: opts.character?.id ? { id: opts.character.id } : null,
   });
 
-  const produce = async () => {
+  const produce = async (seedOverride?: number) => {
     let buffer: Buffer | null = null;
     if (opts.character && portrait && canEdit) {
       // Identity-locked: seed the edit with the cast portrait so the host keeps
@@ -604,7 +613,7 @@ export async function generateSceneImage(opts: {
           imageGenerate({
             prompt: castFragment ? `${artPrompt} ${castFragment}` : artPrompt,
             size: "1344x768",
-            seed,
+            seed: seedOverride ?? seed,
           }),
         { attempts: 4, baseDelayMs: 5000 }
       );
@@ -614,18 +623,77 @@ export async function generateSceneImage(opts: {
     fs.writeFileSync(imagePath, buffer);
   };
 
-  // Phase 3: VLM quality gate — when enabled (qualityGate = "all") every
-  // scene image is inspected against ITS scene: subject/story match first,
-  // artifact detection second; below-threshold images get one re-roll.
+  // Phase 3: VLM quality gate — now DEFAULT for scenes too (qualityGate
+  // "all"): every scene image is inspected against ITS scene: subject/story
+  // match first, artifact detection second; below-threshold images get one
+  // re-roll. Always fails open.
   await runQualityGate({
     kind: "scene",
     videoId: opts.videoId,
     imagePath,
     context: `storyboard scene ${scene.index} "${scene.title}" of a story video — this exact image must depict the scene's moment: ${scene.visual} (mood: ${scene.mood}; narration at this moment: "${scene.narration.slice(0, 140)}")`,
-    generate: produce,
+    generate: () => produce(),
   });
 
-  return { fileBytes: fs.existsSync(imagePath) ? fs.statSync(imagePath).size : 0 };
+  // Dedupe — near-identical frames across scenes read on screen as "the same
+  // image twice". dHash the painted frame; when it sits too close to a
+  // sibling scene's art, re-roll once with a bumped seed and keep whichever
+  // attempt sits further from the pack. Fails open: hashing problems never
+  // block the storyboard.
+  let artHash: string | undefined;
+  try {
+    const priors = opts.priorHashes
+      ? new Map(opts.priorHashes)
+      : await sceneImageHashes(videoDir(opts.videoId), { exclude: scene.index });
+    priors.delete(scene.index);
+
+    const firstHash = await imageHash(imagePath);
+    const firstDist = firstHash ? closestPriorDistance(firstHash, priors) : null;
+
+    if (firstHash && firstDist != null && firstDist <= DUPLICATE_HASH_BITS && priors.size > 0) {
+      const bumped = Math.min((scene.seedVariant ?? 0) + 1, 999);
+      const backup = `${imagePath}.dedupe.bak`;
+      fs.copyFileSync(imagePath, backup);
+      try {
+        await produce(bumped);
+        const secondHash = await imageHash(imagePath);
+        const secondDist = secondHash ? closestPriorDistance(secondHash, priors) : null;
+        if (secondHash && secondDist != null && secondDist < firstDist) {
+          fs.rmSync(backup, { force: true });
+          artHash = secondHash;
+          console.info(
+            `[story] scene ${scene.index}: near-duplicate art re-rolled (${firstDist} → ${secondDist} bits from the closest sibling)`
+          );
+        } else {
+          fs.copyFileSync(backup, imagePath);
+          fs.rmSync(backup, { force: true });
+          artHash = firstHash;
+          console.info(
+            `[story] scene ${scene.index}: near-duplicate detected (${firstDist} bits), re-roll not closer — kept the better gate score`
+          );
+        }
+      } catch (err) {
+        if (fs.existsSync(backup)) {
+          fs.copyFileSync(backup, imagePath);
+          fs.rmSync(backup, { force: true });
+        }
+        artHash = firstHash;
+        console.warn(
+          `[story] scene ${scene.index}: dedupe re-roll failed, kept original:`,
+          err instanceof Error ? err.message : err
+        );
+      }
+    } else if (firstHash) {
+      artHash = firstHash;
+    }
+  } catch (err) {
+    console.warn(
+      `[story] scene ${scene.index}: dedupe skipped:`,
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  return { fileBytes: fs.existsSync(imagePath) ? fs.statSync(imagePath).size : 0, artHash };
 }
 
 // ---------- Scene Studio — per-scene image editing ----------
@@ -765,6 +833,10 @@ export async function generateStoryboard(opts: {
   /** When true, regenerate every scene even if its image already exists. Default false. */
   force?: boolean;
 }): Promise<{ generated: number }> {
+  // Dedupe seed set: hash every scene image already on disk ONCE, so newly
+  // painted scenes are compared against all their siblings (resumed scenes
+  // included) without re-hashing the whole directory after every scene.
+  const priorHashes = await sceneImageHashes(videoDir(opts.videoId));
   let generated = 0;
   for (const [i, scene] of opts.scenes.entries()) {
     if (opts.shouldCancel?.())
@@ -781,7 +853,8 @@ export async function generateStoryboard(opts: {
       }
     }
 
-    await generateSceneImage({ ...opts, scene });
+    const painted = await generateSceneImage({ ...opts, scene, priorHashes });
+    if (painted.artHash) priorHashes.set(scene.index, painted.artHash);
     generated++;
     opts.onSceneDone?.(i, opts.scenes.length);
     if (i < opts.scenes.length - 1) await sleep(2000);

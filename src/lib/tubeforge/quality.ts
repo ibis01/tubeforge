@@ -34,11 +34,13 @@ async function getGateConfig(): Promise<{ mode: string; threshold: number }> {
       where: { key: { in: ["qualityGate", "qualityThreshold"] } },
     });
     const map = new Map(rows.map((r) => [r.key, r.value]));
-    const mode = (map.get("qualityGate") ?? "thumbnails") || "off";
+    const mode = (map.get("qualityGate") ?? "all") || "off";
     const raw = Number(map.get("qualityThreshold") ?? 6);
     return { mode, threshold: Number.isFinite(raw) ? Math.min(9, Math.max(1, raw)) : 6 };
   } catch {
-    return { mode: "thumbnails", threshold: 6 };
+    // Default to "all": scene art feeds the whole video, so a story-mismatched
+    // frame is far costlier than one extra VLM call.
+    return { mode: "all", threshold: 6 };
   }
 }
 
@@ -97,6 +99,65 @@ async function logActivity(
     });
   } catch {
     /* activity logging must never break the gate */
+  }
+}
+
+export interface RelevanceVerdict {
+  /** The VLM actually ran and returned a score. */
+  checked: boolean;
+  /** true = meets the gate threshold; false = below it; null = unchecked. */
+  pass: boolean | null;
+  score: number | null;
+  summary: string | null;
+}
+
+/**
+ * Relevance-only inspection for STOCK footage (downloaded clips, not AI art).
+ * Extracted frames are checked against the scene's required content and
+ * rejected when they show an unrelated subject — the classic Pexels failure
+ * of "market crash" returning a grocery market. Ignores the gate MODE (the
+ * caller decides when to spend the call) but REUSES the gate threshold.
+ * Fails open: any inspector error counts as "keep the clip".
+ */
+export async function relevanceCheck(
+  imagePath: string,
+  context: string
+): Promise<RelevanceVerdict> {
+  try {
+    const cfg = await getGateConfig();
+    const imagePngBase64 = fs.readFileSync(imagePath).toString("base64");
+    const raw = await aiCall("llm", "stock relevance check", () =>
+      visionComplete({
+        system:
+          "You are a strict footage-relevance inspector for a video production pipeline. You always respond with STRICT JSON only — no markdown, no commentary.",
+        user: `Required content: ${context}.
+
+Does this frame show the required content? Score 0-10:
+- 8-10: the frame clearly shows the described subject, action and setting
+- 4-7: related but vague — same broad topic, wrong specifics
+- 0-3: unrelated subject (a different topic entirely)
+Judge ONLY whether the content matches the description. Ignore camera quality, resolution and color grading.
+
+Respond with STRICT JSON only:
+{"score": <integer 0-10>, "issues": [<short strings, empty if perfect>], "summary": "<one sentence>"}`,
+        imagePngBase64,
+      })
+    );
+    if (!raw) throw new Error("Vision inspection unsupported by the chat provider");
+    const parsed = parseJsonLoose(raw);
+    const score = Number(parsed.score);
+    if (!Number.isFinite(score)) throw new Error("Inspector returned no score");
+    const clamped = Math.max(0, Math.min(10, Math.round(score)));
+    return {
+      checked: true,
+      pass: clamped >= cfg.threshold,
+      score: clamped,
+      summary: String(parsed.summary ?? "").slice(0, 200),
+    };
+  } catch (err) {
+    const message = errorText(err, "relevance inspection failed");
+    console.warn(`[quality] stock relevance check skipped, keeping clip: ${message}`);
+    return { checked: false, pass: null, score: null, summary: null };
   }
 }
 

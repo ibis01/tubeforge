@@ -50,6 +50,15 @@ import {
   MAX_SAMPLE_SEC,
   MIN_SAMPLE_SEC,
 } from "../src/lib/tubeforge/voice-clone";
+import {
+  closestPriorDistance,
+  dHashFromGray9x8,
+  hammingDistanceHex,
+  imageHash,
+  sceneImageHashes,
+} from "../src/lib/tubeforge/arthash";
+import { sceneQueries } from "../src/lib/tubeforge/stock-query";
+import type { Scene } from "../src/lib/tubeforge/types";
 
 const execFileAsync = promisify(execFile);
 
@@ -585,6 +594,127 @@ await test("isValidSampleUrl: http(s) only, internal hosts blocked", () => {
 await test("sample limits: clone API window enforced (>= 2s, trimmed at 30s)", () => {
   ok(MIN_SAMPLE_SEC === 2, "minimum sample length");
   ok(MAX_SAMPLE_SEC === 30, "samples are trimmed to the documented 30s window");
+});
+
+// ---------- stock queries + art dedupe (scene↔image matching) ----------
+
+suiteStart("stock queries — scene→search keywords");
+
+await test("sceneQueries: visual leads, narration keywords included", () => {
+  const scene = {
+    index: 3,
+    title: "The Crash",
+    narration: "On black tuesday the wall street market collapsed and savings evaporated overnight",
+    visual: "A tired trader in a 1929 suit staring at a collapsing chalkboard, dramatic cinematic mood",
+  } as unknown as Scene;
+  const queries = sceneQueries(scene);
+  ok(queries.length >= 2 && queries.length <= 4, `2-4 queries (got ${queries.length})`);
+  ok(queries[0].includes("trader"), "visual subject words lead");
+  ok(
+    queries.some((q) => q.includes("savings") || q.includes("collapsed")),
+    "narration content words queried"
+  );
+});
+
+await test("sceneQueries: digits and stop-words never become queries", () => {
+  const scene = {
+    index: 1,
+    title: "The",
+    narration: "In 1929 the market lost 3000000000 dollars",
+    visual: "the of and a",
+  } as unknown as Scene;
+  const queries = sceneQueries(scene);
+  for (const q of queries) {
+    ok(!/\b(1929|3000000000)\b/.test(q), `no raw numbers in "${q}"`);
+    ok(!/\b(the|and|of|a)\b/.test(q), `no stop words in "${q}"`);
+  }
+  ok(
+    queries.some((q) => q.includes("market") || q.includes("dollars") || q.includes("lost")),
+    "real content words survive"
+  );
+});
+
+await test("sceneQueries: no duplicates, hard cap of 4", () => {
+  const scene = {
+    index: 2,
+    title: "Market Crash",
+    narration: "the market crash wiped savings market crash",
+    visual: "market crash wall street panic traders",
+  } as unknown as Scene;
+  const queries = sceneQueries(scene);
+  ok(queries.length <= 4, "capped at 4");
+  ok(new Set(queries).size === queries.length, "no duplicate queries");
+});
+
+suiteStart("art dedupe — dHash perceptual hashing");
+
+await test("dHash pure: flat frame → zero hash, self-distance 0", () => {
+  const flat = Buffer.alloc(72, 128);
+  const h = dHashFromGray9x8(flat);
+  eq(h, "0000000000000000", "no horizontal gradient → all bits 0");
+  eq(hammingDistanceHex(h!, h!), 0, "distance to self = 0");
+});
+
+await test("dHash pure: ramps and noise behave like the duplicate detector needs", () => {
+  const ramp = Buffer.alloc(72);
+  for (let y = 0; y < 8; y++)
+    for (let x = 0; x < 9; x++) ramp[y * 9 + x] = Math.min(255, x * 30); // bright→right
+  const hRamp = dHashFromGray9x8(ramp);
+  eq(hRamp, "ffffffffffffffff", "strict horizontal ramp → all bits 1");
+
+  const vert = Buffer.alloc(72);
+  for (let y = 0; y < 8; y++)
+    for (let x = 0; x < 9; x++) vert[y * 9 + x] = Math.min(255, y * 40); // top→bottom ramp
+  const hVert = dHashFromGray9x8(vert);
+  eq(hVert, "0000000000000000", "vertical ramp has no horizontal gradient");
+  eq(hammingDistanceHex(hRamp!, hVert!), 64, "opposite patterns → max distance");
+
+  const noisy = Buffer.from(ramp);
+  noisy[5] += 4;
+  noisy[40] += 3; // imperceptible noise
+  const d = hammingDistanceHex(hRamp!, dHashFromGray9x8(noisy)!);
+  ok(d != null && d <= 9, `tiny noise stays under the duplicate threshold (got ${d})`);
+});
+
+await test("hamming: symmetric, malformed input rejected, closest picks min", () => {
+  eq(hammingDistanceHex("0f0f0f0f0f0f0f0f", "f0f0f0f0f0f0f0f0"), 64, "complement → 64");
+  eq(
+    hammingDistanceHex("0f0f0f0f0f0f0f0f", "f0f0f0f0f0f0f0f0"),
+    hammingDistanceHex("f0f0f0f0f0f0f0f0", "0f0f0f0f0f0f0f0f"),
+    "symmetric"
+  );
+  eq(hammingDistanceHex("zzzz", "00"), null, "malformed → null");
+  eq(
+    closestPriorDistance("0000000000000000", new Map([[1, "0000000000000000"], [2, "ffffffffffffffff"]])),
+    0,
+    "closest prior is the minimum"
+  );
+  eq(closestPriorDistance("0000000000000000", new Map()), null, "no priors → null");
+});
+
+await test("imageHash: real ffmpeg roundtrip + directory scan", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-hash-"));
+  const a = path.join(dir, "a.png");
+  const c = path.join(dir, "c.png");
+  try {
+    await execFileAsync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=640x360:d=1", "-frames:v", "1", a]);
+    await execFileAsync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "smptebars=s=640x360:d=1", "-frames:v", "1", c]);
+    const [ha, hc] = await Promise.all([imageHash(a), imageHash(c)]);
+    ok(ha != null && /^[0-9a-f]{16}$/.test(ha!), "testsrc hashes to 16 hex chars");
+    const dist = hammingDistanceHex(ha!, hc!);
+    ok(dist != null && dist > 0, `different patterns differ (${dist} bits)`);
+
+    fs.copyFileSync(a, path.join(dir, "scene-01.png"));
+    fs.copyFileSync(c, path.join(dir, "scene-02.png"));
+    fs.writeFileSync(path.join(dir, "voiceover.wav"), Buffer.alloc(10)); // ignored
+    const hashes = await sceneImageHashes(dir);
+    eq(hashes.size, 2, "only scene-*.png files hashed");
+    ok(hashes.has(1) && hashes.has(2), "scene indices parsed from file names");
+    const excluded = await sceneImageHashes(dir, { exclude: 1 });
+    eq(excluded.size, 1, "exclude drops the requested scene");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ---------- summary ----------

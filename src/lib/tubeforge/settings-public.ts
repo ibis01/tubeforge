@@ -21,7 +21,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   autoVoiceover: "true",
   autoThumbnail: "true",
   // Phase 3 — VLM quality gate
-  qualityGate: "thumbnails", // off | thumbnails | all (thumbnails + storyboard scenes)
+  qualityGate: "all", // off | thumbnails | all (thumbnails + storyboard scenes)
   qualityThreshold: "6", // 1-9 — below this the image is re-rolled once
   // Phase 3 — global AI rate budget
   aiBudgetEnabled: "true",

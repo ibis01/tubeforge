@@ -1,18 +1,26 @@
 // Stock b-roll — real footage from Pexels + Pixabay, matched per scene.
 // MoneyPrinterTurbo's hallmark footage source, done TubeForge-style:
 //   • queries are derived deterministically from each scene's visual prompt
-//     (zero LLM cost), tried against both providers
+//     AND its narration (zero LLM cost), tried against both providers
 //   • clips are scored (HD, landscape, duration fit) and the best is kept
+//   • every downloaded clip is RELEVANCE-CHECKED: one frame goes to the VLM
+//     and clips showing an unrelated subject are rejected (next candidate is
+//     tried instead) — the classic "market crash → grocery market" failure
 //   • the clip downloads into the video dir as stock-XX.mp4 and the Scene
 //     gains a `stock` ref — the render compositor picks it up automatically
 //     and falls back to Smart Motion art for scenes without a match.
 
+import { execFile } from "child_process";
 import fs from "fs";
 import path from "path";
+import { promisify } from "util";
 import { db } from "@/lib/db";
 import { videoDir } from "./ai";
+import { relevanceCheck } from "./quality";
+import { sceneQueries } from "./stock-query";
 import type { Scene, StockRef } from "./types";
 
+const execFileAsync = promisify(execFile);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
@@ -181,45 +189,8 @@ export async function searchAll(query: string, keys: { pexels: string; pixabay: 
   return results.flat();
 }
 
-// ---------- Scene → query derivation (deterministic, no LLM cost) ----------
-
-const STOP_WORDS = new Set(
-  ("a an the and or but of in on at to for with from by as is are was were be been being this that these those " +
-    "his her its their our your my one two very more most much many some any no not into onto over under above " +
-    "below through during before after while then than so such only own same too also just about against between " +
-    "it he she they we you i who whom which what where when why how all each few other another both each own " +
-    "scene shot view frame close wide angle lens camera looking showing depicts shows standing sitting walking " +
-    "setting place time day night action wearing holds holding dramatic cinematic")
-    .split(" ")
-);
-
-/** Content words of a phrase, longest-first, deduped. */
-function contentWords(text: string, limit: number): string[] {
-  const words = text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .split(/\s+/)
-    .filter((w) => w.length >= 3 && !STOP_WORDS.has(w) && !/^\d+$/.test(w));
-  return [...new Set(words)]
-    .sort((a, b) => b.length - a.length)
-    .slice(0, limit);
-}
-
-/**
- * 2-4 search queries for a scene, most-specific first:
- *   1. the visual prompt's subject words (nouns dominate: "lighthouse cliff storm waves")
- *   2. the scene title words
- *   3. a two-word tightening of query 1 (broadens the net)
- */
-export function sceneQueries(scene: Scene): string[] {
-  const queries: string[] = [];
-  const fromVisual = contentWords(scene.visual, 4);
-  if (fromVisual.length >= 2) queries.push(fromVisual.join(" "));
-  const fromTitle = contentWords(scene.title, 3);
-  if (fromTitle.length >= 2) queries.push(fromTitle.join(" "));
-  if (fromVisual.length >= 3) queries.push(fromVisual.slice(0, 2).join(" "));
-  return [...new Set(queries)].slice(0, 4);
-}
+// ---------- Scene → query derivation ----------
+// The pure logic lives in stock-query.ts (unit-testable, DB-free).
 
 /** Rough spoken duration of the scene's narration (a TTS refiner, not exact). */
 function estimatedSceneDuration(scene: Scene): number {
@@ -238,9 +209,48 @@ function scoreClip(c: StockCandidate, minDur: number): number {
 }
 
 /**
+ * VLM relevance check for a DOWNLOADED clip: extract one representative frame
+ * and ask the vision model whether it shows the scene's required content.
+ * pass === false → the caller rejects the clip and tries the next candidate.
+ * Any failure (ffmpeg, VLM) resolves to pass: null — the clip is kept.
+ */
+async function clipFrameVerdict(
+  videoId: string,
+  scene: Scene
+): Promise<{ pass: boolean | null; score: number | null; summary: string | null }> {
+  const clipPath = path.join(videoDir(videoId), stockFile(scene.index));
+  const framePath = path.join(videoDir(videoId), `stock-${String(scene.index).padStart(2, "0")}.frame.jpg`);
+  try {
+    await execFileAsync(
+      "ffmpeg",
+      [
+        "-hide_banner", "-loglevel", "error",
+        "-ss", "1", // settle past the opening fade-in most clips have
+        "-i", clipPath,
+        "-frames:v", "1",
+        "-vf", "scale=640:-2",
+        "-y", framePath,
+      ],
+      { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 }
+    );
+    if (!fs.existsSync(framePath) || fs.statSync(framePath).size < 1000)
+      return { pass: null, score: null, summary: null };
+    return await relevanceCheck(
+      framePath,
+      `stock b-roll for scene ${scene.index} "${scene.title}" of a story video — the clip must show: ${scene.visual} (mood: ${scene.mood}; narration at this moment: "${scene.narration.slice(0, 140)}")`
+    );
+  } catch {
+    return { pass: null, score: null, summary: null };
+  } finally {
+    fs.rmSync(framePath, { force: true });
+  }
+}
+
+/**
  * Find + download the best stock clip for one scene. Tries each query in
- * order until a usable candidate is found. Returns null when nothing fits
- * (the scene simply keeps its Smart Motion art — never an error).
+ * order until a usable candidate is found; downloaded clips must survive the
+ * VLM relevance check. Returns null when nothing fits (the scene simply
+ * keeps its Smart Motion art — never an error).
  */
 async function fetchForScene(
   videoId: string,
@@ -268,16 +278,25 @@ async function fetchForScene(
     for (const clip of usable.slice(0, 3)) {
       try {
         const ok = await downloadClip(videoId, scene.index, clip.url);
-        if (ok) {
-          return {
-            source: clip.source,
-            file: stockFile(scene.index),
-            query,
-            credit: `Footage by ${clip.author} (${clip.source === "pexels" ? "Pexels" : "Pixabay"})`,
-            pageUrl: clip.pageUrl,
-            durationSec: clip.durationSec,
-          };
+        if (!ok) continue;
+        // Relevance gate — reject clips showing an unrelated subject and
+        // fall through to the next candidate (fail-open on verdict: null).
+        const verdict = await clipFrameVerdict(videoId, scene);
+        if (verdict.pass === false) {
+          fs.rmSync(path.join(videoDir(videoId), stockFile(scene.index)), { force: true });
+          console.warn(
+            `[stock] scene ${scene.index}: clip rejected — relevance ${verdict.score}/10 (${verdict.summary ?? "unrelated content"})`
+          );
+          continue;
         }
+        return {
+          source: clip.source,
+          file: stockFile(scene.index),
+          query,
+          credit: `Footage by ${clip.author} (${clip.source === "pexels" ? "Pexels" : "Pixabay"})`,
+          pageUrl: clip.pageUrl,
+          durationSec: clip.durationSec,
+        };
       } catch (err) {
         console.warn(`[stock] download failed for scene ${scene.index}:`, err instanceof Error ? err.message : err);
       }
