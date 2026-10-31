@@ -16,6 +16,13 @@ import { listVoiceProfiles } from "./voice-clone";
 
 export const VOICE_PREVIEW_TEXT =
   "Hi! Quick voice preview. If you pick me, this is exactly how I'll narrate your next video — clear, confident, and easy to follow.";
+
+/** Self-hosted (Chatterbox on CPU) variant: synthesis runs ~7-10× slower than
+ *  realtime, so the default line (~7.5s audio ≈ 50-70s render) can outrun
+ *  edge-proxy response timeouts and the FIRST click reports Failed even though
+ *  the WAV lands in the server cache. A short line keeps the first click
+ *  inside the timeout; every click after that plays from cache anyway. */
+export const SELFHOST_PREVIEW_TEXT = "Hi! This is how I'll narrate your video.";
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 const PREVIEW_DIR = path.join(UPLOAD_ROOT, "_voicepreviews");
 const MEMORY_MAX = 32;
@@ -76,8 +83,10 @@ export async function getVoicePreview(voice: string): Promise<Buffer> {
 
   // Same budget/pacing/429 handling as every other TTS call in the pipeline —
   // previews ride out rate-limit storms instead of erroring on the first click.
+  const previewText =
+    config.provider === "selfhost" ? SELFHOST_PREVIEW_TEXT : VOICE_PREVIEW_TEXT;
   const buffer = await aiCall("tts", `voice-preview(${safe})`, () =>
-    ttsSynthesize({ input: VOICE_PREVIEW_TEXT, voice: safe, speed: 1 }, config)
+    ttsSynthesize({ input: previewText, voice: safe, speed: 1 }, config)
   );
 
   touchMemory(key, buffer);
