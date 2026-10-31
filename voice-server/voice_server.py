@@ -29,8 +29,6 @@ TubeForge -> Settings -> AI Providers -> Voiceover -> "My Machine (self-hosted)"
 as the Base URL, and the same --key value as the API key.
 """
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import base64
