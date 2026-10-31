@@ -234,6 +234,14 @@ export function CreateView() {
   const [useOwnScript, setUseOwnScript] = useState(false);
   const [customScript, setCustomScript] = useState("");
 
+  // Analysis state — the engine must review the pasted script before the
+  // user can create a video from it. Approved = engine verdict accepted.
+  type AnalysisState = "idle" | "analyzing" | "done" | "error";
+  const [analysisState, setAnalysisState] = useState<AnalysisState>("idle");
+  const [analysisReport, setAnalysisReport] = useState<any>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [scriptApproved, setScriptApproved] = useState(false);
+
   // Inline script editing in the result card — toggle to a textarea, Save/Cancel
   const [editingScript, setEditingScript] = useState(false);
   const [draftScript, setDraftScript] = useState("");
@@ -242,6 +250,15 @@ export function CreateView() {
 
   const isStory = format === "story";
   const sceneCount = SCENE_COUNTS[length] ?? 6;
+
+  // Reset approval whenever the script or its options change — the analysis
+  // verdict is tied to the exact text we analyzed.
+  useEffect(() => {
+    setScriptApproved(false);
+    setAnalysisState("idle");
+    setAnalysisReport(null);
+    setAnalysisError(null);
+  }, [customScript, niche, tone, length, useOwnScript]);
 
   // Load defaults from settings + channel list
   useEffect(() => {
@@ -358,7 +375,11 @@ export function CreateView() {
           topic,
           // Only send `script` when the user explicitly opted into manual mode
           // AND typed something. Backend uses this to skip AI generation.
-          ...(useOwnScript && customScript.trim() ? { script: customScript } : {}),
+          // `approved: true` is the user's signal the analysis verdict was
+          // accepted — backend rejects creation without it.
+          ...(useOwnScript && customScript.trim()
+            ? { script: customScript, approved: true }
+            : {}),
           niche,
           tone,
           length,
@@ -397,6 +418,66 @@ export function CreateView() {
       ),
     [isStory],
   );
+
+  // Run the pasted script through the analysis engine. The verdict drives
+  // the UI: approved → green Create button; needs_revision → amber with
+  // Approve Anyway; rejected → red, no create.
+  const analyzeCustomScript = useCallback(async () => {
+    if (!customScript.trim()) {
+      toast({
+        title: "Paste a script first",
+        description: "Nothing to analyze yet.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (isStory) {
+      toast({
+        title: "Custom scripts need the Classic format",
+        description: "Story mode uses AI to split the script into scenes — analysis isn't meaningful there.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setAnalysisState("analyzing");
+    setAnalysisError(null);
+    setScriptApproved(false);
+    try {
+      const d = await api<{ analysis: any }>("/api/videos/analyze-script", {
+        method: "POST",
+        body: JSON.stringify({
+          script: customScript,
+          topic,
+          niche,
+          tone,
+          length,
+        }),
+      });
+      setAnalysisReport(d.analysis);
+      setAnalysisState("done");
+      if (d.analysis?.verdict === "approved") {
+        setScriptApproved(true); // auto-approve if engine is happy
+      }
+      const verdictLabel =
+        d.analysis?.verdict === "approved"
+          ? "Approved"
+          : d.analysis?.verdict === "needs_revision"
+          ? "Needs revision"
+          : "Rejected";
+      toast({
+        title: `Engine verdict: ${verdictLabel}`,
+        description: `Score ${d.analysis?.score ?? 0}/100 — ${d.analysis?.summary ?? ""}`,
+      });
+    } catch (e) {
+      setAnalysisState("error");
+      setAnalysisError(e instanceof Error ? e.message : "Analysis failed");
+      toast({
+        title: "Analysis failed",
+        description: e instanceof Error ? e.message : "Engine unavailable",
+        variant: "destructive",
+      });
+    }
+  }, [customScript, topic, niche, tone, length, isStory, toast]);
 
   // Copy the generated script to the clipboard
   const copyScript = useCallback(async () => {
@@ -546,6 +627,29 @@ export function CreateView() {
         });
         return;
       }
+      // Approve-gate — the engine must have analyzed AND the user must have
+      // accepted the verdict. If not yet analyzed, prompt them to analyze.
+      if (useOwnScript && customScript.trim() && !isStory) {
+        if (analysisState !== "done" || !analysisReport) {
+          toast({
+            title: "Analyze the script first",
+            description: "Click 'Analyze script' to run the engine before creating the video.",
+            variant: "destructive",
+          });
+          return;
+        }
+        if (!scriptApproved) {
+          toast({
+            title: "Approve the analysis first",
+            description:
+              analysisReport?.verdict === "rejected"
+                ? "The engine rejected this script — edit it and re-analyze."
+                : "Review the analysis report and click 'Approve & Create'.",
+            variant: "destructive",
+          });
+          return;
+        }
+      }
       runningRef.current = true;
       setAnyRunning(true);
       setVideo(null);
@@ -645,6 +749,11 @@ export function CreateView() {
       autoThumb,
       bumpRefresh,
       toast,
+      useOwnScript,
+      customScript,
+      analysisState,
+      analysisReport,
+      scriptApproved,
     ],
   );
 
@@ -892,6 +1001,51 @@ export function CreateView() {
                       Custom scripts work with the <strong>Classic</strong> format only — Story mode needs AI to split your text into scenes. Switch the format below or toggle this off.
                     </AlertDescription>
                   </Alert>
+                )}
+
+                {/* Analyze button — visible only for Classic format (custom
+                    script + story is blocked earlier). The engine must review
+                    the script before the user can create a video from it. */}
+                {!isStory && customScript.trim() && (
+                  <div className="space-y-2.5 pt-1">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={analyzeCustomScript}
+                      disabled={busy || analysisState === "analyzing"}
+                      className="w-full bg-brand-gradient hover:opacity-90 font-medium gap-2"
+                    >
+                      {analysisState === "analyzing" ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Analyzing script…
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-3.5 w-3.5" />
+                          {analysisState === "done" ? "Re-analyze script" : "Analyze script"}
+                        </>
+                      )}
+                    </Button>
+
+                    {/* Analysis report — appears after the engine returns. */}
+                    {analysisState === "done" && analysisReport && (
+                      <AnalysisReportCard
+                        report={analysisReport}
+                        approved={scriptApproved}
+                        onApprove={() => setScriptApproved(true)}
+                        onRevoke={() => setScriptApproved(false)}
+                      />
+                    )}
+
+                    {analysisState === "error" && analysisError && (
+                      <Alert className="border-rose-500/30 bg-rose-500/5 py-2">
+                        <AlertDescription className="text-[11px] text-rose-200/90 leading-relaxed">
+                          Analysis failed: {analysisError}
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  </div>
                 )}
               </div>
             )}
@@ -1796,6 +1950,226 @@ export function CreateView() {
                 </Card>
               )}
           </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// AnalysisReportCard — shows the engine's verdict on a pasted script.
+// Verdict colors: approved → emerald, needs_revision → amber, rejected → rose.
+// Each issue shows severity icon + category + message + optional suggestion.
+// The Approve/Revoke toggle is the user's manual accept/reject of the verdict.
+// --------------------------------------------------------------------------- //
+
+function AnalysisReportCard({
+  report,
+  approved,
+  onApprove,
+  onRevoke,
+}: {
+  report: any;
+  approved: boolean;
+  onApprove: () => void;
+  onRevoke: () => void;
+}) {
+  if (!report) return null;
+  const verdict = report.verdict as "approved" | "needs_revision" | "rejected";
+  const score = Math.max(0, Math.min(100, Number(report.score) || 0));
+  const summary = String(report.summary ?? "");
+  const strengths: string[] = Array.isArray(report.strengths) ? report.strengths : [];
+  const issues: any[] = Array.isArray(report.issues) ? report.issues : [];
+  const recommendations: string[] = Array.isArray(report.recommendations)
+    ? report.recommendations
+    : [];
+  const wordCount = Number(report.wordCount) || 0;
+  const estimatedDurationSec = Number(report.estimatedDurationSec) || 0;
+  const durationMs = Number(report.durationMs) || 0;
+
+  const verdictColor =
+    verdict === "approved"
+      ? "border-emerald-500/40 bg-emerald-500/8"
+      : verdict === "needs_revision"
+      ? "border-amber-500/40 bg-amber-500/8"
+      : "border-rose-500/40 bg-rose-500/8";
+  const verdictText =
+    verdict === "approved"
+      ? "text-emerald-300"
+      : verdict === "needs_revision"
+      ? "text-amber-300"
+      : "text-rose-300";
+  const verdictLabel =
+    verdict === "approved" ? "Approved" : verdict === "needs_revision" ? "Needs revision" : "Rejected";
+
+  // Format duration for display (e.g. "1m 30s" or "30s")
+  const fmtDur = (sec: number) => {
+    if (sec < 60) return `${sec}s`;
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return s ? `${m}m ${s}s` : `${m}m`;
+  };
+
+  return (
+    <div className={`rounded-xl border ${verdictColor} p-3 space-y-3`}>
+      {/* Header — verdict, score, summary */}
+      <div className="flex items-start gap-3">
+        <div className="shrink-0 mt-0.5">
+          {verdict === "approved" ? (
+            <Check className="h-5 w-5 text-emerald-400" />
+          ) : verdict === "needs_revision" ? (
+            <Sparkles className="h-5 w-5 text-amber-400" />
+          ) : (
+            <X className="h-5 w-5 text-rose-400" />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <p className={`text-sm font-semibold ${verdictText}`}>{verdictLabel}</p>
+            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+              <span>{wordCount} words</span>
+              <span>·</span>
+              <span>~{fmtDur(estimatedDurationSec)} narration</span>
+              {durationMs > 0 && (
+                <>
+                  <span>·</span>
+                  <span>{(durationMs / 1000).toFixed(1)}s engine</span>
+                </>
+              )}
+            </div>
+          </div>
+          {summary && (
+            <p className="text-[12px] text-foreground/85 leading-relaxed mt-1">
+              {summary}
+            </p>
+          )}
+          {/* Score bar */}
+          <div className="mt-2 h-1.5 rounded-full bg-white/5 overflow-hidden">
+            <div
+              className={`h-full rounded-full ${
+                verdict === "approved"
+                  ? "bg-emerald-500"
+                  : verdict === "needs_revision"
+                  ? "bg-amber-500"
+                  : "bg-rose-500"
+              }`}
+              style={{ width: `${score}%` }}
+            />
+          </div>
+          <p className="text-[10px] text-muted-foreground mt-1">
+            Engine score: <span className={verdictText}>{score}/100</span>
+          </p>
+        </div>
+      </div>
+
+      {/* Strengths */}
+      {strengths.length > 0 && (
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1.5">
+            Strengths
+          </p>
+          <ul className="space-y-1">
+            {strengths.map((s, i) => (
+              <li key={i} className="flex items-start gap-1.5 text-[12px] text-emerald-200/90 leading-relaxed">
+                <Check className="h-3 w-3 mt-0.5 shrink-0 text-emerald-400/80" />
+                <span>{s}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Issues */}
+      {issues.length > 0 && (
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1.5">
+            Issues ({issues.length})
+          </p>
+          <ul className="space-y-1.5">
+            {issues.map((issue, i) => {
+              const sev = issue.severity as "blocker" | "warning" | "note";
+              const sevColor =
+                sev === "blocker"
+                  ? "text-rose-300"
+                  : sev === "warning"
+                  ? "text-amber-300"
+                  : "text-sky-300";
+              const sevLabel =
+                sev === "blocker" ? "Blocker" : sev === "warning" ? "Warning" : "Note";
+              return (
+                <li
+                  key={i}
+                  className="rounded-lg border border-white/8 bg-white/3 p-2 text-[12px] leading-relaxed"
+                >
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge
+                      variant="outline"
+                      className={`border-current/30 bg-transparent ${sevColor} text-[10px] font-normal py-0`}
+                    >
+                      {sevLabel}
+                    </Badge>
+                    <span className="text-muted-foreground text-[10px] uppercase tracking-wider">
+                      {String(issue.category).replace(/_/g, " ")}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-foreground/90">{String(issue.message)}</p>
+                  {issue.suggestion && (
+                    <p className="mt-1 text-muted-foreground text-[11px] italic">
+                      → {String(issue.suggestion)}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {/* Recommendations */}
+      {recommendations.length > 0 && (
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1.5">
+            Recommendations
+          </p>
+          <ul className="space-y-1">
+            {recommendations.map((r, i) => (
+              <li key={i} className="flex items-start gap-1.5 text-[12px] text-foreground/85 leading-relaxed">
+                <Sparkles className="h-3 w-3 mt-0.5 shrink-0 text-amber-400/80" />
+                <span>{r}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Approve / Revoke toggle */}
+      <div className="pt-2 border-t border-white/8 flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          {approved ? (
+            <span className="text-emerald-300">✓ Approved — you can generate the video.</span>
+          ) : verdict === "rejected" ? (
+            <span className="text-rose-300">✗ Engine rejected — edit the script and re-analyze.</span>
+          ) : verdict === "needs_revision" ? (
+            <span className="text-amber-300">Engine flagged issues. Approve anyway or edit and re-analyze.</span>
+          ) : (
+            <span className="text-emerald-300">Engine approved automatically.</span>
+          )}
+        </p>
+        {verdict !== "approved" && (
+          <Button
+            type="button"
+            size="sm"
+            onClick={approved ? onRevoke : onApprove}
+            disabled={verdict === "rejected"}
+            className={
+              approved
+                ? "border border-white/15 bg-white/5 text-xs"
+                : "bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 text-xs"
+            }
+            variant={approved ? "outline" : "default"}
+          >
+            {approved ? "Revoke approval" : "Approve anyway"}
+          </Button>
         )}
       </div>
     </div>

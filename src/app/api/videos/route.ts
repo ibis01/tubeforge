@@ -51,6 +51,12 @@ export async function POST(req: NextRequest) {
     // AI generation and stores the user's text verbatim. Classic format only;
     // story format needs AI scene-splitting (we'd lose scene art prompts
     // otherwise) so it falls back to AI generation even if a script is sent.
+    //
+    // GUARD: a custom script must be ANALYZED + APPROVED first. The client
+    // runs POST /api/videos/analyze-script, shows the verdict, and only
+    // re-submits here with `approved: true` once the user accepts. This
+    // catches quality / TTS / sensitive-content issues before we burn a
+    // 30-minute render pipeline on a script that would fail at the end.
     const customScript =
       typeof body.script === "string" ? body.script.trim() : "";
     const useCustomScript =
@@ -67,6 +73,17 @@ export async function POST(req: NextRequest) {
         { error: "Custom script is only supported on the Classic format. Switch to Story for AI scene-splitting." },
         { status: 400 }
       );
+    // Approve-gate: custom script + not approved → 422 with a hint.
+    if (useCustomScript && body.approved !== true) {
+      return NextResponse.json(
+        {
+          error:
+            "Custom script must be analyzed and approved first. POST /api/videos/analyze-script, then re-submit with `approved: true`.",
+          needsApproval: true,
+        },
+        { status: 422 }
+      );
+    }
 
     const niche = String(body.niche ?? "Motivation");
     const tone = String(body.tone ?? "informative");
