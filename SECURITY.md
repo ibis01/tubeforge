@@ -46,3 +46,27 @@ Do this now:
 
 `bun run backup` → `backups/tubeforge-<timestamp>/` with a hot-copy of the SQLite database
 (`VACUUM INTO`) and a manifest of `uploads/`. Keep at least one backup off-machine.
+
+> **Note (2026-11):** the `scripts/backup.sh` file is referenced here and in `package.json` but is currently absent from the shipped tree. Restoring it is Stage 1 task `T-1.1` in `TASKS.md`. Until then, use `sqlite3 db/custom.db ".backup backups/manual.db"` as a manual fallback.
+
+## 2026-11 Foundation Audit findings
+
+A full security audit was run as part of Stage 1 of the TubeForge product development plan. The audit covered all 71 API route files (110 endpoints), the 11 Prisma models, the auth/middleware layer, the video-generation pipeline, and the build/test baseline.
+
+Findings:
+
+- **3 CRITICAL risks** (all multi-tenant blockers; addressed in Stage 2):
+  - No `userId`/`tenantId` on any Prisma model — every endpoint assumes one user.
+  - `Setting` table is a singleton per key — one owner password, one YouTube OAuth grant, one set of provider keys per install.
+  - First-come race on `POST /api/auth/setup` (mitigated in Stage 1 by the new `TUBEFORGE_OWNER_TOKEN` env var — see §"Daily-use security checklist" above).
+- **28 HIGH findings** (mostly Stage 1 and Stage 3): synchronous heavy work in-request (`POST /api/videos`, `/api/research`, `/api/research/[id]/greenlight`, `/api/characters/bible`), dead scaffolding for the YouTube publish stage (`uploadToYouTube` is implemented but never called), missing timeout/retry on YouTube fetch calls, zero `zod` use across 110 endpoints, no `prisma/migrations/` directory, no CI, no security headers.
+- **15 MEDIUM findings**: orphan cleanup gap on `DELETE /api/videos/[id]`, in-memory security state (login lockouts and rate-limit buckets reset on restart), memory-bound media streaming, side-effecting `GET /api/music`, cross-platform `/proc/<pid>/stat` watchdog.
+- **7 LOW findings**: cosmetic schema comment drift, dead Tailwind v3 config file, `reactStrictMode: false`, Playwright installed but unwired.
+
+Full detail:
+
+- `FOUNDATION_AUDIT.md` — the complete audit report (route inventory, pipeline trace, build baseline, 30 recorded defects).
+- `RISK_REGISTER.md` — all 55 risks prioritized with the stage that fixes each.
+- `TASKS.md` — the Stage 1 implementation backlog (19 tasks).
+
+The single most important security recommendation from the audit: **add automated cross-tenant isolation tests in CI from Stage 2 onward, not as a Stage 7 QA item.** By Stage 7 it is too late to find leakage. The next major security milestone is Stage 2 (multi-user SaaS architecture).
