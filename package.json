@@ -9,7 +9,7 @@
     "start": "NODE_ENV=production node .next/standalone/server.js",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "postinstall": "prisma generate",
+    "postinstall": "node scripts/postinstall.mjs",
     "setup": "prisma db push",
     "setup:local": "prisma generate --schema prisma/schema.sqlite.prisma && prisma db push --schema prisma/schema.sqlite.prisma",
     "backup": "bash scripts/backup.sh",
