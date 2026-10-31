@@ -1,0 +1,5 @@
+# Preview requirements — slimmed down (no torch, no TTS)
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.17
+pydantic==2.10.4
