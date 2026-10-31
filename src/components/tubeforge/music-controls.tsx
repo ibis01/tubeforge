@@ -72,9 +72,31 @@ export function useMusicLibrary() {
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/music", { cache: "no-store" });
-      const d = (await res.json()) as { tracks: MusicTrackDTO[]; settings: MusicSettingsDTO };
+      const d = (await res.json()) as {
+        tracks: MusicTrackDTO[];
+        settings: MusicSettingsDTO;
+        // Stage 1 (T-1.14): GET no longer seeds as a hidden side effect —
+        // an empty library asks the client to seed explicitly.
+        needsSeed?: boolean;
+      };
       setTracks(d.tracks ?? []);
       setSettings(d.settings ?? null);
+
+      if (d.needsSeed) {
+        // First open on a fresh install: synthesize the TubeForge-original
+        // beds (local ffmpeg, no network) once, then reload the library.
+        const seedRes = await fetch("/api/music", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "seed" }),
+        }).catch(() => null);
+        if (seedRes?.ok) {
+          const again = await fetch("/api/music", { cache: "no-store" });
+          const d2 = (await again.json()) as { tracks: MusicTrackDTO[]; settings: MusicSettingsDTO };
+          setTracks(d2.tracks ?? []);
+          setSettings(d2.settings ?? null);
+        }
+      }
     } catch {
       toast.error("Could not load the music library");
     } finally {

@@ -8,40 +8,52 @@ const __dirname = dirname(__filename);
 
 const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
   rules: {
-    // TypeScript rules
-    "@typescript-eslint/no-explicit-any": "off",
-    "@typescript-eslint/no-unused-vars": "off",
-    "@typescript-eslint/no-non-null-assertion": "off",
+    // TypeScript rules — Stage 1 (T-1.4): the blanket "off" pass was reverted
+    // to `warn` so `npm run lint` reports real issues without blocking the
+    // build. Tighten selected rules to "error" once the warning count is
+    // driven down to zero.
+    "@typescript-eslint/no-explicit-any": "warn",
+    "@typescript-eslint/no-unused-vars": [
+      "warn",
+      { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" },
+    ],
+    "@typescript-eslint/no-non-null-assertion": "warn",
     "@typescript-eslint/ban-ts-comment": "off",
     "@typescript-eslint/prefer-as-const": "off",
     "@typescript-eslint/no-unused-disable-directive": "off",
-    
+
     // React rules
-    "react-hooks/exhaustive-deps": "off",
+    "react-hooks/exhaustive-deps": "warn",
+    // Next 16 ships this React-Compiler rule at error level; 17 pre-existing
+    // call sites trip it. Warned for Stage 1 (refactoring them is their own
+    // task); tighten to "error" once they are addressed.
+    "react-hooks/set-state-in-effect": "warn",
     "react-hooks/purity": "off",
     "react/no-unescaped-entities": "off",
     "react/display-name": "off",
     "react/prop-types": "off",
     "react-compiler/react-compiler": "off",
-    
+
     // Next.js rules
+    // <img> is deliberate here: all media streams from same-origin /api/...
+    // routes (thumbnails, scene art, video), so next/image adds nothing.
     "@next/next/no-img-element": "off",
     "@next/next/no-html-link-for-pages": "off",
-    
+
     // General JavaScript rules
-    "prefer-const": "off",
-    "no-unused-vars": "off",
-    "no-console": "off",
-    "no-debugger": "off",
+    "prefer-const": "warn",
+    "no-unused-vars": "off", // superseded by @typescript-eslint/no-unused-vars
+    "no-console": ["warn", { "allow": ["warn", "error", "info"] }],
+    "no-debugger": "warn",
     "no-empty": "off",
     "no-irregular-whitespace": "off",
     "no-case-declarations": "off",
     "no-fallthrough": "off",
     "no-mixed-spaces-and-tabs": "off",
     "no-redeclare": "off",
-    "no-undef": "off",
-    "no-unreachable": "off",
-    "no-useless-escape": "off",
+    "no-undef": "off", // TS handles undefined globals
+    "no-unreachable": "warn",
+    "no-useless-escape": "warn",
   },
 }, {
   // pack/ is a packaging artifact mirror; scripts/*.cjs are standalone ops

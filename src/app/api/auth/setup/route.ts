@@ -11,6 +11,12 @@ import { getAuthSecret } from "@/lib/tubeforge/auth-token";
  * POST — first-run: create the access password and sign in.
  * Only works while no password is configured (403 afterwards) so a remote
  * attacker can never (re)claim an already-locked instance.
+ *
+ * Stage 1 hardening (task T-1.8, closes the audit's first-come race, risk
+ * R-CRIT-3): when TUBEFORGE_OWNER_TOKEN is set in .env, the very first
+ * claim MUST present that token in the `x-owner-token` header — a fresh
+ * install can no longer be claimed by whoever hits the endpoint first.
+ * Unset (local dev), the route behaves exactly as before.
  */
 export async function POST(req: NextRequest) {
   if (await isAuthConfigured())
@@ -24,6 +30,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: "Auth is disabled: set TUBEFORGE_AUTH_SECRET in .env first" },
       { status: 500 }
+    );
+
+  const ownerToken = process.env.TUBEFORGE_OWNER_TOKEN;
+  if (ownerToken && req.headers.get("x-owner-token") !== ownerToken)
+    return NextResponse.json(
+      { error: "Owner token required for first-time setup — set x-owner-token to TUBEFORGE_OWNER_TOKEN" },
+      { status: 403 }
     );
 
   const body = (await req.json().catch(() => ({}))) as { password?: string };

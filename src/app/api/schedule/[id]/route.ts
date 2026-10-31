@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { db } from "@/lib/db";
 import { serializeSlot, parseDay, type SlotWithRelations } from "@/lib/tubeforge/schedule";
 
@@ -18,38 +19,45 @@ type Ctx = { params: Promise<{ id: string }> };
 
 const asSlot = (s: unknown) => s as SlotWithRelations;
 
+// Stage 1 (task T-1.11, audit gap R-HIGH-28): title/note previously had no
+// length cap on PATCH — zod now bounds them. slotDate/timeOfDay keep their
+// existing parseDay/regex validation (applied after the shape check).
+const PatchSlotSchema = z
+  .object({
+    slotDate: z.string().max(10).optional(),
+    timeOfDay: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+    done: z.boolean().optional(),
+    title: z.string().trim().min(1).max(120).optional(),
+    note: z.string().max(1000).nullable().optional(),
+    markVideoPublished: z.boolean().optional(),
+  })
+  .strict();
+
 /** PATCH — move/reschedule a slot, toggle done, or rename it. */
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
-  let body: {
-    slotDate?: string;
-    timeOfDay?: string;
-    done?: boolean;
-    title?: string;
-    note?: string;
-    markVideoPublished?: boolean;
-  };
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-  }
+  const parsed = PatchSlotSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success)
+    return NextResponse.json(
+      { error: "Invalid slot fields", details: parsed.error.flatten().fieldErrors },
+      { status: 400 }
+    );
+  const body = parsed.data;
 
   const existing = await db.scheduleSlot.findUnique({ where: { id } });
   if (!existing)
     return NextResponse.json({ error: "Slot not found" }, { status: 404 });
 
   const data: Record<string, unknown> = {};
-  if (body.slotDate) {
+  if (body.slotDate !== undefined) {
     const day = parseDay(body.slotDate);
     if (!day)
       return NextResponse.json({ error: "Invalid slotDate" }, { status: 400 });
     data.slotDate = day;
   }
-  if (body.timeOfDay && /^\d{2}:\d{2}$/.test(body.timeOfDay))
-    data.timeOfDay = body.timeOfDay;
-  if (typeof body.done === "boolean") data.done = body.done;
-  if (body.title?.trim()) data.title = body.title.trim();
+  if (body.timeOfDay !== undefined) data.timeOfDay = body.timeOfDay;
+  if (body.done !== undefined) data.done = body.done;
+  if (body.title !== undefined) data.title = body.title;
   if (body.note !== undefined) data.note = body.note?.trim() || null;
 
   // Mark linked video as published (slot completion)

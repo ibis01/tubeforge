@@ -9,6 +9,13 @@ import { errorText } from "@/lib/tubeforge/redact";
  * generation-ready profile. Synchronous (~5-8s) — safely under gateway timeout.
  * Body: { name, concept, niche?, characterId? } — when characterId is given,
  * the bible is applied to that character directly.
+ *
+ * Stage 1 note (task T-1.10 deviation, recorded in TASKS.md): this route
+ * stays synchronous on purpose. Its only caller is the new-character form
+ * preview (no entity id exists yet to job onto, and the caller needs the
+ * generated fields to fill form inputs). At ~5-8s it sits well under the
+ * gateway timeout; the Stage 3 queue migration will move it onto the worker
+ * with a synthetic run id once the client can poll a drafts endpoint.
  */
 export async function POST(req: NextRequest) {
   try {

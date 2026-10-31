@@ -70,3 +70,17 @@ Full detail:
 - `TASKS.md` — the Stage 1 implementation backlog (19 tasks).
 
 The single most important security recommendation from the audit: **add automated cross-tenant isolation tests in CI from Stage 2 onward, not as a Stage 7 QA item.** By Stage 7 it is too late to find leakage. The next major security milestone is Stage 2 (multi-user SaaS architecture).
+
+---
+
+## Stage 1 execution (2026-11-01)
+
+The Stage 1 backlog was executed the same day: `TUBEFORGE_OWNER_TOKEN` now gates
+the first-run setup claim (close-out of the CRITICAL setup race), security
+headers are served by `next.config.ts`, CI runs typecheck + lint + tests, the
+test suite moved to npm/Node (bun no longer required), the multi-minute script
+generation moved off the request path into a background job (202 + polling),
+and the first-come setup race, DELETE orphan gap, side-effecting music GET and
+`params.n` validation gaps are all fixed. Verification: typecheck clean, 46/46
+tests pass, live smoke test green. Remaining CRITICAL work is Stage 2
+(cross-tenant isolation). Full per-task status: `TASKS.md`.

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { db } from "@/lib/db";
 import {
   serializeCharacter,
@@ -7,6 +8,22 @@ import {
 } from "@/lib/tubeforge/characters";
 
 type Ctx = { params: Promise<{ id: string }> };
+
+// Stage 1 (task T-1.11, audit gap R-HIGH-28): the PATCH path previously wrote
+// role/personality/appearance verbatim (the POST path had caps, PATCH did
+// not) — zod now bounds every text field to the same limits as POST.
+const PatchCharacterSchema = z
+  .object({
+    name: z.string().trim().min(1).max(60).optional(),
+    role: z.string().max(200).nullable().optional(),
+    personality: z.string().max(2000).nullable().optional(),
+    appearance: z.string().max(2000).nullable().optional(),
+    voice: z.string().min(1).max(100).optional(),
+    artStyle: z.string().min(1).max(60).optional(),
+    identityAnchor: z.string().max(2000).nullable().optional(),
+    isActive: z.boolean().optional(),
+  })
+  .strict();
 
 export async function GET(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
@@ -23,38 +40,39 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
-  const body = await req.json();
+  const parsed = PatchCharacterSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success)
+    return NextResponse.json(
+      { error: "Invalid character fields", details: parsed.error.flatten().fieldErrors },
+      { status: 400 }
+    );
+  const body = parsed.data;
 
   const character = await db.character.findUnique({ where: { id } });
   if (!character)
     return NextResponse.json({ error: "Character not found" }, { status: 404 });
 
   const data: Record<string, unknown> = {};
-  if (typeof body.name === "string" && body.name.trim())
-    data.name = body.name.trim().slice(0, 60);
-  if (typeof body.role === "string" || body.role === null)
-    data.role = body.role;
-  if (typeof body.personality === "string" || body.personality === null)
-    data.personality = body.personality;
-  if (typeof body.appearance === "string" || body.appearance === null)
-    data.appearance = body.appearance;
-  if (typeof body.voice === "string") data.voice = body.voice;
-  if (typeof body.artStyle === "string") data.artStyle = body.artStyle;
-  if (typeof body.identityAnchor === "string" || body.identityAnchor === null)
-    data.identityAnchor = body.identityAnchor;
+  if (body.name !== undefined) data.name = body.name;
+  if (body.role !== undefined) data.role = body.role;
+  if (body.personality !== undefined) data.personality = body.personality;
+  if (body.appearance !== undefined) data.appearance = body.appearance;
+  if (body.voice !== undefined) data.voice = body.voice;
+  if (body.artStyle !== undefined) data.artStyle = body.artStyle;
+  if (body.identityAnchor !== undefined) data.identityAnchor = body.identityAnchor;
   // Re-derive a fallback anchor if visuals changed and no explicit anchor given
   else if (
-    (typeof body.appearance === "string" || typeof body.artStyle === "string") &&
+    (body.appearance !== undefined || body.artStyle !== undefined) &&
     !body.identityAnchor
   ) {
     const appearance =
-      typeof body.appearance === "string" ? body.appearance : character.appearance;
+      body.appearance !== undefined ? body.appearance : character.appearance;
     const artStyle =
-      typeof body.artStyle === "string" ? body.artStyle : character.artStyle;
+      body.artStyle !== undefined ? body.artStyle : character.artStyle;
     if (appearance || artStyle)
       data.identityAnchor = buildAnchorFallback(appearance ?? null, artStyle);
   }
-  if (typeof body.isActive === "boolean") data.isActive = body.isActive;
+  if (body.isActive !== undefined) data.isActive = body.isActive;
 
   const updated = await db.character.update({
     where: { id },

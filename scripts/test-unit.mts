@@ -1,8 +1,8 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * TubeForge unit + regression suite — audio mixer, QC gate, music mood logic.
  *
- *   bun scripts/test-unit.ts          (also wired into `bun run check`)
+ *   node --import tsx scripts/test-unit.mts          (also wired into `npm run check`)
  *
  * Two layers:
  *   1. PURE units — filter-chain builders, loudnorm JSON parsing, static-run

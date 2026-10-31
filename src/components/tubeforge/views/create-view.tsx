@@ -42,6 +42,7 @@ import {
   pollStoryboard,
   pollRender,
   pollStock,
+  pollScript,
 } from "@/lib/tubeforge/poll";
 import {
   Wand2,
@@ -369,7 +370,7 @@ export function CreateView() {
 
   const createVideo = useCallback(
     () =>
-      api<{ video: VideoDTO }>("/api/videos", {
+      api<{ video: VideoDTO; queued?: boolean }>("/api/videos", {
         method: "POST",
         body: JSON.stringify({
           topic,
@@ -405,7 +406,17 @@ export function CreateView() {
           transitionStyle: transition.style,
           transitionDuration: transition.durationSec,
         }),
-      }).then((d) => d.video),
+      }).then(async (d) => {
+        const v = d.video;
+        // Stage 1 (T-1.9): the script now generates as a background job —
+        // the create response is 202 with the draft. Wait for the script
+        // here so the Auto-Pilot chain can keep treating this stage as
+        // "done when scripted" (same contract as the re-roll path).
+        if (v.status !== "scripted") {
+          return pollScript(v.id, { timeoutMs: 15 * 60 * 1000 });
+        }
+        return v;
+      }),
     [topic, useOwnScript, customScript, niche, tone, length, voice, speed, thumbStyle, channelId, characterId, format, renderMode, music, motion, transition]
   );
 

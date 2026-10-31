@@ -11,7 +11,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "postinstall": "node scripts/postinstall.mjs",
-    "setup": "prisma db push",
+    "setup": "node scripts/postinstall.mjs",
     "setup:local": "prisma generate --schema prisma/schema.sqlite.prisma && prisma db push --schema prisma/schema.sqlite.prisma",
     "backup": "bash scripts/backup.sh",
     "auth:reset": "node scripts/auth-reset.mjs",
@@ -19,8 +19,9 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
-    "test": "bun scripts/test-unit.ts",
-    "check": "bun run typecheck && bun run lint && bun run test"
+    "test": "node --import tsx scripts/test-unit.mts",
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -93,13 +94,15 @@
     "zustand": "^5.0.6"
   },
   "devDependencies": {
+    "@playwright/test": "^1.57.0",
     "@tailwindcss/postcss": "^4",
+    "@types/node": "^26.6.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "bun-types": "^1.3.4",
     "eslint": "^9",
     "eslint-config-next": "^16.1.1",
     "tailwindcss": "^4",
+    "tsx": "^4.23.15",
     "tw-animate-css": "^1.3.5",
     "typescript": "^5"
   }

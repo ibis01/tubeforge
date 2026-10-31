@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { db } from "@/lib/db";
 import { parseScenes } from "@/lib/tubeforge/story";
 import { readSceneStock, fetchStockForScenes, readStockKeys } from "@/lib/tubeforge/stock";
@@ -7,13 +8,23 @@ import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string; n: string }> };
 
+// Stage 1 (task T-1.12): `n` must be a positive integer.
+const ParamsSchema = z.object({
+  id: z.string().min(1),
+  n: z.coerce.number().int().positive(),
+});
+
 /** GET — stream one scene's stock clip (drives the filmstrip hover preview). */
 export async function GET(_req: NextRequest, ctx: Ctx) {
-  const { id, n } = await ctx.params;
+  const parsed = ParamsSchema.safeParse(await ctx.params);
+  if (!parsed.success)
+    return NextResponse.json({ error: "Invalid scene index" }, { status: 400 });
+  const { id } = parsed.data;
+  const index = parsed.data.n;
+
   const video = await db.video.findUnique({ where: { id } });
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-  const index = Number(n);
   const buf = readSceneStock(id, index);
   if (!buf) return NextResponse.json({ error: "No stock clip for this scene" }, { status: 404 });
 
@@ -31,7 +42,13 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
  * Used by the per-scene "Find footage" button; replaces any existing clip.
  */
 export async function POST(_req: NextRequest, ctx: Ctx) {
-  const { id, n } = await ctx.params;
+  const parsed = ParamsSchema.safeParse(await ctx.params);
+  if (!parsed.success)
+    return NextResponse.json({ error: "Invalid scene index" }, { status: 400 });
+  const { id } = parsed.data;
+  const index = parsed.data.n;
+  const n = String(index);
+
   const video = await db.video.findUnique({ where: { id } });
   if (!video)
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
@@ -39,7 +56,6 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "Not a scene-based video" }, { status: 400 });
 
   const scenes = parseScenes(video.scenes);
-  const index = Number(n);
   const scene = scenes.find((s) => s.index === index);
   if (!scene)
     return NextResponse.json({ error: `Scene ${n} does not exist` }, { status: 400 });

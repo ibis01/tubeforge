@@ -6,6 +6,36 @@
 
 ---
 
+## Execution status (updated 2026-11-01)
+
+All 19 tasks executed. Verification: `tsc --noEmit` clean · `eslint` 0 errors / 235 warnings (baseline) · 46 unit + regression tests pass · live dev-server smoke test green (202 create in 28 ms → scripted via background job; custom-script path 200; DELETE removes `uploads/<id>/`; security headers present; `params.n` → 400; research GET 404 shape correct).
+
+| Task | Status | Notes |
+|---|---|---|
+| T-1.1 restore scripts | ✅ Done | `scripts/backup.sh`, `scripts/auth-reset.mjs`, `scripts/package-local.sh` written, executable, backup tested against the live SQLite DB |
+| T-1.2 one package manager | ✅ Done | npm is PM of record; `bun.lock` deleted; `bun-types` → `@types/node` + `tsx`; test suite runs under Node (`scripts/test-unit.mts`); 46/46 pass |
+| T-1.3 fix `npm run setup` | ✅ Done | `setup` now delegates to the postinstall auto-detect logic; verified against SQLite |
+| T-1.4 ESLint rules | ✅ Done | Selected rules re-enabled at warn (235-warning baseline recorded); Next 16's `react-hooks/set-state-in-effect` warned with a note (17 pre-existing sites) |
+| T-1.5 CI | ✅ Done | `.github/workflows/ci.yml` — typecheck + lint + tests + Postgres schema compile on push/PR; optional Playwright job on PRs |
+| T-1.6 security headers | ✅ Done | CSP, nosniff, Referrer-Policy, Permissions-Policy, HSTS, COOP via `next.config.ts headers()`; verified live. XFO/frame-ancestors/COEP deliberately deferred to Stage 4a (preview-iframe caveat documented in the config) |
+| T-1.7 prisma migrate | ✅ Done | Baseline migration `prisma/migrations/000000000000_init/migration.sql` generated via `migrate diff` (266 lines) + `migration_lock.toml` |
+| T-1.8 setup race | ✅ Done | `TUBEFORGE_OWNER_TOKEN` gate in `POST /api/auth/setup`; documented in `.env.example` + SETUP.md |
+| T-1.9 jobbed script create | ✅ Done | `POST /api/videos` returns 202 in 28 ms (was 30 s+ blocking); `runScriptJob` wired; end-to-end verified — job ran, video landed `scripted` |
+| T-1.10 jobbed research/greenlight | ✅ Done* | Research: jobbed with new `research` JobKind + new `GET /api/research/[id]` poll endpoint + persisted scan errors; client polls. Greenlight: jobbed via `runScriptJob` with the radar brief + keyword union; client toast updated; detail dialog adopts the in-flight job. *Deviation: the character-bible route stays synchronous by design (~5-8 s, form-preview path has no entity id to job onto) — documented in the route; moves to the queue in Stage 3 |
+| T-1.11 zod validation | ✅ Done* | Full zod schemas on `PATCH channels/[id]`, `PATCH characters/[id]`, `PATCH schedule/[id]`; `PATCH videos/[id]` got length caps (description ≤5000, tags ≤500) with full zod conversion deferred to Stage 2 |
+| T-1.12 params.n validation | ✅ Done | zod `int().positive()` on storyboard/[n], slides/[n], stock/[n] (GET+POST); live-verified 400 on `abc` |
+| T-1.13 DELETE cleanup | ✅ Done | `DELETE /api/videos/[id]` removes `uploads/<id>/`; live-verified |
+| T-1.14 music seed off GET | ✅ Done | GET is a pure read returning `needsSeed`; the client seeds explicitly; live-verified |
+| T-1.15 strict mode + drift | ✅ Done | `reactStrictMode: true`; dead Tailwind v3 config left in place intentionally (v4 ignores it — deletion is cosmetic and deferred to avoid churn); VoiceProfile comment drift noted for the Stage 2 schema pass |
+| T-1.16 docs | ✅ Done | SETUP.md: studio access modes table, npm-only prerequisites, migrate deploy guidance; `.env.example` documents `TUBEFORGE_OWNER_TOKEN` |
+| T-1.17 Playwright | ✅ Done | Kept (it is a runtime dep for slides rendering, not dead weight); added `@playwright/test` + `playwright.config.ts` + `e2e/smoke.spec.ts` (3 tests incl. a security-header assertion) + `npm run test:e2e`; wired as an optional CI job |
+| T-1.18 docs in repo | ✅ Done | Already in place from the audit sprint |
+| T-1.19 SECURITY.md | ✅ Done | Already in place from the audit sprint |
+
+Risks closed this session: R-CRIT-3, R-HIGH-1, R-HIGH-2, R-HIGH-3, R-HIGH-11, R-HIGH-28 (partial), R-MED-1, R-MED-8, R-MED-9, R-MED-10, R-MED-11, R-MED-12, R-MED-14, R-MED-15, R-LOW-4, R-LOW-5, R-LOW-6, R-LOW-7 (+ partial R-HIGH-4 recorded as a documented deviation, R-LOW-1/R-LOW-2 deferred with rationale). Stage 2 closes the remaining CRITICAL pair (R-CRIT-1, R-CRIT-2).
+
+---
+
 ## How to read this document
 
 Every task has:

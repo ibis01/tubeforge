@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { generateScriptPackage } from "@/lib/tubeforge/ai";
 import { latestStatsMap } from "@/lib/tubeforge/analytics";
-import { generateSceneScriptPackage } from "@/lib/tubeforge/story";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
+import { startJob } from "@/lib/tubeforge/jobs";
+import { runScriptJob } from "@/lib/tubeforge/script-job";
 import { FORMATS, RENDER_MODES, type VideoDTO } from "@/lib/tubeforge/types";
 import { TRANSITIONS, sanitizeTransitionDuration } from "@/lib/tubeforge/transitions";
 import { isDuckIntensity } from "@/lib/tubeforge/audiomix";
@@ -203,108 +203,25 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Stage 1 — AI script generation (classic narration OR scene-based story)
-    try {
+    // Stage 1 — AI script generation (classic narration OR scene-based story).
+    //
+    // Stage 1 of the roadmap (task T-1.9): the multi-minute LLM call moved
+    // OFF the request path. The route returns 202 with the draft video and
+    // the script job runs via startJob + runScriptJob (the same worker the
+    // batch route already used) — quota-storm retries included. Clients poll
+    // GET /api/videos/[id] (generating.script flag) via pollScript().
+    if (useCustomScript) {
       const wordCount = (text: string) =>
         text.split(/\s+/).filter(Boolean).length;
-
-      // ----- Custom script: skip AI generation, use the user's text verbatim -----
-      if (useCustomScript) {
-        const title = topic.slice(0, 80);
-        const updated = await db.video.update({
-          where: { id: video.id },
-          data: {
-            title,
-            script: customScript,
-            description: "",
-            tags: "",
-            wordCount: wordCount(customScript),
-            status: "scripted",
-            error: null,
-          },
-          include: {
-            channel: { select: { name: true } },
-            character: { select: { name: true, hasPortrait: true } },
-          },
-        });
-
-        await db.activity.create({
-          data: {
-            videoId: video.id,
-            stage: "script",
-            message: `Custom script pasted — "${title}" (${wordCount(customScript)} words, no AI generation)`,
-          },
-        });
-
-        return NextResponse.json({
-          video: serializeVideo(updated, updated.channel?.name, {
-            includeScenes: true,
-          }) as VideoDTO,
-        });
-      }
-
-      if (format === "story") {
-        const pkg = await generateSceneScriptPackage({
-          topic,
-          niche,
-          tone,
-          length,
-          character: character
-            ? {
-                name: character.name,
-                personality: character.personality,
-                identityAnchor: character.identityAnchor,
-              }
-            : null,
-        });
-
-        const updated = await db.video.update({
-          where: { id: video.id },
-          data: {
-            title: pkg.title,
-            script: pkg.script,
-            description: pkg.description,
-            tags: pkg.tags.join(", "),
-            scenes: JSON.stringify(pkg.scenes),
-            wordCount: wordCount(pkg.script),
-            status: "scripted",
-            error: null,
-          },
-          include: {
-            channel: { select: { name: true } },
-            character: { select: { name: true, hasPortrait: true } },
-          },
-        });
-
-        await db.activity.create({
-          data: {
-            videoId: video.id,
-            stage: "script",
-            message: `Scene script written — "${pkg.title}" (${pkg.scenes.length} scenes, ${wordCount(pkg.script)} words)${
-              pkg.verification.fixes > 0
-                ? ` · plan audit fixed ${pkg.verification.fixes} scene${pkg.verification.fixes === 1 ? "" : "s"} (script/art mismatch caught before painting)`
-                : " · plan audit: every scene matches its narration"
-            }`,
-          },
-        });
-
-        return NextResponse.json({
-          video: serializeVideo(updated, updated.channel?.name, {
-            includeScenes: true,
-          }) as VideoDTO,
-        });
-      }
-
-      const pkg = await generateScriptPackage({ topic, niche, tone, length });
-
+      const title = topic.slice(0, 80);
       const updated = await db.video.update({
         where: { id: video.id },
         data: {
-          title: pkg.title,
-          script: pkg.script,
-          description: pkg.description,
-          tags: pkg.tags.join(", "),
-          wordCount: wordCount(pkg.script),
+          title,
+          script: customScript,
+          description: "",
+          tags: "",
+          wordCount: wordCount(customScript),
           status: "scripted",
           error: null,
         },
@@ -318,38 +235,38 @@ export async function POST(req: NextRequest) {
         data: {
           videoId: video.id,
           stage: "script",
-          message: `Script written by GLM — "${pkg.title}" (${wordCount(pkg.script)} words)`,
+          message: `Custom script pasted — "${title}" (${wordCount(customScript)} words, no AI generation)`,
         },
       });
 
       return NextResponse.json({
         video: serializeVideo(updated, updated.channel?.name, {
           includeScenes: true,
-        }),
+        }) as VideoDTO,
       });
-    } catch (err) {
-      const message = errorText(err, "Script generation failed");
-      const failed = await db.video.update({
-        where: { id: video.id },
-        data: { status: "failed", error: message },
-        include: {
-          channel: { select: { name: true } },
-          character: { select: { name: true, hasPortrait: true } },
-        },
-      });
-      await db.activity.create({
-        data: {
-          videoId: video.id,
-          stage: "script",
-          level: "error",
-          message: `Script generation failed: ${message}`,
-        },
-      });
+    }
+
+    const accepted = await startJob(video.id, "script", () =>
+      runScriptJob(video.id)
+    );
+    if (!accepted) {
+      // Practically unreachable for a freshly-created id, but stay honest:
+      // surface the dedupe hit instead of silently returning a draft.
       return NextResponse.json(
-        { error: message, video: serializeVideo(failed, failed.channel?.name) },
-        { status: 500 }
+        { error: "A script job is already running for this video", videoId: video.id },
+        { status: 409 }
       );
     }
+
+    return NextResponse.json(
+      {
+        video: serializeVideo(video, video.channel?.name, {
+          includeScenes: true,
+        }) as VideoDTO,
+        queued: true,
+      },
+      { status: 202 }
+    );
   } catch (err) {
     const message = errorText(err, "Invalid request");
     return NextResponse.json({ error: message }, { status: 400 });

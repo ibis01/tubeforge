@@ -17,7 +17,7 @@
 // "Writing script…" in the UI (no user action needed).
 
 import { db } from "@/lib/db";
-import { generateScriptPackage } from "./ai";
+import { generateScriptPackage, type ResearchBrief } from "./ai";
 import { generateSceneScriptPackage } from "./story";
 import { JobCancelledError, cancellableSleep, throwIfCancelled } from "./cancel";
 import { errorText } from "@/lib/tubeforge/redact";
@@ -31,8 +31,21 @@ const wordCount = (text: string) => text.split(/\s+/).filter(Boolean).length;
  * Run the AI script stage for a video as a background job body.
  * Handles classic narration AND scene-based story formats, mirrors
  * results into the Video record, and auto-retries across quota storms.
+ *
+ * opts.brief / opts.extraKeywords — the Topic Radar greenlight path weaves
+ * the scan's angle/keywords/why into the prompt and unions the idea's SEO
+ * keywords into the final tags. They are captured by the caller's closure
+ * (same-process lifetime); after a server restart the job is marked
+ * interrupted anyway and a re-kick regenerates without the brief — the same
+ * degradation every interrupted stage already has.
  */
-export async function runScriptJob(videoId: string): Promise<void> {
+export async function runScriptJob(
+  videoId: string,
+  opts: {
+    brief?: ResearchBrief;
+    extraKeywords?: string[];
+  } = {}
+): Promise<void> {
   for (let round = 1; round <= STORM_ROUNDS; round++) {
     // Stop requested while queued/cooling — unwind before touching the DB.
     throwIfCancelled();
@@ -61,6 +74,7 @@ export async function runScriptJob(videoId: string): Promise<void> {
           niche: video.niche,
           tone: video.tone,
           length: video.length,
+          brief: opts.brief,
           character: video.character
             ? {
                 name: video.character.name,
@@ -70,13 +84,22 @@ export async function runScriptJob(videoId: string): Promise<void> {
             : null,
         });
 
+        // Union the caller's SEO keywords into the tags (research safety net
+        // — GLM is asked to weave them in, but never lose radar keywords).
+        const modelTags = new Set(pkg.tags.map((t) => t.toLowerCase()));
+        for (const k of opts.extraKeywords ?? []) {
+          if (modelTags.size >= 12) break;
+          modelTags.add(k.toLowerCase());
+        }
+        const tags = [...modelTags].slice(0, 12);
+
         await db.video.update({
           where: { id: videoId },
           data: {
             title: pkg.title,
             script: pkg.script,
             description: pkg.description,
-            tags: pkg.tags.join(", "),
+            tags: tags.join(", "),
             scenes: JSON.stringify(pkg.scenes),
             wordCount: wordCount(pkg.script),
             status: "scripted",
@@ -97,7 +120,16 @@ export async function runScriptJob(videoId: string): Promise<void> {
           niche: video.niche,
           tone: video.tone,
           length: video.length,
+          brief: opts.brief,
         });
+
+        // Same keyword union for the classic format (greenlight path).
+        const modelTags = new Set(pkg.tags.map((t) => t.toLowerCase()));
+        for (const k of opts.extraKeywords ?? []) {
+          if (modelTags.size >= 12) break;
+          modelTags.add(k.toLowerCase());
+        }
+        const tags = [...modelTags].slice(0, 12);
 
         await db.video.update({
           where: { id: videoId },
@@ -105,7 +137,7 @@ export async function runScriptJob(videoId: string): Promise<void> {
             title: pkg.title,
             script: pkg.script,
             description: pkg.description,
-            tags: pkg.tags.join(", "),
+            tags: tags.join(", "),
             wordCount: wordCount(pkg.script),
             status: "scripted",
             error: null,

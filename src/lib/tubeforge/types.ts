@@ -506,6 +506,9 @@ export interface ResearchSessionDTO {
   query: string;
   nicheSummary: string;
   ideas: ResearchIdea[];
+  // Persisted scan failure (jobbed research scan, Stage 1) — null while the
+  // scan succeeded or is still running.
+  error?: string | null;
   createdAt: string;
 }
 

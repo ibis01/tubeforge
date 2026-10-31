@@ -276,11 +276,36 @@ export function ResearchView() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Scan failed");
-      setActive(data.session);
-      setSessions((prev) => [data.session, ...prev].slice(0, 10));
+
+      // Stage 1 (T-1.10): the scan now runs as a background job — 202 with
+      // the empty shell session. Poll GET /api/research/[id] until the
+      // job clears, then adopt the finished session (or its error).
+      let session = data.session;
+      if (data.generating) {
+        setActive(session);
+        const deadline = Date.now() + 5 * 60 * 1000;
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 2500));
+          if (Date.now() > deadline)
+            throw new Error("Scan is taking unusually long — check back shortly.");
+          const poll = await fetch(`/api/research/${session.id}`, { cache: "no-store" });
+          const pd = await poll.json();
+          if (!poll.ok) throw new Error(pd.error ?? "Scan failed");
+          if (!pd.generating) {
+            session = pd.session;
+            if (session.error) throw new Error(session.error);
+            if (!session.ideas?.length)
+              throw new Error("Scan finished without ideas — try again.");
+            break;
+          }
+        }
+      }
+
+      setActive(session);
+      setSessions((prev) => [session, ...prev.filter((s) => s.id !== session.id)].slice(0, 10));
       toast({
         title: "Topic Radar finished",
-        description: `${data.session.ideas.length} video ideas found for ${niche}.`,
+        description: `${session.ideas.length} video ideas found for ${niche}.`,
       });
       bumpRefresh();
     } catch (e) {
@@ -328,9 +353,12 @@ export function ResearchView() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Greenlight failed");
       bumpRefresh();
+      // Stage 1 (T-1.10): greenlight returns 202 — the script writes in a
+      // background job and the library's detail dialog adopts the in-flight
+      // generation (same UX as a script re-roll).
       toast({
         title: "Scene story greenlit",
-        description: `"${data.video.title ?? idea.title}" — ${data.video.sceneCount ?? 0} scenes written from the radar's angle & keywords.`,
+        description: `"${data.video.title ?? idea.title}" is writing its script in the background — open it to follow progress.`,
       });
       setFocusVideoId(data.video.id); // library opens the detail dialog
       setView("library");

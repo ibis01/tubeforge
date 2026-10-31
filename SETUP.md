@@ -15,7 +15,7 @@ everything regenerates on demand once your own key is in.
 
 | Requirement | Why | Where to get it |
 |---|---|---|
-| **Node.js 20+ (LTS)** | runs the Next.js app | https://nodejs.org (npm comes with it) |
+| **Node.js 20+ (LTS)** | runs the Next.js app AND the test suite | https://nodejs.org (npm comes with it) |
 | **ffmpeg + ffprobe** on your PATH | video render, Shorts, narration checks | Ubuntu/Debian: `sudo apt install ffmpeg` · macOS: `brew install ffmpeg` · Windows: `winget install ffmpeg` |
 | **A Z.ai API key** | every AI step (script, TTS, images, video) calls Z.ai services | https://z.ai/model-api — sign up, open API Keys, create a key (free) |
 | ~2 GB free disk | node_modules + generated media | — |
@@ -23,6 +23,10 @@ everything regenerates on demand once your own key is in.
 **Cost tip:** the app defaults to the **GLM-4.5 Flash** chat model, which is
 **free** on Z.ai — script writing costs $0. Voiceovers (TTS), images and video
 rendering need a small credit balance on your account.
+
+> **One package manager:** npm is the PM of record (Stage 1, task T-1.2).
+> `bun.lock` was removed; `npm install` / `npm run …` drive everything, and
+> `npm test` runs under Node via `tsx` — bun is no longer required.
 
 ---
 
@@ -50,11 +54,16 @@ npm run setup:local
 npm run dev
 ```
 
+> `npm run setup` also works — since Stage 1 it auto-detects the database
+> mode from `DATABASE_URL` (task T-1.3), so SQLite setups no longer crash
+> with a provider mismatch.
+
 > Deploying on **Vercel / PostgreSQL** instead? Keep `DATABASE_URL` pointed at
-> your hosted Postgres connection string, run `npx prisma db push` once against
-> it, and skip `setup:local` — `postinstall` already generates the Postgres
-> client during the build. (If you previously ran `setup:local`, run
-> `npx prisma generate` once to switch the local client back to Postgres.)
+> your hosted Postgres connection string, run `npx prisma migrate deploy`
+> (the schema is baselined in `prisma/migrations/`), and skip `setup:local` —
+> `postinstall` already generates the Postgres client during the build.
+> (If you previously ran `setup:local`, run `npx prisma generate` once to
+> switch the local client back to Postgres.)
 
 5. Open **http://localhost:3000** → go to **Settings → AI Providers**:
 
@@ -83,10 +92,17 @@ To let other devices on your Wi-Fi reach it: `npm run dev:lan`.
 
 ---
 
-## 3. Protecting your studio (optional, recommended before sharing)
+## 3. Studio access modes (local dev vs production)
 
-The studio is **open by default** — no password popup, you are the only one who
-knows the URL. Before exposing it to your network (`dev:lan`) or the internet:
+| | Local dev (default) | Production (recommended) |
+|---|---|---|
+| `TUBEFORGE_AUTH_SECRET` in `.env` | absent → studio OPEN, no login | set (32+ hex chars) → sessions signed |
+| `TUBEFORGE_REQUIRE_LOCK` | not needed | leave unset — a production server with the lock OFF refuses to serve studio APIs (503) until you enable Studio access |
+| Lock toggle | Settings → Studio access (opt-in) | Settings → Studio access, then restart the server |
+| First-run claim | whoever opens the app first sets the password | set `TUBEFORGE_OWNER_TOKEN` in the environment — the first `POST /api/auth/setup` must present it in the `x-owner-token` header (Stage 1, task T-1.8) |
+
+Suitable protections before exposing the studio to your network (`dev:lan`)
+or the internet:
 
 - **Settings → Studio access** → flip **Password protection** on and create a
   password (min 8 chars). Every visit then needs it; APIs reject anyone without
@@ -96,7 +112,7 @@ knows the URL. Before exposing it to your network (`dev:lan`) or the internet:
 
   ```bash
   npm run auth:reset           # studio open again, password kept
-  npm run auth:reset --purge   # also forget the password entirely
+  npm run auth:reset -- --purge   # also forget the password entirely
   ```
 
 - Rotating `TUBEFORGE_AUTH_SECRET` in `.env` signs everyone out instantly
@@ -173,3 +189,8 @@ Git Bash for those two commands — `npm run dev` works everywhere as-is.
 
 **Backups** (optional): `npm run backup` writes a hot-copy of the database plus
 an uploads manifest into `backups/` (needs the `sqlite3` CLI installed).
+
+**Tests**: `npm test` runs the unit + regression suite (pure Node — no bun,
+no extra services). `npm run check` runs typecheck + lint + tests together.
+`npm run test:e2e` runs the Playwright browser smoke suite (downloads Chromium
+on first run).

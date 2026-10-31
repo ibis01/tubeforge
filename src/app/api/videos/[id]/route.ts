@@ -96,8 +96,9 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       data.shortScene = null;
     }
   }
-  if (typeof body.description === "string") data.description = body.description;
-  if (typeof body.tags === "string") data.tags = body.tags;
+  if (typeof body.description === "string")
+    data.description = body.description.slice(0, 5000);
+  if (typeof body.tags === "string") data.tags = body.tags.slice(0, 500);
   if (typeof body.voice === "string") data.voice = body.voice;
   if (typeof body.ttsSpeed === "number")
     data.ttsSpeed = Math.min(Math.max(body.ttsSpeed, 0.5), 2.0);
@@ -211,5 +212,18 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
   await db.video.delete({ where: { id } });
+
+  // Stage 1 (task T-1.13, audit defect D-05): the DB row cascade no longer
+  // orphans the media tree — scene art, voiceovers, renders and thumbnails
+  // all live under uploads/<id>/ and are removed with it. Stage 3 replaces
+  // this with storage.delete(videoId) when artifacts move to object storage.
+  try {
+    const dir = path.join(process.cwd(), "uploads", id);
+    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // best-effort — a stuck file must not fail the delete; a periodic
+    // uploads/ sweep can clean strays later.
+  }
+
   return NextResponse.json({ success: true });
 }

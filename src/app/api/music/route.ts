@@ -10,14 +10,14 @@ import {
 import { errorText } from "@/lib/tubeforge/redact";
 
 /**
- * GET — the music library + settings. Auto-seeds the TubeForge-original beds
- * on first open (synthesis is local ffmpeg — no network, no cost).
+ * GET — the music library + settings. Pure read: no side effects.
+ *
+ * Stage 1 (task T-1.14): the old GET auto-seeded the TubeForge-original beds
+ * on first open (an ffmpeg-synthesis write hidden inside a read). Seeding is
+ * now explicit: the client checks `needsSeed` and calls POST /api/music with
+ * {action:"seed"} (Settings → Background Music also has a manual re-seed).
  */
 export async function GET() {
-  const seeded = await seedMusicLibrary().catch((err) => {
-    console.error("[music] seed failed:", err);
-    return { created: 0, skipped: 0 };
-  });
   const [rows, settings] = await Promise.all([
     db.musicTrack.findMany({ orderBy: [{ isOriginal: "desc" }, { name: "asc" }] }),
     getMusicSettings(),
@@ -25,7 +25,7 @@ export async function GET() {
   return NextResponse.json({
     tracks: rows.map(serializeTrack),
     settings,
-    seeded,
+    needsSeed: rows.length === 0,
   });
 }
 

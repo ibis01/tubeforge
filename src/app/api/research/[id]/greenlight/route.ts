@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { generateScriptPackage } from "@/lib/tubeforge/ai";
-import { generateSceneScriptPackage } from "@/lib/tubeforge/story";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
 import { serializeSession } from "@/lib/tubeforge/research";
+import { startJob } from "@/lib/tubeforge/jobs";
+import { runScriptJob } from "@/lib/tubeforge/script-job";
 import {
   FORMATS,
   LENGTHS,
@@ -111,101 +111,35 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       },
     });
 
-    try {
-      const wordCount = (text: string) =>
-        text.split(/\s+/).filter(Boolean).length;
+    // Stage 1 of the roadmap (task T-1.10): the radar's brief (angle /
+    // keywords / why) is woven into the prompt by runScriptJob, and the
+    // idea's SEO keywords are unioned into the tags there too. The script
+    // generation runs as a background "script" job — response is 202 and
+    // the library's detail dialog adopts the in-flight job on open.
+    const brief = {
+      angle: idea.angle,
+      keywords: idea.keywords,
+      why: idea.why,
+    };
 
-      // The research brief carries the radar's intelligence into the prompt.
-      const brief = {
-        angle: idea.angle,
-        keywords: idea.keywords,
-        why: idea.why,
-      };
+    const accepted = await startJob(video.id, "script", () =>
+      runScriptJob(video.id, { brief, extraKeywords: idea.keywords })
+    );
+    if (!accepted)
+      return NextResponse.json(
+        { error: "A script job is already running for this video", videoId: video.id },
+        { status: 409 }
+      );
 
-      const pkg =
-        format === "story"
-          ? await generateSceneScriptPackage({
-              topic,
-              niche: session.niche,
-              tone,
-              length,
-              brief,
-              character: character
-                ? {
-                    name: character.name,
-                    personality: character.personality,
-                    identityAnchor: character.identityAnchor,
-                  }
-                : null,
-            })
-          : await generateScriptPackage({
-              topic,
-              niche: session.niche,
-              tone,
-              length,
-              brief,
-            });
-
-      // Union the idea's SEO keywords into the tags (research safety net —
-      // GLM was asked to weave them in, but never lose radar keywords).
-      const modelTags = new Set(pkg.tags.map((t) => t.toLowerCase()));
-      for (const k of idea.keywords) {
-        if (modelTags.size >= 12) break;
-        modelTags.add(k.toLowerCase());
-      }
-      const tags = [...modelTags].slice(0, 12);
-
-      const updated = await db.video.update({
-        where: { id: video.id },
-        data: {
-          title: pkg.title,
-          script: pkg.script,
-          description: pkg.description,
-          tags: tags.join(", "),
-          scenes:
-            format === "story" && "scenes" in pkg
-              ? JSON.stringify(pkg.scenes)
-              : undefined,
-          wordCount: wordCount(pkg.script),
-          status: "scripted",
-          error: null,
-        },
-        include,
-      });
-
-      await db.activity.create({
-        data: {
-          videoId: video.id,
-          stage: "script",
-          message: `${format === "story" ? "Scene script" : "Script"} written from the greenlit idea — "${pkg.title}" (${wordCount(pkg.script)} words)`,
-        },
-      });
-
-      return NextResponse.json({
-        video: serializeVideo(updated, updated.channel?.name, {
+    return NextResponse.json(
+      {
+        video: serializeVideo(video, video.channel?.name, {
           includeScenes: true,
         }) as VideoDTO,
-      });
-    } catch (err) {
-      const message = errorText(err, "Script generation failed");
-      const failed = await db.video.update({
-        where: { id: video.id },
-        data: { status: "failed", error: message },
-        include,
-      });
-      await db.activity.create({
-        data: {
-          videoId: video.id,
-          stage: "script",
-          level: "error",
-          message: `Greenlight script failed: ${message}`,
-        },
-      });
-      return NextResponse.json(
-        { error: message, video: serializeVideo(failed, failed.channel?.name) },
-        { status: 500 }
-      );
-    }
+        queued: true,
+      },
+      { status: 202 }
+    );
   } catch (err) {
     const message = errorText(err, "Invalid request");
     return NextResponse.json({ error: message }, { status: 400 });

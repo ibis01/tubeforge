@@ -27,6 +27,7 @@ export type JobKind =
   | "short" // 9:16 vertical cut (Phase 5)
   | "convert" // classic narration script -> scene-based story
   | "stock" // stock b-roll fetch (Pexels/Pixabay)
+  | "research" // Topic Radar scan (Stage 1, T-1.10 — jobbed off the request path)
   | "script"; // (re)generate the script package — retry after a failed create, or re-roll
 
 export type JobStatus = "running" | "done" | "failed" | "interrupted" | "cancelled";
@@ -86,6 +87,7 @@ const STAGE_LABEL: Record<string, string> = {
   short: "vertical short",
   convert: "scene conversion",
   stock: "stock b-roll",
+  research: "Topic Radar scan",
   script: "script",
 };
 

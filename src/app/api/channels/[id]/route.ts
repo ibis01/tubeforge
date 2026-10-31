@@ -1,22 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { db } from "@/lib/db";
 
 type Ctx = { params: Promise<{ id: string }> };
 
+// Stage 1 (task T-1.11, audit gap R-HIGH-28): the PATCH path previously wrote
+// niche/description with no length cap — zod now bounds every field.
+const PatchChannelSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80).optional(),
+    niche: z.string().trim().min(1).max(80).optional(),
+    description: z.string().trim().max(500).optional(),
+    isActive: z.boolean().optional(),
+  })
+  .strict();
+
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
-  const body = await req.json();
+  const parsed = PatchChannelSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success)
+    return NextResponse.json(
+      { error: "Invalid channel fields", details: parsed.error.flatten().fieldErrors },
+      { status: 400 }
+    );
+  const body = parsed.data;
 
   const channel = await db.channel.findUnique({ where: { id } });
   if (!channel)
     return NextResponse.json({ error: "Channel not found" }, { status: 404 });
 
   const data: Record<string, unknown> = {};
-  if (typeof body.name === "string" && body.name.trim())
-    data.name = body.name.trim().slice(0, 80);
-  if (typeof body.niche === "string") data.niche = body.niche;
-  if (typeof body.description === "string") data.description = body.description;
-  if (typeof body.isActive === "boolean") data.isActive = body.isActive;
+  if (body.name !== undefined) data.name = body.name;
+  if (body.niche !== undefined) data.niche = body.niche;
+  if (body.description !== undefined) data.description = body.description;
+  if (body.isActive !== undefined) data.isActive = body.isActive;
 
   const updated = await db.channel.update({
     where: { id },
