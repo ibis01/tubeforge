@@ -47,6 +47,27 @@ export async function POST(req: NextRequest) {
     if (topic.length > 300)
       return NextResponse.json({ error: "Topic too long" }, { status: 400 });
 
+    // Optional custom script — when provided (non-empty), Auto-Pilot skips
+    // AI generation and stores the user's text verbatim. Classic format only;
+    // story format needs AI scene-splitting (we'd lose scene art prompts
+    // otherwise) so it falls back to AI generation even if a script is sent.
+    const customScript =
+      typeof body.script === "string" ? body.script.trim() : "";
+    const useCustomScript =
+      customScript.length > 0 &&
+      FORMATS.some((f) => f.id === body.format) &&
+      String(body.format) !== "story";
+    if (typeof body.script === "string" && body.script.length > 50000)
+      return NextResponse.json(
+        { error: "Script too long (50,000 char max)" },
+        { status: 400 }
+      );
+    if (typeof body.script === "string" && body.script.trim() && String(body.format) === "story")
+      return NextResponse.json(
+        { error: "Custom script is only supported on the Classic format. Switch to Story for AI scene-splitting." },
+        { status: 400 }
+      );
+
     const niche = String(body.niche ?? "Motivation");
     const tone = String(body.tone ?? "informative");
     const length = String(body.length ?? "medium");
@@ -169,6 +190,41 @@ export async function POST(req: NextRequest) {
     try {
       const wordCount = (text: string) =>
         text.split(/\s+/).filter(Boolean).length;
+
+      // ----- Custom script: skip AI generation, use the user's text verbatim -----
+      if (useCustomScript) {
+        const title = topic.slice(0, 80);
+        const updated = await db.video.update({
+          where: { id: video.id },
+          data: {
+            title,
+            script: customScript,
+            description: "",
+            tags: "",
+            wordCount: wordCount(customScript),
+            status: "scripted",
+            error: null,
+          },
+          include: {
+            channel: { select: { name: true } },
+            character: { select: { name: true, hasPortrait: true } },
+          },
+        });
+
+        await db.activity.create({
+          data: {
+            videoId: video.id,
+            stage: "script",
+            message: `Custom script pasted — "${title}" (${wordCount(customScript)} words, no AI generation)`,
+          },
+        });
+
+        return NextResponse.json({
+          video: serializeVideo(updated, updated.channel?.name, {
+            includeScenes: true,
+          }) as VideoDTO,
+        });
+      }
 
       if (format === "story") {
         const pkg = await generateSceneScriptPackage({

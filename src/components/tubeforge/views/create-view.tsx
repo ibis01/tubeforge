@@ -63,6 +63,9 @@ import {
   ListVideo,
   ChevronDown,
   Sparkles,
+  ClipboardCopy,
+  Pencil,
+  Save,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -227,6 +230,16 @@ export function CreateView() {
   const [batchRunning, setBatchRunning] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
+  // Manual-script flow — paste your own narration instead of generating with AI
+  const [useOwnScript, setUseOwnScript] = useState(false);
+  const [customScript, setCustomScript] = useState("");
+
+  // Inline script editing in the result card — toggle to a textarea, Save/Cancel
+  const [editingScript, setEditingScript] = useState(false);
+  const [draftScript, setDraftScript] = useState("");
+  const [scriptSaving, setScriptSaving] = useState(false);
+  const [justCopied, setJustCopied] = useState(false);
+
   const isStory = format === "story";
   const sceneCount = SCENE_COUNTS[length] ?? 6;
 
@@ -343,6 +356,9 @@ export function CreateView() {
         method: "POST",
         body: JSON.stringify({
           topic,
+          // Only send `script` when the user explicitly opted into manual mode
+          // AND typed something. Backend uses this to skip AI generation.
+          ...(useOwnScript && customScript.trim() ? { script: customScript } : {}),
           niche,
           tone,
           length,
@@ -369,7 +385,7 @@ export function CreateView() {
           transitionDuration: transition.durationSec,
         }),
       }).then((d) => d.video),
-    [topic, niche, tone, length, voice, speed, thumbStyle, channelId, characterId, format, renderMode, music, motion, transition]
+    [topic, useOwnScript, customScript, niche, tone, length, voice, speed, thumbStyle, channelId, characterId, format, renderMode, music, motion, transition]
   );
 
   const startVoiceover = useCallback(
@@ -381,6 +397,71 @@ export function CreateView() {
       ),
     [isStory],
   );
+
+  // Copy the generated script to the clipboard
+  const copyScript = useCallback(async () => {
+    if (!video?.script) return;
+    try {
+      await navigator.clipboard.writeText(video.script);
+      setJustCopied(true);
+      setTimeout(() => setJustCopied(false), 1800);
+      toast({ title: "Script copied", description: `${video.wordCount} words on the clipboard.` });
+    } catch {
+      // Older browsers / insecure context — fall back to a textarea hack
+      const ta = document.createElement("textarea");
+      ta.value = video.script;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand("copy");
+        setJustCopied(true);
+        setTimeout(() => setJustCopied(false), 1800);
+        toast({ title: "Script copied", description: `${video.wordCount} words on the clipboard.` });
+      } catch {
+        toast({ title: "Copy failed", description: "Select the text and Cmd/Ctrl-C instead.", variant: "destructive" });
+      } finally {
+        document.body.removeChild(ta);
+      }
+    }
+  }, [video, toast]);
+
+  // Enter inline-edit mode for the displayed script
+  const startEditScript = useCallback(() => {
+    if (!video?.script) return;
+    setDraftScript(video.script);
+    setEditingScript(true);
+  }, [video]);
+
+  // PATCH the new script to the server and refresh local state
+  const saveScript = useCallback(async () => {
+    if (!video || !draftScript.trim()) return;
+    setScriptSaving(true);
+    try {
+      const d = await api<{ video: VideoDTO }>(`/api/videos/${video.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ script: draftScript }),
+      });
+      setVideo(d.video);
+      setEditingScript(false);
+      bumpRefresh();
+      toast({
+        title: "Script saved",
+        description: d.video.hasVoiceover
+          ? "Voiceover kept (only minor changes detected)."
+          : "Previous voiceover & render were reset — regenerate them from the pipeline.",
+      });
+    } catch (e) {
+      toast({
+        title: "Save failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setScriptSaving(false);
+    }
+  }, [video, draftScript, bumpRefresh, toast]);
 
   const startThumbnail = useCallback(
     (id: string) =>
@@ -444,6 +525,27 @@ export function CreateView() {
   const handleGenerate = useCallback(
     async (autopilot: boolean) => {
       if (!topic.trim() || busy) return;
+      // When "use my own script" is on, the script itself is the source of
+      // truth — block generation until they've pasted something.
+      if (useOwnScript && !customScript.trim()) {
+        toast({
+          title: "Paste your script first",
+          description: "Toggle off 'Use my own script' to let AI write it instead.",
+          variant: "destructive",
+        });
+        return;
+      }
+      // Custom scripts only work on classic format. If the user has the
+      // story format selected + custom script, the backend will reject —
+      // fail fast with a clearer client-side message instead.
+      if (useOwnScript && customScript.trim() && isStory) {
+        toast({
+          title: "Custom script needs the Classic format",
+          description: "Switch to Story to let AI generate the scene-by-scene script.",
+          variant: "destructive",
+        });
+        return;
+      }
       runningRef.current = true;
       setAnyRunning(true);
       setVideo(null);
@@ -709,6 +811,90 @@ export function CreateView() {
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Paste-your-own-script block — toggled on shows a textarea that
+              replaces AI generation. Used to bypass GLM and ship your own
+              copy verbatim into the pipeline. */}
+          <div className="rounded-xl border border-white/10 bg-white/3 overflow-hidden">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setUseOwnScript((v) => !v)}
+              className={clsx(
+                "w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left transition-colors",
+                useOwnScript
+                  ? "bg-primary/8 hover:bg-primary/10"
+                  : "hover:bg-white/4",
+              )}
+              aria-expanded={useOwnScript}
+            >
+              <div className="flex items-center gap-2">
+                <FileText
+                  className={clsx(
+                    "h-3.5 w-3.5",
+                    useOwnScript ? "text-primary" : "text-muted-foreground",
+                  )}
+                />
+                <span className="text-sm font-medium">Use my own script</span>
+                {useOwnScript && (
+                  <Badge
+                    variant="outline"
+                    className="border-primary/40 bg-primary/10 text-primary text-[10px] font-normal"
+                  >
+                    skips AI
+                  </Badge>
+                )}
+              </div>
+              <ChevronDown
+                className={clsx(
+                  "h-4 w-4 text-muted-foreground transition-transform",
+                  useOwnScript && "rotate-180",
+                )}
+              />
+            </button>
+
+            {useOwnScript && (
+              <div className="p-3 pt-0 space-y-2.5">
+                <Textarea
+                  placeholder="Paste your narration here — Auto-Pilot will skip AI generation and use this text verbatim. Title still comes from the topic above. Edit anytime after creation."
+                  value={customScript}
+                  onChange={(e) => setCustomScript(e.target.value)}
+                  rows={8}
+                  maxLength={50000}
+                  disabled={busy}
+                  className="bg-white/5 resize-y font-mono text-[13px] leading-relaxed min-h-[180px]"
+                />
+                <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                  <span>
+                    {customScript.trim() ? (
+                      <>
+                        {customScript.trim().split(/\s+/).filter(Boolean).length} words · {customScript.length.toLocaleString()} chars
+                      </>
+                    ) : (
+                      <>Empty — paste something to enable generation</>
+                    )}
+                  </span>
+                  {customScript && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setCustomScript("")}
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                {isStory && (
+                  <Alert className="border-amber-500/30 bg-amber-500/5 py-2">
+                    <AlertDescription className="text-[11px] text-amber-200/90 leading-relaxed">
+                      Custom scripts work with the <strong>Classic</strong> format only — Story mode needs AI to split your text into scenes. Switch the format below or toggle this off.
+                    </AlertDescription>
+                  </Alert>
+                )}
+              </div>
+            )}
           </div>
 
           <SectionLabel
@@ -1393,23 +1579,114 @@ export function CreateView() {
             </Card>
 
             <Card className="glass rounded-2xl p-5">
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
                 <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
                   {isStory ? "Scene Narration" : "Full Script"}
                 </p>
-                {video.description && (
-                  <Badge
-                    variant="outline"
-                    className="border-white/15 bg-white/5 text-muted-foreground"
-                  >
-                    SEO description included
-                  </Badge>
-                )}
+                <div className="flex items-center gap-2">
+                  {video.description && !editingScript && (
+                    <Badge
+                      variant="outline"
+                      className="border-white/15 bg-white/5 text-muted-foreground"
+                    >
+                      SEO description included
+                    </Badge>
+                  )}
+                  {!editingScript && video.script && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={copyScript}
+                        disabled={busy}
+                        className="h-7 gap-1.5 border-white/15 bg-white/5 text-xs"
+                      >
+                        {justCopied ? (
+                          <Check className="h-3.5 w-3.5 text-emerald-400" />
+                        ) : (
+                          <ClipboardCopy className="h-3.5 w-3.5" />
+                        )}
+                        {justCopied ? "Copied" : "Copy"}
+                      </Button>
+                      {!isStory && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={startEditScript}
+                          disabled={busy || scriptSaving}
+                          className="h-7 gap-1.5 border-white/15 bg-white/5 text-xs"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          Edit
+                        </Button>
+                      )}
+                    </>
+                  )}
+                </div>
               </div>
-              <div className="max-h-72 overflow-y-auto scroll-area-bar pr-3 text-sm leading-relaxed whitespace-pre-wrap text-foreground/90">
-                {video.script}
-              </div>
-              {tags.length > 0 && (
+
+              {editingScript ? (
+                <div className="space-y-3">
+                  <Textarea
+                    value={draftScript}
+                    onChange={(e) => setDraftScript(e.target.value)}
+                    rows={12}
+                    maxLength={50000}
+                    disabled={scriptSaving}
+                    autoFocus
+                    className="bg-white/5 resize-y font-mono text-[13px] leading-relaxed min-h-[280px]"
+                  />
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                    <span>
+                      {draftScript.trim().split(/\s+/).filter(Boolean).length} words · {draftScript.length.toLocaleString()} chars
+                    </span>
+                    {video.hasVoiceover && (
+                      <span className="text-amber-300/80">
+                        ⚠ Existing voiceover &amp; render will be reset if you change the script
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      onClick={saveScript}
+                      disabled={scriptSaving || !draftScript.trim()}
+                      className="bg-brand-gradient hover:opacity-90 font-medium gap-1.5"
+                    >
+                      {scriptSaving ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Save className="h-3.5 w-3.5" />
+                      )}
+                      {scriptSaving ? "Saving…" : "Save script"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setEditingScript(false);
+                        setDraftScript("");
+                      }}
+                      disabled={scriptSaving}
+                      className="border-white/15 bg-white/5 text-xs"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="max-h-72 overflow-y-auto scroll-area-bar pr-3 text-sm leading-relaxed whitespace-pre-wrap text-foreground/90">
+                  {video.script}
+                </div>
+              )}
+
+              {isStory && !editingScript && (
+                <p className="mt-3 text-[11px] text-muted-foreground/80 leading-relaxed">
+                  Scene-by-scene narration lives in the Storyboard — open the Scene Editor to tweak individual scene lines.
+                </p>
+              )}
+
+              {tags.length > 0 && !editingScript && (
                 <div className="mt-4 pt-4 border-t border-white/6">
                   <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-2">
                     SEO Tags

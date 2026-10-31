@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import fs from "fs";
+import path from "path";
 import { db } from "@/lib/db";
 import { latestStatsFor } from "@/lib/tubeforge/analytics";
 import { jobSnapshot } from "@/lib/tubeforge/jobs";
@@ -44,8 +46,55 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   const data: Record<string, unknown> = {};
   if (typeof body.title === "string") data.title = body.title.slice(0, 120);
   if (typeof body.script === "string") {
-    data.script = body.script;
-    data.wordCount = body.script.split(/\s+/).filter(Boolean).length;
+    const newScript = body.script;
+    const oldScript = video.script ?? "";
+    const newWordCount = newScript.split(/\s+/).filter(Boolean).length;
+    data.script = newScript;
+    data.wordCount = newWordCount;
+
+    // When the script meaningfully changes, downstream artifacts built from
+    // the old text no longer match. Drop the voiceover (and any rendered
+    // MP4/short that contained it) so the UI re-offers those stages. The
+    // thumbnail stays — it depends on the topic, not the script.
+    //
+    // `body.preserveArtifacts` opt-out: when the user explicitly says they're
+    // only fixing typos and want to keep everything, we skip invalidation.
+    const preserveArtifacts = body.preserveArtifacts === true;
+    const changedEnough =
+      Math.abs(newWordCount - (video.wordCount ?? 0)) > 5 ||
+      newScript.trim() !== oldScript.trim();
+
+    if (changedEnough && !preserveArtifacts && oldScript.trim()) {
+      try {
+        const dir = path.join(process.cwd(), "uploads", id);
+        if (fs.existsSync(dir)) {
+          for (const f of fs.readdirSync(dir)) {
+            // voiceover (.wav/.mp3), final mp4, the short, scenes' rendered
+            // clips — anything keyed off the old narration.
+            if (
+              f === "voiceover.wav" ||
+              f === "voiceover.mp3" ||
+              f === "render.mp4" ||
+              f === "short.mp4" ||
+              /^scene-\d+-clip\.(mp4|webm)$/.test(f) ||
+              /^scene-\d+-voice\.(wav|mp3)$/.test(f)
+            ) {
+              fs.rmSync(path.join(dir, f), { force: true });
+            }
+          }
+        }
+      } catch {
+        /* directory may not exist yet — non-fatal */
+      }
+      data.hasVoiceover = false;
+      data.audioDuration = null;
+      data.voiceSource = "tts";
+      data.voiceLabel = null;
+      data.hasVideo = false;
+      data.hasShort = false;
+      data.shortDuration = null;
+      data.shortScene = null;
+    }
   }
   if (typeof body.description === "string") data.description = body.description;
   if (typeof body.tags === "string") data.tags = body.tags;
