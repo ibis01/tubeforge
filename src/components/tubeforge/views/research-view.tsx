@@ -24,6 +24,7 @@ import {
   NICHES,
   type ResearchSessionDTO,
   type ResearchIdea,
+  type ResearchSource,
 } from "@/lib/tubeforge/types";
 import {
   Radar,
@@ -112,7 +113,7 @@ function IdeaCard({
   idea: ResearchIdea;
   sessionId: string;
   busyId: string | null;
-  onCreate: (title: string) => void;
+  onCreate: (title: string, sources?: ResearchSource[]) => void;
   onGreenlight: (idea: ResearchIdea) => void;
 }) {
   const lengthLabel =
@@ -218,7 +219,7 @@ function IdeaCard({
             size="sm"
             variant="outline"
             disabled={Boolean(busyId)}
-            onClick={() => onCreate(idea.title)}
+            onClick={() => onCreate(idea.title, idea.sources)}
             className="flex-1 border-white/15 bg-white/4 hover:bg-white/8 text-muted-foreground font-normal"
             title="Send the topic to Create and configure it yourself"
           >
@@ -361,6 +362,7 @@ export function ResearchView() {
   const { toast } = useToast();
   const setView = useAppStore((s) => s.setView);
   const setPrefillTopic = useAppStore((s) => s.setPrefillTopic);
+  const setPrefillSources = useAppStore((s) => s.setPrefillSources);
   const setFocusVideoId = useAppStore((s) => s.setFocusVideoId);
   const bumpRefresh = useAppStore((s) => s.bumpRefresh);
 
@@ -465,8 +467,9 @@ export function ResearchView() {
     }
   };
 
-  const sendToCreate = (topic: string) => {
+  const sendToCreate = (topic: string, sources?: ResearchSource[]) => {
     setPrefillTopic(topic);
+    setPrefillSources(sources?.length ? sources : null);
     setView("create");
   };
 
@@ -777,7 +780,7 @@ export function ResearchView() {
                     idea={idea}
                     sessionId={active.id}
                     busyId={greenlightId}
-                    onCreate={sendToCreate}
+                    onCreate={(title, sources) => sendToCreate(title, sources)}
                     onGreenlight={greenlightIdea}
                   />
                 ))}

@@ -416,6 +416,10 @@ export interface VideoDTO {
   brandLogoOn: boolean; // false only when the badge was explicitly switched off
   // Post-render quality gate (qc.ts) — parsed report or null
   qc: QcReportDTO | null;
+  // Stage 5 (module A) — web sources captured from the research idea this
+  // video was greenlit from (or attached at create). The Script tab links
+  // out to them — the fact-check surface. Empty array when none.
+  researchSources: ResearchSource[];
   // Latest synced performance (Phase 5, null before the first sync)
   stats: { views: number; likes: number; comments: number } | null;
   createdAt: string;
@@ -519,6 +523,18 @@ export interface ResearchIdea {
   // Phase 5 — performance feedback loop (optional, set after a boost/rescore)
   perfBoost?: number; // points added by real channel performance (can be negative)
   boostReason?: string; // why the boost was applied
+  // Stage 5 (module A) — real web sources matched to this idea by the scan's
+  // web-search grounding pass. Absent on legacy scans / when search is
+  // unavailable (fail-open): the idea list itself is LLM-synthesized, the
+  // sources are the citable grounding for the fact-check panel.
+  sources?: ResearchSource[];
+}
+
+/** One citable web source (from the SDK's web_search function). */
+export interface ResearchSource {
+  url: string;
+  name: string;
+  host: string;
 }
 
 export interface ResearchSessionDTO {

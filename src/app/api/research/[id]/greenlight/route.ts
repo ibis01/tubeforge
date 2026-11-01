@@ -90,6 +90,18 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       character: { select: { name: true, hasPortrait: true } },
     };
 
+    // Stage 5 (module A) — snapshot the idea's web sources onto the video.
+    // A snapshot (not a live lookup) survives the session's deletion and
+    // keeps the Script tab's fact-check panel stable forever.
+    const researchSources =
+      Array.isArray(idea.sources) && idea.sources.length > 0
+        ? JSON.stringify(
+            idea.sources
+              .filter((s) => typeof s?.url === "string" && /^https?:\/\//.test(s.url))
+              .slice(0, 6)
+          )
+        : null;
+
     // Create the draft first so every later step has a stable id.
     const video = await db.video.create({
       data: {
@@ -105,6 +117,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         format,
         renderMode,
         status: "draft",
+        researchSources,
       },
       include,
     });
@@ -128,6 +141,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       angle: idea.angle,
       keywords: idea.keywords,
       why: idea.why,
+      sources: idea.sources ?? [],
     };
 
     const accepted = await startJob(video.id, "script", () =>

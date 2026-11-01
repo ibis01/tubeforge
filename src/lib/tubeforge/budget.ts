@@ -19,7 +19,7 @@ import { getUserSettings } from "./settings";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export type AiService = "llm" | "tts" | "image" | "video";
+export type AiService = "llm" | "tts" | "image" | "video" | "search";
 
 /** Concurrency caps per service (small upstream limits — be a polite client). */
 const MAX_CONCURRENT: Record<AiService, number> = {
@@ -27,6 +27,7 @@ const MAX_CONCURRENT: Record<AiService, number> = {
   tts: 2,
   image: 1,
   video: 1,
+  search: 2,
 };
 
 /** Shared cool-down when a service reports a 429. */
@@ -54,6 +55,7 @@ const budget: BudgetState = (g.__tfBudget ??= {
     tts: { active: 0, lastStart: 0, penaltyUntil: 0, queue: Promise.resolve() },
     image: { active: 0, lastStart: 0, penaltyUntil: 0, queue: Promise.resolve() },
     video: { active: 0, lastStart: 0, penaltyUntil: 0, queue: Promise.resolve() },
+    search: { active: 0, lastStart: 0, penaltyUntil: 0, queue: Promise.resolve() },
   },
   cfgCache: new Map(),
 });
@@ -65,6 +67,7 @@ const DEFAULT_PER_MIN: Record<AiService, number> = {
   tts: 12,
   image: 8,
   video: 4,
+  search: 10,
 };
 
 /** Read the ACTING USER's budget settings with a 25s cache so hot paths never hit the DB. */
@@ -241,6 +244,9 @@ const CAPABILITY_OF: Record<AiService, "chat" | "tts" | "image" | "video"> = {
   tts: "tts",
   image: "image",
   video: "video",
+  // Stage 5 (module A): the web_search function rides the Z.ai gateway under
+  // the chat capability's provider config — it is the same credential.
+  search: "chat",
 };
 
 /**

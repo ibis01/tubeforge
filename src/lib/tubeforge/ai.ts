@@ -76,6 +76,9 @@ export interface ResearchBrief {
   angle: string;
   keywords: string[];
   why: string;
+  /** Stage 5 (module A) — real web sources matched to the greenlit idea.
+   * Grounds the script in citable material; never invents URLs itself. */
+  sources?: { url: string; name: string; host: string }[];
 }
 
 /** Prompt block that steers GLM with Topic Radar findings. */
@@ -88,6 +91,12 @@ export function researchBriefBlock(
     brief.why ? `WHY VIEWERS CLICK: ${brief.why}` : "",
     brief.keywords.length
       ? `SEO KEYWORDS to weave naturally into the title, description and tags where they fit: ${brief.keywords.join(", ")}`
+      : "",
+    brief.sources?.length
+      ? `REFERENCE SOURCES (real web pages found for this topic — ground every factual claim in them; never say URLs aloud, never fabricate statistics beyond what they state):\n${brief.sources
+          .slice(0, 6)
+          .map((s) => `- ${s.name} (${s.host}) — ${s.url}`)
+          .join("\n")}`
       : "",
   ].filter(Boolean);
   return lines.length ? `\n${lines.join("\n")}\n` : "";

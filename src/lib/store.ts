@@ -30,6 +30,11 @@ interface AppState {
   prefillTopic: string | null;
   setPrefillTopic: (t: string | null) => void;
 
+  /** Stage 5 (module A) — research sources riding the topic prefill (the
+   * radar idea's web grounding follows it into the created video). */
+  prefillSources: import("./tubeforge/types").ResearchSource[] | null;
+  setPrefillSources: (s: import("./tubeforge/types").ResearchSource[] | null) => void;
+
   /** Slot date prefill when jumping into Calendar */
   prefillSlotDate: string | null;
   setPrefillSlotDate: (d: string | null) => void;
@@ -55,6 +60,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   prefillTopic: null,
   setPrefillTopic: (t) => set({ prefillTopic: t }),
+
+  prefillSources: null,
+  setPrefillSources: (s) => set({ prefillSources: s }),
 
   prefillSlotDate: null,
   setPrefillSlotDate: (d) => set({ prefillSlotDate: d }),

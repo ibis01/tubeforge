@@ -185,6 +185,11 @@ export function CreateView() {
   const setView = useAppStore((s) => s.setView);
   const prefillTopic = useAppStore((s) => s.prefillTopic);
   const setPrefillTopic = useAppStore((s) => s.setPrefillTopic);
+  const prefillSources = useAppStore((s) => s.prefillSources);
+  const setPrefillSources = useAppStore((s) => s.setPrefillSources);
+  // Stage 5 (module A) — research sources captured from the prefill, held for
+  // the create call (cleared once consumed).
+  const heldSourcesRef = useRef<import("@/lib/tubeforge/types").ResearchSource[] | null>(null);
 
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [aiConfig, setAiConfig] = useState<any>(null);
@@ -346,18 +351,23 @@ export function CreateView() {
       .catch(() => undefined);
   }, []);
 
-  // Prefill topic from other views
+  // Prefill topic from other views. Stage 5 (module A): the radar idea's web
+  // sources ride the topic prefill — captured here into a ref for the create
+  // call (both cleared from the store so nothing stale survives; a bare
+  // topic prefill naturally resets the ref to null).
   useEffect(() => {
     if (prefillTopic) {
       // Defer state updates to avoid "setState synchronously within an effect" warning
       const timer = setTimeout(() => {
         setTopic(prefillTopic);
+        heldSourcesRef.current = prefillSources?.length ? prefillSources : null;
         setPrefillTopic(null);
+        setPrefillSources(null);
         setStep(0);
       }, 0);
       return () => clearTimeout(timer);
     }
-  }, [prefillTopic, setPrefillTopic]);
+  }, [prefillTopic, prefillSources, setPrefillTopic, setPrefillSources]);
 
   // ---- Brief draft persistence (T-4.3) -----------------------------------
   // Restore once, AFTER server defaults land (so the draft wins). A prefill
@@ -559,6 +569,10 @@ export function CreateView() {
           characterId: characterId !== "none" ? characterId : null,
           format,
           renderMode,
+          // Stage 5 (module A) — the radar idea's web sources riding the prefill
+          ...(heldSourcesRef.current?.length
+            ? { researchSources: heldSourcesRef.current }
+            : {}),
           musicEnabled: music.enabled,
           musicTrackId: music.trackId,
           musicVolume: music.volume,
@@ -583,6 +597,11 @@ export function CreateView() {
         if (v.status !== "scripted") {
           return pollScript(v.id, { timeoutMs: 15 * 60 * 1000 });
         }
+        return v;
+      }).then((v) => {
+        // Stage 5 (module A) — the riding sources were consumed by this
+        // create; never leak them into the next one.
+        heldSourcesRef.current = null;
         return v;
       }),
     [topic, useOwnScript, customScript, niche, tone, length, voice, speed, thumbStyle, channelId, characterId, format, renderMode, music, motion, transition]

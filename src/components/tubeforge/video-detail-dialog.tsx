@@ -2597,6 +2597,39 @@ export function VideoDetailDialog({
 
   const scriptTab = (
     <>
+      {/* Stage 5 (module A) — the research-source snapshot: the fact-check
+          surface. Real web pages matched to the idea this video came from;
+          the human reads the script against them before rendering. */}
+      {video.researchSources?.length ? (
+        <div className="mb-4 rounded-xl border border-white/10 bg-white/3 p-3">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5 mb-2">
+            <ExternalLink className="h-3 w-3" /> Research sources ({video.researchSources.length})
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {video.researchSources.map((s, i) => (
+              <a
+                key={`${s.url}-${i}`}
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-white/10 bg-white/4 px-2 py-1 text-[11px] text-white/75 hover:bg-white/8 hover:text-white transition-colors"
+                title={s.url}
+              >
+                <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
+                <span className="truncate">
+                  {s.name || s.url}
+                  {s.host ? <span className="text-muted-foreground"> · {s.host}</span> : null}
+                </span>
+              </a>
+            ))}
+          </div>
+          <p className="mt-2 text-[10px] text-muted-foreground leading-snug">
+            Real pages found for this topic — verify the script&apos;s claims against them
+            before rendering.
+          </p>
+        </div>
+      ) : null}
+
       {/* Header: counts + regeneration */}
       <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
         <div>

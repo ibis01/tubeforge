@@ -113,6 +113,27 @@ export async function POST(req: NextRequest) {
       ? String(body.renderMode)
       : "kenburns";
 
+    // Stage 5 (module A) — research sources attached at create (the Classic
+    // script path from a radar idea). Same validation as the greenlight
+    // snapshot: http(s) URLs only, ≤6, field lengths capped.
+    const researchSources = Array.isArray(body.researchSources)
+      ? JSON.stringify(
+          body.researchSources
+            .filter(
+              (s: { url?: unknown }) =>
+                Boolean(s) &&
+                typeof s.url === "string" &&
+                /^https?:\/\//.test(s.url)
+            )
+            .slice(0, 6)
+            .map((s: { url: string; name?: unknown; host?: unknown }) => ({
+              url: s.url.slice(0, 300),
+              name: typeof s.name === "string" ? s.name.slice(0, 160) : s.url,
+              host: typeof s.host === "string" ? s.host.slice(0, 100) : "",
+            }))
+        )
+      : null;
+
     // Background-music overrides (null → Settings defaults at render time)
     const musicEnabled =
       typeof body.musicEnabled === "boolean" ? body.musicEnabled : null;
@@ -187,6 +208,7 @@ export async function POST(req: NextRequest) {
         characterId,
         format,
         renderMode,
+        researchSources,
         musicEnabled,
         musicTrackId,
         musicVolume,

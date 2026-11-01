@@ -312,6 +312,10 @@ model Video {
   shotList      String?
   directorState String?
   consistency   String?
+  // Stage 5 (module A) — web sources captured from the research idea this
+  // video was greenlit from (or attached at create). JSON array of
+  // ResearchSource { url, name, host }; the Script tab links out to them.
+  researchSources String?
   appearances   CharacterAppearance[]
 
   createdAt    DateTime       @default(now())

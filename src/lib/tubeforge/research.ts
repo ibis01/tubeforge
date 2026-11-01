@@ -6,7 +6,9 @@ import { assertCtx } from "./tenant";
 import { generateTopicResearch } from "./ai";
 import { applyPerformanceBoost } from "./analytics";
 import { errorText } from "./redact";
-import type { ResearchSessionDTO, ResearchIdea } from "./types";
+import { aiCall } from "./budget";
+import { llmWebSearch } from "./llm";
+import type { ResearchSessionDTO, ResearchIdea, ResearchSource } from "./types";
 
 interface StoredPayload {
   ideas?: ResearchIdea[];
@@ -46,6 +48,62 @@ export function serializeSession(row: {
 }
 
 /**
+ * Stage 5 (module A) — attach REAL web sources to the LLM-synthesized ideas.
+ *
+ * One web search per scan (the niche + query the user asked about); results
+ * are matched to ideas by keyword overlap — a source is relevant to an idea
+ * when the idea's keywords appear in the source's title/snippet. Pure +
+ * unit-tested: the scan is the only caller, but the matching policy (what
+ * earns a citation) deserves a pin.
+ */
+export function matchSourcesToIdeas(
+  ideas: ResearchIdea[],
+  results: { url: string; name: string; snippet: string; host: string }[],
+  maxPerIdea = 3
+): Map<string, ResearchSource[]> {
+  const byIdea = new Map<string, ResearchSource[]>();
+  if (results.length === 0) return byIdea;
+
+  // Tokenize a source's text once: lowercase words ≥3 chars.
+  const tokenize = (text: string): Set<string> =>
+    new Set(
+      text
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length >= 3)
+    );
+
+  const tokenized = results.map((r) => ({
+    result: r,
+    tokens: tokenize(`${r.name} ${r.snippet} ${r.host}`),
+  }));
+
+  for (const idea of ideas) {
+    const scored = tokenized
+      .map(({ result, tokens }) => {
+        const hits = idea.keywords.filter((k) =>
+          k
+            .toLowerCase()
+            .split(/[^a-z0-9]+/)
+            .filter(Boolean)
+            .some((w) => tokens.has(w))
+        ).length;
+        return { result, score: hits };
+      })
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, maxPerIdea)
+      .map((x) => ({
+        url: x.result.url,
+        name: x.result.name,
+        host: x.result.host,
+      }));
+    if (scored.length > 0) byIdea.set(idea.id, scored);
+  }
+  return byIdea;
+}
+
+/**
  * The research-scan job body — extracted from the POST /api/research closure
  * (Stage 3, T-3.5) so the SAME code runs from the request path and from the
  * durable queue (boot re-enqueue / standalone worker). Everything derives
@@ -60,7 +118,24 @@ export async function runResearchScan(sessionId: string): Promise<void> {
   try {
     const result = await generateTopicResearch({ niche: session.niche, query: session.query });
     const boosted = await applyPerformanceBoost(result.ideas);
-    const finalResult = { ...result, ideas: boosted.ideas };
+    let ideas = boosted.ideas;
+
+    // Stage 5 (module A) — ground the scan with one real web search. Fail-open
+    // by contract (llmWebSearch returns [] on any failure): ideas without
+    // sources are still shipped, exactly as before.
+    const searchQuery =
+      `${session.niche}${session.query && session.query !== "—" ? ` ${session.query}` : ""}`.trim();
+    const results = await aiCall("search", "research web grounding", () =>
+      llmWebSearch(searchQuery, 10)
+    ).catch(() => []);
+    if (results.length > 0) {
+      const sources = matchSourcesToIdeas(ideas, results);
+      ideas = ideas.map((idea) =>
+        sources.has(idea.id) ? { ...idea, sources: sources.get(idea.id) } : idea
+      );
+    }
+
+    const finalResult = { ...result, ideas };
 
     await db.researchSession.update({
       where: { id: sessionId },
@@ -71,7 +146,7 @@ export async function runResearchScan(sessionId: string): Promise<void> {
         organizationId: ctx.organizationId,
         userId: ctx.userId,
         stage: "research",
-        message: `Topic Radar scanned "${session.niche}"${session.query && session.query !== "—" ? ` for "${session.query}"` : ""} — ${finalResult.ideas.length} ideas found${boosted.boosted > 0 ? ` (${boosted.boosted} performance-boosted)` : ""}`,
+        message: `Topic Radar scanned "${session.niche}"${session.query && session.query !== "—" ? ` for "${session.query}"` : ""} — ${ideas.length} ideas found${boosted.boosted > 0 ? ` (${boosted.boosted} performance-boosted)` : ""}${results.length > 0 ? ` · ${ideas.filter((i) => i.sources?.length).length} source-grounded` : ""}`,
       },
     });
   } catch (err) {

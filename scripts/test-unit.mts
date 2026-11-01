@@ -1485,6 +1485,44 @@ await test("director-plan: module E audio fields normalize + pacing factors", as
   eq(pacingSpeedFactor("garbage"), 1, "unknown = untouched");
 });
 
+await test("research: matchSourcesToIdeas attaches only keyword-relevant sources", async () => {
+  const { matchSourcesToIdeas } = await import("../src/lib/tubeforge/research.ts");
+  const idea = (id: string, keywords: string[]) =>
+    ({ id, title: "", angle: "", keywords, searchVolume: "", competition: "", viralScore: 50, suggestedLength: "medium", why: "" });
+  const results = [
+    { url: "https://a.example.com/roman", name: "Roman engineering feats", snippet: "aqueducts and concrete built the empire", host: "a.example.com" },
+    { url: "https://b.example.com/finance", name: "Compound interest explained", snippet: "how money grows over decades", host: "b.example.com" },
+    { url: "https://c.example.com/rome-2", name: "More on Rome", snippet: "the empire's aqueducts in detail", host: "c.example.com" },
+  ];
+
+  const byIdea = matchSourcesToIdeas(
+    [idea("i-rome", ["rome", "aqueducts"]), idea("i-money", ["compound interest", "money"])],
+    results
+  );
+  const rome = byIdea.get("i-rome") ?? [];
+  eq(rome.length, 2, "both Rome-relevant sources attach");
+  ok(rome.some((s) => s.host === "a.example.com"), "ranked first source present");
+  ok(rome.every((s) => s.url.startsWith("https://")), "urls carried through");
+  const money = byIdea.get("i-money") ?? [];
+  eq(money.length, 1, "finance source attaches to the finance idea");
+  eq(money[0].host, "b.example.com", "correct source matched");
+
+  // No overlap → no sources (an idea without grounding ships bare, not padded).
+  const none = matchSourcesToIdeas([idea("i-off", ["quantum", "koala"])], results);
+  eq(none.size, 0, "irrelevant idea gets no sources");
+
+  // Empty results → empty map (fail-open contract).
+  eq(matchSourcesToIdeas([idea("i-x", ["anything"])], []).size, 0, "no results → no sources");
+
+  // maxPerIdea caps the attachment.
+  const many = matchSourcesToIdeas(
+    [idea("i-many", ["rome", "aqueducts"])],
+    results.concat(results.map((r) => ({ ...r, url: r.url + "-2" }))),
+    2
+  );
+  eq((many.get("i-many") ?? []).length, 2, "capped at maxPerIdea");
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

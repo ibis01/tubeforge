@@ -180,6 +180,42 @@ export async function llmVision(body: LLMChatBody): Promise<LLMCompletion> {
   return visionWith(await effectiveSettings(), body);
 }
 
+export interface WebSearchResult {
+  url: string;
+  name: string;
+  snippet: string;
+  host: string;
+}
+
+/**
+ * Real web search via the Z.ai gateway's web_search function (Stage 5,
+ * module A — research grounding). Z.ai-SDK-only by design, like vision:
+ * there is no cross-provider standard for search. Returns [] on ANY failure
+ * (no key, gateway down, empty result) — callers treat sources as optional
+ * enrichment, never a dependency: a scan without sources is still a scan.
+ */
+export async function llmWebSearch(query: string, num = 10): Promise<WebSearchResult[]> {
+  if (!query.trim()) return [];
+  try {
+    const zai = await getZai();
+    const results = (await zai.functions.invoke("web_search", {
+      query: query.trim().slice(0, 400),
+      num: Math.min(Math.max(num, 1), 20),
+    })) as { url?: string; name?: string; snippet?: string; host_name?: string }[];
+    return (Array.isArray(results) ? results : [])
+      .filter((r) => typeof r?.url === "string" && /^https?:\/\//.test(r.url))
+      .slice(0, 20)
+      .map((r) => ({
+        url: String(r.url).slice(0, 300),
+        name: String(r.name ?? "").slice(0, 160),
+        snippet: String(r.snippet ?? "").slice(0, 300),
+        host: String(r.host_name ?? "").slice(0, 100),
+      }));
+  } catch {
+    return []; // fail-open — see the doc comment
+  }
+}
+
 /**
  * One tiny round-trip used by the Settings → "Test connection" button.
  * `override` merges over saved settings so a key can be tested before saving.

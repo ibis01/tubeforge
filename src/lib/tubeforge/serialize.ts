@@ -97,6 +97,10 @@ export async function serializeVideo(
     brandHasLogo: isStory && (await hasBrandLogo(v.id)),
     brandLogoOn: v.brandLogoOn ?? true,
     qc: parseQc(v.qcReport),
+    // Stage 5 (module A) — the research-source snapshot (legacy rows → []).
+    researchSources: parseResearchSources(
+      (v as { researchSources?: string | null }).researchSources
+    ),
     stats: opts.stats ?? null,
     createdAt: v.createdAt.toISOString(),
     updatedAt: v.updatedAt.toISOString(),
@@ -111,5 +115,31 @@ function parseQc(raw: string | null): import("./types").QcReportDTO | null {
     return parsed && typeof parsed.passed === "boolean" && Array.isArray(parsed.checks) ? parsed : null;
   } catch {
     return null;
+  }
+}
+
+/** Parse the research-source snapshot safely (bad/legacy payloads → []).
+ * Only http(s) URLs survive — the panel links out, so nothing else is safe
+ * to render as a href. */
+function parseResearchSources(raw: string | null | undefined): import("./types").ResearchSource[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (s): s is import("./types").ResearchSource =>
+          Boolean(s) &&
+          typeof (s as { url?: unknown }).url === "string" &&
+          /^https?:\/\//.test((s as { url: string }).url)
+      )
+      .slice(0, 6)
+      .map((s) => ({
+        url: s.url.slice(0, 300),
+        name: typeof s.name === "string" ? s.name.slice(0, 160) : s.url,
+        host: typeof s.host === "string" ? s.host.slice(0, 100) : "",
+      }));
+  } catch {
+    return [];
   }
 }
