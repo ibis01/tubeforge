@@ -441,11 +441,17 @@ model Job {
   userId         String? // who kicked the job (null = legacy row)
   kind           String // voiceover | thumbnail | variants | portrait | poses | storyboard | render | scene | verify | …
   entityId       String // video id, character id, or "<videoId>#scene<N>"
-  status         String    @default("running") // running | done | failed | interrupted | cancelled
+  status         String    @default("pending") // pending | running | done | failed | interrupted | cancelled
   progress       Float? // 0..1
   label          String? // human progress label ("Rendering scene 3 of 6")
   error          String?
-  startedAt      DateTime  @default(now())
+  attempts       Int       @default(0) // claim cycles started (Stage 3 queue)
+  maxAttempts    Int       @default(2) // claim cycles allowed before "failed" sticks
+  nextRunAt      DateTime  @default(now()) // earliest claim time (retry backoff)
+  claimedBy      String? // "<role>:<pid>:<bootTs>" of the executing process
+  claimedAt      DateTime?
+  cancelRequested Boolean  @default(false) // cooperative cancel — visible cross-process
+  startedAt      DateTime  @default(now()) // set at claim (execution start)
   endedAt        DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -456,4 +462,5 @@ model Job {
   @@index([entityId, kind])
   @@index([status])
   @@index([startedAt])
+  @@index([status, nextRunAt]) // Stage 3 queue claim scan
 }

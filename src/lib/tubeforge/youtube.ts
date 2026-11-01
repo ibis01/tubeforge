@@ -23,6 +23,7 @@ import { currentCtx } from "./tenant";
 import { getUserSettings, setUserSetting } from "./settings";
 import { createSignedToken, getAuthSecret, verifyToken } from "./auth-token";
 import { redactText } from "./redact";
+import { timeoutFor, type ProviderCapability } from "./providers/http";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -30,6 +31,20 @@ const SCOPES = [
   "https://www.googleapis.com/auth/youtube.upload",
   "https://www.googleapis.com/auth/youtube.readonly",
 ].join(" ");
+
+/**
+ * Every YouTube fetch goes through the D-09 timeout matrix — the audit found
+ * these direct `fetch` calls with NO timeout, so one hung Google request
+ * could stall an OAuth callback or upload job forever.
+ * youtube-api: 30s (metadata + OAuth) · youtube-upload: 60min (resumable PUT).
+ */
+async function ytFetch(
+  url: string,
+  init: RequestInit,
+  capability: Extract<ProviderCapability, "youtube-api" | "youtube-upload"> = "youtube-api"
+): Promise<Response> {
+  return fetch(url, { ...init, signal: AbortSignal.timeout(timeoutFor(capability)) });
+}
 
 // ---------- OAuth client (server-wide) ----------
 
@@ -103,7 +118,7 @@ export async function exchangeCode(code: string, origin: string): Promise<void> 
     throw new Error("YouTube OAuth client is not configured");
   });
 
-  const res = await fetch(TOKEN_URL, {
+  const res = await ytFetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -126,7 +141,7 @@ export async function exchangeCode(code: string, origin: string): Promise<void> 
   }
 
   // Learn the channel id/title/thumb right away (also proves the token works).
-  const channel = await fetch(
+  const channel = await ytFetch(
     "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
@@ -184,7 +199,7 @@ export async function getAccessToken(): Promise<string> {
     throw new Error("YouTube channel is not connected — connect it in Settings → Channel");
 
   const { clientId, clientSecret } = await getYtOAuthClient();
-  const res = await fetch(TOKEN_URL, {
+  const res = await ytFetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -239,7 +254,7 @@ export async function fetchChannelInfo(): Promise<ChannelInfo> {
     return { title: account.channelTitle, thumbUrl: account.channelThumb ?? null };
   }
   const token = await getAccessToken();
-  const res = await fetch(
+  const res = await ytFetch(
     "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
     { headers: { Authorization: `Bearer ${token}` } }
   );
@@ -291,7 +306,7 @@ export async function fetchVideoStats(youtubeIds: string[]): Promise<Map<string,
     throw new Error("Sync more than 50 published videos is not supported yet — sync in batches");
 
   const token = await getAccessToken();
-  const res = await fetch(
+  const res = await ytFetch(
     `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet&id=${youtubeIds.join(",")}`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
@@ -404,7 +419,7 @@ export async function uploadToYouTube(input: UploadInput): Promise<UploadResult>
     },
   };
 
-  const init = await fetch(
+  const init = await ytFetch(
     "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
     {
       method: "POST",
@@ -426,14 +441,18 @@ export async function uploadToYouTube(input: UploadInput): Promise<UploadResult>
   let upRes: Response;
   try {
     const bytes = await import("fs").then((fs) => fs.readFileSync(input.filePath));
-    upRes = await fetch(sessionUrl, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "video/mp4",
-        "Content-Length": String(input.fileSize),
+    upRes = await ytFetch(
+      sessionUrl,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "video/mp4",
+          "Content-Length": String(input.fileSize),
+        },
+        body: new Uint8Array(bytes),
       },
-      body: new Uint8Array(bytes),
-    });
+      "youtube-upload"
+    );
   } catch (err) {
     throw new Error(
       redactText(
@@ -452,7 +471,7 @@ export async function uploadToYouTube(input: UploadInput): Promise<UploadResult>
     try {
       const fs = await import("fs");
       const thumb = fs.readFileSync(input.thumbnailPath);
-      const thumbRes = await fetch(
+      const thumbRes = await ytFetch(
         `https://www.googleapis.com/youtube/v3/thumbnails/set?videoId=${uploaded.id}`,
         {
           method: "POST",

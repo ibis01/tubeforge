@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import fs from "fs";
+import { Readable } from "stream";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
-import { readVideoFile } from "@/lib/tubeforge/render";
-import { readShortFile } from "@/lib/tubeforge/shorts";
+import { statVideoFile } from "@/lib/tubeforge/render";
+import { statShortFile } from "@/lib/tubeforge/shorts";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -10,6 +12,11 @@ type Ctx = { params: Promise<{ id: string }> };
  * GET — stream the rendered MP4 with HTTP Range support so the browser
  * <video> player can seek instantly. ?variant=preview streams preview.mp4,
  * ?variant=short streams the 9:16 vertical Short (Phase 5).
+ *
+ * Stage 3 (T-3.6, closes D-23): the file streams from disk in bounded
+ * chunks — memory is constant per request instead of one full copy per
+ * concurrent viewer. (A presigned-CDN redirect replaces this route when the
+ * S3 storage driver activates — Stage 3 part 2, T-3.7.)
  */
 export async function GET(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
@@ -33,8 +40,8 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 
   const media =
     variant === "short"
-      ? readShortFile(id)
-      : readVideoFile(id, variant);
+      ? statShortFile(id)
+      : statVideoFile(id, variant);
   if (!media)
     return NextResponse.json(
       {
@@ -48,13 +55,16 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       { status: 404 }
     );
 
-  const { buffer, fileName } = media;
-  const total = buffer.length;
+  const { path: filePath, size: total, fileName } = media;
   const baseHeaders: Record<string, string> = {
     "Content-Type": "video/mp4",
     "Accept-Ranges": "bytes",
     "Cache-Control": "private, max-age=3600",
   };
+
+  /** Stream [start, end] from disk — the only allocation is the read buffer. */
+  const streamRange = (start: number, end: number) =>
+    Readable.toWeb(fs.createReadStream(filePath, { start, end })) as unknown as ReadableStream<Uint8Array>;
 
   // Range request → 206 Partial Content (lets the player seek smoothly)
   const range = req.headers.get("range");
@@ -65,13 +75,12 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       const end = match[2] ? Math.min(Number(match[2]), total - 1) : total - 1;
 
       if (start <= end && start < total) {
-        const chunk = buffer.subarray(start, end + 1);
-        return new NextResponse(new Uint8Array(chunk), {
+        return new NextResponse(streamRange(start, end), {
           status: 206,
           headers: {
             ...baseHeaders,
             "Content-Range": `bytes ${start}-${end}/${total}`,
-            "Content-Length": String(chunk.length),
+            "Content-Length": String(end - start + 1),
           },
         });
       }
@@ -84,7 +93,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   }
 
   const download = new URL(req.url).searchParams.get("download") === "1";
-  return new NextResponse(new Uint8Array(buffer), {
+  return new NextResponse(streamRange(0, total - 1), {
     status: 200,
     headers: {
       ...baseHeaders,

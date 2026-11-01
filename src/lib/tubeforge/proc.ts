@@ -9,10 +9,16 @@
 // The fix: spawn with stdout/stderr captured to temp FILES (no stream EOF
 // dependency) and decide completion ourselves:
 //   1. the `exit` event — the happy path (runtime reaping works);
-//   2. a /proc poll — if the child's state is `Z` (zombie: finished, unreaped)
-//      or /proc/<pid> is gone, the process is DEFINITELY done; resolve
-//      without waiting for the runtime to notice.
-// Exit code is only available on path 1. On the zombie path we classify
+//   2. platform liveness probes (Stage 3, D-10 — previously Linux-only):
+//        a. Linux: read /proc/<pid>/stat — state `Z` (zombie) or a missing
+//           entry means the process is DEFINITELY done.
+//        b. Any platform: kill(pid, 0) — ESRCH means the process is fully
+//           gone (works on macOS/Windows; a zombie still answers, so this
+//           catches the reaped-but-event-lost case).
+//        c. Non-Linux only: output-stall heuristic — if both capture files
+//           stopped growing for STALL_GRACE_MS and no exit event arrived,
+//           treat the child as finished (zombie detection without /proc).
+// Exit code is only available on path 1. On probe paths we classify
 // success/failure from stderr (ffmpeg failure signatures are loud and
 // consistent) and let downstream parse errors catch anything else.
 
@@ -34,7 +40,21 @@ export interface RunResult {
 const FAILURE_RE =
   /\b(Error|Conversion failed|Invalid data|Unable to|No such file|Permission denied|Failed to|matches no streams|Killed|out of memory|Cannot allocate)\b/i;
 
+/** Watchdog tick — probes run this often. */
+const POLL_TICK_MS = 500;
+/**
+ * Non-Linux zombie heuristic threshold: consecutive silent ticks before the
+ * output-stall probe resolves the child. ffmpeg writes `time=` progress lines
+ * to stderr ~every 0.5s, so a LIVE encode is essentially never silent for
+ * 30s; a zombie is silent forever. Generous on purpose — a false positive
+ * (killing a live encode) costs a render, a late positive costs 30s.
+ */
+const STALL_TICKS_TO_FINISH = 60; // 60 × 500ms = 30s
+
+const HAS_PROC = fs.existsSync("/proc/self/stat");
+
 function procState(pid: number): string | null {
+  if (!HAS_PROC) return "unsupported";
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
     // Field 3 (state) — but comm can contain spaces, so parse after the last ')'.
@@ -42,6 +62,26 @@ function procState(pid: number): string | null {
     return after.split(" ")[0] ?? null;
   } catch {
     return null; // /proc entry gone — process fully reaped or never existed
+  }
+}
+
+/** True when the pid no longer exists (ESRCH) — cross-platform liveness probe. */
+function pidGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (err) {
+    // ESRCH = no such process. EPERM exists but is alive — treat as present.
+    return (err as NodeJS.ErrnoException).code === "ESRCH";
+  }
+}
+
+/** Byte size of a file (0 when missing) — feeds the output-stall heuristic. */
+function fileSizeSafe(p: string): number {
+  try {
+    return fs.statSync(p).size;
+  } catch {
+    return 0;
   }
 }
 
@@ -126,16 +166,47 @@ export function runProcess(
     });
     child.on("exit", (code) => finish(code, "exit"));
 
-    // Zombie watchdog — the bun-unreaped-children workaround.
+    // Zombie watchdog — the bun-unreaped-children workaround (D-10: also
+    // covers non-Linux platforms where /proc does not exist).
+    let lastOut = -1;
+    let lastErr = -1;
+    let stallTicks = 0;
     const poll = setInterval(() => {
       if (settled) { clearInterval(poll); return; }
+
+      // Probe 1 — Linux /proc state: zombie or fully reaped.
       const state = procState(child.pid);
       if (state === "Z" || state === null) {
         clearInterval(poll);
         // Give the runtime a beat to deliver the real exit event + code.
         setTimeout(() => finish(null, "zombie-poll"), 400);
+        return;
       }
-    }, 250);
+
+      // Probe 2 — cross-platform: the pid vanished entirely.
+      if (pidGone(child.pid)) {
+        clearInterval(poll);
+        setTimeout(() => finish(null, "zombie-poll"), 200);
+        return;
+      }
+
+      // Probe 3 — non-Linux zombie heuristic: ffmpeg writes progress lines
+      // to stderr continuously; when BOTH capture files go quiet for longer
+      // than the grace window with no exit event, the child is a zombie the
+      // runtime refused to reap. (Not used on Linux — probe 1 is exact.)
+      if (!HAS_PROC) {
+        const out = fileSizeSafe(outTmp);
+        const err = fileSizeSafe(errTmp);
+        const stalled = out === lastOut && err === lastErr;
+        stallTicks = stalled ? stallTicks + 1 : 0;
+        lastOut = out;
+        lastErr = err;
+        if (stallTicks >= STALL_TICKS_TO_FINISH) {
+          clearInterval(poll);
+          setTimeout(() => finish(null, "zombie-poll"), 400);
+        }
+      }
+    }, POLL_TICK_MS);
     // Stop the watchdog when the timeout fires (finish() already settled).
     child.on("exit", () => clearInterval(poll));
   });

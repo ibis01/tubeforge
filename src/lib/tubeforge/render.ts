@@ -729,6 +729,26 @@ export function readVideoFile(
   return { buffer: fs.readFileSync(p), fileName };
 }
 
+/**
+ * Stat the final/preview MP4 WITHOUT reading it (Stage 3, T-3.6 — D-23).
+ * The streaming route opens the file lazily per Range request; memory stays
+ * constant instead of one full copy per concurrent viewer.
+ */
+export function statVideoFile(
+  videoId: string,
+  variant: "final" | "preview"
+): { path: string; size: number; fileName: string } | null {
+  const fileName = variant === "final" ? "final.mp4" : "preview.mp4";
+  const p = path.join(UPLOAD_ROOT, videoId, fileName);
+  try {
+    const s = fs.statSync(p);
+    if (!s.isFile()) return null;
+    return { path: p, size: s.size, fileName };
+  } catch {
+    return null;
+  }
+}
+
 // ---------- Orchestrator ----------
 
 /** Compose the video. Caller (route job) updates the DB afterwards. */

@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
-import { generateTopicResearch } from "@/lib/tubeforge/ai";
-import { applyPerformanceBoost } from "@/lib/tubeforge/analytics";
-import { serializeSession } from "@/lib/tubeforge/research";
+import { serializeSession, runResearchScan } from "@/lib/tubeforge/research";
 import { startJob } from "@/lib/tubeforge/jobs";
-import { errorText } from "@/lib/tubeforge/redact";
 
 /** GET — recent research sessions (newest first). */
 export async function GET(req: NextRequest) {
@@ -61,49 +58,10 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  const accepted = await startJob(row.id, "research", async () => {
-    try {
-      const result = await generateTopicResearch({ niche, query });
-
-      // Phase 5 — lift/ding the fresh ideas with real channel performance.
-      const boosted = await applyPerformanceBoost(result.ideas);
-      const finalResult = { ...result, ideas: boosted.ideas };
-
-      await db.researchSession.update({
-        where: { id: row.id },
-        data: { ideas: JSON.stringify(finalResult) },
-      });
-
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          stage: "research",
-          message: `Topic Radar scanned "${niche}"${query ? ` for "${query}"` : ""} — ${finalResult.ideas.length} ideas found${boosted.boosted > 0 ? ` (${boosted.boosted} performance-boosted)` : ""}`,
-        },
-      });
-    } catch (err) {
-      const message = errorText(err, "Research failed");
-      // Persist the failure on the session itself — the job registry's
-      // in-memory lastJobError is lost on restart, the row is not.
-      await db.researchSession
-        .update({
-          where: { id: row.id },
-          data: { ideas: JSON.stringify({ ideas: [], nicheSummary: "", error: message }) },
-        })
-        .catch(() => {});
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          stage: "research",
-          level: "error",
-          message: `Topic Radar failed: ${message}`,
-        },
-      });
-      throw err;
-    }
-  });
+  // Stage 3 (T-3.5): the scan body lives in research.ts (runResearchScan) so
+  // the request path and the durable queue execute the SAME code — a restart
+  // re-runs it from the session row (niche + query are persisted above).
+  const accepted = await startJob(row.id, "research", () => runResearchScan(row.id));
 
   if (!accepted)
     return NextResponse.json(

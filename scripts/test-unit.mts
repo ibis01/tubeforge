@@ -15,6 +15,7 @@
  */
 
 import { execFile } from "child_process";
+import crypto from "node:crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -759,6 +760,207 @@ await test("crypto: sha256Hex is deterministic and format-stable", async () => {
   );
   eq(sha256Hex("token").length, 64, "SHA-256 hex digest length");
   ok(sha256Hex("a") !== sha256Hex("b"), "different tokens hash differently");
+});
+
+// ===========================================================================
+// Stage 3 — durable queue, timeout matrix, streaming ZIP, structured logging
+// ===========================================================================
+
+suiteStart("Stage 3 — provider timeout matrix (D-09)");
+
+await test("timeoutFor: defaults per capability; env overrides apply; invalid env ignored", async () => {
+  const http = await import("../src/lib/tubeforge/providers/http.ts");
+  http.resetTimeoutOverrides();
+  eq(http.timeoutFor("generic"), 300_000, "generic keeps the old universal 300s");
+  eq(http.timeoutFor("youtube-api"), 30_000, "YouTube metadata fails fast");
+  eq(http.timeoutFor("youtube-upload"), 3_600_000, "resumable upload gets an hour");
+  ok(http.timeoutFor("video-gen") > http.timeoutFor("llm"), "video-gen outlives llm");
+
+  process.env.TUBEFORGE_TIMEOUT_YOUTUBE_API = "12345";
+  http.resetTimeoutOverrides();
+  eq(http.timeoutFor("youtube-api"), 12_345, "env override wins after reset");
+
+  process.env.TUBEFORGE_TIMEOUT_YOUTUBE_API = "50"; // below the 1s floor
+  http.resetTimeoutOverrides();
+  eq(http.timeoutFor("youtube-api"), 30_000, "invalid env falls back to default");
+  delete process.env.TUBEFORGE_TIMEOUT_YOUTUBE_API;
+  http.resetTimeoutOverrides();
+  eq(http.timeoutFor("youtube-api"), 30_000, "clean env keeps the default");
+});
+
+await test("timeoutFor: no timeout regression — youtube.ts routes through the matrix", async () => {
+  // Static sanity (the audited D-09 fix): every outbound YouTube HTTP call
+  // goes through ytFetch — the only raw fetch( left is ytFetch's own body.
+  const src = fs.readFileSync(
+    new URL("../src/lib/tubeforge/youtube.ts", import.meta.url),
+    "utf8"
+  );
+  const rawFetch = src
+    .split("\n")
+    .filter((l) => /\bfetch\(/.test(l) && !/ytFetch\(/.test(l)).length;
+  eq(rawFetch, 1, "exactly one raw fetch remains — inside ytFetch itself");
+  const viaHelper = (src.match(/ytFetch\(/g) ?? []).length;
+  eq(viaHelper, 9, "8 call sites + the helper definition all route through ytFetch");
+});
+
+suiteStart("Stage 3 — queue claim liveness (multi-process safety)");
+
+await test("claimIsStale: null claim, own claim, dead pid, live foreign pid, prior incarnation", async () => {
+  // SAFETY: this test process must NEVER claim real jobs from the live DB —
+  // set before the first queue.ts import so its module state sees it.
+  process.env.TUBEFORGE_NO_CLAIM = "1";
+  const queue = await import("../src/lib/tubeforge/queue.ts");
+  queue.initQueue("web");
+  const myId = queue.queueWorkerId();
+  ok(queue.queueStats().noClaim, "test process runs in enqueue-only mode");
+
+  ok(queue.claimIsStale(null), "unclaimed running rows (Stage 1/2 legacy) are stale");
+  ok(!queue.claimIsStale(myId), "my own live claim is never stale");
+
+  // A provably dead pid (pid 2^22 is never allocated on Linux).
+  ok(queue.claimIsStale("worker:4194304:zzz"), "dead claimer pid is stale");
+
+  // A LIVE foreign process (pid 1 — init, always alive) is never stale.
+  ok(!queue.claimIsStale("worker:1:zzz"), "live foreign claimer is not stale");
+
+  // Previous incarnation of THIS process (same role + pid, older boot).
+  const [role, pid] = myId.split(":");
+  const priorIncarnation = `${role}:${pid}:olderboot`;
+  ok(queue.claimIsStale(priorIncarnation), "same pid + older boot = previous incarnation, stale");
+
+  delete process.env.TUBEFORGE_NO_CLAIM;
+});
+
+suiteStart("Stage 3 — streaming ZIP (D-24)");
+
+await test("streamZip: entries round-trip byte-exact (store + deflate + text/binary)", async () => {
+  const { streamZip } = await import("../src/lib/tubeforge/zip.ts");
+  const { Readable } = await import("node:stream");
+
+  const textData = Buffer.from("script.txt content\n".repeat(50), "utf8");
+  const binData = Buffer.from(Array.from({ length: 4096 }, (_, i) => (i * 7 + 13) & 0xff));
+  const emptyFile = Buffer.alloc(0);
+
+  const entries = [
+    { name: "pkg/script.txt", stream: () => Readable.from([textData]), method: 8 as const },
+    { name: "pkg/final.mp4", stream: () => Readable.from([binData]), method: 0 as const },
+    { name: "pkg/voiceover.wav", stream: () => Readable.from([binData, textData]), method: 8 as const },
+    { name: "pkg/empty.txt", stream: () => Readable.from([emptyFile]), method: 8 as const },
+  ];
+
+  const webStream = streamZip(entries);
+  const nodeStream = Readable.fromWeb(webStream as never);
+  const chunks: Buffer[] = [];
+  for await (const chunk of nodeStream) chunks.push(Buffer.from(chunk));
+  const zipped = Buffer.concat(chunks);
+
+  // Structural sanity: EOCD signature + entry count.
+  const eocd = zipped.subarray(zipped.length - 22);
+  eq(eocd.readUInt32LE(0), 0x06054b50, "EOCD signature present");
+  eq(eocd.readUInt16LE(8), 4, "central directory counts 4 entries");
+
+  // Data descriptor signatures present for every entry (streaming layout).
+  let descriptors = 0;
+  for (let i = 0; i + 4 <= zipped.length; i++) {
+    if (zipped.readUInt32LE(i) === 0x08074b50) descriptors++;
+  }
+  eq(descriptors, 4, "one data descriptor per streamed entry");
+});
+
+await test("streamZip: python zipfile validates the archive and extracts exact bytes", async () => {
+  const { streamZip, zipMethodFor } = await import("../src/lib/tubeforge/zip.ts");
+  const { Readable } = await import("node:stream");
+
+  eq(zipMethodFor("final.mp4"), 0, "mp4 is stored (already compressed)");
+  eq(zipMethodFor("subtitles.srt"), 8, "srt is deflated");
+
+  const payloadA = Buffer.from("line one\nline two\n".repeat(200), "utf8");
+  const payloadB = Buffer.from(Array.from({ length: 100_000 }, (_, i) => (i * 31) & 0xff));
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-zip-"));
+  const zipPath = path.join(dir, "pkg.zip");
+  const webStream = streamZip([
+    { name: "pkg/subtitles.srt", stream: () => Readable.from([payloadA]), method: 8 },
+    { name: "pkg/final.mp4", stream: () => Readable.from([payloadB]), method: 0 },
+  ]);
+  const out = fs.createWriteStream(zipPath);
+  await new Promise<void>((resolve, reject) => {
+    Readable.fromWeb(webStream as never).pipe(out).on("finish", resolve).on("error", reject);
+  });
+
+  // python3's zipfile is an independent implementation — the honest arbiter.
+  const script = `
+import zipfile, hashlib, sys
+z = zipfile.ZipFile("${zipPath}")
+bad = z.testzip()
+if bad is not None: sys.exit("crc failed: " + bad)
+a = z.read("pkg/subtitles.srt")
+b = z.read("pkg/final.mp4")
+print(hashlib.sha256(a).hexdigest(), hashlib.sha256(b).hexdigest())
+`;
+  const { stdout } = await execFileAsync("python3", ["-c", script]);
+  const [hashA, hashB] = stdout.trim().split(" ");
+  const sha = (buf: Buffer) => crypto.createHash("sha256").update(buf).digest("hex");
+  eq(hashA, sha(payloadA), "deflated entry extracts byte-exact (python-verified CRC)");
+  eq(hashB, sha(payloadB), "stored entry extracts byte-exact (python-verified CRC)");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+await test("buildZip (in-memory path) still works — no regression for small bundles", async () => {
+  const { buildZip } = await import("../src/lib/tubeforge/zip.ts");
+  const zip = buildZip([{ name: "a.txt", data: Buffer.from("hello") }]);
+  eq(zip.readUInt32LE(0), 0x04034b50, "local header signature intact");
+});
+
+suiteStart("Stage 3 — structured logging (T-3.2)");
+
+await test("log: pino-format JSON lines, level filtering, child bindings, redaction", async () => {
+  const captured: string[] = [];
+  const origOut = process.stdout.write.bind(process.stdout);
+  const origErr = process.stderr.write.bind(process.stderr);
+  const origLevel = process.env.TUBEFORGE_LOG_LEVEL;
+  const collect = (chunk: unknown) => {
+    if (typeof chunk === "string") captured.push(chunk);
+    return true;
+  };
+  (process.stdout as { write: unknown }).write = collect;
+  (process.stderr as { write: unknown }).write = collect;
+  try {
+    process.env.TUBEFORGE_LOG_LEVEL = "debug";
+    const mod = await import("../src/lib/tubeforge/log.ts");
+    const logger = mod.createLogger({ mod: "probe" }).child({ job: "j1" });
+
+    logger.info("hello", { apiKey: "sk-secret-123", note: "plain" });
+    logger.error("boom", { err: new Error("x") });
+
+    const lines = captured.map((l) => JSON.parse(l) as Record<string, unknown>);
+    const info = lines.find((l) => l.msg === "hello");
+    ok(info, "info line emitted");
+    eq(info?.level, 30, "pino info level value");
+    eq(info?.mod, "probe", "parent binding inherited");
+    eq(info?.job, "j1", "child binding present");
+    eq(info?.apiKey, "<redacted>", "secret-looking keys are redacted");
+    eq(info?.note, "plain", "plain values pass through");
+    ok(typeof info?.time === "number", "epoch ms timestamp");
+    const errLine = lines.find((l) => l.msg === "boom");
+    ok(errLine && typeof errLine.err === "object" && errLine.err !== null, "errors serialize as objects (stderr)");
+
+    // Level threshold: warn suppresses info/debug (threshold is dynamic).
+    captured.length = 0;
+    process.env.TUBEFORGE_LOG_LEVEL = "warn";
+    const quiet = await import("../src/lib/tubeforge/log.ts");
+    const l2 = quiet.createLogger({});
+    l2.info("hidden");
+    l2.warn("shown");
+    eq(captured.length, 1, "only warn passes the warn threshold");
+    eq(JSON.parse(captured[0]).msg, "shown", "the warn line is the one emitted");
+  } finally {
+    (process.stdout as { write: unknown }).write = origOut;
+    (process.stderr as { write: unknown }).write = origErr;
+    if (origLevel === undefined) delete process.env.TUBEFORGE_LOG_LEVEL;
+    else process.env.TUBEFORGE_LOG_LEVEL = origLevel;
+  }
 });
 
 // ---------- summary ----------

@@ -1,16 +1,33 @@
-// Persistent background job registry for long-running AI stages.
-// Stage POSTs return 202 immediately so preview proxies/gateways never time out
-// (long requests were killed with 502 Bad Gateway). Clients poll for completion.
+// Persistent background job registry + durable queue integration (Stage 3).
 //
-// Phase 3: job state is mirrored into the DB `Job` table so it survives server
-// restarts. On boot, "running" rows left over from a dead process are marked
-// `interrupted` and their owning video/character gets a visible error — users
-// see "server restarted mid-stage, run it again" instead of a spinner that
-// never resolves.
+// Stage 1/2 model: startJob ran the closure fire-and-forget inside the web
+// process; DB rows were a visibility mirror; a crash meant "interrupted, run
+// again" for every in-flight stage.
+//
+// Stage 3 (T-3.5) model: startJob ENQUEUES. The row starts "pending"; the
+// queue (queue.ts) claims it atomically, runs it under the captured tenant
+// ctx, retries with backoff, and persists cancellation across processes.
+// Kinds with registered handlers (queue-handlers.ts) survive a full process
+// crash: boot recovery flips their stale rows back to "pending".
+//
+// This module keeps the Stage-1/2 public surface EXACTLY: isJobRunning,
+// requestJobCancel, isJobCancelled, jobStartedAt, lastJobError,
+// setJobProgress, jobProgress, jobSnapshot, characterJobSnapshot,
+// jobHistory, ensureRecovered, startJob — 22 route call sites unchanged.
 
 import { db, rawDatabase } from "./tenant-db";
-import { currentCtx, withCtxNull } from "./tenant";
+import { currentCtx, withCtxNull, type TenantCtx } from "./tenant";
 import { errorText } from "@/lib/tubeforge/redact";
+import { JobCancelledError } from "./cancel";
+import {
+  createPendingJob,
+  registerClosure,
+  kickQueue,
+  reenqueueIfHandlerKind,
+  onJobClaimed,
+  onJobFinished,
+  claimIsStale,
+} from "./queue";
 
 export type JobKind =
   | "voiceover"
@@ -31,15 +48,15 @@ export type JobKind =
   | "research" // Topic Radar scan (Stage 1, T-1.10 — jobbed off the request path)
   | "script"; // (re)generate the script package — retry after a failed create, or re-roll
 
-export type JobStatus = "running" | "done" | "failed" | "interrupted" | "cancelled";
+export type JobStatus = "pending" | "running" | "done" | "failed" | "interrupted" | "cancelled";
 
-/** Thrown by cancellable loops when a user requested cancellation. */
-export class JobCancelledError extends Error {
-  constructor(message = "Cancelled by the user") {
-    super(message);
-    this.name = "CancelError";
-  }
-}
+/**
+ * Thrown by cancellable loops when a user requested cancellation.
+ * Re-exported from cancel.ts — Stage 3 unified the TWO same-named classes
+ * (jobs.ts + cancel.ts) that previously made instanceof checks miss, so a
+ * cancelled script job was recorded "failed" instead of "cancelled".
+ */
+export { JobCancelledError };
 
 interface RunningEntry {
   jobId: string;
@@ -50,9 +67,10 @@ interface RunningEntry {
 // with closures still executing from a previous module instance.
 interface JobState {
   running: Map<string, RunningEntry>; // key -> active job
+  queued: Set<string>; // key -> enqueued, not yet claimed (Stage 3)
   lastErrors: Map<string, string>;
   progress: Map<string, { current: number; total: number; label: string }>;
-  cancelled: Set<string>; // keys with a pending cancel request
+  cancelled: Set<string>; // keys with a pending cancel request (in-process fast path)
   bootTs: number; // process boot time — rows older than this are from a dead process
   recoveryPromise: Promise<void> | null;
 }
@@ -60,6 +78,7 @@ interface JobState {
 const g = globalThis as typeof globalThis & { __tfJobs?: JobState };
 const state: JobState = (g.__tfJobs ??= {
   running: new Map(),
+  queued: new Set(),
   lastErrors: new Map(),
   progress: new Map(),
   cancelled: new Set(),
@@ -95,11 +114,39 @@ const STAGE_LABEL: Record<string, string> = {
 /** Human label for an interrupted stage ("voiceover" -> "Voiceover"). */
 const stageLabel = (kind: string) => STAGE_LABEL[kind] ?? kind;
 
+// ---------------------------------------------------------------------------
+// Queue lifecycle bridge — the queue owns execution; this module owns the
+// in-memory view the UI polls (isJobRunning / progress / lastError).
+
+onJobClaimed((jobId, kind, entityId) => {
+  const k = key(entityId, kind);
+  state.queued.delete(k);
+  state.lastErrors.delete(k);
+  state.progress.delete(k);
+  state.cancelled.delete(k);
+  state.running.set(k, { jobId, startedAt: Date.now() });
+});
+
+onJobFinished((jobId, kind, entityId, status, errorMessage) => {
+  const k = key(entityId, kind);
+  state.running.delete(k);
+  state.queued.delete(k);
+  state.progress.delete(k);
+  state.cancelled.delete(k);
+  if ((status === "failed" || status === "cancelled" || status === "interrupted") && errorMessage) {
+    state.lastErrors.set(k, errorMessage);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Boot recovery
+
 /**
  * One-time boot recovery: any "running" Job row started before this process
- * booted belongs to a dead process — mark it interrupted and surface a
- * readable error on the owning video / character so polling clients stop
- * waiting and the UI explains what happened.
+ * booted belongs to a dead process. Kinds with a registered handler are
+ * flipped back to "pending" (the queue resumes them automatically); the rest
+ * are marked "interrupted" and their owning video/character gets a visible
+ * error so polling clients stop waiting and the UI explains what happened.
  */
 async function runRecovery(): Promise<void> {
   // Boot recovery must see EVERY organization's stale rows — never the
@@ -110,6 +157,19 @@ async function runRecovery(): Promise<void> {
 
     for (const row of stale) {
       if (row.startedAt.getTime() >= state.bootTs) continue; // started in this process — alive or HMR orphan
+
+      // Stage 3 multi-process guard: a running row claimed by a LIVE process
+      // (standalone worker, second web dyno) is NOT stale just because it
+      // started before this process booted. Only unclaimed rows, previous
+      // incarnations of this process, or provably dead claimers are recovered.
+      if (!claimIsStale(row.claimedBy)) continue;
+
+      // Durable resume: handler kinds go back to the queue instead of dying.
+      const resumed = await reenqueueIfHandlerKind(row.id, row.kind).catch(() => false);
+      if (resumed) {
+        console.warn(`[jobs] recovered stale ${row.kind} job ${row.id} (entity ${row.entityId}) -> re-enqueued`);
+        continue;
+      }
 
       const message = `Server restarted while this ${stageLabel(row.kind)} was running — run the stage again.`;
 
@@ -145,7 +205,7 @@ async function runRecovery(): Promise<void> {
         } else if (row.kind === "portrait" || row.kind === "poses") {
           // Characters have no error column — mirror into the in-memory map
           // that serializeCharacter() reads (this process's map is fresh/empty).
-          state.lastErrors.set(key(row.entityId, row.kind), message);
+          state.lastErrors.set(key(row.entityId, row.kind as JobKind), message);
         }
 
         console.warn(`[jobs] recovered stale ${row.kind} job ${row.id} (entity ${row.entityId}) -> interrupted`);
@@ -158,9 +218,8 @@ async function runRecovery(): Promise<void> {
 
 /**
  * Boot recovery: any "running" Job row started before this process booted
- * belongs to a dead process — mark it interrupted and surface a readable
- * error on the owning video / character so polling clients stop waiting and
- * the UI explains what happened.
+ * belongs to a dead process — resume it (handler kinds) or mark it
+ * interrupted with a readable error.
  *
  * Runs on EVERY startJob/jobHistory call (a cheap indexed scan); concurrent
  * callers share the in-flight promise. Live jobs of this process are safe:
@@ -177,11 +236,20 @@ export function ensureRecovered(): Promise<void> {
   return state.recoveryPromise;
 }
 
+// ---------------------------------------------------------------------------
+// In-memory job view (UI contract)
+
 export function isJobRunning(entityId: string, kind: JobKind): boolean {
-  return state.running.has(key(entityId, kind));
+  return state.running.has(key(entityId, kind)) || state.queued.has(key(entityId, kind));
 }
 
-/** Request cancellation of one running job (all running jobs when kind omitted). */
+/**
+ * Request cancellation of one running job (all running jobs when kind
+ * omitted). Stage 3: the request ALSO lands in the Job row
+ * (cancelRequested) so it is visible to the executing process even when
+ * that is a different one (standalone worker), and pending jobs that were
+ * cancelled before starting never run.
+ */
 export function requestJobCancel(entityId: string, kind?: JobKind): JobKind[] {
   const cancelled: JobKind[] = [];
   const prefix = `${entityId}:`;
@@ -191,6 +259,28 @@ export function requestJobCancel(entityId: string, kind?: JobKind): JobKind[] {
     state.cancelled.add(k);
     cancelled.push(k.slice(prefix.length) as JobKind);
   }
+  for (const k of state.queued.keys()) {
+    if (!k.startsWith(prefix)) continue;
+    if (kind && k !== key(entityId, kind)) continue;
+    state.cancelled.add(k);
+    if (!cancelled.includes(k.slice(prefix.length) as JobKind)) {
+      cancelled.push(k.slice(prefix.length) as JobKind);
+    }
+  }
+
+  // Persist cross-process. Fire-and-forget: the in-memory flag above already
+  // covers the local case; the row covers the worker + not-yet-claimed cases.
+  void withCtxNull(() =>
+    rawDatabase.job.updateMany({
+      where: {
+        entityId,
+        ...(kind ? { kind } : {}),
+        status: { in: ["pending", "running"] },
+      },
+      data: { cancelRequested: true },
+    })
+  ).catch(() => {});
+
   return cancelled;
 }
 
@@ -236,12 +326,21 @@ export function jobProgress(
   return state.progress.get(key(entityId, kind)) ?? null;
 }
 
+// ---------------------------------------------------------------------------
+// startJob — enqueue
+
 /**
- * Launch a fire-and-forget background job. Returns false if an identical job
- * is already in flight (dedupes double-clicks and concurrent stages).
- * The promise keeps running inside the Node process regardless of whether the
- * HTTP client (or proxy) disconnects; the DB row records the outcome so a
- * server crash can be detected after restart.
+ * Enqueue a background job. Returns false if an identical job is already
+ * in flight or queued (dedupes double-clicks and concurrent stages).
+ *
+ * The work runs when the queue claims the row (typically within one tick —
+ * ~1s worst case, near-zero when the process is idle). The closure captures
+ * the REQUEST's tenant context at enqueue time; the queue re-enters it for
+ * execution, so tenant scoping survives the deferred call.
+ *
+ * Fallback: if the Job row cannot be created (DB hiccup) or there is no
+ * tenant context to attribute it to, the closure runs untracked in-process
+ * exactly like Stage 1 — a durability downgrade, never a functional one.
  */
 export async function startJob(
   entityId: string,
@@ -251,70 +350,62 @@ export async function startJob(
   await ensureRecovered();
 
   const k = key(entityId, kind);
-  if (state.running.has(k)) return false;
+  if (state.running.has(k) || state.queued.has(k)) return false;
+
+  // Cross-process dedupe: a pending row from a dead request must block a
+  // duplicate enqueue (indexed on entityId+kind; one cheap read).
+  const alreadyPending = await db.job
+    .findFirst({ where: { entityId, kind, status: "pending" }, select: { id: true } })
+    .catch(() => null);
+  if (alreadyPending) return false;
 
   state.lastErrors.delete(k);
   state.progress.delete(k);
   state.cancelled.delete(k);
 
+  const jobCtx: TenantCtx | null = currentCtx();
   let jobId: string | null = null;
-  try {
-    // The tenant-db extension stamps organizationId + userId from the
-    // request context that launched this job; the type-level stamp is
-    // explicit here so a missing context can never silently create an
-    // unattributed row — jobs started outside a tenant run untracked.
-    const jobCtx = currentCtx();
-    if (jobCtx) {
-      const row = await db.job.create({
-        data: {
+  if (jobCtx) {
+    try {
+      jobId = (
+        await createPendingJob({
           organizationId: jobCtx.organizationId,
           userId: jobCtx.userId,
           kind,
           entityId,
-          status: "running",
-          startedAt: new Date(),
-        },
-      });
-      jobId = row.id;
-    } else {
-      console.warn("[jobs] job started outside a tenant context — running untracked");
+        })
+      ).jobId;
+    } catch (err) {
+      // DB hiccup — run untracked (Stage-1 behavior) rather than block the stage.
+      console.error("[jobs] failed to persist job row — running untracked:", err);
     }
-  } catch (err) {
-    // DB hiccup must not block the stage itself — run untracked.
-    console.error("[jobs] failed to persist job row:", err);
+  } else {
+    console.warn("[jobs] job started outside a tenant context — running untracked");
   }
 
-  state.running.set(k, { jobId: jobId ?? "", startedAt: Date.now() });
+  if (!jobId) {
+    // Untracked fallback: fire-and-forget, in-memory state only.
+    state.running.set(k, { jobId: "", startedAt: Date.now() });
+    void (async () => {
+      try {
+        await fn();
+      } catch (err) {
+        const cancelled = err instanceof JobCancelledError;
+        const message = errorText(err, `${kind} job failed`);
+        state.lastErrors.set(k, message);
+        if (!cancelled) console.error(`[job:${k}] failed:`, message);
+      } finally {
+        state.running.delete(k);
+        state.progress.delete(k);
+        state.cancelled.delete(k);
+      }
+    })();
+    return true;
+  }
 
-  void fn()
-    .then(async () => {
-      if (jobId)
-        await db.job
-          .update({ where: { id: jobId }, data: { status: "done", endedAt: new Date(), progress: 1 } })
-          .catch(() => {});
-    })
-    .catch(async (err) => {
-      const cancelled = err instanceof JobCancelledError;
-      const message = errorText(err, `${kind} job failed`);
-      state.lastErrors.set(k, message);
-      if (!cancelled) console.error(`[job:${k}] failed:`, message);
-      if (jobId)
-        await db.job
-          .update({
-            where: { id: jobId },
-            data: {
-              status: cancelled ? "cancelled" : "failed",
-              error: cancelled ? message : message,
-              endedAt: new Date(),
-            },
-          })
-          .catch(() => {});
-    })
-    .finally(() => {
-      state.running.delete(k);
-      state.progress.delete(k);
-      state.cancelled.delete(k);
-    });
+  registerClosure(jobId, fn, jobCtx);
+  state.queued.add(k);
+  kickQueue(); // claim immediately when a slot is free
 
   return true;
 }

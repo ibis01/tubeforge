@@ -1,10 +1,74 @@
 // Shared fetch plumbing for the non-Z.ai provider adapters — URL joining,
-// timeouts, and readable errors (status + body snippet) so users can debug
-// 401s / wrong endpoints straight from the activity feed.
+// per-capability timeouts (Stage 3, D-09), and readable errors (status + body
+// snippet) so users can debug 401s / wrong endpoints straight from the feed.
 
 import { redactText } from "../redact";
 
-const TIMEOUT_MS = 300_000; // 5 min — long LLM and image calls are normal
+/**
+ * Per-capability timeout matrix (ms). Replaces the flat 5-minute universal
+ * timeout the audit flagged (D-09): a YouTube metadata call should fail fast,
+ * a CogVideoX generation may legitimately run 10 minutes.
+ *
+ * Every value is overridable via env: TUBEFORGE_TIMEOUT_<CAPABILITY> (ms),
+ * e.g. TUBEFORGE_TIMEOUT_LLM=60000. Invalid env values fall back to the
+ * default and warn once.
+ */
+export type ProviderCapability =
+  | "llm" // chat completions (GLM etc.)
+  | "tts" // speech synthesis
+  | "image" // image generation
+  | "video-gen" // image/video generation models
+  | "vision" // image understanding
+  | "asr" // transcription
+  | "download" // binary result downloads (fal/Replicate/HF)
+  | "youtube-api" // OAuth + Data API metadata calls — fail fast
+  | "youtube-upload" // resumable video PUT — can legitimately take an hour
+  | "generic"; // everything unclassified (300s — the old universal timeout)
+
+const DEFAULT_TIMEOUT_MS: Record<ProviderCapability, number> = {
+  llm: 120_000,
+  tts: 180_000,
+  image: 300_000,
+  "video-gen": 600_000,
+  vision: 120_000,
+  asr: 180_000,
+  download: 600_000,
+  "youtube-api": 30_000,
+  "youtube-upload": 3_600_000,
+  generic: 300_000,
+};
+
+const g = globalThis as typeof globalThis & { __tfTimeouts?: Record<string, number>; __tfTimeoutWarned?: Set<string> };
+const overrides = (g.__tfTimeouts ??= {});
+const warned = (g.__tfTimeoutWarned ??= new Set());
+
+export function timeoutFor(capability: ProviderCapability = "generic"): number {
+  // Only valid env overrides are cached; defaults recompute so tests can
+  // flip env vars without a stale cache.
+  if (capability in overrides) return overrides[capability];
+  const raw = process.env[`TUBEFORGE_TIMEOUT_${capability.toUpperCase().replace(/-/g, "_")}`];
+  const parsed = raw ? Number(raw) : NaN;
+  if (Number.isFinite(parsed) && parsed >= 1_000) {
+    overrides[capability] = parsed;
+    return parsed;
+  }
+  if (raw && !warned.has(capability)) {
+    warned.add(capability);
+    console.warn(`[http] ignoring invalid TUBEFORGE_TIMEOUT for ${capability}: "${raw}" (need >= 1000 ms)`);
+  }
+  return DEFAULT_TIMEOUT_MS[capability];
+}
+
+/** Test hook — forget cached env overrides. */
+export function resetTimeoutOverrides(): void {
+  for (const k of Object.keys(overrides)) delete overrides[k];
+  warned.clear();
+}
+
+/** The matrix as a read-only snapshot (surfaced by GET /api/status diagnostics). */
+export function timeoutMatrix(): Record<ProviderCapability, number> {
+  return { ...DEFAULT_TIMEOUT_MS };
+}
 
 /**
  * Race a promise against a deadline. The bundled Z.ai SDK issues its own
@@ -80,21 +144,30 @@ export class ProviderHttpError extends Error {
   }
 }
 
+export interface ProviderFetchOpts {
+  /** Capability whose timeout applies (default "generic" — 300s). */
+  capability?: ProviderCapability;
+  /** Explicit override wins over the capability matrix. */
+  timeoutMs?: number;
+}
+
 export async function providerFetch(
   provider: string,
   url: string,
-  init: RequestInit
+  init: RequestInit,
+  opts: ProviderFetchOpts = {}
 ): Promise<Response> {
+  const timeoutMs = opts.timeoutMs ?? timeoutFor(opts.capability);
   let response: Response;
   try {
     response = await fetch(url, {
       ...init,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
     if (err instanceof Error && err.name === "TimeoutError") {
       throw new Error(
-        `${provider} request timed out after 5 minutes (${sanitizeUrlForError(url)})`
+        `${provider} request timed out after ${Math.round(timeoutMs / 1000)}s (${sanitizeUrlForError(url)})`
       );
     }
     throw new Error(
@@ -113,8 +186,9 @@ export async function providerFetch(
 export async function providerFetchJson<T>(
   provider: string,
   url: string,
-  init: RequestInit
+  init: RequestInit,
+  opts: ProviderFetchOpts = {}
 ): Promise<T> {
-  const response = await providerFetch(provider, url, init);
+  const response = await providerFetch(provider, url, init, opts);
   return (await response.json()) as T;
 }

@@ -3,11 +3,12 @@ import fs from "fs";
 import path from "path";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
-import { buildZip, safeZipName } from "@/lib/tubeforge/zip";
-import { readMedia, listVariants } from "@/lib/tubeforge/ai";
+import { safeZipName, streamZip, zipMethodFor, type StreamZipEntry } from "@/lib/tubeforge/zip";
+import { listVariants } from "@/lib/tubeforge/ai";
 import { parseScenes, sceneImageFile } from "@/lib/tubeforge/story";
 import { LENGTHS, TONES, VOICES } from "@/lib/tubeforge/types";
 import { resolveMusicForVideo, isMusicEnabledForVideo } from "@/lib/tubeforge/music";
+import { Readable } from "stream";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -29,18 +30,37 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   });
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-  const files: { name: string; data: Buffer }[] = [];
-  const add = (name: string, data: Buffer | string | null) => {
+  // Stage 3 (T-3.6, closes D-24): media assets STREAM from disk through the
+  // data-descriptor ZIP builder — the whole package flows through a few MB of
+  // memory instead of buffering every asset plus the archive. Text metadata
+  // stays in memory (KBs) and uses the same stream with a one-shot source.
+  const entries: StreamZipEntry[] = [];
+  const addText = (name: string, data: Buffer | string | null) => {
     if (data !== null && data !== undefined) {
-      files.push({
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8");
+      entries.push({
         name: safeZipName(name),
-        data: Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8"),
+        stream: () => Readable.from([buf]),
+        method: 8,
       });
     }
   };
-  const readFile = (rel: string): Buffer | null => {
+  const hasFile = (rel: string): boolean => {
+    try {
+      return fs.statSync(path.join(UPLOAD_ROOT, video.id, rel)).isFile();
+    } catch {
+      return false;
+    }
+  };
+  const addFile = (name: string, rel: string) => {
     const p = path.join(UPLOAD_ROOT, video.id, rel);
-    return fs.existsSync(p) ? fs.readFileSync(p) : null;
+    if (hasFile(rel)) {
+      entries.push({
+        name: safeZipName(name),
+        stream: () => fs.createReadStream(p),
+        method: zipMethodFor(name),
+      });
+    }
   };
 
   const base = safeZipName(video.title ?? video.topic) || "video-package";
@@ -48,7 +68,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 
   // Core metadata for manual YouTube upload
   const tags = video.tags ? video.tags.split(",").map((t) => t.trim()).filter(Boolean) : [];
-  add(
+  addText(
     `${base}/upload-metadata.txt`,
     [
       `TITLE: ${video.title ?? ""}`,
@@ -93,9 +113,9 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     ].join("\n")
   );
 
-  add(`${base}/script.txt`, video.script);
-  add(`${base}/description.txt`, video.description);
-  add(`${base}/tags.csv`, tags.length ? "tag\n" + tags.join("\n") : null);
+  addText(`${base}/script.txt`, video.script);
+  addText(`${base}/description.txt`, video.description);
+  addText(`${base}/tags.csv`, tags.length ? "tag\n" + tags.join("\n") : null);
 
   // Engagement kit (Phase 4) — paste into the comment section right after upload.
   let kit: { pinnedComment?: string; replies?: { trigger: string; text: string }[]; heartTargets?: string[]; strategy?: string } | null = null;
@@ -105,7 +125,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     kit = null;
   }
   if (kit?.pinnedComment) {
-    add(
+    addText(
       `${base}/engagement-kit.txt`,
       [
         `ENGAGEMENT KIT — post these in the first golden hour after upload.`,
@@ -127,7 +147,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     );
   }
 
-  add(
+  addText(
     `${base}/metadata.json`,
     JSON.stringify(
       {
@@ -220,43 +240,39 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       ``,
       `Paste the attribution lines above into your YouTube description when the license requires it.`
     );
-    add(`${base}/CREDITS.txt`, creditLines.join("\n").replace(/\n==/g, "\n\n=="));
+    addText(`${base}/CREDITS.txt`, creditLines.join("\n").replace(/\n==/g, "\n\n=="));
   } catch {
     // Credits must never block an export — a resolveMusicForVideo failure
     // (e.g. deleted pinned track) just omits the file.
   }
 
-  // Media assets
-  const voiceover = readMedia(video.id, "voiceover.wav");
-  add(`${base}/voiceover.wav`, voiceover);
-
-  const thumb = readMedia(video.id, "thumbnail.png");
-  add(`${base}/thumbnail.png`, thumb);
+  // Media assets — streamed from disk (no whole-file buffers)
+  addFile(`${base}/voiceover.wav`, "voiceover.wav");
+  addFile(`${base}/thumbnail.png`, "thumbnail.png");
 
   for (const v of listVariants(video.id)) {
-    add(`${base}/thumbnail-variants/${v.style}.png`, readMedia(video.id, v.fileName as `variant-${string}.png`));
+    addFile(`${base}/thumbnail-variants/${v.style}.png`, v.fileName);
   }
 
   // Story engine artifacts — storyboard art, captions, rendered video
   for (const scene of scenes) {
-    add(`${base}/storyboard/scene-${String(scene.index).padStart(2, "0")}.png`, readFile(sceneImageFile(scene.index)));
+    addFile(`${base}/storyboard/scene-${String(scene.index).padStart(2, "0")}.png`, sceneImageFile(scene.index));
   }
-  add(`${base}/subtitles.srt`, readFile("subtitles.srt"));
-  add(`${base}/final.mp4`, readFile("final.mp4"));
+  addFile(`${base}/subtitles.srt`, "subtitles.srt");
+  addFile(`${base}/final.mp4`, "final.mp4");
 
-  if (files.length === 0)
+  if (entries.length === 0)
     return NextResponse.json(
       { error: "Nothing to export yet — run the Auto-Pilot pipeline first" },
       { status: 400 }
     );
 
-  const zip = buildZip(files);
-
-  return new NextResponse(new Uint8Array(zip), {
+  // Chunked transfer (no Content-Length — the ZIP is composed on the fly).
+  // Browsers handle attachment downloads over chunked responses fine.
+  return new NextResponse(streamZip(entries), {
     status: 200,
     headers: {
       "Content-Type": "application/zip",
-      "Content-Length": String(zip.length),
       "Content-Disposition": `attachment; filename="${base.replace(/[^\w.-]/g, "_").slice(0, 80)}.zip"`,
       "Cache-Control": "no-store",
     },

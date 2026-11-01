@@ -318,6 +318,18 @@ export function readShortFile(videoId: string): { buffer: Buffer; fileName: stri
   return { buffer: fs.readFileSync(p), fileName: "short.mp4" };
 }
 
+/** Stat short.mp4 without reading it (Stage 3, T-3.6 — streaming route). */
+export function statShortFile(videoId: string): { path: string; size: number; fileName: string } | null {
+  const p = path.join(process.cwd(), "uploads", videoId, "short.mp4");
+  try {
+    const s = fs.statSync(p);
+    if (!s.isFile()) return null;
+    return { path: p, size: s.size, fileName: "short.mp4" };
+  } catch {
+    return null;
+  }
+}
+
 /** Read short-thumb.png (null when absent). */
 export function readShortThumb(videoId: string): Buffer | null {
   const p = path.join(process.cwd(), "uploads", videoId, "short-thumb.png");

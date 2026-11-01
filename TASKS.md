@@ -64,6 +64,31 @@ Risks closed this session: R-CRIT-3, R-HIGH-1, R-HIGH-2, R-HIGH-3, R-HIGH-11, R-
 
 ---
 
+## Stage 3 task backlog (defined 2026-11-01 — executing now)
+
+**Sandbox constraint noted up front:** this environment has ffmpeg + network but **no Redis and no Docker**. Stage 3's Redis-backed items are therefore built against a **DB-backed durable queue** (same semantics: claims, retries, backoff, cross-process cancellation, per-org caps — implemented with atomic `UPDATE ... WHERE status='pending'` claims that work on SQLite *and* Postgres). The `QueueDriver` seam stays one interface wide so a BullMQ/Redis driver can be dropped in when infrastructure is provisioned. S3/storage, SMTP and deploy-pipeline tasks ship as code-complete drivers + docs that activate purely via env vars.
+
+### Execution order (dependency-sorted)
+
+| Task | Objective | Dependencies |
+|---|---|---|
+| T-3.1 | This backlog | — |
+| T-3.2 | Structured JSON logging (`log.ts`, pino-format lines, zero-dep) | — |
+| T-3.3 | Cross-platform zombie reaper (D-10 — kill the Linux-only `/proc` dependency) | — |
+| T-3.4 | Per-capability provider timeout matrix (D-09 — replace the flat 5-min timeout; fix `youtube.ts` direct-fetch bypasses) | — |
+| T-3.5 | Durable job queue: `Job` schema columns + claim loop + retries w/ backoff + DB-persisted cancellation + per-org render caps + boot re-enqueue for DB-derivable kinds + standalone worker entry (`npm run worker`) | T-3.2 |
+| T-3.6 | Streaming media delivery (D-23/D-24 — `mp4` route streams from disk w/ Range in constant memory; `export` zip composed per-file instead of whole-folder buffers) | — |
+| T-3.7 | Storage abstraction (`storage.ts`): key-based API (`put/get/stat/delete/readStream/presign`), LocalDisk driver (default) + S3 driver (env-gated), quotas on `put`; migrate the ~20 `UPLOAD_ROOT` call sites | T-3.6 |
+| T-3.8 | `UsageRecord` cost tracking: every `aiCall` recorded per-user/per-capability; `GET /api/account/usage` aggregate | T-3.5 |
+| T-3.9 | SMTP email adapter (`email.ts` drivers: console default, smtp via env) — closes Stage 2 deviation 1 | — |
+| T-3.10 | Per-user Z.ai provider isolation (provider abstraction resolves the acting user's credential) — closes Stage 2 deviation 2 | T-3.4 |
+| T-3.11 | `LegacySetting` lifecycle close-out — closes Stage 2 deviation 6 | — |
+| T-3.12 | Deploy pipeline: Dockerfile (standalone), docker-compose (app+worker+PG), `fly.toml`, SETUP.md production matrix | T-3.5 |
+
+**Completion gate (roadmap):** a video job survives an application restart, resumes safely where possible, and its assets reach the correct user. T-3.5 delivers exactly this for the DB-derivable kinds (`script`, `research`, `stock`); kinds whose closures capture request-scoped state are re-enqueued as handlers are extracted (backlog continues next session).
+
+---
+
 ## How to read this document
 
 Every task has:

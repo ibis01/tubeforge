@@ -4,21 +4,14 @@ import path from "path";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseScenes } from "@/lib/tubeforge/story";
-import {
-  fetchStockForScenes,
-  clearStock,
-  readStockKeys,
-} from "@/lib/tubeforge/stock";
+import { clearStock, readStockKeys } from "@/lib/tubeforge/stock";
+import { runStockRefresh } from "@/lib/tubeforge/queue-handlers";
 import {
   startJob,
   isJobRunning,
-  isJobCancelled,
   lastJobError,
   jobProgress,
-  setJobProgress,
-  JobCancelledError,
 } from "@/lib/tubeforge/jobs";
-import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -107,62 +100,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   await db.video.update({ where: { id }, data: { error: null } });
 
-  const accepted = await startJob(id, "stock", async () => {
-    try {
-      const result = await fetchStockForScenes({
-        videoId: id,
-        scenes,
-        force,
-        shouldCancel: () => isJobCancelled(id, "stock"),
-        onProgress: (current, total, label) => {
-          if (isJobCancelled(id, "stock")) throw new Error("__CANCELLED__");
-          setJobProgress(id, "stock", current, total, label);
-        },
-      });
-
-      invalidateRenders(id);
-      await db.video.update({
-        where: { id },
-        data: { hasVideo: false, videoDuration: null, error: null },
-      });
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "stock",
-          message: `Stock b-roll — ${result.fetched} clip${result.fetched === 1 ? "" : "s"} downloaded, ${result.matched}/${scenes.length} scenes covered`,
-        },
-      });
-    } catch (err) {
-      if (err instanceof Error && err.message === "__CANCELLED__") {
-        await db.video.update({ where: { id }, data: { error: null } });
-        await db.activity.create({
-          data: {
-            organizationId: auth.ctx.organizationId,
-            userId: auth.ctx.userId,
-            videoId: id,
-            stage: "stock",
-            message: "Stock fetch cancelled — matched clips were kept",
-          },
-        });
-        throw new JobCancelledError();
-      }
-      const message = errorText(err, "Stock fetch failed");
-      await db.video.update({ where: { id }, data: { error: message } });
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "stock",
-          level: "error",
-          message: `Stock fetch failed: ${message}`,
-        },
-      });
-      throw err;
-    }
-  });
+  // Stage 3 (T-3.5): the fetch body lives in queue-handlers.ts (runStockRefresh)
+  // so the request path and the durable queue execute the SAME code — a restart
+  // resumes from the video row (scenes re-parsed, force=false).
+  const accepted = await startJob(id, "stock", () => runStockRefresh(id, { force }));
 
   return NextResponse.json(
     { accepted, generating: true },

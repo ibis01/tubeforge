@@ -22,6 +22,9 @@
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
     "test": "node --import tsx scripts/test-unit.mts",
+    "test:queue": "node --import tsx scripts/test-queue.mts",
+    "worker": "node --import tsx scripts/worker.mts",
+    "worker:daemon": "python3 scripts/daemonize.py scripts/worker-daemon.log npm run worker",
     "check": "npm run typecheck && npm run lint && npm run test",
     "test:e2e": "playwright test"
   },
