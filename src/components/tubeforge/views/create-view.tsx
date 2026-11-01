@@ -63,6 +63,9 @@ import {
   Presentation,
   ListVideo,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  RotateCcw,
   Sparkles,
   ClipboardCopy,
   Pencil,
@@ -79,6 +82,17 @@ const EXAMPLE_TOPICS = [
   "Why compound interest is the closest thing to magic",
   "What Jupiter's moons whisper about alien life",
 ];
+
+/** Stage 4a (T-4.3) — the guided brief's four steps. */
+const STEPS = [
+  { label: "Concept", hint: "Topic & script source" },
+  { label: "Format", hint: "Shape, length & tone" },
+  { label: "Voice & art", hint: "Narration & look" },
+  { label: "Launch", hint: "Destination & run" },
+] as const;
+
+/** localStorage key for the persisted brief draft (T-4.3). */
+const DRAFT_KEY = "tubeforge:create-draft";
 
 const STAGE_DEFS: Record<
   Stage,
@@ -231,6 +245,14 @@ export function CreateView() {
   const [batchRunning, setBatchRunning] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
+  // Stage 4a (T-4.3) — guided brief: the wizard step + draft restore flag.
+  const [step, setStep] = useState(0);
+  const [draftRestored, setDraftRestored] = useState(false);
+  const draftCheckedRef = useRef(false);
+
+  // ✅ Derived from state only — never read runningRef during render.
+  const busy = anyRunning;
+
   // Manual-script flow — paste your own narration instead of generating with AI
   const [useOwnScript, setUseOwnScript] = useState(false);
   const [customScript, setCustomScript] = useState("");
@@ -251,6 +273,12 @@ export function CreateView() {
 
   const isStory = format === "story";
   const sceneCount = SCENE_COUNTS[length] ?? 6;
+
+  // Step 0 needs a topic (or a pasted script) before the brief can advance.
+  const stepValid =
+    step === 0
+      ? Boolean(topic.trim() || (useOwnScript && customScript.trim()))
+      : true;
 
   // Reset approval whenever the script or its options change — the analysis
   // verdict is tied to the exact text we analyzed.
@@ -325,13 +353,153 @@ export function CreateView() {
       const timer = setTimeout(() => {
         setTopic(prefillTopic);
         setPrefillTopic(null);
+        setStep(0);
       }, 0);
       return () => clearTimeout(timer);
     }
   }, [prefillTopic, setPrefillTopic]);
 
-  // ✅ FIX: Do not read runningRef.current during render
-  const busy = anyRunning;
+  // ---- Brief draft persistence (T-4.3) -----------------------------------
+  // Restore once, AFTER server defaults land (so the draft wins). A prefill
+  // topic from another view wins over any saved draft.
+  useEffect(() => {
+    if (!settingsLoaded || draftCheckedRef.current) return;
+    draftCheckedRef.current = true;
+    if (prefillTopic) return;
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if (!d || typeof d !== "object") return;
+      if (typeof d.topic === "string" && d.topic) setTopic(d.topic);
+      if (typeof d.niche === "string" && d.niche) setNiche(d.niche);
+      if (typeof d.tone === "string" && d.tone) setTone(d.tone);
+      if (typeof d.length === "string" && d.length) setLength(d.length);
+      if (typeof d.voice === "string" && d.voice) setVoice(d.voice);
+      if (typeof d.speed === "number") setSpeed(d.speed);
+      if (typeof d.thumbStyle === "string" && d.thumbStyle) setThumbStyle(d.thumbStyle);
+      if (d.music && typeof d.music === "object") setMusic(d.music);
+      if (d.motion && typeof d.motion === "object") setMotion(d.motion);
+      if (d.transition && typeof d.transition === "object") setTransition(d.transition);
+      if (typeof d.channelId === "string") setChannelId(d.channelId);
+      if (typeof d.characterId === "string") setCharacterId(d.characterId);
+      if (d.format === "story" || d.format === "script") setFormat(d.format);
+      if (typeof d.renderMode === "string" && d.renderMode) setRenderMode(d.renderMode);
+      if (typeof d.useOwnScript === "boolean") setUseOwnScript(d.useOwnScript);
+      if (typeof d.customScript === "string" && d.customScript) setCustomScript(d.customScript);
+      if (typeof d.batchCount === "number") setBatchCount(d.batchCount);
+      // A discarded/empty draft must not resurrect a pointless banner.
+      if (d.topic || d.customScript) setDraftRestored(true);
+    } catch {
+      /* corrupt draft — start fresh */
+    }
+  }, [settingsLoaded, prefillTopic]);
+
+  // Debounced save — never while a production run is live (the brief is
+  // committed at that point; freezing it keeps the draft honest).
+  useEffect(() => {
+    if (!settingsLoaded || !draftCheckedRef.current || busy || video) return;
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          DRAFT_KEY,
+          JSON.stringify({
+            topic,
+            niche,
+            tone,
+            length,
+            voice,
+            speed,
+            thumbStyle,
+            music,
+            motion,
+            transition,
+            channelId,
+            characterId,
+            format,
+            renderMode,
+            useOwnScript,
+            customScript,
+            batchCount,
+            savedAt: Date.now(),
+          }),
+        );
+      } catch {
+        /* storage blocked — non-fatal */
+      }
+    }, 700);
+    return () => clearTimeout(t);
+  }, [
+    settingsLoaded,
+    busy,
+    video,
+    topic,
+    niche,
+    tone,
+    length,
+    voice,
+    speed,
+    thumbStyle,
+    music,
+    motion,
+    transition,
+    channelId,
+    characterId,
+    format,
+    renderMode,
+    useOwnScript,
+    customScript,
+    batchCount,
+  ]);
+
+  // A created video = the brief was used. Clear the draft so the next visit
+  // starts clean instead of resurrecting a produced topic.
+  useEffect(() => {
+    if (!video) return;
+    try {
+      localStorage.removeItem(DRAFT_KEY);
+    } catch {
+      /* ignore */
+    }
+    setDraftRestored(false);
+  }, [video]);
+
+  const discardDraft = () => {
+    try {
+      localStorage.removeItem(DRAFT_KEY);
+    } catch {
+      /* ignore */
+    }
+    setTopic("");
+    setUseOwnScript(false);
+    setCustomScript("");
+    setFormat("story");
+    setRenderMode("kenburns");
+    setNiche("Motivation");
+    setTone("informative");
+    setLength("medium");
+    setVoice("jam");
+    setSpeed(1.0);
+    setThumbStyle("cinematic");
+    setChannelId("none");
+    setCharacterId("none");
+    setMusic({
+      enabled: null,
+      trackId: null,
+      volume: null,
+      fadeIn: null,
+      fadeOut: null,
+      ducking: null,
+      duckingIntensity: null,
+      mood: null,
+    });
+    setMotion({ mode: null, intensity: null, curve: null, vary: null });
+    setTransition({ style: null, durationSec: null });
+    setDraftRestored(false);
+    setStep(0);
+  };
+
+  // ✅ FIX: Do not read runningRef.current during render (busy declared above)
 
   // Casting a character adopts their voice so narration matches the persona.
   const castCharacter = characters.find((c) => c.id === characterId) ?? null;
@@ -891,21 +1059,87 @@ export function CreateView() {
 
   return (
     <div className="grid lg:grid-cols-12 gap-5">
-      {/* Left — configuration */}
+      {/* Left — configuration (guided brief, T-4.3) */}
       <Card className="glass rounded-2xl p-5 lg:col-span-5 h-fit lg:sticky lg:top-24">
-        <div className="flex items-center gap-2 mb-5">
+        <div className="flex items-center gap-2 mb-4">
           <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center glow-red-soft shrink-0">
             <Wand2 className="h-4.5 w-4.5 text-white" />
           </div>
           <div>
             <h2 className="font-semibold leading-tight">Video Blueprint</h2>
             <p className="text-xs text-muted-foreground">
-              One topic is all Auto-Pilot needs
+              A guided brief · step {step + 1} of {STEPS.length}
             </p>
           </div>
         </div>
 
+        {/* Step rail — click a completed step to revisit it */}
+        <nav aria-label="Brief steps" className="mb-4">
+          <ol className="grid grid-cols-4 gap-1.5">
+            {STEPS.map((s, i) => {
+              const state = i === step ? "current" : i < step ? "done" : "todo";
+              return (
+                <li key={s.label}>
+                  <button
+                    type="button"
+                    disabled={busy || i > step}
+                    onClick={() => setStep(i)}
+                    aria-current={state === "current" ? "step" : undefined}
+                    className={clsx(
+                      "tf-focusable w-full rounded-xl border px-2 py-2 text-left transition-colors",
+                      state === "current" && "border-primary/50 bg-primary/10",
+                      state === "done" && "border-white/12 bg-white/4 hover:bg-white/8",
+                      state === "todo" && "border-white/8 bg-transparent opacity-50",
+                    )}
+                  >
+                    <span
+                      className={clsx(
+                        "flex items-center gap-1.5 text-[11px] font-semibold leading-none",
+                        state === "current" ? "text-primary" : "text-white/70",
+                      )}
+                    >
+                      <span
+                        className={clsx(
+                          "h-4.5 w-4.5 rounded-full flex items-center justify-center text-[10px] shrink-0",
+                          state === "current" && "bg-primary text-white",
+                          state === "done" && "bg-emerald-400/20 text-emerald-300 border border-emerald-400/40",
+                          state === "todo" && "bg-white/8 text-white/50 border border-white/12",
+                        )}
+                      >
+                        {state === "done" ? <Check className="h-3 w-3" /> : i + 1}
+                      </span>
+                      {s.label}
+                    </span>
+                    <span className="block text-[9.5px] text-muted-foreground mt-1 truncate">
+                      {s.hint}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+        </nav>
+
+        {/* Draft-restored banner (T-4.3) */}
+        {draftRestored && !video && (
+          <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-amber-400/25 bg-amber-400/8 px-3.5 py-2.5">
+            <RotateCcw className="h-3.5 w-3.5 text-amber-300 shrink-0" />
+            <p className="flex-1 min-w-0 text-xs text-amber-200/90 leading-snug">
+              Brief draft restored from your last visit.
+            </p>
+            <button
+              type="button"
+              onClick={discardDraft}
+              className="tf-focusable text-xs font-medium text-amber-200 hover:text-white underline underline-offset-2 shrink-0"
+            >
+              Discard
+            </button>
+          </div>
+        )}
+
         <div className="space-y-4">
+          {step === 0 && (
+            <>
           <div className="space-y-1.5">
             <Label htmlFor="topic">Video topic</Label>
             <Textarea
@@ -1061,7 +1295,11 @@ export function CreateView() {
               </div>
             )}
           </div>
+          </>
+          )}
 
+          {step === 1 && (
+            <>
           <SectionLabel
             title="Format & rendering"
             hint="Pick the shape of the video, then how it is rendered"
@@ -1165,7 +1403,11 @@ export function CreateView() {
               )}
             </div>
           )}
+          </>
+          )}
 
+          {step === 2 && (
+            <>
           <SectionLabel
             title="Script & narration"
             hint="What gets written and who reads it"
@@ -1346,6 +1588,60 @@ export function CreateView() {
             onChange={setMusic}
             compact={isStory}
           />
+          </>
+          )}
+
+          {step === 3 && (
+            <>
+          {/* Review summary — the whole brief at a glance before launch */}
+          <div className="rounded-xl border border-white/10 bg-white/3 p-3.5">
+            <p className="tf-kicker mb-2.5">Your brief</p>
+            <div className="flex flex-wrap gap-1.5">
+              <Badge variant="outline" className="border-white/15 bg-white/5 text-white/80 text-[11px]">
+                {isStory ? "Scene story" : "Classic narration"}
+              </Badge>
+              {isStory && (
+                <Badge variant="outline" className="border-white/15 bg-white/5 text-white/80 text-[11px]">
+                  {RENDER_MODES.find((m) => m.id === renderMode)?.label ?? renderMode}
+                </Badge>
+              )}
+              <Badge variant="outline" className="border-white/15 bg-white/5 text-white/80 text-[11px]">
+                {niche} · {TONES.find((t) => t.id === tone)?.label ?? tone}
+              </Badge>
+              <Badge variant="outline" className="border-white/15 bg-white/5 text-white/80 text-[11px]">
+                {LENGTHS.find((l) => l.id === length)?.label ?? length}
+                {isStory ? ` · ${sceneCount} scenes` : ""}
+              </Badge>
+              <Badge variant="outline" className="border-white/15 bg-white/5 text-white/80 text-[11px]">
+                {voice} · {speed.toFixed(1)}x
+              </Badge>
+              {isStory && (
+                <Badge variant="outline" className="border-white/15 bg-white/5 text-white/80 text-[11px]">
+                  {motionSummary} · {transitionSummary}
+                </Badge>
+              )}
+              {music.enabled !== false && (
+                <Badge variant="outline" className="border-white/15 bg-white/5 text-white/80 text-[11px]">
+                  {music.trackId ? "Pinned track" : "Mood-matched music"}
+                </Badge>
+              )}
+              {castCharacter && (
+                <Badge variant="outline" className="border-emerald-400/30 bg-emerald-400/10 text-emerald-300 text-[11px]">
+                  Host: {castCharacter.name}
+                </Badge>
+              )}
+              {channelId !== "none" && (
+                <Badge variant="outline" className="border-white/15 bg-white/5 text-white/80 text-[11px]">
+                  {channels.find((c) => c.id === channelId)?.name ?? "Channel"}
+                </Badge>
+              )}
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-2.5 leading-snug">
+              {useOwnScript
+                ? "Your pasted script ships verbatim (AI analysis approved)."
+                : "AI writes the script from your topic, then the pipeline runs."}
+            </p>
+          </div>
 
           <SectionLabel
             title="Destination"
@@ -1470,6 +1766,44 @@ export function CreateView() {
               {batchRunning ? "Queuing series…" : `Generate ${batchCount}-Video Series`}
             </Button>
           </div>
+          </>
+          )}
+        </div>
+
+        {/* Step navigation (T-4.3) — Back / Next; step 4 launches above */}
+        <div className="mt-5 pt-4 border-t border-white/8 flex items-center gap-2.5">
+          {step > 0 ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setStep((s) => Math.max(0, s - 1))}
+              disabled={busy}
+              className="border-white/15 bg-white/4 hover:bg-white/10"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Back
+            </Button>
+          ) : (
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              The blueprint saves itself — leave and pick up where you left off.
+            </p>
+          )}
+          <div className="flex-1" />
+          {step < STEPS.length - 1 ? (
+            <Button
+              type="button"
+              onClick={() => setStep((s) => s + 1)}
+              disabled={!stepValid || busy}
+              className="bg-brand-gradient hover:opacity-90 font-semibold"
+            >
+              Next: {STEPS[step + 1].label}
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          ) : (
+            <p className="text-[11px] text-muted-foreground text-right leading-snug">
+              Review the brief, then launch above.
+            </p>
+          )}
         </div>
       </Card>
 
