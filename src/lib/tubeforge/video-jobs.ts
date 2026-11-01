@@ -56,6 +56,7 @@ import {
   trackAbsolutePath,
 } from "./music";
 import { qcForVideo } from "./qc";
+import { parsePlan } from "./director-plan";
 import { sanitizeTransition, transitionSummary } from "./transitions";
 import {
   loadSlideDeck,
@@ -516,12 +517,22 @@ export async function runRenderJob(
 
     if (result.fileName === "final.mp4") {
       setJobProgress(videoId, "render", scenes.length + 1, scenes.length + 1, "Running quality checks");
+      // Stage 5 pacing gate: only an APPROVED plan shaped this render, so only
+      // an approved plan may be judged by it. Render-mode blanket exemptions:
+      // "animated" (i2v) and "stock" move every scene whatever the plan says.
+      const approvedPlan =
+        video.directorState === "approved" ? parsePlan(video.shotList) : null;
       const report = await qcForVideo(
         videoId,
         result.durationSec,
         video.audioDuration,
         result.blackWindows,
-        result.aspect
+        result.aspect,
+        approvedPlan,
+        {
+          i2vEverywhere: mode === "animated",
+          stockEverywhere: mode === "stock",
+        }
       );
       await db.video.update({
         where: { id: videoId },

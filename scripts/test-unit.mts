@@ -1341,6 +1341,88 @@ await test("director-plan: addendum + duration + transition accessors", async ()
   eq(directorImageAddendum(null, 1), "", "no plan → empty addendum");
 });
 
+await test("director-plan: planStaticRuns flags 3+ consecutive unmotivated static shots", async () => {
+  const { parsePlan, planStaticRuns } = await import("../src/lib/tubeforge/director-plan.ts");
+  const shot = (shotIndex: number, camera = "static") => ({
+    shotIndex,
+    framing: "medium",
+    camera,
+    lens: "35mm",
+    composition: "rule of thirds",
+    duration: 2.5,
+    imagePrompt: "",
+  });
+  const scene = (sceneIndex: number, shots: unknown[], extra: Record<string, unknown> = {}) => ({
+    sceneIndex,
+    mood: "",
+    motion: "off",
+    needsI2V: false,
+    useStock: false,
+    shots,
+    ...extra,
+  });
+  const flat = parsePlan(
+    JSON.stringify({
+      concept: "",
+      scenes: [
+        scene(1, [shot(0)]),
+        scene(2, [shot(0), shot(1)]),
+        scene(3, [shot(0, "dolly-in")]), // motivated by camera movement — breaks the run
+        scene(4, [shot(0), shot(1)]),
+      ],
+    })
+  );
+  ok(flat !== null);
+  const runs = planStaticRuns(flat);
+  eq(runs.length, 2, "two separate flat runs (camera-move shot splits them)");
+  eq(runs[0].length, 3, "longest run = 3 consecutive static shots across scenes 1–2");
+  eq(runs[0].fromScene, 1, "run starts at scene 1");
+  eq(runs[0].toScene, 2, "run ends at scene 2");
+  eq(runs[1].length, 2, "scene 4's pair alone stays under the 3-shot gate");
+
+  // Each motivation channel excuses a static camera.
+  for (const extra of [{ motion: "smart" }, { needsI2V: true }, { useStock: true }]) {
+    const motivated = parsePlan(
+      JSON.stringify({ concept: "", scenes: [scene(1, [shot(0), shot(1), shot(2)], extra)] })
+    );
+    ok(motivated !== null);
+    eq(planStaticRuns(motivated).length, 0, `motivated via ${Object.keys(extra)[0]} → no runs`);
+  }
+
+  // Render-mode blanket exemptions: an i2v or stock render moves everything.
+  const blanket = parsePlan(
+    JSON.stringify({ concept: "", scenes: [scene(1, [shot(0), shot(1), shot(2)])] })
+  );
+  ok(blanket !== null);
+  eq(planStaticRuns(blanket, { i2vEverywhere: true }).length, 0, "i2v render mode exempts all");
+  eq(planStaticRuns(blanket, { stockEverywhere: true }).length, 0, "stock render mode exempts all");
+  eq(planStaticRuns(blanket).length, 1, "without exemptions the run is flagged");
+
+  // Index gaps and shot-less scenes break runs (unknown pacing neither
+  // extends nor excuses a flat stretch).
+  const gapped = parsePlan(
+    JSON.stringify({
+      concept: "",
+      scenes: [scene(1, [shot(0), shot(1)]), scene(3, [shot(0), shot(1)])],
+    })
+  );
+  ok(gapped !== null);
+  eq(gapped.scenes.length, 2, "scene 2 absent from the plan");
+  const gapRuns = planStaticRuns(gapped);
+  eq(gapRuns.length, 2, "gap splits the four static shots into two 2-shots runs");
+
+  const shotless = parsePlan(
+    JSON.stringify({
+      concept: "",
+      scenes: [scene(1, [shot(0), shot(1)]), scene(2, []), scene(3, [shot(0), shot(1)])],
+    })
+  );
+  ok(shotless !== null);
+  eq(planStaticRuns(shotless).length, 2, "shot-less scene splits the run");
+
+  eq(planStaticRuns(null).length, 0, "no plan → no runs");
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

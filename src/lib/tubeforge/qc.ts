@@ -39,6 +39,8 @@ import {
   LRA_WARN,
   MIX_TARGETS,
 } from "./audiomix";
+import { planStaticRuns } from "./director-plan";
+import type { DirectorPlan } from "./director-plan";
 
 const execFileAsync = promisify(execFile);
 
@@ -196,6 +198,15 @@ export async function runQcReport(opts: {
   expectedBlack?: [number, number][];
   /** Frame geometry this render was built for (default "16:9"). */
   expectedAspect?: QcAspect;
+  /** Stage 5 pacing gate: the APPROVED shot plan (null / absent = no plan).
+   * Only approved plans reach the render, so callers pass null for
+   * proposed/dismissed ones — a plan that never touched the pipeline must
+   * not fail its QC. */
+  shotPlan?: DirectorPlan | null;
+  /** Render-mode blanket motion exemptions: an "animated" (i2v) or "stock"
+   * render moves every scene regardless of plan flags. */
+  shotPlanI2VEverywhere?: boolean;
+  shotPlanStockEverywhere?: boolean;
 }): Promise<QcReport> {
   const aspect: QcAspect = opts.expectedAspect === "9:16" ? "9:16" : "16:9";
   const aspectSpec = ASPECT_TARGET[aspect];
@@ -379,21 +390,46 @@ export async function runQcReport(opts: {
       );
     }
 
-    // 8) Visual pacing — sampled static-shot detection (freezedetect above
-    // only catches EXACT freezes; a motionless Ken Burns crop or static
-    // stock clip reads as "nothing happens" while evading it).
+    // 8) Visual pacing — two lenses on the same defect class:
+    //   (a) the APPROVED shot-plan's own rhythm (Stage 5 completion gate):
+    //       3+ consecutive static shots with no motion / i2v / stock
+    //       motivation is flat pacing — deterministic, knowable before a
+    //       single pixel is measured;
+    //   (b) the sampled visual-change scan (freezedetect above only catches
+    //       EXACT freezes; a motionless Ken Burns crop or static stock clip
+    //       reads as "nothing happens" while evading it).
+    const planRuns = planStaticRuns(opts.shotPlan ?? null, {
+      i2vEverywhere: opts.shotPlanI2VEverywhere,
+      stockEverywhere: opts.shotPlanStockEverywhere,
+    });
+    const worstRun = planRuns.find((r) => r.length >= 3) ?? null;
     const staticPass = await detectStaticRuns(opts.mp4Path);
+    const planFlat = worstRun !== null;
     checks.push(
       check(
         "static-shots",
         "Visual pacing — no long static stretches",
-        !staticPass.measured ? "unmeasured" : staticPass.runs.length === 0 ? "pass" : "fail",
-        !staticPass.measured
-          ? "not measured"
-          : staticPass.runs.length === 0
-            ? "visual change throughout"
-            : `${staticPass.runs.length} static run${staticPass.runs.length > 1 ? "s" : ""}`,
-        staticRunsDetail(staticPass.runs)
+        planFlat
+          ? "fail"
+          : !staticPass.measured
+            ? "unmeasured"
+            : staticPass.runs.length === 0
+              ? "pass"
+              : "fail",
+        planFlat
+          ? `${worstRun.length} flat shots in a row (scene${
+              worstRun.fromScene === worstRun.toScene
+                ? ` ${worstRun.fromScene}`
+                : `s ${worstRun.fromScene}–${worstRun.toScene}`
+            })`
+          : !staticPass.measured
+            ? "not measured"
+            : staticPass.runs.length === 0
+              ? "visual change throughout"
+              : `${staticPass.runs.length} static run${staticPass.runs.length > 1 ? "s" : ""}`,
+        planFlat
+          ? "approved direction holds these shots still with no motion, i2v or stock motivation — re-run the director with movement or set motion/animation on those scenes"
+          : staticRunsDetail(staticPass.runs)
       )
     );
 
@@ -456,7 +492,9 @@ export async function qcForVideo(
   videoDuration: number,
   narrationSec: number | null,
   expectedBlack?: [number, number][],
-  expectedAspect?: QcAspect
+  expectedAspect?: QcAspect,
+  shotPlan?: DirectorPlan | null,
+  pacingExemptions?: { i2vEverywhere?: boolean; stockEverywhere?: boolean }
 ): Promise<QcReport> {
   // Storage seam (T-3.7): ffprobe/readFile need real paths — materialize
   // returns the uploads path locally, a cached download under s3.
@@ -468,5 +506,8 @@ export async function qcForVideo(
     srtPath: await materialize(`${videoId}/subtitles.srt`),
     expectedBlack,
     expectedAspect,
+    shotPlan,
+    shotPlanI2VEverywhere: pacingExemptions?.i2vEverywhere,
+    shotPlanStockEverywhere: pacingExemptions?.stockEverywhere,
   });
 }

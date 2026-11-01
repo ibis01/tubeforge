@@ -197,6 +197,76 @@ export function planTransitionIn(plan: DirectorPlan | null, sceneIndex: number):
   return plan?.scenes.find((x) => x.sceneIndex === sceneIndex)?.transitionIn ?? "";
 }
 
+// ---------------------------------------------------------------------------
+// Pacing gate (Stage 5 completion gate) — "the video has a deliberate
+// cinematic rhythm": 3+ consecutive shots the director pointed at the screen
+// WITHOUT giving them motion is flat pacing, no matter how good the stills are.
+
+/** A run of consecutive unmotivated-static shots, in story order. */
+export interface PlanStaticRun {
+  length: number; // shots in the run
+  fromScene: number; // 1-based scene index of the first shot
+  toScene: number; // 1-based scene index of the last shot
+}
+
+/** Mode-level exemptions the caller knows from the render mode: an "animated"
+ * (i2v) or "stock" render moves every scene regardless of the plan flags. */
+export interface PacingExemptions {
+  i2vEverywhere?: boolean;
+  stockEverywhere?: boolean;
+}
+
+function isUnmotivatedStaticShot(
+  scene: DirectorScene,
+  shot: DirectorShot,
+  ex: PacingExemptions
+): boolean {
+  if (shot.camera !== "static") return false;
+  if (ex.i2vEverywhere || ex.stockEverywhere) return false;
+  // Motivation channels: Ken Burns motion, image-to-video, real stock footage.
+  return scene.motion === "off" && !scene.needsI2V && !scene.useStock;
+}
+
+/**
+ * Runs of consecutive unmotivated-static shots (longest first). A scene the
+ * plan skips or gives no shots breaks a run — its pacing is unknown, so it
+ * can neither extend nor excuse the flat stretch beside it.
+ */
+export function planStaticRuns(
+  plan: DirectorPlan | null,
+  ex: PacingExemptions = {}
+): PlanStaticRun[] {
+  if (!plan) return [];
+  const runs: PlanStaticRun[] = [];
+  let length = 0;
+  let fromScene = 0;
+  let toScene = 0;
+  const flush = () => {
+    if (length > 0) runs.push({ length, fromScene, toScene });
+    length = 0;
+  };
+  let prevIndex: number | null = null;
+  for (const scene of plan.scenes) {
+    if (prevIndex !== null && scene.sceneIndex !== prevIndex + 1) flush(); // index gap
+    if (scene.shots.length === 0) {
+      flush(); // shot-less scene = unknown pacing
+    } else {
+      for (const shot of scene.shots) {
+        if (isUnmotivatedStaticShot(scene, shot, ex)) {
+          if (length === 0) fromScene = scene.sceneIndex;
+          length += 1;
+          toScene = scene.sceneIndex;
+        } else {
+          flush();
+        }
+      }
+    }
+    prevIndex = scene.sceneIndex;
+  }
+  flush();
+  return runs.sort((a, b) => b.length - a.length);
+}
+
 /**
  * Render-side accessor — the addendum for one scene when (and ONLY when) the
  * human has APPROVED the plan. Unapproved plans never touch the pipeline.
