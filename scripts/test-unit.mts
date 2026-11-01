@@ -1660,6 +1660,62 @@ await test("research: matchSourcesToIdeas attaches only keyword-relevant sources
   eq((many.get("i-many") ?? []).length, 2, "capped at maxPerIdea");
 });
 
+// ---------------------------------------------------------------------------
+// Stage 7 (T-7.5) — billing resolver + plan gating (billing.ts)
+// ---------------------------------------------------------------------------
+
+await test("billing: PLAN_DEFAULTS has the three tiers with sensible monthly credits", async () => {
+  const { PLAN_DEFAULTS } = await import("../src/lib/tubeforge/billing.ts");
+  eq(PLAN_DEFAULTS.starter.tier, "starter", "starter tier id");
+  eq(PLAN_DEFAULTS.creator.tier, "creator", "creator tier id");
+  eq(PLAN_DEFAULTS.studio.tier, "studio", "studio tier id");
+  ok(PLAN_DEFAULTS.starter.monthlyCredits > 0, "starter has positive credits");
+  ok(
+    PLAN_DEFAULTS.creator.monthlyCredits > PLAN_DEFAULTS.starter.monthlyCredits,
+    "creator has more credits than starter"
+  );
+  ok(
+    PLAN_DEFAULTS.studio.monthlyCredits > PLAN_DEFAULTS.creator.monthlyCredits,
+    "studio has more credits than creator"
+  );
+  ok(!PLAN_DEFAULTS.starter.priorityRendering, "starter has no priority rendering");
+  ok(PLAN_DEFAULTS.creator.priorityRendering, "creator has priority rendering");
+  ok(PLAN_DEFAULTS.studio.teamMembers > 1, "studio has team members");
+});
+
+await test("billing: planSupportsResolution gates by plan tier", async () => {
+  const { planSupportsResolution, PLAN_DEFAULTS } = await import("../src/lib/tubeforge/billing.ts");
+  ok(planSupportsResolution(PLAN_DEFAULTS.starter, "1080p"), "starter can render 1080p");
+  ok(!planSupportsResolution(PLAN_DEFAULTS.starter, "1440p"), "starter cannot render 1440p");
+  ok(!planSupportsResolution(PLAN_DEFAULTS.starter, "2160p"), "starter cannot render 2160p");
+  ok(planSupportsResolution(PLAN_DEFAULTS.creator, "1080p"), "creator can render 1080p");
+  ok(planSupportsResolution(PLAN_DEFAULTS.creator, "1440p"), "creator can render 1440p");
+  ok(!planSupportsResolution(PLAN_DEFAULTS.creator, "2160p"), "creator cannot render 2160p");
+  ok(planSupportsResolution(PLAN_DEFAULTS.studio, "2160p"), "studio can render 2160p");
+  // Unknown resolution → 1080p allowed (the fallback), 4k blocked
+  ok(planSupportsResolution(PLAN_DEFAULTS.starter, "weird"), "unknown resolution defaults to 1080p-allowed");
+});
+
+await test("billing: hasCredits — Starter never hard-blocks; paid tier gates on balance", async () => {
+  const billing = await import("../src/lib/tubeforge/billing.ts");
+  const { hasCredits, PLAN_DEFAULTS } = billing;
+  type ResolvedPlan = import("../src/lib/tubeforge/billing.ts").ResolvedPlan;
+  const starterResolved: ResolvedPlan = {
+    plan: PLAN_DEFAULTS.starter,
+    subscription: null,
+    creditBalance: 0, // overdrawn starter
+  };
+  ok(hasCredits(starterResolved, 1), "starter with 0 balance still allowed (free tier, no hard-block)");
+
+  const creatorResolved: ResolvedPlan = {
+    plan: PLAN_DEFAULTS.creator,
+    subscription: { id: "x", status: "active", currentPeriodEnd: null, stripeCustomerId: null },
+    creditBalance: 1000,
+  };
+  ok(hasCredits(creatorResolved, 500), "creator with positive balance allowed");
+  ok(!hasCredits(creatorResolved, 1001), "creator overdrawn blocked");
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

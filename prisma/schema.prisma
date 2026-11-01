@@ -44,6 +44,11 @@ model User {
   activities          Activity[]
   jobs                Job[]
   usageRecords        UsageRecord[]
+  // Stage 7 (T-7.5) — billing. One subscription per user (the plan);
+  // grants are monthly allotments; ledger rows are individual spends.
+  subscription        Subscription?
+  creditGrants        CreditGrant[]
+  creditLedger        CreditLedger[]
 }
 
 model Organization {
@@ -602,4 +607,85 @@ model UsageRecord {
   @@index([organizationId, createdAt])
   @@index([userId, createdAt])
   @@index([organizationId, capability, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Stage 7 (T-7.5) — Billing
+// ---------------------------------------------------------------------------
+
+// Three plans per MASTER_PLAN §5: starter (free), creator (paid), studio (paid).
+// The Plan rows are seeded once at deploy time and never written by the app.
+model Plan {
+  id                String  @id @default(cuid())
+  name              String // "Starter" | "Creator" | "Studio"
+  tier              String // starter | creator | studio
+  monthlyCredits    Int     @default(0) // credits granted per period
+  maxResolution     String  @default("1080p") // 1080p | 1440p | 2160p
+  priorityRendering Boolean @default(false)
+  teamMembers       Int     @default(1)
+  isActive          Boolean @default(true)
+  subscriptions     Subscription[]
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([tier])
+}
+
+// One subscription per user. The Subscription is the source of truth for
+// "what can this user do right now"; the Stripe webhook updates it on
+// `invoice.paid` / `customer.subscription.updated`. A user with no
+// Subscription row gets the default Starter plan (resolved in code, never
+// written) — fresh installs don't need to seed rows for existing users.
+model Subscription {
+  id                     String  @id @default(cuid())
+  userId                 String  @unique
+  planId                 String
+  plan                   Plan    @relation(fields: [planId], references: [id], onDelete: Restrict)
+  stripeCustomerId       String?
+  stripeSubscriptionId   String?
+  status                 String  @default("active") // active | past_due | canceled | trialing
+  currentPeriodEnd       DateTime?
+  user                   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  grants                 CreditGrant[]
+  ledger                 CreditLedger[]
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@index([stripeCustomerId])
+  @@index([stripeSubscriptionId])
+}
+
+// Monthly credit allotment per subscription. The remaining balance is the
+// sum of grants minus the ledger's spent rows for the user (resolved in
+// code; never denormalized into the Subscription).
+model CreditGrant {
+  id              String   @id @default(cuid())
+  userId          String
+  subscriptionId  String
+  grantedCredits  Int // credits granted this period
+  periodStart     DateTime
+  periodEnd       DateTime
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription    Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  createdAt       DateTime     @default(now())
+
+  @@index([userId, periodEnd])
+}
+
+// Append-only ledger of every credit spend (and refund). Every row links to
+// a UsageRecord when the spend was an AI call (the reconciliation test joins
+// the two and verifies the sum matches). Negative `microCredits` = refund.
+model CreditLedger {
+  id              String   @id @default(cuid())
+  userId          String
+  subscriptionId  String?
+  kind            String // ai_call | render_minute | publish | storage | topup | refund
+  microCredits    Int // signed; positive = spent, negative = refunded
+  usageRecordId   String? // link to UsageRecord for reconciliation
+  note            String?
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription    Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  createdAt       DateTime     @default(now())
+
+  @@index([userId, createdAt])
 }
