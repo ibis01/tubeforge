@@ -42,6 +42,7 @@ import {
 import { isMusicMoodId, moodTags, NICHE_MOODS } from "../src/lib/tubeforge/music";
 import { parseSrt, runQcReport } from "../src/lib/tubeforge/qc";
 import {
+  describeVoiceHealth,
   isClonedVoiceId,
   sanitizeVoice,
   voiceCatalog,
@@ -563,6 +564,26 @@ await test("voiceCatalog: zhipu exposes the 7 studio voices (clones appended by 
   eq(catalog.length, 7, "exactly the 7 studio voices");
   ok(catalog.some((v) => v.id === "tongtong"), "default voice present");
   ok(!catalog.some((v) => isClonedVoiceId(v.id)), "no clone ids baked into the static catalog");
+});
+
+await test("describeVoiceHealth: /health payloads render as one readable line", () => {
+  eq(
+    describeVoiceHealth({ model: "chatterbox", device: "cpu", warm: true, busy: false }),
+    "Chatterbox (English) · cpu · model loaded",
+    "warm English server reads at a glance",
+  );
+  eq(
+    describeVoiceHealth({ model: "chatterbox-multilingual", device: "cpu", warm: true, busy: true }),
+    "Chatterbox Multilingual (23 languages) · cpu · model loaded · busy synthesizing",
+    "multilingual + busy state included",
+  );
+  const cold = describeVoiceHealth({ model: "chatterbox", device: "cpu", warm: false });
+  ok(cold.includes("model still loading"), `cold start is REPORTED, not failed (got: ${cold})`);
+  eq(
+    describeVoiceHealth({}),
+    "Voice server · model still loading — retry in a few minutes",
+    "an empty payload (older server) still degrades to a useful line",
+  );
 });
 
 await test("cleanCloneName: trims, strips control chars, falls back to the file name", () => {

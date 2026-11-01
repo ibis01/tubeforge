@@ -38,7 +38,7 @@ import {
 } from "@/lib/tubeforge/types";
 import { chatComplete } from "@/lib/tubeforge/providers/chat";
 import { visionComplete } from "@/lib/tubeforge/providers/vision";
-import { ttsSynthesize } from "@/lib/tubeforge/providers/tts";
+import { probeSelfhostHealth, ttsSynthesize } from "@/lib/tubeforge/providers/tts";
 import { imageEdit, imageGenerate } from "@/lib/tubeforge/providers/image";
 import { errorText } from "@/lib/tubeforge/redact";
 import { imageToVideo } from "@/lib/tubeforge/providers/video";
@@ -247,6 +247,24 @@ export async function POST(req: NextRequest) {
         });
       }
       case "tts": {
+        // A self-hosted server gets a LIGHTWEIGHT health probe instead of a
+        // synthesis — a CPU Chatterbox box takes 15-45 s per call, and the
+        // /health endpoint already answers the question ("is it up, is the
+        // model loaded?") in milliseconds. Cold-start state is REPORTED, not
+        // failed — the exact situation right after the Oracle VM boots.
+        if (body.health === true) {
+          const cfg = await getCapability("tts", overrides);
+          if (cfg.provider === "selfhost") {
+            const probe = await probeSelfhostHealth(overrides);
+            return NextResponse.json({
+              ok: probe.up,
+              capability,
+              reply: probe.up ? `${probe.detail} · ${probe.latencyMs} ms` : probe.detail,
+              ...(probe.up ? { health: probe.health } : {}),
+              latencyMs: probe.latencyMs,
+            });
+          }
+        }
         const voice = String(body.voice ?? "").trim();
         const buffer = await ttsSynthesize(
           { input: "Connection test.", voice, speed: 1 },

@@ -13,7 +13,7 @@ import { zaiClientFor } from "../zai-client";
 import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta, OPENAI_VOICES, type ProviderId } from "./registry";
 import { VOICES } from "../types";
-import { joinUrl, providerFetch } from "./http";
+import { joinUrl, providerFetch, ProviderHttpError } from "./http";
 import { getSampleWavByVoiceId } from "../voice-clone";
 import { applyPronunciations, loadPronunciations } from "../pronounce";
 
@@ -206,9 +206,35 @@ async function selfhostTts(
       },
     );
   } catch (err) {
-    throw new Error(
-      `Your voice server at ${baseUrl} didn't respond — if it's a sleeping free-tier server give it a minute and retry; if it's your PC, check the server (and cloudflared tunnel) are running. (${(err as Error).message})`,
-    );
+    // providerFetch turns every non-2xx into ProviderHttpError — a 503 cold
+    // start is WORTH ONE RETRY (the Oracle VM loads the ~1.5 GB model for
+    // 2-5 minutes after a reboot; narration jobs queued behind that boot
+    // should survive it instead of failing the whole render).
+    if (err instanceof ProviderHttpError && err.status === 503) {
+      await new Promise((r) => setTimeout(r, 4_000));
+      try {
+        response = await providerFetch(
+          "Self-hosted voice server",
+          joinUrl(baseUrl, "tts"),
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(key ? { "X-Voice-Key": key } : {}),
+            },
+            body: JSON.stringify({
+              text: req.input,
+              voice: sampleB64 ?? "",
+              speed: req.speed,
+            }),
+          },
+        );
+      } catch (retryErr) {
+        throw selfhostError(retryErr, baseUrl);
+      }
+    } else {
+      throw selfhostError(err, baseUrl);
+    }
   }
   const buffer = Buffer.from(new Uint8Array(await response.arrayBuffer()));
   if (buffer.length < 44)
@@ -216,6 +242,93 @@ async function selfhostTts(
       `Your voice server returned no audio (HTTP ${response.status}) — check its console (PC) or Logs tab (HF Space) for errors`,
     );
   return buffer;
+}
+
+/** Readable errors for self-hosted voice server failures — the server
+ *  answers with a JSON {detail} (FastAPI), so surface it verbatim:
+ *  a 401 means the X-Voice-Key doesn't match the server's --key, a 503
+ *  means the model is still loading after a cold start. */
+function selfhostError(err: unknown, baseUrl: string): Error {
+  if (err instanceof ProviderHttpError) {
+    if (err.status === 401)
+      return new Error(
+        `Your voice server rejected the API key (HTTP 401) — the key in Settings must equal the --key value the server was started with`,
+      );
+    if (err.status === 503)
+      return new Error(
+        `Your voice server is still loading its model (HTTP 503) — give it 2-5 minutes after a cold start, then retry`,
+      );
+    return new Error(`Your voice server at ${baseUrl} answered ${err.message}`);
+  }
+  return new Error(
+    `Your voice server at ${baseUrl} didn't respond — if it's a sleeping free-tier server give it a minute and retry; if it's your PC, check the server (and cloudflared tunnel) are running. (${(err as Error).message})`,
+  );
+}
+
+// ---------- Self-hosted health probe (Settings → "Test" without a synthesis) ----------
+
+export interface VoiceServerHealth {
+  ok?: boolean;
+  model?: string;
+  device?: string;
+  warm?: boolean;
+  busy?: boolean;
+}
+
+/** Human line for a voice_server.py /health payload — pure, unit-pinned.
+ *  "Chatterbox (English) · cpu · model loaded · 230 ms" reads at a glance;
+ *  a cold start says so instead of failing mysteriously. */
+export function describeVoiceHealth(h: VoiceServerHealth): string {
+  const model =
+    h.model === "chatterbox-multilingual"
+      ? "Chatterbox Multilingual (23 languages)"
+      : h.model
+        ? "Chatterbox (English)"
+        : "Voice server";
+  const bits = [model];
+  if (h.device) bits.push(h.device);
+  bits.push(h.warm ? "model loaded" : "model still loading — retry in a few minutes");
+  if (h.busy) bits.push("busy synthesizing");
+  return bits.join(" · ");
+}
+
+/** GET {baseUrl}/health on the configured self-hosted server — never
+ *  synthesizes, 6s timeout, network failures become `up: false` with a
+ *  readable reason. Used by the Settings test button so the user can confirm
+ *  the Oracle VM (or laptop) is reachable before wiring it in. */
+export async function probeSelfhostHealth(
+  overrides?: Partial<CapabilityConfig>,
+): Promise<{ up: boolean; detail: string; latencyMs: number; health?: VoiceServerHealth }> {
+  const cfg = await getCapability("tts", overrides);
+  if (cfg.provider !== "selfhost")
+    throw new Error("The health probe only applies to the self-hosted provider");
+  const baseUrl =
+    cfg.baseUrl?.trim() ||
+    providerMeta("tts", "selfhost")?.defaultBaseUrl ||
+    "http://localhost:8931";
+  const key = cfg.apiKey?.trim();
+  const started = Date.now();
+  try {
+    const res = await providerFetch(
+      "Self-hosted voice server",
+      joinUrl(baseUrl, "health"),
+      { method: "GET", headers: key ? { "X-Voice-Key": key } : {} },
+      { timeoutMs: 6_000 },
+    );
+    const health = (await res.json()) as VoiceServerHealth;
+    return {
+      up: true,
+      detail: describeVoiceHealth(health),
+      latencyMs: Date.now() - started,
+      health,
+    };
+  } catch (err) {
+    return {
+      up: false,
+      detail: selfhostError(err, baseUrl).message,
+      latencyMs: Date.now() - started,
+    };
+  }
 }
 
 // ---------- OpenAI-compatible (OpenAI / TTSFM / etc) ----------

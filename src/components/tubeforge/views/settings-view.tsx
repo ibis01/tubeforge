@@ -596,6 +596,11 @@ export function SettingsView() {
           model: row.model.trim() || undefined,
           visionModel: row.visionModel?.trim() || undefined,
           confirmCost,
+          // TTS + self-hosted: the button becomes a millisecond health probe
+          // instead of a 15-45 s CPU synthesis (cold starts REPORT instead
+          // of failing — "model still loading" is exactly what you see right
+          // after the Oracle VM boots).
+          health: kind === "tts",
         }),
       });
       const d = await res.json();
