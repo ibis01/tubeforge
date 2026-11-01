@@ -167,3 +167,34 @@ test.describe.serial("cross-tenant isolation (Stage 2 completion gate)", () => {
     expect(after.status(), "revoked session cookie must 401").toBe(401);
   });
 });
+
+// Stage 4b (T-4.14): the battery above never LISTED the models whose Prisma
+// names are camelCase. tenant-db's Stage 2 set carried them camelCase while
+// the hook lowercases the model name at lookup — so researchSession (and
+// scheduleSlot, videoStat, voiceProfile, musicTrack) were silently UNSCOPED,
+// a live cross-tenant leak surfaced through /api/research during the Stage 4b
+// sweep. These tests pin the previously-unscoped surfaces.
+test.describe("cross-tenant isolation — previously-unscoped models (T-4.14)", () => {
+  test("research sessions stay tenant-scoped", async ({ request }) => {
+    // A POSTs a scan — the shell row exists immediately (202) even though the
+    // LLM job may fail without keys; the row persists with an error, so the
+    // listing is a real cross-tenant probe.
+    const a = await register(request, `iso-r-a-${RUN}@tubeforge.test`);
+    const post = await request.post("/api/research", {
+      headers: { cookie: a.cookie },
+      data: { niche: "Motivation", query: "" },
+    });
+    expect(post.status(), "research shell create must be accepted").toBeLessThan(300);
+
+    const own = await request.get("/api/research?limit=25", { headers: { cookie: a.cookie } });
+    const ownBody = (await own.json()) as { sessions?: unknown[] };
+    expect(ownBody.sessions?.length, "A sees their own shell row").toBeGreaterThanOrEqual(1);
+
+    // B (a different fresh account) must never see A's session row.
+    const b = await register(request, `iso-r-b-${RUN}@tubeforge.test`);
+    const list = await request.get("/api/research?limit=25", { headers: { cookie: b.cookie } });
+    expect(list.status()).toBe(200);
+    const body = (await list.json()) as { sessions?: unknown[] };
+    expect(body.sessions ?? [], "B's research list must be empty").toEqual([]);
+  });
+});

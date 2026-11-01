@@ -9,6 +9,7 @@ export type ViewId =
   | "create"
   | "library"
   | "cast"
+  | "voice"
   | "calendar"
   | "channels"
   | "settings";

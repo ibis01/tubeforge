@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAppStore } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import { Card } from "@/components/ui/card";
@@ -40,6 +40,7 @@ import {
   Lightbulb,
   Clapperboard,
   Zap,
+  BarChart3,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -75,6 +76,30 @@ function volumeStyle(level: string): string {
   if (l.includes("high")) return "text-sky-300 bg-sky-500/10 border-sky-500/25";
   if (l.includes("low")) return "text-zinc-400 bg-zinc-500/10 border-zinc-500/25";
   return "text-amber-300 bg-amber-500/10 border-amber-500/25";
+}
+
+/** Competition bucket — the same substring logic the badge styles use. */
+function compClass(level: string): "low" | "medium" | "high" {
+  const l = level.toLowerCase();
+  if (l.includes("low")) return "low";
+  if (l.includes("high")) return "high";
+  return "medium";
+}
+
+/** Search-volume rank for sorting (very high > high > medium > low). */
+function volumeRank(level: string): number {
+  const l = level.toLowerCase();
+  if (l.includes("very high")) return 4;
+  if (l.includes("high")) return 3;
+  if (l.includes("low")) return 1;
+  return 2;
+}
+
+/** Production-length rank: short → medium → long. */
+function lengthRank(id: string): number {
+  if (id === "short") return 0;
+  if (id === "long") return 2;
+  return 1;
 }
 
 function IdeaCard({
@@ -229,6 +254,109 @@ function IdeaSkeleton() {
   );
 }
 
+/** Cross-scan aggregates for the left rail (T-4.8): ideas per niche, average
+ *  viral score and recurring keywords. Counts EVERY loaded session — the
+ *  recent-scans list is capped at 8 for legibility, the pulse is not. */
+function NichePulse({ sessions }: { sessions: ResearchSessionDTO[] }) {
+  const stats = useMemo(() => {
+    const byNiche = new Map<string, { ideas: number; scoreSum: number }>();
+    const keywordCount = new Map<string, number>();
+    for (const s of sessions) {
+      const cur = byNiche.get(s.niche) ?? { ideas: 0, scoreSum: 0 };
+      cur.ideas += s.ideas.length;
+      cur.scoreSum += s.ideas.reduce((acc, i) => acc + i.viralScore, 0);
+      byNiche.set(s.niche, cur);
+      // Count a keyword once per SCAN (not once per idea) so one keyword-stuffed
+      // session can't dominate the panel.
+      const seen = new Set<string>();
+      for (const i of s.ideas) {
+        for (const k of i.keywords) {
+          const key = k.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          keywordCount.set(key, (keywordCount.get(key) ?? 0) + 1);
+        }
+      }
+    }
+    const niches = [...byNiche.entries()]
+      .map(([niche, v]) => ({
+        niche,
+        ideas: v.ideas,
+        avg: v.ideas ? Math.round(v.scoreSum / v.ideas) : 0,
+      }))
+      .sort((a, b) => b.avg - a.avg || b.ideas - a.ideas);
+    const topKeywords = [...keywordCount.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([k, n]) => ({ k, n }));
+    const totalIdeas = niches.reduce((sum, n) => sum + n.ideas, 0);
+    return { niches: niches.slice(0, 5), topKeywords, totalIdeas, nicheCount: niches.length };
+  }, [sessions]);
+
+  if (sessions.length === 0) return null;
+  const maxAvg = Math.max(1, ...stats.niches.map((n) => n.avg));
+
+  return (
+    <Card className="glass border-white/8 rounded-2xl p-5">
+      <div className="flex items-center gap-2 mb-1">
+        <BarChart3 className="h-4 w-4 text-primary" />
+        <p className="font-semibold text-sm">Niche pulse</p>
+      </div>
+      <p className="text-[11px] text-muted-foreground mb-3">
+        {stats.nicheCount} {stats.nicheCount === 1 ? "niche" : "niches"} ·{" "}
+        {stats.totalIdeas} ideas across your last {sessions.length}{" "}
+        {sessions.length === 1 ? "scan" : "scans"}
+      </p>
+      <div className="space-y-2">
+        {stats.niches.map((n) => (
+          <div key={n.niche}>
+            <div className="flex items-baseline justify-between gap-2">
+              <p className="text-xs font-medium truncate">{n.niche}</p>
+              <p className="text-[10px] text-muted-foreground tabular-nums shrink-0">
+                {n.ideas} {n.ideas === 1 ? "idea" : "ideas"} · avg {n.avg}
+              </p>
+            </div>
+            <div
+              className="h-1.5 rounded-full bg-white/6 mt-1 overflow-hidden"
+              role="meter"
+              aria-valuenow={n.avg}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label={`${n.niche}: average viral score ${n.avg} of 100`}
+        >
+              <div
+                className="h-full rounded-full bg-brand-gradient"
+                style={{ width: `${Math.max(6, (n.avg / maxAvg) * 100)}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      {stats.topKeywords.length > 0 && (
+        <div className="mt-4">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">
+            Recurring keywords
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {stats.topKeywords.map(({ k, n }) => (
+              <Badge
+                key={k}
+                variant="outline"
+                className="border-primary/25 bg-primary/10 text-red-200 text-[10px]"
+                title={`Appears in ${n} of ${sessions.length} scans`}
+              >
+                <KeyRound className="h-2.5 w-2.5 mr-1" />
+                {k}
+                <span className="text-muted-foreground ml-1">×{n}</span>
+              </Badge>
+            ))}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function ResearchView() {
   const { toast } = useToast();
   const setView = useAppStore((s) => s.setView);
@@ -243,10 +371,12 @@ export function ResearchView() {
   const [active, setActive] = useState<ResearchSessionDTO | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [greenlightId, setGreenlightId] = useState<string | null>(null);
+  const [ideaSort, setIdeaSort] = useState<"viral" | "volume" | "length">("viral");
+  const [compFilter, setCompFilter] = useState<"all" | "low" | "medium" | "high">("all");
 
   const loadSessions = useCallback(async () => {
     try {
-      const res = await fetch("/api/research?limit=10");
+      const res = await fetch("/api/research?limit=25");
       const data = await res.json();
       if (res.ok) {
         setSessions(data.sessions ?? []);
@@ -302,7 +432,7 @@ export function ResearchView() {
       }
 
       setActive(session);
-      setSessions((prev) => [session, ...prev.filter((s) => s.id !== session.id)].slice(0, 10));
+      setSessions((prev) => [session, ...prev.filter((s) => s.id !== session.id)].slice(0, 25));
       toast({
         title: "Topic Radar finished",
         description: `${session.ideas.length} video ideas found for ${niche}.`,
@@ -372,6 +502,32 @@ export function ResearchView() {
       setGreenlightId(null);
     }
   };
+
+  // Sorted + competition-filtered view of the active session's ideas (T-4.8).
+  const ideas = useMemo(() => {
+    if (!active) return [];
+    const filtered = active.ideas.filter(
+      (i) => compFilter === "all" || compClass(i.competition) === compFilter
+    );
+    return [...filtered].sort((a, b) => {
+      if (ideaSort === "volume")
+        return volumeRank(b.searchVolume) - volumeRank(a.searchVolume) || b.viralScore - a.viralScore;
+      if (ideaSort === "length")
+        return lengthRank(a.suggestedLength) - lengthRank(b.suggestedLength) || b.viralScore - a.viralScore;
+      return b.viralScore - a.viralScore;
+    });
+  }, [active, ideaSort, compFilter]);
+
+  // Session-level insights for the header chips.
+  const insights = useMemo(() => {
+    if (!active?.ideas.length) return null;
+    const all = active.ideas;
+    const best = all.reduce((m, i) => (i.viralScore > m.viralScore ? i : m), all[0]);
+    const avg = Math.round(all.reduce((s, i) => s + i.viralScore, 0) / all.length);
+    const split = { low: 0, medium: 0, high: 0 };
+    for (const i of all) split[compClass(i.competition)]++;
+    return { best, avg, split };
+  }, [active]);
 
   return (
     <div className="flex flex-col lg:flex-row gap-6">
@@ -453,7 +609,7 @@ export function ResearchView() {
               Recent scans
             </p>
             <div className="space-y-2">
-              {sessions.map((s) => (
+              {sessions.slice(0, 8).map((s) => (
                 <div
                   key={s.id}
                   className={clsx(
@@ -486,8 +642,17 @@ export function ResearchView() {
                 </div>
               ))}
             </div>
+            {sessions.length > 8 && (
+              <p className="text-[11px] text-muted-foreground/70 px-1 mt-2">
+                +{sessions.length - 8} older {sessions.length - 8 === 1 ? "scan" : "scans"} —
+                the pulse below counts all of them
+              </p>
+            )}
           </div>
         )}
+
+        {/* Cross-scan niche pulse (T-4.8) */}
+        <NichePulse sessions={sessions} />
       </div>
 
       {/* Results */}
@@ -517,7 +682,7 @@ export function ResearchView() {
             <Card className="glass border-white/8 rounded-2xl p-5 mb-5">
               <div className="flex items-start gap-3">
                 <Flame className="h-5 w-5 text-primary shrink-0 mt-0.5" />
-                <div>
+                <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold">
                     Niche analysis · {active.niche}
                     {active.query !== "—" ? ` · “${active.query}”` : ""}
@@ -525,25 +690,99 @@ export function ResearchView() {
                   <p className="text-sm text-muted-foreground leading-relaxed mt-1">
                     {active.nicheSummary}
                   </p>
+                  {insights && (
+                    <div className="flex flex-wrap gap-1.5 mt-2.5">
+                      <Badge
+                        variant="outline"
+                        className="border-emerald-500/30 bg-emerald-500/10 text-emerald-200 text-[11px] max-w-[260px]"
+                        title={`Top idea: ${insights.best.title}`}
+                      >
+                        <Zap className="h-3 w-3 mr-1 shrink-0" />
+                        Best {insights.best.viralScore} ·“{" "}
+                        {insights.best.title.length > 26
+                          ? `${insights.best.title.slice(0, 26)}…`
+                          : insights.best.title}
+                        ”
+                      </Badge>
+                      <Badge variant="outline" className="border-white/15 bg-white/5 text-zinc-300 text-[11px]">
+                        Avg {insights.avg}
+                      </Badge>
+                      <Badge
+                        variant="outline"
+                        className="border-white/15 bg-white/5 text-zinc-300 text-[11px]"
+                        title="Ideas by competition level"
+                      >
+                        {insights.split.low} low · {insights.split.medium} med · {insights.split.high} high
+                      </Badge>
+                    </div>
+                  )}
                   <p className="text-[11px] text-muted-foreground mt-2">
                     {active.ideas.length} ideas · scanned {timeAgo(active.createdAt)} · pick one and send it straight to the Auto-Pilot
                   </p>
+                  {/* Idea toolbar (T-4.8) — sort + competition filter */}
+                  <div className="flex flex-wrap items-center gap-2 mt-3.5">
+                    <Select value={ideaSort} onValueChange={(v) => setIdeaSort(v as typeof ideaSort)}>
+                      <SelectTrigger
+                        className="h-8 w-[150px] bg-white/4 border-white/12 text-xs"
+                        aria-label="Sort ideas"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-popover border-white/10">
+                        <SelectItem value="viral">Viral score</SelectItem>
+                        <SelectItem value="volume">Search volume</SelectItem>
+                        <SelectItem value="length">Length</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <div className="flex gap-1.5" role="group" aria-label="Filter by competition">
+                      {(["all", "low", "medium", "high"] as const).map((c) => {
+                        const count = c === "all" ? active.ideas.length : insights?.split[c] ?? 0;
+                        return (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => setCompFilter(c)}
+                            aria-pressed={compFilter === c}
+                            className={clsx(
+                              "rounded-full border px-2.5 py-1 text-[11px] transition-all",
+                              compFilter === c
+                                ? "border-primary/50 bg-primary/15 text-red-200"
+                                : "border-white/10 bg-white/4 text-muted-foreground hover:border-white/25"
+                            )}
+                          >
+                            {c === "all" ? "All" : c === "medium" ? "Med" : c === "low" ? "Low" : "High"}
+                            <span className="tabular-nums opacity-70 ml-1">{count}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <span className="ml-auto text-[11px] text-muted-foreground/80 tabular-nums">
+                      {ideas.length}/{active.ideas.length} shown
+                    </span>
+                  </div>
                 </div>
               </div>
             </Card>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              {active.ideas.map((idea) => (
-                <IdeaCard
-                  key={idea.id}
-                  idea={idea}
-                  sessionId={active.id}
-                  busyId={greenlightId}
-                  onCreate={sendToCreate}
-                  onGreenlight={greenlightIdea}
-                />
-              ))}
-            </div>
+            {ideas.length === 0 ? (
+              <p className="glass rounded-2xl border border-white/8 p-6 text-center text-sm text-muted-foreground">
+                No ideas at this competition level — switch the filter to All to see every{" "}
+                {active.ideas.length}.
+              </p>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2">
+                {ideas.map((idea) => (
+                  <IdeaCard
+                    key={idea.id}
+                    idea={idea}
+                    sessionId={active.id}
+                    busyId={greenlightId}
+                    onCreate={sendToCreate}
+                    onGreenlight={greenlightIdea}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         ) : loaded ? (
           <EmptyState

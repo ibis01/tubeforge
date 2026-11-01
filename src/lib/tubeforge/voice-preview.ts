@@ -67,8 +67,18 @@ export async function resolvePreviewVoice(voice: string) {
   };
 }
 
-/** Get (or synthesize+cache) the preview WAV for a voice of the ACTIVE provider. */
-export async function getVoicePreview(voice: string): Promise<Buffer> {
+/** Get (or synthesize+cache) the preview WAV for a voice of the ACTIVE provider.
+ *  `text` (T-4.11) runs a one-off synthesis with that exact line — used by the
+ *  Voice Studio's pronunciation test row; never cached, never written to disk. */
+export async function getVoicePreview(voice: string, text?: string): Promise<Buffer> {
+  const custom = text?.trim().slice(0, 200);
+  if (custom) {
+    const { config, voice: safe } = await resolvePreviewVoice(voice);
+    return aiCall("tts", `voice-preview-test(${safe})`, () =>
+      ttsSynthesize({ input: custom, voice: safe, speed: 1 }, config)
+    );
+  }
+
   const { config, model, voice: safe } = await resolvePreviewVoice(voice);
   const key = cacheKey({ ...config, model }, safe);
 

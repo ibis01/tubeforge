@@ -3,6 +3,7 @@ import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { serializeCharacter, buildAnchorFallback } from "@/lib/tubeforge/characters";
 import { errorText } from "@/lib/tubeforge/redact";
+import type { CharacterDTO } from "@/lib/tubeforge/types";
 
 export async function GET(req: NextRequest) {
   const auth = await requireUser(req);
@@ -13,9 +14,38 @@ export async function GET(req: NextRequest) {
     orderBy: { createdAt: "desc" },
     include: { _count: { select: { videos: true } } },
   });
+
+  // T-4.9 — every character's recent cast usage in ONE grouped query
+  // (≤4 per character, newest first) instead of one query per row.
+  const ids = characters.map((c) => c.id);
+  const videoRows = ids.length
+    ? await db.video.findMany({
+        where: { characterId: { in: ids }, organizationId: auth.ctx.organizationId },
+        orderBy: { updatedAt: "desc" },
+        select: { id: true, title: true, status: true, hasThumbnail: true, characterId: true },
+      })
+    : [];
+  const byCharacter = new Map<string, CharacterDTO["recentVideos"]>();
+  for (const v of videoRows) {
+    const cid = v.characterId;
+    if (!cid) continue;
+    const list = byCharacter.get(cid) ?? [];
+    if (list.length < 4) {
+      list.push({
+        id: v.id,
+        title: v.title,
+        status: v.status as CharacterDTO["recentVideos"][number]["status"],
+        hasThumbnail: v.hasThumbnail,
+      });
+      byCharacter.set(cid, list);
+    }
+  }
+
   return NextResponse.json({
     characters: await Promise.all(
-      characters.map((c) => serializeCharacter(c, c._count.videos))
+      characters.map((c) =>
+        serializeCharacter(c, c._count.videos, byCharacter.get(c.id) ?? [])
+      )
     ),
   });
 }

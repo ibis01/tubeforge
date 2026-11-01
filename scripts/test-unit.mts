@@ -1185,6 +1185,81 @@ await test("queue: resumableKinds covers every kind the routes start", async () 
   ok(!kinds.includes("upload"), `"upload" (Stage 6) is not claimed by handlers`);
 });
 
+// ---------------------------------------------------------------------------
+// Stage 4b (T-4.11) — pronunciation overrides (pronounce.ts)
+// ---------------------------------------------------------------------------
+
+await test("pronounce: substitutes longest-first, word-boundary, case-insensitive", async () => {
+  const { applyPronunciations, sortPairs } = await import("../src/lib/tubeforge/pronounce.ts");
+
+  const pairs = sortPairs([
+    { from: "Colonel", to: "kernel" },
+    { from: "Colonel Sanders", to: "kernel sand-erz" },
+    { from: "AWOL", to: "ay-wall" },
+  ]);
+  // Longest first so the two-word entry wins over its prefix.
+  eq(pairs[0][0], "Colonel Sanders", "longest from sorts first");
+
+  const out = applyPronunciations(
+    "Colonel Sanders went AWOL, but the colonel stayed.",
+    pairs
+  );
+  ok(out.includes("kernel sand-erz"), "two-word entry substituted before its prefix");
+  ok(out.includes("ay-wall"), "case-insensitive match on AWOL");
+  ok(out.includes("the kernel stayed"), "standalone colonel substituted");
+
+  // Word boundaries: "read" must not hit the "read" inside "already".
+  const noFalse = applyPronunciations(
+    "I already read it",
+    sortPairs([{ from: "read", to: "red" }])
+  );
+  ok(noFalse.includes("already"), "substring inside another word untouched");
+  eq(noFalse, "I already red it", "the actual word substituted");
+});
+
+await test("pronounce: parseStoredPronunciations degrades corrupt rows to empty", async () => {
+  const { parseStoredPronunciations } = await import("../src/lib/tubeforge/pronounce.ts");
+
+  eq(parseStoredPronunciations(null).length, 0, "null -> empty");
+  eq(parseStoredPronunciations("not json").length, 0, "corrupt JSON -> empty");
+  eq(parseStoredPronunciations('{"from":"x"}').length, 0, "non-array -> empty");
+  eq(parseStoredPronunciations("[]").length, 0, "empty array -> empty");
+
+  const parsed = parseStoredPronunciations(
+    JSON.stringify([
+      { from: "colonel", to: "kernel" },
+      { from: "", to: "x" }, // empty from dropped
+      { from: "x", to: "" }, // empty to dropped
+      { foo: "bar" }, // no from/to at all -> dropped
+      { from: "awol", to: "ay-wall" },
+    ])
+  );
+  eq(parsed.length, 2, "only well-formed entries survive");
+  eq(parsed[0].to, "kernel", "first valid entry kept");
+  eq(parsed[1].from, "awol", "second valid entry kept");
+});
+
+// ---------------------------------------------------------------------------
+// Stage 4b (T-4.14) — tenant-db model-scope regression (the research leak)
+// ---------------------------------------------------------------------------
+
+await test("tenant-db: every org-scoped model matches the lowercased lookup", async () => {
+  // The $allOperations hook lowercases the Prisma model name ("ResearchSession"
+  // → "researchsession") before the ORG_SCOPED_MODELS lookup. Stage 2 shipped
+  // camelCase entries, so five models (researchSession, scheduleSlot, videoStat,
+  // voiceProfile, musicTrack) were silently UNSCOPED — a cross-tenant leak the
+  // Stage 4b sweep caught live. This pins the normalization.
+  const { ORG_SCOPED_MODELS } = await import("../src/lib/tubeforge/tenant-db.ts");
+  const expected = [
+    "channel", "character", "video", "activity", "researchsession",
+    "scheduleslot", "videostat", "voiceprofile", "musictrack", "job", "membership",
+  ];
+  for (const m of expected) {
+    ok(ORG_SCOPED_MODELS.has(m), `"${m}" is org-scoped`);
+  }
+  eq(ORG_SCOPED_MODELS.size, expected.length, "no unexpected scoped models");
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

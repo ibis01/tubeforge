@@ -15,6 +15,7 @@ import { providerMeta, OPENAI_VOICES, type ProviderId } from "./registry";
 import { VOICES } from "../types";
 import { joinUrl, providerFetch } from "./http";
 import { getSampleWavByVoiceId } from "../voice-clone";
+import { applyPronunciations, loadPronunciations } from "../pronounce";
 
 export interface TtsRequest {
   input: string;
@@ -72,16 +73,26 @@ export async function ttsSynthesize(
 ): Promise<Buffer> {
   const config = await getCapability("tts", overrides);
 
+  // T-4.11 — the acting user's pronunciation overrides, applied at the ONE
+  // synthesis choke point so every flow inherits them (full-script voiceover,
+  // per-scene story narration, clones, ▶ previews). Fail-open: a settings
+  // hiccup renders the narration without substitutions, never breaks it.
+  let request = req;
+  const pron = await loadPronunciations();
+  if (pron.length) {
+    request = { ...req, input: applyPronunciations(req.input, pron) };
+  }
+
   if (config.provider === "openai") {
-    return openaiTts(req, config);
+    return openaiTts(request, config);
   }
   if (config.provider === "zhipu") {
-    return zhipuTts(req, config);
+    return zhipuTts(request, config);
   }
   if (config.provider === "selfhost") {
-    return selfhostTts(req, config);
+    return selfhostTts(request, config);
   }
-  return zaiTts(req, config);
+  return zaiTts(request, config);
 }
 
 // ---------- Z.ai (SDK — unchanged legacy shape) ----------

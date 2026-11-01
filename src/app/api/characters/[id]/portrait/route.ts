@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { startJob, lastJobError } from "@/lib/tubeforge/jobs";
-import { readPortrait, serializeCharacter } from "@/lib/tubeforge/characters";
+import { readPortrait, serializeCharacter, recentVideosFor } from "@/lib/tubeforge/characters";
 import { runPortraitJob } from "@/lib/tubeforge/character-jobs";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -71,7 +71,11 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   if (!character)
     return NextResponse.json({ error: "Character not found" }, { status: 404 });
   return NextResponse.json({
-    character: await serializeCharacter(character, 0),
+    character: await serializeCharacter(
+      character,
+      0,
+      await recentVideosFor(character.id, character.organizationId)
+    ),
     lastError: error,
   });
 }

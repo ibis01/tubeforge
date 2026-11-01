@@ -229,6 +229,32 @@ export async function getAnalyticsOverview(): Promise<AnalyticsOverviewDTO> {
 
   const lastSyncAt = await getUserSetting("ytStatsSyncedAt");
 
+  // T-4.13 — per-niche aggregates over the tracked videos (views desc).
+  const byNiche = new Map<
+    string,
+    { videos: number; views: number; likes: number; comments: number; engagementSum: number }
+  >();
+  for (const r of rows) {
+    const cur =
+      byNiche.get(r.niche) ?? { videos: 0, views: 0, likes: 0, comments: 0, engagementSum: 0 };
+    cur.videos += 1;
+    cur.views += r.views;
+    cur.likes += r.likes;
+    cur.comments += r.comments;
+    cur.engagementSum += r.engagementRate;
+    byNiche.set(r.niche, cur);
+  }
+  const niches = [...byNiche.entries()]
+    .map(([niche, v]) => ({
+      niche,
+      videos: v.videos,
+      views: v.views,
+      likes: v.likes,
+      comments: v.comments,
+      engagement: v.videos ? v.engagementSum / v.videos : 0,
+    }))
+    .sort((a, b) => b.views - a.views);
+
   return {
     publishedCount: published,
     trackedCount: rows.length,
@@ -238,6 +264,7 @@ export async function getAnalyticsOverview(): Promise<AnalyticsOverviewDTO> {
     lastSyncAt: lastSyncAt ?? null,
     rows,
     series,
+    niches,
     feedback: feedbackState(rows),
   };
 }

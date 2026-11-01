@@ -4,6 +4,7 @@ import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import {
   serializeCharacter,
+  recentVideosFor,
   buildAnchorFallback,
   deleteCharacterFiles,
 } from "@/lib/tubeforge/characters";
@@ -41,7 +42,11 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!character)
     return NextResponse.json({ error: "Character not found" }, { status: 404 });
   return NextResponse.json({
-    character: await serializeCharacter(character, character._count.videos),
+    character: await serializeCharacter(
+      character,
+      character._count.videos,
+      await recentVideosFor(character.id, character.organizationId)
+    ),
   });
 }
 
@@ -91,7 +96,11 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     include: { _count: { select: { videos: true } } },
   });
   return NextResponse.json({
-    character: await serializeCharacter(updated, updated._count.videos),
+    character: await serializeCharacter(
+      updated,
+      updated._count.videos,
+      await recentVideosFor(updated.id, updated.organizationId)
+    ),
   });
 }
 

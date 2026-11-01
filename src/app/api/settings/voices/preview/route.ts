@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
   auth.enter(); // tenant scope: handler + spawned job closures
 
-  let body: { voice?: unknown } = {};
+  let body: { voice?: unknown; text?: unknown } = {};
   try {
     body = await req.json();
   } catch {
@@ -28,6 +28,8 @@ export async function POST(req: NextRequest) {
   if (!voice) {
     return NextResponse.json({ error: "Pick a voice to preview" }, { status: 400 });
   }
+  // T-4.11 — optional one-off line (≤200 chars) for the pronunciation test row.
+  const text = typeof body.text === "string" ? body.text.trim().slice(0, 200) : "";
 
   const { known, config } = await resolvePreviewVoice(voice);
   if (!known) {
@@ -44,7 +46,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const wav = await getVoicePreview(voice);
+    const wav = await getVoicePreview(voice, text || undefined);
     return new NextResponse(new Uint8Array(wav), {
       headers: {
         "Content-Type": "audio/wav",

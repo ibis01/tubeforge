@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
-import { generateCharacterBible } from "@/lib/tubeforge/characters";
-import { serializeCharacter } from "@/lib/tubeforge/characters";
+import { generateCharacterBible, serializeCharacter, recentVideosFor } from "@/lib/tubeforge/characters";
 import { errorText } from "@/lib/tubeforge/redact";
 
 /**
@@ -55,7 +54,11 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json({
         bible,
-        character: await serializeCharacter(updated, updated._count.videos),
+        character: await serializeCharacter(
+          updated,
+          updated._count.videos,
+          await recentVideosFor(updated.id, updated.organizationId)
+        ),
       });
     }
 

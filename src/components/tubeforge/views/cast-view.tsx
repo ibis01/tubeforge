@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAppStore } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import { Card } from "@/components/ui/card";
@@ -30,6 +30,7 @@ import {
   VOICES,
   ART_STYLES,
   POSES,
+  STATUS_META,
   type CharacterDTO,
 } from "@/lib/tubeforge/types";
 import { pollPortrait, pollPoses } from "@/lib/tubeforge/poll";
@@ -47,6 +48,9 @@ import {
   ShieldCheck,
   UserRound,
   Wand2,
+  Check,
+  Circle,
+  ChevronRight,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -447,14 +451,52 @@ function CharacterCard({ character: c, onOpen }: { character: CharacterDTO; onOp
           <Film className="h-3 w-3" />
           {c.videoCount}
         </span>
-        {c.poseCount > 0 && (
-          <span className="inline-flex items-center gap-1 text-[11px] text-emerald-300">
-            <ShieldCheck className="h-3 w-3" />
-            {c.poseCount} poses
-          </span>
-        )}
+      </div>
+
+      {/* Identity readiness (T-4.9) — portrait / consistency sheet / persona */}
+      <div className="flex flex-wrap gap-1 mt-2">
+        <ReadyChip ok={c.hasPortrait}>Portrait</ReadyChip>
+        <ReadyChip ok={c.poseCount >= POSES.length}>
+          {c.poseCount}/{POSES.length} poses
+        </ReadyChip>
+        <ReadyChip
+          ok={Boolean(c.role?.trim() && c.personality?.trim() && c.appearance?.trim())}
+          title="Role, personality and appearance are all filled in"
+        >
+          Bible
+        </ReadyChip>
       </div>
     </Card>
+  );
+}
+
+/** T-4.9 — one identity-readiness chip on a roster card (done = emerald). */
+function ReadyChip({
+  ok,
+  title,
+  children,
+}: {
+  ok: boolean;
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <span
+      title={title}
+      className={clsx(
+        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium",
+        ok
+          ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+          : "border-white/10 bg-white/4 text-muted-foreground/80"
+      )}
+    >
+      {ok ? (
+        <Check className="h-2.5 w-2.5" />
+      ) : (
+        <Circle className="h-2.5 w-2.5 opacity-60" />
+      )}
+      {children}
+    </span>
   );
 }
 
@@ -473,6 +515,9 @@ function CharacterStudio({
 }) {
   const [c, setC] = useState<CharacterDTO>(initial);
   const { voices } = useVoices();
+  // T-4.9 — the Cast-in rows navigate to the video in the Library.
+  const setFocusVideoId = useAppStore((s) => s.setFocusVideoId);
+  const setView = useAppStore((s) => s.setView);
   const [form, setForm] = useState({
     name: initial.name,
     role: initial.role ?? "",
@@ -872,6 +917,68 @@ function CharacterStudio({
                 <Film className="h-3 w-3" />
                 {c.videoCount} video{c.videoCount === 1 ? "" : "s"} cast this character
               </span>
+            </div>
+
+            {/* Cast in (T-4.9) — the newest videos casting this character */}
+            <div className="rounded-xl border border-white/10 bg-white/3 p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium flex items-center gap-1.5">
+                  <Film className="h-3.5 w-3.5 text-primary" />
+                  Cast in
+                </p>
+                {c.videoCount > 0 && (
+                  <span className="text-[10px] text-muted-foreground">
+                    {c.videoCount} video{c.videoCount === 1 ? "" : "s"} total
+                  </span>
+                )}
+              </div>
+              {c.recentVideos.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground/80 leading-relaxed">
+                  No videos yet — assign this character in Create and they’ll appear
+                  here with their live pipeline status.
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  {c.recentVideos.map((v) => (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() => {
+                        setFocusVideoId(v.id);
+                        setView("library");
+                        onClose();
+                      }}
+                      className="w-full flex items-center gap-2.5 rounded-lg border border-white/8 bg-white/3 px-2.5 py-2 text-left transition-all hover:border-white/20 hover:bg-white/6"
+                    >
+                      {v.hasThumbnail ? (
+                        <img
+                          src={`/api/videos/${v.id}/thumbnail`}
+                          alt=""
+                          className="h-8 w-14 rounded-md object-cover border border-white/10 shrink-0"
+                        />
+                      ) : (
+                        <div className="h-8 w-14 rounded-md bg-white/5 border border-white/10 shrink-0" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium truncate">
+                          {v.title ?? "Untitled video"}
+                        </p>
+                        <span
+                          className={`inline-block text-[10px] px-1.5 py-0.5 rounded-md border font-semibold ${STATUS_META[v.status].color}`}
+                        >
+                          {STATUS_META[v.status].label}
+                        </span>
+                      </div>
+                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    </button>
+                  ))}
+                  {c.videoCount > c.recentVideos.length && (
+                    <p className="text-[10px] text-muted-foreground/70 px-1">
+                      +{c.videoCount - c.recentVideos.length} earlier — open the Library to see them all.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>

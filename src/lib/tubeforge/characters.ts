@@ -5,6 +5,7 @@
 
 import type { Character } from "@prisma/client";
 import { POSES, ART_STYLES } from "./types";
+import { db } from "./tenant-db";
 import { parseJsonLoose } from "./ai";
 import { aiCall } from "./budget";
 import { characterJobSnapshot, lastJobError } from "./jobs";
@@ -21,10 +22,35 @@ import * as storage from "./storage";
 const characterKey = (characterId: string, file: string) =>
   `characters/${characterId}/${file}`;
 
-/** Shape a Prisma character row (with optional video count) into the API DTO. */
+/** T-4.9 — the ≤4 newest videos casting a character (the "Cast in" section
+ *  of the Character Studio). Scoped by the character's OWN organizationId so
+ *  the helper stays correct under any calling context. */
+export async function recentVideosFor(
+  characterId: string,
+  organizationId: string
+): Promise<import("./types").CharacterDTO["recentVideos"]> {
+  const rows = await db.video.findMany({
+    where: { characterId, organizationId },
+    orderBy: { updatedAt: "desc" },
+    take: 4,
+    select: { id: true, title: true, status: true, hasThumbnail: true },
+  });
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title,
+    status: r.status as import("./types").CharacterDTO["recentVideos"][number]["status"],
+    hasThumbnail: r.hasThumbnail,
+  }));
+}
+
+/** Shape a Prisma character row (with optional video count) into the API DTO.
+ *  `recentVideos` defaults to [] — single-character callers pass the
+ *  recentVideosFor() result; the list route computes them in one grouped
+ *  query instead. */
 export async function serializeCharacter(
   c: Character,
-  videoCount = 0
+  videoCount = 0,
+  recentVideos: import("./types").CharacterDTO["recentVideos"] = []
 ): Promise<import("./types").CharacterDTO> {
   const poseIds = new Set(await listPoses(c.id));
   return {
@@ -47,6 +73,7 @@ export async function serializeCharacter(
     })),
     generating: characterJobSnapshot(c.id),
     error: lastJobError(c.id, "portrait") ?? lastJobError(c.id, "poses"),
+    recentVideos,
     createdAt: c.createdAt.toISOString(),
     updatedAt: c.updatedAt.toISOString(),
   };

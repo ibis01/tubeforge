@@ -96,6 +96,17 @@ import {
 } from "lucide-react";
 import { clsx } from "clsx";
 
+/** T-4.12 — QC checks grouped for the scorecard (ids from qc.ts runQcReport).
+ *  Anything not listed lands in an "Other" group so future checks still show. */
+const QC_GROUPS: { title: string; ids: string[] }[] = [
+  {
+    title: "Video",
+    ids: ["playable", "aspect", "black-frames", "frozen-frames", "static-shots", "tail-fade"],
+  },
+  { title: "Audio", ids: ["loudness", "true-peak", "loudness-range", "dead-air"] },
+  { title: "Sync", ids: ["duration", "captions"] },
+];
+
 /** QC checks store a three-state status (qc.ts); older reports predate it.
  * Fall back to the legacy boolean so pre-upgrade reports still render. */
 function qcCheckStatus(c: { status?: "pass" | "fail" | "unmeasured"; pass: boolean }) {
@@ -1639,10 +1650,11 @@ export function VideoDetailDialog({
         )}
       </div>
 
-      {/* Quality-check report — measured on every full render (qc.ts) */}
-      {video.qc && (
+      {/* Quality-check scorecard (T-4.12) — grouped video/audio/sync,
+          measured on every full render (qc.ts) */}
+      {video.qc ? (
         <div className="rounded-xl border border-white/10 bg-white/3 p-4">
-          <div className="flex items-center justify-between gap-2 mb-2.5">
+          <div className="flex items-center justify-between gap-2 mb-3">
             <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
               Quality check · {new Date(video.qc.checkedAt).toLocaleString()}
             </p>
@@ -1672,26 +1684,60 @@ export function VideoDetailDialog({
               )}
             </Badge>
           </div>
-          <ul className="space-y-1.5">
-            {video.qc.checks.map((c) => (
-              <li key={c.id} className="flex items-start gap-2 text-[11px]">
-                {qcCheckStatus(c) === "pass" ? (
-                  <CircleCheck className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                ) : qcCheckStatus(c) === "unmeasured" ? (
-                  <CircleHelp className="h-3.5 w-3.5 text-zinc-400 shrink-0 mt-0.5" />
-                ) : (
-                  <CircleX className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
-                )}
-                <div className="min-w-0">
-                  <span className="text-foreground/85">{c.label}</span>
-                  <span className="text-muted-foreground"> — {c.value}</span>
-                  {c.detail && <p className="text-muted-foreground/70 text-[10px]">{c.detail}</p>}
-                </div>
-              </li>
-            ))}
-          </ul>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {(() => {
+              const groups = QC_GROUPS.map((g) => ({
+                title: g.title,
+                checks: video.qc!.checks.filter((c) => g.ids.includes(c.id)),
+              })).filter((g) => g.checks.length > 0);
+              const known = new Set(QC_GROUPS.flatMap((g) => g.ids));
+              const others = video.qc!.checks.filter((c) => !known.has(c.id));
+              if (others.length > 0) groups.push({ title: "Other", checks: others });
+              return groups.map((g) => {
+                const fails = g.checks.filter((c) => qcCheckStatus(c) === "fail").length;
+                const unmeasured = g.checks.filter((c) => qcCheckStatus(c) === "unmeasured").length;
+                return (
+                  <div key={g.title} className="rounded-lg border border-white/8 bg-white/3 p-3">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <p className="text-xs font-semibold">{g.title}</p>
+                      <span
+                        className={clsx(
+                          "text-[10px] px-1.5 py-0.5 rounded-md border font-semibold",
+                          fails === 0
+                            ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                            : "bg-amber-500/15 text-amber-400 border-amber-500/30"
+                        )}
+                      >
+                        {fails === 0
+                          ? `${g.checks.length}/${g.checks.length} clean`
+                          : `${fails} flagged${unmeasured ? ` · ${unmeasured} n/m` : ""}`}
+                      </span>
+                    </div>
+                    <ul className="space-y-1.5">
+                      {g.checks.map((c) => (
+                        <li key={c.id} className="flex items-start gap-2 text-[11px]">
+                          {qcCheckStatus(c) === "pass" ? (
+                            <CircleCheck className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                          ) : qcCheckStatus(c) === "unmeasured" ? (
+                            <CircleHelp className="h-3.5 w-3.5 text-zinc-400 shrink-0 mt-0.5" />
+                          ) : (
+                            <CircleX className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
+                          )}
+                          <div className="min-w-0">
+                            <span className="text-foreground/85">{c.label}</span>
+                            <span className="text-muted-foreground"> — {c.value}</span>
+                            {c.detail && <p className="text-muted-foreground/70 text-[10px]">{c.detail}</p>}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              });
+            })()}
+          </div>
         </div>
-      )}
+      ) : null}
 
       {/* Final video */}
       {video.hasVideo && video.videoUrl ? (
@@ -1834,6 +1880,68 @@ export function VideoDetailDialog({
           )}
         </div>
       )}
+
+      {/* Export bundle (T-4.12) — what the ZIP contains */}
+      <div className="rounded-xl border border-white/10 bg-white/3 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+          <div>
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
+              Export bundle
+            </p>
+            <p className="text-[11px] text-muted-foreground/80 mt-0.5">
+              One ZIP with everything YouTube needs
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            asChild
+            disabled={!(video.script || video.hasVoiceover || video.hasThumbnail)}
+            className="border-white/15 bg-white/4 shrink-0"
+            title="Download script, metadata, voiceover, storyboard and video as a ZIP"
+          >
+            <a href={`/api/videos/${video.id}/export`} download>
+              <Download className="h-3.5 w-3.5" />
+              Download ZIP
+            </a>
+          </Button>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {(
+            [
+              { ok: Boolean(video.script), label: "Script + brief" },
+              { ok: video.hasVoiceover, label: "Voiceover WAV" },
+              { ok: video.hasThumbnail, label: "Thumbnail" },
+              { ok: video.hasStoryboard, label: "Storyboard art" },
+              { ok: video.hasVideo, label: "Subtitles SRT" },
+              { ok: video.hasVideo, label: "Final MP4" },
+              { ok: video.hasShort, label: "Short 9:16" },
+              { ok: true, label: "Credits & license sheet" },
+            ] as { ok: boolean; label: string }[]
+          ).map((row) => (
+            <span
+              key={row.label}
+              className={clsx(
+                "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]",
+                row.ok
+                  ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+                  : "border-white/10 bg-white/4 text-muted-foreground/70"
+              )}
+            >
+              {row.ok ? (
+                <Check className="h-2.5 w-2.5" />
+              ) : (
+                <span className="h-1.5 w-1.5 rounded-full border border-current opacity-60" />
+              )}
+              {row.label}
+            </span>
+          ))}
+        </div>
+        <p className="text-[10px] text-muted-foreground/70 mt-2.5 leading-relaxed">
+          Absent rows mean that pipeline stage hasn’t run yet — the ZIP always reflects
+          what exists today, so run the stage first if you need it inside.
+        </p>
+      </div>
     </div>
   );
 
@@ -2012,6 +2120,16 @@ export function VideoDetailDialog({
 
               {voiceMode === "clone" && (
                 <div className="space-y-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVoicePanelOpen(false);
+                      setView("voice");
+                    }}
+                    className="w-full text-left text-[11px] text-primary/90 hover:text-primary transition-colors"
+                  >
+                    Manage &amp; clone voices in the Voice Studio →
+                  </button>
                   {!canClone ? (
                     <p className="text-[11px] leading-relaxed text-amber-300/90 rounded-lg border border-amber-400/20 bg-amber-400/8 px-2.5 py-2">
                       Voice cloning runs on the <b>Zhipu GLM-TTS</b> provider — switch to it in

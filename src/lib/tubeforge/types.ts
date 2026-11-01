@@ -635,6 +635,14 @@ export interface CharacterDTO {
   poseUrls: { pose: string; label: string; url: string }[];
   generating: { portrait: boolean; poses: boolean };
   error: string | null;
+  /** T-4.9 — the ≤4 newest videos casting this character ("Cast in" section
+   *  of the Character Studio; click-through opens the video in the Library). */
+  recentVideos: {
+    id: string;
+    title: string | null;
+    status: VideoStatus;
+    hasThumbnail: boolean;
+  }[];
   createdAt: string;
   updatedAt: string;
 }
@@ -733,6 +741,15 @@ export interface AnalyticsOverviewDTO {
   lastSyncAt: string | null;
   rows: AnalyticsRowDTO[]; // sorted by views desc
   series: { day: string; views: number }[]; // cumulative views per snapshot day
+  /** T-4.13 — per-niche aggregates over tracked videos (views desc). */
+  niches: {
+    niche: string;
+    videos: number;
+    views: number;
+    likes: number;
+    comments: number;
+    engagement: number; // 0..1 average across the niche's videos
+  }[];
   feedback: {
     active: boolean; // boost can run (has tracked stats)
     winners: string[]; // titles of top performers feeding the loop

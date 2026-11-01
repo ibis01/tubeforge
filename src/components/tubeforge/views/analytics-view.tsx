@@ -1,11 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAppStore } from "@/lib/store";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { StatCard, EmptyState, timeAgo } from "@/components/tubeforge/shared";
 import type {
@@ -46,6 +53,8 @@ export function AnalyticsView() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [boosting, setBoosting] = useState(false);
+  // T-4.13 — client-side sort for the per-video table.
+  const [tableSort, setTableSort] = useState<"views" | "engagement" | "delta">("views");
 
   const load = useCallback(async () => {
     try {
@@ -65,6 +74,18 @@ export function AnalyticsView() {
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
+
+  // T-4.13 — per-video table sort. Lives ABOVE the early returns (hooks
+  // rule — the Stage 4a worklog caught this same class in the detail dialog).
+  const sortedRows = useMemo(() => {
+    if (!data?.rows?.length) return [];
+    const list = [...data.rows];
+    if (tableSort === "engagement")
+      list.sort((a, b) => b.engagementRate - a.engagementRate);
+    else if (tableSort === "delta") list.sort((a, b) => b.viewDelta - a.viewDelta);
+    else list.sort((a, b) => b.views - a.views);
+    return list;
+  }, [data, tableSort]);
 
   const syncNow = async () => {
     if (syncing) return;
@@ -161,6 +182,7 @@ export function AnalyticsView() {
 
   const maxSeries = Math.max(1, ...data.series.map((s) => s.views));
   const top = data.rows[0];
+  const maxNicheViews = Math.max(1, ...data.niches.map((n) => n.views));
 
   return (
     <div className="space-y-6">
@@ -211,17 +233,29 @@ export function AnalyticsView() {
         <StatCard icon={Sparkles} label="Avg engagement" value={`${(data.avgEngagement * 100).toFixed(1)}%`} sub="(likes + comments) / views" />
       </div>
 
-      <div className="grid lg:grid-cols-5 gap-4">
+      {/* T-4.14 — [&>*]:min-w-0 lets the cards shrink below their content on
+          narrow viewports; without it the grid tracks blow past 390px. */}
+      <div className="grid min-w-0 gap-4 lg:grid-cols-5 [&>*]:min-w-0">
         {/* Per-video table */}
         <Card className="glass border-white/8 rounded-2xl p-5 lg:col-span-3">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
             <h3 className="text-sm font-semibold">Video performance</h3>
-            <Badge variant="outline" className="border-white/15 bg-white/5 text-muted-foreground text-[10px]">
-              sorted by views
-            </Badge>
+            <Select value={tableSort} onValueChange={(v) => setTableSort(v as typeof tableSort)}>
+              <SelectTrigger
+                className="h-8 w-[170px] bg-white/4 border-white/12 text-xs"
+                aria-label="Sort videos"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-popover border-white/10">
+                <SelectItem value="views">By views</SelectItem>
+                <SelectItem value="engagement">By engagement</SelectItem>
+                <SelectItem value="delta">By last-sync growth</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-2">
-            {data.rows.map((row, i) => (
+            {sortedRows.map((row, i) => (
               <button
                 key={row.videoId}
                 onClick={() => {
@@ -351,6 +385,53 @@ export function AnalyticsView() {
               Open Topic Radar
             </Button>
           </Card>
+
+          {/* T-4.13 — where the views actually come from */}
+          {data.niches.length > 0 && (
+            <Card className="glass border-white/8 rounded-2xl p-5">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <h3 className="text-sm font-semibold">Niche trends</h3>
+                <Badge
+                  variant="outline"
+                  className="border-white/15 bg-white/5 text-muted-foreground text-[10px]"
+                >
+                  {data.niches.length} niche{data.niches.length === 1 ? "" : "s"} tracked
+                </Badge>
+              </div>
+              <p className="text-[11px] text-muted-foreground mb-3">
+                Where your views actually come from — lean into the leaders.
+              </p>
+              <div className="space-y-2.5">
+                {data.niches.slice(0, 5).map((n) => {
+                  const share = (n.views / maxNicheViews) * 100;
+                  return (
+                    <div key={n.niche}>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <p className="text-xs font-medium truncate">{n.niche}</p>
+                        <p className="text-[10px] text-muted-foreground tabular-nums shrink-0">
+                          {formatNum(n.views)} views · {(n.engagement * 100).toFixed(1)}% eng ·{" "}
+                          {n.videos} video{n.videos === 1 ? "" : "s"}
+                        </p>
+                      </div>
+                      <div
+                        className="h-1.5 rounded-full bg-white/6 mt-1 overflow-hidden"
+                        role="meter"
+                        aria-valuenow={n.views}
+                        aria-valuemin={0}
+                        aria-valuemax={maxNicheViews}
+                        aria-label={`${n.niche}: ${n.views.toLocaleString()} views`}
+                      >
+                        <div
+                          className="h-full rounded-full bg-brand-gradient"
+                          style={{ width: `${Math.max(6, share)}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
         </div>
       </div>
     </div>

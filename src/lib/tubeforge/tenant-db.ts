@@ -26,19 +26,27 @@ import { db as rawDb } from "@/lib/db";
 import { currentCtx } from "./tenant";
 
 // Models whose rows belong to an organization (content + membership).
-const ORG_SCOPED_MODELS = new Set([
-  "channel",
-  "character",
-  "video",
-  "activity",
-  "researchSession",
-  "scheduleSlot",
-  "videoStat",
-  "voiceProfile",
-  "musicTrack",
-  "job",
-  "membership",
-]);
+// T-4.14 regression fix: the $allOperations hook lowercases the Prisma model
+// name before this lookup — the Stage 2 list carried camelCase entries
+// ("researchSession", "scheduleSlot", "videoStat", "voiceProfile",
+// "musicTrack") which NEVER matched, silently leaving those five models
+// unscoped (cross-tenant leak caught by the Stage 4b sweep). The set is now
+// lowercase-normalized at construction and pinned by a unit test.
+export const ORG_SCOPED_MODELS = new Set(
+  [
+    "channel",
+    "character",
+    "video",
+    "activity",
+    "researchSession",
+    "scheduleSlot",
+    "videoStat",
+    "voiceProfile",
+    "musicTrack",
+    "job",
+    "membership",
+  ].map((m) => m.toLowerCase())
+);
 
 // Models whose creates also stamp the acting user (audit trail).
 const USER_STAMPED_MODELS = new Set(["activity", "job"]);

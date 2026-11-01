@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
   auth.enter(); // tenant scope: handler + spawned job closures
 
   const limit = Math.min(
-    20,
+    25,
     Math.max(1, Number(req.nextUrl.searchParams.get("limit") ?? 10) || 10)
   );
   const sessions = await db.researchSession.findMany({

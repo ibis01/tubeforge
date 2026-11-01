@@ -58,6 +58,11 @@ import {
   PenLine,
   Eye,
   EyeOff,
+  Wand2,
+  Radar,
+  Smartphone,
+  Presentation,
+  Ban,
 } from "lucide-react";
 import {
   useVoices,
@@ -83,6 +88,11 @@ const KIND_META: Record<string, { label: string; icon: typeof Mic }> = {
   upload: { label: "YT upload", icon: Youtube },
   convert: { label: "Scene conversion", icon: Clapperboard },
   stock: { label: "Stock b-roll", icon: Film },
+  // T-4.12 — kinds the panel used to render through the generic fallback.
+  script: { label: "Script", icon: Wand2 },
+  research: { label: "Topic Radar", icon: Radar },
+  short: { label: "Auto-Short", icon: Smartphone },
+  slide: { label: "Slide deck", icon: Presentation },
 };
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
@@ -101,6 +111,15 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   interrupted: {
     label: "Interrupted",
     cls: "bg-orange-500/15 text-orange-400 border-orange-500/30",
+  },
+  // T-4.12 — cancelled previously fell through to the “Done” fallback chip.
+  cancelled: {
+    label: "Cancelled",
+    cls: "bg-zinc-500/15 text-zinc-400 border-zinc-500/30",
+  },
+  pending: {
+    label: "Queued",
+    cls: "bg-sky-500/15 text-sky-400 border-sky-500/30",
   },
 };
 
@@ -168,6 +187,9 @@ export function SettingsView() {
 
   const [jobs, setJobs] = useState<JobDTO[]>([]);
   const [jobsLoading, setJobsLoading] = useState(false);
+  // T-4.12 — live queue: kind filter, cancel-in-flight markers, auto-refresh.
+  const [kindFilter, setKindFilter] = useState<string>("all");
+  const [cancellingIds, setCancellingIds] = useState<Set<string>>(new Set());
 
   // YouTube connection (Phase 4 — OAuth upload)
   const [yt, setYt] = useState<YouTubeStatusDTO | null>(null);
@@ -291,6 +313,48 @@ export function SettingsView() {
       setJobsLoading(false);
     }
   }, []);
+
+  // T-4.12 — the queue feels live: while anything is running (or queued),
+  // refresh every 4s without a manual click. Stops when the panel goes idle.
+  const anyActive = jobs.some((j) => j.status === "running");
+  useEffect(() => {
+    if (!anyActive) return;
+    const t = setInterval(() => {
+      void loadJobs();
+    }, 4000);
+    return () => clearInterval(t);
+  }, [anyActive, loadJobs]);
+
+  const cancelJob = async (job: JobDTO) => {
+    if (cancellingIds.has(job.id)) return;
+    setCancellingIds((s) => new Set(s).add(job.id));
+    try {
+      const res = await fetch("/api/jobs/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entityId: job.entityId, kind: job.kind }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error ?? "Could not cancel");
+      toast({
+        title: "Cancel requested",
+        description: "The job stops at its next checkpoint — completed work is kept.",
+      });
+      await loadJobs();
+    } catch (e) {
+      toast({
+        title: "Cancel failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setCancellingIds((s) => {
+        const next = new Set(s);
+        next.delete(job.id);
+        return next;
+      });
+    }
+  };
 
   useEffect(() => {
     fetch("/api/settings")
@@ -835,7 +899,7 @@ export function SettingsView() {
                         })
                       }
                     >
-                      <SelectTrigger className="bg-white/5 border-white/10 text-xs h-9 w-[230px]">
+                      <SelectTrigger className="bg-white/5 border-white/10 text-xs h-9 w-[230px] max-w-full">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -867,7 +931,7 @@ export function SettingsView() {
                             }))
                           }
                         >
-                          <SelectTrigger className="bg-white/5 border-white/10 text-xs h-9">
+                          <SelectTrigger className="bg-white/5 border-white/10 text-xs h-9 w-full max-w-full">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -1558,71 +1622,160 @@ export function SettingsView() {
               </p>
             </div>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void loadJobs()}
-            disabled={jobsLoading}
-            className="gap-1.5 shrink-0"
-            aria-label="Refresh job history"
-          >
-            <RefreshCw
-              className={`h-3.5 w-3.5 ${jobsLoading ? "animate-spin" : ""}`}
-            />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2 shrink-0">
+            {anyActive && (
+              <Badge
+                variant="outline"
+                className="border-amber-500/30 bg-amber-500/10 text-amber-200 text-[10px]"
+                title="Auto-refreshing while jobs run"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse mr-1" />
+                Live
+              </Badge>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void loadJobs()}
+              disabled={jobsLoading}
+              className="gap-1.5"
+              aria-label="Refresh job history"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${jobsLoading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </div>
         </div>
 
-        <div className="mt-4 space-y-2 max-h-96 overflow-y-auto scroll-area-bar pr-1">
-          {jobs.length === 0 && (
-            <p className="text-sm text-muted-foreground py-6 text-center">
-              No jobs yet — generate something and it will show up here with its
-              full lifecycle.
-            </p>
-          )}
-          {jobs.map((job) => {
-            const meta = KIND_META[job.kind] ?? {
-              label: job.kind,
-              icon: LayoutGrid,
-            };
-            const status = STATUS_META[job.status] ?? STATUS_META.done;
-            const Icon = meta.icon;
-            return (
-              <div
-                key={job.id}
-                className="flex items-center gap-3 rounded-xl border border-white/8 bg-white/3 px-3 py-2.5"
-              >
-                <div className="h-8 w-8 rounded-lg bg-white/8 flex items-center justify-center shrink-0">
-                  <Icon className="h-4 w-4 text-primary" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="text-sm font-medium truncate">{meta.label}</p>
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded-md border font-semibold ${status.cls} ${job.status === "running" ? "animate-pulse" : ""}`}
-                    >
-                      {status.label}
-                    </span>
+        {/* T-4.12 — kind filter chips, derived from what is actually loaded */}
+        <div className="flex flex-wrap gap-1.5 mt-3" role="group" aria-label="Filter jobs by kind">
+          {[
+            { id: "all", label: "All", count: jobs.length },
+            ...[...new Set(jobs.map((j) => j.kind))].map((k) => ({
+              id: k,
+              label: KIND_META[k]?.label ?? k,
+              count: jobs.filter((j) => j.kind === k).length,
+            })),
+          ].map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setKindFilter(f.id)}
+              aria-pressed={kindFilter === f.id}
+              className={`rounded-full border px-2.5 py-1 text-[11px] transition-all ${
+                kindFilter === f.id
+                  ? "border-primary/50 bg-primary/15 text-red-200"
+                  : "border-white/10 bg-white/4 text-muted-foreground hover:border-white/25"
+              }`}
+            >
+              {f.label}
+              <span className="tabular-nums opacity-70 ml-1">{f.count}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-3 space-y-2 max-h-96 overflow-y-auto scroll-area-bar pr-1">
+          {(() => {
+            const filtered =
+              kindFilter === "all" ? jobs : jobs.filter((j) => j.kind === kindFilter);
+            if (filtered.length === 0) {
+              return (
+                <p className="text-sm text-muted-foreground py-6 text-center">
+                  {jobs.length === 0
+                    ? "No jobs yet — generate something and it will show up here with its full lifecycle."
+                    : "No jobs of this kind in the recent history."}
+                </p>
+              );
+            }
+            return filtered.map((job) => {
+              const meta = KIND_META[job.kind] ?? {
+                label: job.kind,
+                icon: LayoutGrid,
+              };
+              const status = STATUS_META[job.status] ?? STATUS_META.done;
+              const Icon = meta.icon;
+              const isRunning = job.status === "running";
+              const isCancelling = cancellingIds.has(job.id);
+              return (
+                <div
+                  key={job.id}
+                  className="flex items-center gap-3 rounded-xl border border-white/8 bg-white/3 px-3 py-2.5"
+                >
+                  <div className="h-8 w-8 rounded-lg bg-white/8 flex items-center justify-center shrink-0">
+                    <Icon className="h-4 w-4 text-primary" />
                   </div>
-                  <p className="text-xs text-muted-foreground truncate">
-                    {job.entityTitle ?? job.entityId}
-                    {job.error ? ` — ${job.error}` : ""}
-                  </p>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-medium truncate">{meta.label}</p>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded-md border font-semibold ${status.cls} ${isRunning ? "animate-pulse" : ""}`}
+                      >
+                        {status.label}
+                      </span>
+                      {isCancelling && (
+                        <span className="text-[10px] text-amber-300/90">stopping…</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {job.entityTitle ?? job.entityId}
+                      {job.error ? ` — ${job.error}` : ""}
+                    </p>
+                    {isRunning &&
+                      (job.label ? (
+                        <p className="text-[10px] text-primary/90 truncate mt-0.5">
+                          {job.label}
+                          {typeof job.progress === "number"
+                            ? ` · ${Math.round(job.progress * 100)}%`
+                            : ""}
+                        </p>
+                      ) : typeof job.progress === "number" ? (
+                        <div
+                          className="h-1 rounded-full bg-white/8 mt-1.5 overflow-hidden"
+                          role="progressbar"
+                          aria-valuenow={Math.round(job.progress * 100)}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                        >
+                          <div
+                            className="h-full rounded-full bg-brand-gradient"
+                            style={{ width: `${Math.max(4, job.progress * 100)}%` }}
+                          />
+                        </div>
+                      ) : null)}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {isRunning && (
+                      <button
+                        type="button"
+                        onClick={() => cancelJob(job)}
+                        disabled={isCancelling}
+                        title="Cooperative cancel — stops at the next checkpoint, keeps completed work"
+                        aria-label={`Cancel ${meta.label} job`}
+                        className="grid h-7 w-7 place-items-center rounded-full border border-white/10 bg-white/8 text-muted-foreground hover:bg-red-500/15 hover:text-red-300 transition-colors disabled:opacity-50"
+                      >
+                        {isCancelling ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Ban className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    )}
+                    <div className="text-right">
+                      <p className="text-xs font-medium tabular-nums">
+                        {formatDuration(job.durationMs)}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {new Date(job.startedAt).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                <div className="text-right shrink-0">
-                  <p className="text-xs font-medium tabular-nums">
-                    {formatDuration(job.durationMs)}
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">
-                    {new Date(job.startedAt).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
+              );
+            });
+          })()}
         </div>
       </Card>
 
