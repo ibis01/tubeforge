@@ -470,6 +470,21 @@ export interface ActivityDTO {
   createdAt: string;
 }
 
+/** Aggregated YouTube performance (Stage 4a, T-4.2) — derived from VideoStat
+ *  snapshots. Null when no snapshot has ever been synced. */
+export interface PerformanceDTO {
+  views: number;
+  likes: number;
+  comments: number;
+  /** Views gained over the last 7 days across the STABLE COHORT (videos with
+   *  a snapshot ≥7 days old) — null when that cohort is empty. */
+  viewsDelta7d: number | null;
+  /** 7 daily cumulative view totals (oldest → today) for the sparkline. */
+  viewsSeries: number[];
+  /** How many videos have at least one synced snapshot. */
+  syncedVideos: number;
+}
+
 export interface StatsDTO {
   total: number;
   byStatus: Record<string, number>;
@@ -481,6 +496,7 @@ export interface StatsDTO {
   channels: number;
   perDay: { day: string; count: number }[];
   recent: ActivityDTO[];
+  performance: PerformanceDTO | null;
 }
 
 // ---------- Topic Radar (keyword research) ----------

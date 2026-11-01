@@ -8,7 +8,7 @@ export async function GET(req: NextRequest) {
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
   auth.enter(); // tenant scope: handler + spawned job closures
 
-  const [videos, channels, activities] = await Promise.all([
+  const [videos, channels, activities, statRows] = await Promise.all([
     db.video.findMany({
       select: { status: true, audioDuration: true, createdAt: true },
     }),
@@ -17,6 +17,12 @@ export async function GET(req: NextRequest) {
       orderBy: { createdAt: "desc" },
       take: 12,
       include: { video: { select: { title: true, topic: true } } },
+    }),
+    // Stage 4a (T-4.2): the dashboard's performance KPIs. Snapshots are
+    // cumulative per video (what YouTube reported at sync time).
+    db.videoStat.findMany({
+      select: { videoId: true, views: true, likes: true, comments: true, snapshotAt: true },
+      orderBy: { snapshotAt: "asc" },
     }),
   ]);
 
@@ -51,6 +57,70 @@ export async function GET(req: NextRequest) {
     createdAt: a.createdAt.toISOString(),
   }));
 
+  // ---- Performance aggregates (Stage 4a, T-4.2) -------------------------
+  // Latest snapshot per video = that video's current totals. The 7-day delta
+  // uses the STABLE COHORT only (videos with a snapshot ≥7 days old), so a
+  // freshly-synced back catalog can't masquerade as a week of growth.
+  let performance: import("@/lib/tubeforge/types").PerformanceDTO | null = null;
+  if (statRows.length > 0) {
+    const byVideo = new Map<string, typeof statRows>();
+    for (const row of statRows) {
+      const list = byVideo.get(row.videoId);
+      if (list) list.push(row);
+      else byVideo.set(row.videoId, [row]);
+    }
+
+    let views = 0;
+    let likes = 0;
+    let comments = 0;
+    let cohortThenViews = 0;
+    let cohortNowViews = 0;
+    let cohortSize = 0;
+    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+    for (const rows of byVideo.values()) {
+      const latest = rows[rows.length - 1];
+      views += latest.views;
+      likes += latest.likes;
+      comments += latest.comments;
+
+      const then = rows.filter((r) => r.snapshotAt.getTime() <= weekAgo).pop();
+      if (then) {
+        cohortSize += 1;
+        cohortThenViews += then.views;
+        cohortNowViews += latest.views;
+      }
+    }
+
+    // 7 daily cumulative totals (oldest → today): per video, the latest
+    // snapshot on-or-before each day's end (0 before its first sync).
+    const viewsSeries: number[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const dayEnd = new Date();
+      dayEnd.setHours(23, 59, 59, 999);
+      dayEnd.setDate(dayEnd.getDate() - i);
+      let dayTotal = 0;
+      for (const rows of byVideo.values()) {
+        for (let j = rows.length - 1; j >= 0; j--) {
+          if (rows[j].snapshotAt <= dayEnd) {
+            dayTotal += rows[j].views;
+            break;
+          }
+        }
+      }
+      viewsSeries.push(dayTotal);
+    }
+
+    performance = {
+      views,
+      likes,
+      comments,
+      viewsDelta7d: cohortSize > 0 ? cohortNowViews - cohortThenViews : null,
+      viewsSeries,
+      syncedVideos: byVideo.size,
+    };
+  }
+
   const stats: StatsDTO = {
     total: videos.length,
     byStatus,
@@ -65,6 +135,7 @@ export async function GET(req: NextRequest) {
     channels,
     perDay,
     recent,
+    performance,
   };
 
   return NextResponse.json({ stats });

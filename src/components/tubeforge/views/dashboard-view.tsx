@@ -5,14 +5,22 @@ import { useAppStore } from "@/lib/store";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { StatCard, EmptyState, timeAgo } from "@/components/tubeforge/shared";
+import {
+  StatCard,
+  EmptyState,
+  StatusBadge,
+  timeAgo,
+  formatDuration,
+  compactNumber,
+  Sparkline,
+  TrendDelta,
+} from "@/components/tubeforge/shared";
 import { AttentionPanel } from "@/components/tubeforge/attention-panel";
-import type { StatsDTO } from "@/lib/tubeforge/types";
+import type { StatsDTO, VideoDTO } from "@/lib/tubeforge/types";
 import {
   Film,
   Rocket,
   Loader2,
-  Timer,
   Wand2,
   FileText,
   Mic,
@@ -20,6 +28,12 @@ import {
   Radio,
   AlertTriangle,
   ArrowRight,
+  Eye,
+  Heart,
+  MessageCircle,
+  Radar,
+  PlayCircle,
+  CheckCircle2,
 } from "lucide-react";
 
 const STAGE_ICONS: Record<string, typeof FileText> = {
@@ -32,19 +46,33 @@ const STAGE_ICONS: Record<string, typeof FileText> = {
   channel: Radio,
 };
 
+/** Quick-start chips — one tap pre-fills the Create brief (T-4.2). */
+const QUICK_TOPICS = [
+  "Why the ocean has two layers that never mix",
+  "The bankruptcy that built Las Vegas",
+  "5 sleep experiments that went too far",
+  "How container ships broke global trade",
+];
+
 export function DashboardView() {
   const refreshKey = useAppStore((s) => s.refreshKey);
   const setView = useAppStore((s) => s.setView);
+  const setPrefillTopic = useAppStore((s) => s.setPrefillTopic);
+  const setFocusVideoId = useAppStore((s) => s.setFocusVideoId);
   const [stats, setStats] = useState<StatsDTO | null>(null);
+  const [videos, setVideos] = useState<VideoDTO[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/stats")
-      .then((r) => r.json())
-      .then((data) => {
+    Promise.all([
+      fetch("/api/stats").then((r) => r.json()),
+      fetch("/api/videos?limit=6").then((r) => r.json()),
+    ])
+      .then(([statsData, videosData]) => {
         if (!cancelled) {
-          setStats(data.stats ?? null);
+          setStats(statsData.stats ?? null);
+          setVideos(videosData.videos ?? []);
           setLoading(false);
         }
       })
@@ -116,44 +144,87 @@ export function DashboardView() {
   const maxPipeline = Math.max(1, ...pipelineData.map((p) => p.value));
   const chartTotal = stats.perDay.reduce((acc, d) => acc + d.count, 0);
 
+  // "Continue where you left off" — the most recent video still in flight
+  // (T-4.2). Published/failed videos are done; everything else is resumable.
+  const continueVideo =
+    videos.find(
+      (v) => v.status !== "published" && v.status !== "failed" && v.status !== "ready"
+    ) ?? null;
+  const perf = stats.performance;
+
+  const openVideo = (id: string) => {
+    setFocusVideoId(id);
+    setView("library");
+  };
+
   return (
     <div className="space-y-6">
-      {/* Hero banner */}
+      {/* Quick-start hero (T-4.2) — actions + one-tap topic chips */}
       <Card className="glass rounded-2xl overflow-hidden relative">
-        <div
-          className="absolute inset-0 bg-grid opacity-60"
-          aria-hidden="true"
-        />
+        <div className="absolute inset-0 bg-grid opacity-60" aria-hidden="true" />
         <div
           className="absolute -top-24 -right-16 h-56 w-56 rounded-full bg-primary/15 blur-3xl"
           aria-hidden="true"
         />
-        <div className="relative p-5 sm:p-7 flex flex-col md:flex-row md:items-center gap-5">
-          <div className="flex-1 min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full border border-primary/35 bg-primary/15 px-3 py-1 text-[11px] font-medium text-red-200">
-              <span className="animate-pulse-dot h-1.5 w-1.5 rounded-full bg-primary" />
-              Auto-Pilot Online
+        <div className="relative p-5 sm:p-7">
+          <div className="flex flex-col md:flex-row md:items-center gap-5">
+            <div className="flex-1 min-w-0">
+              <div className="inline-flex items-center gap-2 rounded-full border border-primary/35 bg-primary/15 px-3 py-1 text-[11px] font-medium text-red-200">
+                <span className="animate-pulse-dot h-1.5 w-1.5 rounded-full bg-primary" />
+                Auto-Pilot Online
+              </div>
+              <h2 className="mt-3 text-xl sm:text-2xl font-bold tracking-tight">
+                Your faceless channel, fully automated.
+              </h2>
+              <p className="text-sm text-muted-foreground mt-2 max-w-lg leading-relaxed">
+                Drop a topic — AI writes the script, generates the narration, and
+                paints the thumbnail. You just hit publish.
+              </p>
             </div>
-            <h2 className="mt-3 text-xl sm:text-2xl font-bold tracking-tight">
-              Your faceless channel, fully automated.
-            </h2>
-            <p className="text-sm text-muted-foreground mt-2 max-w-lg leading-relaxed">
-              Drop a topic — AI writes the script, generates the narration, and
-              paints the thumbnail. You just hit publish.
-            </p>
+            <div className="flex flex-col sm:flex-row gap-2.5 shrink-0">
+              <Button
+                onClick={() => setView("create")}
+                size="lg"
+                className="bg-brand-gradient hover:opacity-90 font-semibold glow-red"
+              >
+                <Wand2 className="h-4.5 w-4.5" />
+                Generate a Video
+              </Button>
+              <Button
+                onClick={() => setView("research")}
+                size="lg"
+                variant="outline"
+                className="border-white/15"
+              >
+                <Radar className="h-4.5 w-4.5" />
+                Research a Topic
+              </Button>
+            </div>
           </div>
-          <Button
-            onClick={() => setView("create")}
-            size="lg"
-            className="bg-brand-gradient hover:opacity-90 font-semibold glow-red shrink-0"
-          >
-            <Wand2 className="h-4.5 w-4.5" />
-            Generate a Video
-          </Button>
+          {/* One-tap starts — prefill the guided brief (wired in T-4.3) */}
+          {videos.length === 0 && (
+            <div className="mt-5 pt-4 border-t border-white/8">
+              <p className="tf-kicker mb-2.5">Start in one tap</p>
+              <div className="flex flex-wrap gap-2">
+                {QUICK_TOPICS.map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => {
+                      setPrefillTopic(t);
+                      setView("create");
+                    }}
+                    className="tf-focusable text-left text-xs rounded-full border border-white/12 bg-white/4 hover:bg-white/8 hover:border-white/20 px-3.5 py-2 text-white/70 hover:text-white transition-colors"
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </Card>
 
-      {/* Stat cards */}
+      {/* KPI row (T-4.2) — published + failed finally surfaced */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
           icon={Film}
@@ -163,27 +234,124 @@ export function DashboardView() {
           accent
         />
         <StatCard
-          icon={Rocket}
-          label="Ready to Upload"
-          value={String(stats.ready)}
-          sub="Packaged & waiting"
-        />
-        <StatCard
           icon={Loader2}
           label="In Pipeline"
           value={String(stats.inPipeline)}
           sub="Scripting / voicing / art"
         />
         <StatCard
-          icon={Timer}
-          label="Audio Produced"
-          value={`${stats.audioMinutes}m`}
-          sub="Narration runtime"
+          icon={Rocket}
+          label="Ready to Upload"
+          value={String(stats.ready)}
+          sub="Packaged & waiting"
+        />
+        <StatCard
+          icon={CheckCircle2}
+          label="Published"
+          value={String(stats.published)}
+          sub={
+            stats.failed > 0
+              ? `${stats.failed} failed — check Library`
+              : "Live on YouTube"
+          }
         />
       </div>
 
+      {/* Performance strip (T-4.2) — real YouTube numbers from VideoStat */}
+      {perf && perf.syncedVideos > 0 && (
+        <Card className="glass rounded-2xl p-5">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <h3 className="font-semibold flex items-center gap-2">
+                <Eye className="h-4 w-4 text-primary" />
+                Channel Performance
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Across {perf.syncedVideos} synced video
+                {perf.syncedVideos === 1 ? "" : "s"} · YouTube Data API
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => setView("analytics")}
+            >
+              Full analytics
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="flex items-center gap-3.5">
+              <Sparkline values={perf.viewsSeries} width={84} height={30} />
+              <div className="min-w-0">
+                <p className="text-2xl font-bold tf-num tracking-tight">
+                  {compactNumber(perf.views)}
+                </p>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-muted-foreground">Total views</p>
+                  <TrendDelta value={perf.viewsDelta7d} />
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3.5">
+              <div className="h-10 w-10 rounded-xl bg-rose-500/12 border border-rose-500/25 flex items-center justify-center shrink-0">
+                <Heart className="h-4.5 w-4.5 text-rose-300" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-2xl font-bold tf-num tracking-tight">
+                  {compactNumber(perf.likes)}
+                </p>
+                <p className="text-xs text-muted-foreground">Likes</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3.5">
+              <div className="h-10 w-10 rounded-xl bg-sky-500/12 border border-sky-500/25 flex items-center justify-center shrink-0">
+                <MessageCircle className="h-4.5 w-4.5 text-sky-300" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-2xl font-bold tf-num tracking-tight">
+                  {compactNumber(perf.comments)}
+                </p>
+                <p className="text-xs text-muted-foreground">Comments</p>
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* Needs attention + generating now (Mission Control audit points) */}
       <AttentionPanel />
+
+      {/* Continue where you left off (T-4.2) */}
+      {continueVideo && (
+        <Card className="glass rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-4">
+          <div className="h-11 w-11 rounded-xl bg-primary/12 border border-primary/25 flex items-center justify-center shrink-0">
+            <PlayCircle className="h-5 w-5 text-primary" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="tf-kicker">Continue where you left off</p>
+            <p className="text-sm font-medium truncate mt-1">
+              {continueVideo.title || continueVideo.topic}
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {continueVideo.status} · {continueVideo.sceneCount
+                ? `${continueVideo.sceneCount} scenes · `
+                : ""}
+              updated {timeAgo(continueVideo.updatedAt ?? continueVideo.createdAt)}
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-white/15 shrink-0"
+            onClick={() => openVideo(continueVideo.id)}
+          >
+            Resume production
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Button>
+        </Card>
+      )}
 
       <div className="grid lg:grid-cols-5 gap-4 items-stretch">
         {/* Production chart */}
@@ -207,7 +375,9 @@ export function DashboardView() {
           <div
             className="mt-6 h-44 flex items-end gap-2 sm:gap-3"
             role="img"
-            aria-label="Bar chart of videos created per day over the last 7 days"
+            aria-label={`Bar chart of videos created per day over the last 7 days: ${stats.perDay
+              .map((d) => `${d.day} ${d.count}`)
+              .join(", ")}`}
           >
             {stats.perDay.map((d) => {
               const max = Math.max(1, ...stats.perDay.map((x) => x.count));
@@ -215,14 +385,15 @@ export function DashboardView() {
               return (
                 <div
                   key={d.day}
-                  className="flex-1 h-full flex flex-col items-center justify-end gap-1.5 min-w-0"
+                  className="flex-1 h-full flex flex-col items-center justify-end gap-1.5 min-w-0 group"
+                  title={`${d.day}: ${d.count} video${d.count === 1 ? "" : "s"}`}
                 >
                   <span className="text-[11px] text-muted-foreground tabular-nums">
                     {d.count > 0 ? d.count : ""}
                   </span>
                   <div className="flex-1 w-full max-w-12 flex items-end">
                     <div
-                      className="w-full rounded-t-lg bg-gradient-to-t from-primary/80 to-primary/30 transition-all duration-500"
+                      className="w-full rounded-t-lg bg-gradient-to-t from-primary/80 to-primary/30 transition-all duration-500 group-hover:from-primary group-hover:to-primary/50"
                       style={{
                         height: `${h}%`,
                         opacity: d.count > 0 ? 1 : 0.12,
@@ -260,11 +431,107 @@ export function DashboardView() {
                 </div>
               </li>
             ))}
+            {stats.failed > 0 && (
+              <li>
+                <div className="flex items-center justify-between text-xs mb-1.5">
+                  <span className="text-red-300/90">Failed</span>
+                  <span className="font-semibold tabular-nums text-red-300">
+                    {stats.failed}
+                  </span>
+                </div>
+                <div className="h-2 rounded-full bg-white/6 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-red-400/80 transition-all duration-500"
+                    style={{ width: `${(stats.failed / maxPipeline) * 100}%` }}
+                  />
+                </div>
+              </li>
+            )}
           </ul>
+          {stats.failed > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-4 text-red-300 hover:text-red-200 hover:bg-red-500/10 self-start"
+              onClick={() => setView("library")}
+            >
+              Review failed videos
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Button>
+          )}
         </Card>
       </div>
 
-      {/* Activity feed */}
+      {/* Recent projects (T-4.2) — clickable, thumbnail-first */}
+      {videos.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="font-semibold">Recent Projects</h3>
+              <p className="text-xs text-muted-foreground">
+                Pick up any production — click to open
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => setView("library")}
+            >
+              Library
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+            {videos.slice(0, 6).map((v) => (
+              <button
+                key={v.id}
+                onClick={() => openVideo(v.id)}
+                className="tf-focusable tf-card tf-card-hover text-left overflow-hidden group"
+              >
+                <div className="relative aspect-video bg-white/4 overflow-hidden">
+                  {v.hasThumbnail ? (
+                    <img
+                      src={`/api/videos/${v.id}/thumbnail`}
+                      alt=""
+                      className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+                    />
+                  ) : (
+                    <div className="h-full w-full bg-gradient-to-br from-primary/15 via-transparent to-white/5 flex items-center justify-center">
+                      <Film className="h-7 w-7 text-white/15" />
+                    </div>
+                  )}
+                  <div className="absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-black/70 to-transparent" />
+                  <div className="absolute bottom-2 left-2.5 flex items-center gap-2">
+                    <StatusBadge status={v.status} />
+                    {v.videoDuration ? (
+                      <span className="tf-num text-[11px] text-white/85 px-1.5 py-0.5 rounded bg-black/55">
+                        {formatDuration(v.videoDuration)}
+                      </span>
+                    ) : null}
+                  </div>
+                  {v.stats?.views ? (
+                    <span className="tf-num absolute top-2 right-2 flex items-center gap-1 text-[11px] text-white/85 px-1.5 py-0.5 rounded bg-black/55">
+                      <Eye className="h-3 w-3" />
+                      {compactNumber(v.stats.views)}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="p-3.5">
+                  <p className="text-sm font-medium leading-snug line-clamp-1">
+                    {v.title || v.topic}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1 truncate">
+                    {v.niche} · {timeAgo(v.createdAt)}
+                  </p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Activity feed — rows drill into the video (T-4.2) */}
       <Card className="glass rounded-2xl p-5">
         <div className="flex items-center justify-between">
           <div>
@@ -294,11 +561,9 @@ export function DashboardView() {
               {stats.recent.map((a) => {
                 const Icon = STAGE_ICONS[a.stage] ?? Wand2;
                 const isError = a.level === "error";
-                return (
-                  <li
-                    key={a.id}
-                    className="flex items-start gap-3 rounded-xl px-3 py-2.5 hover:bg-white/4 transition-colors"
-                  >
+                const videoId = a.videoId;
+                const inner = (
+                  <>
                     <div
                       className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 ${
                         isError
@@ -314,6 +579,25 @@ export function DashboardView() {
                         {a.stage} · {timeAgo(a.createdAt)}
                       </p>
                     </div>
+                    {videoId && (
+                      <ArrowRight className="h-3.5 w-3.5 text-white/25 shrink-0 mt-1.5" />
+                    )}
+                  </>
+                );
+                return (
+                  <li key={a.id}>
+                    {videoId ? (
+                      <button
+                        onClick={() => openVideo(videoId)}
+                        className="tf-focusable w-full flex items-start gap-3 rounded-xl px-3 py-2.5 hover:bg-white/4 transition-colors text-left"
+                      >
+                        {inner}
+                      </button>
+                    ) : (
+                      <div className="flex items-start gap-3 rounded-xl px-3 py-2.5">
+                        {inner}
+                      </div>
+                    )}
                   </li>
                 );
               })}
