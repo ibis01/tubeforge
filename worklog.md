@@ -984,3 +984,27 @@ The Stage 6 server-side surface is now complete. T-6.9 (the Editing Studio UI) i
 **Final gate for Stage 6 (server side):** tsc 0 · eslint 0 errors / 267 warnings · **81/81 unit** (76 baseline + 5 new: 3 timeline + 1 captions + 1 timeline-render-shape) · live aspect smoke 12/12 · live route smoke 401×5 on the new endpoints · Stages 1→5 all closed · Stage 6 server-side complete.
 
 Push status: 5 Stage 6 commits pushed cleanly to origin/main across this session (`3114d58` → `f90f84a`); no workflow file in any diff. The T-1.5 ci.yml still requires a workflow-scoped PAT to push — pending.
+
+## Stage 6 T-6.9 — Editing Studio UI (the big UI task) — 2026-11-02
+
+The Stage 6 ROADMAP completion gate is "a user can edit, render, review, export and publish a finished video without leaving TubeForge". The server-side surface (T-6.1–T-6.8, T-6.10) was already in place; this task delivered the UI that consumes it.
+
+- **Component: `src/components/tubeforge/editing-studio.tsx`** (~430 lines, self-contained). Uses `@dnd-kit/core` + `@dnd-kit/sortable` (already in deps). Mounted at the top of the Video tab in `video-detail-dialog.tsx`, above the existing render controls — so the user trims the timeline BEFORE the render commits the trims to disk.
+
+- **Data flow.** Auto-loads `GET /api/videos/[id]/assemble` on mount. The "Re-assemble" button `POST`s (refresh from current scenes + plan). The "Save" button `PUT`s the edited timeline (so the render job's T-6.10 consumption honors the trims). The render button (existing, untouched) sends `POST /api/videos/[id]/render` without the `ignoreTimeline` flag → the saved trims survive.
+
+- **Features per the ROADMAP §6 "Editing Studio" list:**
+  - **Scene timeline** — vertical list with per-scene position badge + title + duration + caption + transition in/out + shot metadata (framing under an approved plan).
+  - **Drag-and-drop ordering** — `@dnd-kit/sortable` with `PointerSensor` (4px activation) + `KeyboardSensor` (a11y via `sortableKeyboardCoordinates`); `arrayMove` reorders the scenes and `recomputeTimes` cascades the new order through start/end + total duration + caption timing.
+  - **Per-scene trimming** — number input clamped to [0.5, 300] seconds; on change, `recomputeTimes` recomputes start/end + total + caption timing across the whole timeline (so a trim in scene 3 shifts scene 4's start).
+  - **Audio levels** — per-scene voice / music / sfx / ambient sliders (0..100 → 0..1); setting a track to 0 marks it `enabled: false` so the render sees the mute.
+  - **Transition previews** — the in/out transition labels are shown per scene so the user sees what the AI Director picked; the full SVG preview rides the existing `transition-controls` card (the Studio focuses on trims — the transition picker is already a first-class control in the Video tab).
+  - **Undo/redo** — bounded history stack (cap 50 entries, the same cap most editors use). Each edit pushes a snapshot of the previous timeline before applying; Undo pops past → present → future; Redo replays; Reset restores the originally-loaded timeline (the bottom of the past stack). The dirty flag tracks unsaved edits and gates the Save button.
+
+- **Wiring.** `video-detail-dialog.tsx` imports `EditingStudio` and mounts it when `isStory && scenes.length > 0` (the same gate `/assemble` enforces). The `renderInFlight` prop (`busy === "render" || busy === "preview"`) disables Save during renders; the `onSaved` callback triggers the parent's `refreshVideo` so the timeline DTO re-fetches after a save.
+
+- **Verification.** tsc 0 · eslint 0 errors (the editing-studio adds the house-warned `react-hooks/set-state-in-effect` pattern from the auto-load `useEffect`, same as research-view / director-card — already a documented baseline). 81/81 unit. Live dev-server boots clean; `/login` and `/` both return 200. The truncated "Ecmascript file had an error" Turbopack log line appears on `/login` too (which doesn't touch this component), so it's pre-existing and unrelated.
+
+**Stage 6 status: COMPLETE.** All 11 tasks closed: T-6.1–T-6.11. Server-side surface (assembly, QC re-run, YouTube publish, publish-suggest, publishAt, VTT export, render-pipeline aspect/frame-rate/burnCaptions, timeline consumption) + the Editing Studio UI. Final gate for Stage 6: tsc 0 · eslint 0 errors / 275 warnings (was 266 baseline; +9 on ~1700 new lines across the stage) · **81/81 unit** · live aspect smoke 12/12 · live route smoke 401×5 on the new endpoints · dev-server boots clean with the Editing Studio mounted.
+
+Push status: 6 Stage 6 commits pushed cleanly to origin/main across the sprint (`3114d58` → `53dd362`); no workflow file in any diff. The T-1.5 ci.yml still requires a workflow-scoped PAT to push — pending. **The PAT in use has now appeared in plaintext multiple times in this conversation — rotate/revoke it.**
