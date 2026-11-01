@@ -456,6 +456,239 @@ await test("10 parallel spends of 30,000 micro against a 100,000-micro grant →
 });
 
 // ===========================================================================
+// Phase 7 — full subscription lifecycle through the REAL event handlers
+// (review item #7: payment / renewal / cancellation / refund / payment
+// failure as END-TO-END event sequences, not just resolver states)
+// ===========================================================================
+suiteStart("Stage 7.1 #7 — Stripe lifecycle integration (checkout → failure → recovery → cancel → refund)");
+
+/** Ensure the paid plan row exists (the checkout handler reuses it). */
+async function ensurePlan(tier: "creator" | "studio") {
+  let plan = await db.plan.findUnique({ where: { tier } });
+  if (!plan) {
+    plan = await db.plan.create({
+      data: {
+        name: tier === "creator" ? "Creator" : "Studio",
+        tier,
+        monthlyCredits: tier === "creator" ? 10000 : 50000,
+        maxResolution: tier === "creator" ? "1440p" : "2160p",
+        priorityRendering: true,
+        teamMembers: 1,
+      },
+    });
+    PLAN_IDS.push(plan.id);
+  }
+  return plan;
+}
+
+await test("checkout.session.completed via the SIGNED route → Subscription row created, active, paid plan", async () => {
+  await ensurePlan("creator");
+  const user = await db.user.create({
+    data: { email: `${MARK}.lifecycle@t.test`, passwordHash: `pbkdf2$1$s$${MARK}`, name: "Stage 7.1 lifecycle" },
+  });
+  USER_IDS.push(user.id);
+
+  // Before checkout: no Subscription row → Starter.
+  const before = await billing.resolveUserPlan(user.id);
+  eq(before.plan.tier, "starter", "pre-checkout user is Starter");
+  eq(before.subscription, null, "no Subscription row yet");
+
+  // The checkout event, delivered through the REAL route with a REAL
+  // signature — the exact path Stripe production traffic takes.
+  process.env.TUBEFORGE_STRIPE_WEBHOOK_SECRET = SECRET;
+  const checkoutEventId = `evt_${MARK}_checkout`;
+  EVENT_IDS.push(checkoutEventId);
+  const body = JSON.stringify({
+    id: checkoutEventId,
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        client_reference_id: user.id,
+        customer: `cus_${MARK}_lc`,
+        subscription: `sub_${MARK}_lc`,
+        metadata: { planTier: "creator" },
+      },
+    },
+  });
+  const res = await postWebhook(body, { "stripe-signature": stripeSign(SECRET, body) });
+  eq(res.status, 200, "signed checkout event accepted");
+  eq(res.json.received, true, "route acks the checkout");
+
+  const row = await db.subscription.findUnique({ where: { userId: user.id } });
+  ok(row, "checkout created the Subscription row");
+  eq(row!.status, "active", "checkout subscription is active");
+  eq(row!.stripeCustomerId, `cus_${MARK}_lc`, "stripe customer id persisted");
+  eq(row!.stripeSubscriptionId, `sub_${MARK}_lc`, "stripe subscription id persisted");
+
+  const after = await billing.resolveUserPlan(user.id);
+  eq(after.plan.tier, "creator", "post-checkout user resolves to the paid plan");
+  eq(after.access, "full", "post-checkout access is full");
+});
+
+await test("payment failure: subscription.updated status=past_due → grace (paid plan kept while dunning runs)", async () => {
+  const { user, sub } = await makePaidUser(`${MARK}.dunning@t.test`, "active");
+  const future = Math.floor(Date.now() / 1000) + 14 * 86400;
+  const evtId = `evt_${MARK}_dunfail`;
+  EVENT_IDS.push(evtId);
+  await processStripeEvent({
+    id: evtId,
+    type: "customer.subscription.updated",
+    data: { object: { id: sub.stripeSubscriptionId, status: "past_due", current_period_end: future } },
+  });
+  const resolved = await billing.resolveUserPlan(user.id);
+  eq(resolved.plan.tier, "creator", "past_due keeps the paid plan (grace)");
+  eq(resolved.access, "grace", "past_due access is grace — not full, not none");
+  eq(
+    (await db.subscription.findUnique({ where: { id: sub.id } }))!.currentPeriodEnd?.getTime(),
+    future * 1000,
+    "period end tracked from the Stripe payload"
+  );
+});
+
+await test("cancellation: subscription.deleted → Starter fallback, no access, subscription record kept for the UI", async () => {
+  const { user, sub } = await makePaidUser(`${MARK}.term@t.test`, "active");
+  const evtId = `evt_${MARK}_term`;
+  EVENT_IDS.push(evtId);
+  await processStripeEvent({
+    id: evtId,
+    type: "customer.subscription.deleted",
+    data: { object: { id: sub.stripeSubscriptionId } },
+  });
+  eq((await db.subscription.findUnique({ where: { id: sub.id } }))!.status, "canceled", "status flipped to canceled");
+  const resolved = await billing.resolveUserPlan(user.id);
+  eq(resolved.plan.tier, "starter", "canceled user resolves to Starter");
+  eq(resolved.access, "none", "canceled access is none");
+  ok(resolved.subscription, "the subscription record survives for the UI");
+  eq(resolved.subscription!.status, "canceled", "UI can render the canceled state");
+});
+
+await test("refund: unknown charge.refunded event is safely acked; credit refunds flow through the refund ledger kind", async () => {
+  const { user, sub } = await makePaidUser(`${MARK}.refund@t.test`, "active");
+  await db.creditGrant.create({
+    data: {
+      userId: user.id,
+      subscriptionId: sub.id,
+      grantedMicroCredits: creditsToMicro(10000),
+      periodStart: new Date(Date.now() - 60_000),
+      periodEnd: new Date(Date.now() + 30 * 86400_000),
+    },
+  });
+  // Consume 40,000 micro (one video call).
+  await billing.spendCredits({ userId: user.id, kind: "ai_call", microCredits: 40_000, note: "s71 refund probe spend" });
+  const afterSpend = await billing.resolveUserPlan(user.id);
+  eq(afterSpend.creditBalance, creditsToMicro(10000) - 40_000, "balance after the spend");
+
+  // A Stripe charge refund arrives — the handler must ack it WITHOUT
+  // corrupting the ledger (metered usage is not clawed back automatically;
+  // credit refunds are an explicit operator action, see below).
+  const evtId = `evt_${MARK}_refund`;
+  EVENT_IDS.push(evtId);
+  eq(
+    await processStripeEvent({ id: evtId, type: "charge.refunded", data: { object: { id: `ch_${MARK}` } } }),
+    "processed",
+    "charge.refunded is acked (default case — no 500 retry loop)"
+  );
+  const afterEvent = await billing.resolveUserPlan(user.id);
+  eq(afterEvent.creditBalance, afterSpend.creditBalance, "the refund event itself does not touch the balance");
+
+  // The DOCUMENTED credit-refund path: a negative ledger row of kind
+  // "refund" (resolver math: granted − spent + refunded).
+  await db.creditLedger.create({
+    data: { userId: user.id, subscriptionId: sub.id, kind: "refund", microCredits: -40_000, note: "operator credit refund" },
+  });
+  const afterRefund = await billing.resolveUserPlan(user.id);
+  eq(afterRefund.creditBalance, creditsToMicro(10000), "refund ledger row restores the spent credits exactly");
+});
+
+await test("FULL lifecycle chain: checkout → grant → failure → recovery grant → cancel, all event-driven", async () => {
+  await ensurePlan("creator");
+  const user = await db.user.create({
+    data: { email: `${MARK}.chain@t.test`, passwordHash: `pbkdf2$1$s$${MARK}`, name: "Stage 7.1 chain" },
+  });
+  USER_IDS.push(user.id);
+  const STRIPE_SUB = `sub_${MARK}_chain`;
+  const periodEnd = () => Math.floor(Date.now() / 1000) + 30 * 86400;
+
+  // 1. checkout.session.completed → subscription row (active).
+  await processStripeEvent({
+    id: `evt_${MARK}_c1`,
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        client_reference_id: user.id,
+        customer: `cus_${MARK}_chain`,
+        subscription: STRIPE_SUB,
+        metadata: { planTier: "creator" },
+      },
+    },
+  });
+  EVENT_IDS.push(`evt_${MARK}_c1`);
+  eq((await billing.resolveUserPlan(user.id)).access, "full", "step 1: checkout → full access");
+
+  // 2. first invoice.paid → the monthly grant lands.
+  await processStripeEvent({
+    id: `evt_${MARK}_c2`,
+    type: "invoice.paid",
+    data: {
+      object: { id: `in_${MARK}_c1`, subscription: STRIPE_SUB, period_start: Math.floor(Date.now() / 1000), period_end: periodEnd() },
+    },
+  });
+  EVENT_IDS.push(`evt_${MARK}_c2`);
+  let resolved = await billing.resolveUserPlan(user.id);
+  eq(resolved.creditBalance, creditsToMicro(10000), "step 2: first invoice grants the full allowance");
+
+  // 3. consume some credits, then the payment FAILS next period.
+  await billing.spendCredits({ userId: user.id, kind: "ai_call", microCredits: 40_000, note: "s71 chain spend" });
+  await processStripeEvent({
+    id: `evt_${MARK}_c3`,
+    type: "customer.subscription.updated",
+    data: { object: { id: STRIPE_SUB, status: "past_due", current_period_end: periodEnd() } },
+  });
+  EVENT_IDS.push(`evt_${MARK}_c3`);
+  resolved = await billing.resolveUserPlan(user.id);
+  eq(resolved.access, "grace", "step 3: payment failure → grace");
+  eq(resolved.creditBalance, creditsToMicro(10000) - 40_000, "step 3: spend counted during dunning");
+
+  // 4. the customer fixes their card — Stripe sends a NEW invoice (new id!).
+  await processStripeEvent({
+    id: `evt_${MARK}_c4`,
+    type: "invoice.paid",
+    data: {
+      object: { id: `in_${MARK}_c2`, subscription: STRIPE_SUB, period_start: Math.floor(Date.now() / 1000), period_end: periodEnd() },
+    },
+  });
+  EVENT_IDS.push(`evt_${MARK}_c4`);
+  resolved = await billing.resolveUserPlan(user.id);
+  eq(resolved.access, "full", "step 4: recovery invoice re-activates the subscription");
+  eq(await db.creditGrant.count({ where: { userId: user.id } }), 2, "step 4: recovery invoice is a SECOND grant (new invoice id)");
+  eq(resolved.creditBalance, 2 * creditsToMicro(10000) - 40_000, "step 4: balance spans both periods minus the spend");
+
+  // 5. the customer cancels — access ends, grants stop, record survives.
+  await processStripeEvent({
+    id: `evt_${MARK}_c5`,
+    type: "customer.subscription.deleted",
+    data: { object: { id: STRIPE_SUB } },
+  });
+  EVENT_IDS.push(`evt_${MARK}_c5`);
+  resolved = await billing.resolveUserPlan(user.id);
+  eq(resolved.access, "none", "step 5: cancellation ends access");
+  eq(resolved.plan.tier, "starter", "step 5: back to Starter");
+  eq(resolved.subscription!.status, "canceled", "step 5: record kept for the UI");
+
+  // 6. a late invoice for the canceled sub grants NOTHING (no resurrection).
+  await processStripeEvent({
+    id: `evt_${MARK}_c6`,
+    type: "invoice.paid",
+    data: {
+      object: { id: `in_${MARK}_c3`, subscription: STRIPE_SUB, period_start: Math.floor(Date.now() / 1000), period_end: periodEnd() },
+    },
+  });
+  EVENT_IDS.push(`evt_${MARK}_c6`);
+  eq(await db.creditGrant.count({ where: { userId: user.id } }), 2, "step 6: canceled sub collects no new grant");
+  eq((await db.subscription.findUnique({ where: { userId: user.id } }))!.status, "canceled", "step 6: late invoice cannot resurrect the subscription");
+});
+
+// ===========================================================================
 // summary
 // ===========================================================================
 console.log(`\n${"─".repeat(56)}`);

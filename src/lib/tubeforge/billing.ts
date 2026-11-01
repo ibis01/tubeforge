@@ -702,6 +702,18 @@ export async function handleStripeEvent(event: StripeEvent): Promise<void> {
         console.warn("[billing/webhook] invoice.paid for unknown subscription", subscriptionId);
         break;
       }
+      // Stage 7.1 B-6b (caught by the lifecycle integration test): a paid
+      // invoice for a CANCELED subscription grants NOTHING. A late or
+      // replayed invoice must not mint credits onto an account whose
+      // subscription has ended — the user-scoped balance would otherwise
+      // hand those orphaned credits to the user's NEXT subscription. The
+      // re-activation below already skips canceled; the GRANT must skip
+      // canceled too. Genuine recovery payments (past_due/unpaid) still
+      // grant AND re-activate.
+      if (sub.status === "canceled") {
+        console.warn(`[billing/webhook] invoice.paid for canceled subscription ${subscriptionId} — no grant, no re-activation`);
+        break;
+      }
       const plan = await rawDb.plan.findUnique({ where: { id: sub.planId } });
       if (!plan) break;
       // Stage 7.1 fix #5: upsert on the invoice id (unique index) — Stripe
