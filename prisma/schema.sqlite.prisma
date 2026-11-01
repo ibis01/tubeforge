@@ -459,6 +459,12 @@ model Job {
   nextRunAt      DateTime  @default(now()) // earliest claim time (retry backoff)
   claimedBy      String? // "<role>:<pid>:<bootTs>" of the executing process
   claimedAt      DateTime?
+  // Stage 3 close-out — JSON-encoded request options (render mode, scene
+  // instruction, voiceover source pointer, …). Write-once at enqueue, parsed
+  // by the kind's crash-recovery handler so a restarted process can re-run
+  // the job with the SAME choices instead of factory defaults. Kept as TEXT
+  // (not a Json column) so the SQLite mirror and Postgres behave identically.
+  payload        String?
   cancelRequested Boolean  @default(false) // cooperative cancel — visible cross-process
   startedAt      DateTime  @default(now()) // set at claim (execution start)
   endedAt        DateTime?

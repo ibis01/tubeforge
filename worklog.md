@@ -852,3 +852,16 @@ Continuation of the Stage 3 sprint (T-3.1…T-3.6 landed earlier: logging, cross
 **Regression caught by the final sweep** — async-izing `serializeVideo`/`serializeScenes`/media readers made unawaited calls serialize Promises to `{}` (GET /api/videos returned `[{}]`), and two promoteVariant try/catch blocks went blind to async throws. Fixed across 11 call sites; class of bug invisible to tsc (NextResponse.json accepts any) — the 7/7 isolation e2e suite is the real gate and is green again.
 
 Final: tsc 0 · eslint 0 errors / 262 warnings baseline · 64/64 unit · 7/7 isolation · 4/4 smoke · live smoke (register/usage/create/delete/zai-key) green.
+
+## Stage 3 close-out — durable resume for every job kind — 2026-11-01
+
+The completion gate ("a video job survives an application restart") was only met for script/research/stock — every other kind captured request-scoped closures, so a crash meant "interrupted, run again". This session closed that gap.
+
+- **`Job.payload` column** (migration `20261101070000_stage3c_job_payload`): routes persist their request-scoped options at enqueue (render mode/subtitles/music/sceneLimit, scene instruction, voiceover source pointer, stock force flag). Plain TEXT — SQLite mirror and Postgres behave identically; parsed once at claim, corrupt JSON degrades to null instead of killing the job.
+- **`video-jobs.ts` / `character-jobs.ts`** — 13 extracted job bodies. Route closures AND the crash handler call the SAME function (the runStockRefresh pattern, applied everywhere). One implementation, two entry points, no drift. Voiceover uploads are staged into object storage BEFORE enqueueing — a request buffer cannot survive a restart, a storage key can — and dropped after the ingest (quota-neutral via remove()'s decrement).
+- **Bug found & fixed**: a crashed per-scene stock job (`entityId "<videoId>#scene<N>"`) resumed as a SILENT NO-OP — the shared handler passed the composite id to runStockRefresh, findUnique came back null, the job "finished" having done nothing. New runStockSceneJob + entityId dispatch; regression probe pinned in the queue test (keyless stock → visible "No stock provider" error instead of quiet done).
+- **Attempt caps**: voiceover/variants/poses join script at maxAttempts=1 (multi-call AI stages whose calls already retry internally; whole-job re-runs would re-pay every call).
+- **Test coverage**: 2 new unit tests (splitEntityId parsing, resumable-kinds contract) + the queue integration test rewritten in three phases (registry completeness incl. "upload stays unregistered", payload roundtrip incl. corrupt-payload degradation, real-worker restart recovery incl. per-scene dispatch + honest interruption). Added `setClaiming()` to queue.ts for harness/drain control.
+- **Environment lesson**: a dev server left running from the previous session was silently claiming test jobs with OLD handler code, making phase B fail mysteriously (claimedBy="web:<old-pid>:<old-bootTs>"). Killed the stale process; the test now asserts the claimer is the spawned worker.
+
+Final: tsc 0 · eslint 0 errors / 257 warnings (−5 vs baseline) · 66/66 unit · queue integration PASS · 11/11 e2e (isolation + smoke) · live smoke green with payload verified in the Job row.

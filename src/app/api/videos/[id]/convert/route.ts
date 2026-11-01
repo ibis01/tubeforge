@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
-import { convertClassicToScenes } from "@/lib/tubeforge/convert";
 import { startJob, isJobRunning, lastJobError } from "@/lib/tubeforge/jobs";
-import { errorText } from "@/lib/tubeforge/redact";
+import { runConvertJob } from "@/lib/tubeforge/video-jobs";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -30,6 +29,9 @@ export async function GET(req: NextRequest, ctx: Ctx) {
  * Splits the existing script into scenes (GLM, verbatim narration) and cuts
  * the existing voiceover.wav into per-scene WAVs (silence-snapped, no TTS).
  * Afterwards the storyboard + render stages become available.
+ *
+ * The job body is runConvertJob (video-jobs.ts) — shared with the crash-
+ * recovery handler, so a restart resumes the conversion.
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
@@ -53,25 +55,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   await db.video.update({ where: { id }, data: { error: null } });
 
-  const accepted = await startJob(id, "convert", async () => {
-    try {
-      await convertClassicToScenes({ videoId: id });
-    } catch (err) {
-      const message = errorText(err, "Conversion failed");
-      await db.video.update({ where: { id }, data: { error: message } });
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "convert",
-          level: "error",
-          message: `Scene conversion failed: ${message}`,
-        },
-      });
-      throw err;
-    }
-  });
+  const accepted = await startJob(id, "convert", () => runConvertJob(id));
 
   return NextResponse.json({ accepted, converting: true }, { status: accepted ? 202 : 200 });
 }

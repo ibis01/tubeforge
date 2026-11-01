@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
-import { generateStoryboard, generateSceneImage, editSceneImage, serializeScenes, storyboardComplete, parseScenes } from "@/lib/tubeforge/story";
-import { startJob, isJobRunning, isJobCancelled, lastJobError, setJobProgress, JobCancelledError } from "@/lib/tubeforge/jobs";
-import { errorText } from "@/lib/tubeforge/redact";
-import { invalidateRenderedArtifacts } from "@/lib/tubeforge/render";
+import { serializeScenes, storyboardComplete, parseScenes } from "@/lib/tubeforge/story";
+import { startJob, isJobRunning, lastJobError } from "@/lib/tubeforge/jobs";
+import { runStoryboardJob, runSceneJob } from "@/lib/tubeforge/video-jobs";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -35,6 +34,11 @@ export async function GET(req: NextRequest, ctx: Ctx) {
  * Body: {} for the full storyboard, { scene: n } to re-roll one scene from
  * its (Scene Studio-edited) prompt, or { scene: n, instruction: "..." } to
  * AI-edit the EXISTING scene image in place ("make it night", "warmer light").
+ *
+ * The job bodies (runStoryboardJob / runSceneJob in video-jobs.ts) are the
+ * SAME functions the durable queue's crash-recovery handler runs — a restart
+ * resumes the storyboard (already-painted scenes are kept) instead of dying
+ * as "interrupted".
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
@@ -61,19 +65,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const body = await req.json().catch(() => ({}));
   const sceneIndex = Number(body?.scene);
 
-  const character = video.characterId
-    ? await db.character.findUnique({ where: { id: video.characterId } })
-    : null;
-
-  const castOpts = character
-    ? {
-        id: character.id,
-        name: character.name,
-        identityAnchor: character.identityAnchor,
-        appearance: character.appearance,
-      }
-    : null;
-
   // Clear any stale error before the job starts.
   await db.video.update({ where: { id }, data: { error: null } });
 
@@ -93,61 +84,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     const mode = instruction ? "edit" : "reroll";
 
     const jobKey = `${id}#scene${sceneIndex}`;
-    const accepted = await startJob(jobKey, "scene", async () => {
-      try {
-        if (mode === "edit") {
-          await editSceneImage({ videoId: id, scene, instruction });
-        } else {
-          // Re-roll = a NEW take: bump the scene's generation counter BEFORE
-          // painting so the pinned seed (identity locking on text-to-image
-          // providers) yields a fresh image instead of the same pixels, then
-          // persist the bump — a later resume must not reuse the old take.
-          scene.seedVariant = Math.min((scene.seedVariant ?? 0) + 1, 999);
-          await db.video.update({
-            where: { id },
-            data: { scenes: JSON.stringify(scenes) },
-          });
-          await generateSceneImage({ videoId: id, scene, character: castOpts });
-        }
-        invalidateRenderedArtifacts(id, { slidePngs: true });
-        await db.video.update({
-          where: { id },
-          data: {
-            hasStoryboard: await storyboardComplete(id, scenes),
-            hasVideo: false,
-            videoDuration: null,
-            error: null,
-          },
-        });
-        await db.activity.create({
-          data: {
-            organizationId: auth.ctx.organizationId,
-            userId: auth.ctx.userId,
-            videoId: id,
-            stage: "storyboard",
-            message:
-              mode === "edit"
-                ? `Scene ${sceneIndex} "${scene.title}" AI-edited: ${instruction.slice(0, 80)}`
-                : `Scene ${sceneIndex} "${scene.title}" re-rolled`,
-          },
-        });
-      } catch (err) {
-        const message = errorText(err, "Scene edit failed");
-        await db.video.update({ where: { id }, data: { error: message } });
-        await db.activity.create({
-          data: {
-            organizationId: auth.ctx.organizationId,
-            userId: auth.ctx.userId,
-            videoId: id,
-            stage: "storyboard",
-            level: "error",
-            message: `Scene ${sceneIndex} ${mode === "edit" ? "edit" : "re-roll"} failed: ${message}`,
-          },
-        });
-        // Re-thrown so startJob records the failure for GET polling + history.
-        throw err;
-      }
-    });
+    const accepted = await startJob(
+      jobKey,
+      "scene",
+      () => runSceneJob(jobKey, { sceneIndex, instruction: instruction || undefined }),
+      { payload: { sceneIndex, instruction: instruction || undefined } }
+    );
 
     return NextResponse.json(
       { accepted, generating: true, mode },
@@ -156,78 +98,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
 
   // Full storyboard
-  const accepted = await startJob(id, "storyboard", async () => {
-    try {
-      await generateStoryboard({
-        videoId: id,
-        scenes,
-        character: castOpts,
-        shouldCancel: () => isJobCancelled(id, "storyboard"),
-        onSceneDone: (i, total) =>
-          setJobProgress(id, "storyboard", i + 1, total, `Painting scene ${i + 1} of ${total}`),
-      });
-
-      invalidateRenderedArtifacts(id, { slidePngs: true });
-      await db.video.update({
-        where: { id },
-        data: {
-          hasStoryboard: true,
-          hasVideo: false,
-          videoDuration: null,
-          error: null,
-        },
-      });
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "storyboard",
-          message: `Storyboard painted — ${scenes.length} scenes${character ? ` (host: ${character.name})` : ""}`,
-        },
-      });
-    } catch (err) {
-      if (err instanceof Error && err.message === "__CANCELLED__") {
-        await db.video.update({
-          where: { id },
-          data: {
-            hasStoryboard: await storyboardComplete(id, scenes),
-            error: null,
-          },
-        });
-        await db.activity.create({
-          data: {
-            organizationId: auth.ctx.organizationId,
-            userId: auth.ctx.userId,
-            videoId: id,
-            stage: "storyboard",
-            message: `Storyboard cancelled — finished scenes were kept`,
-          },
-        });
-        throw new JobCancelledError();
-      }
-      const message = errorText(err, "Storyboard failed");
-      await db.video.update({
-        where: { id },
-        data: {
-          hasStoryboard: await storyboardComplete(id, scenes),
-          error: message,
-        },
-      });
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "storyboard",
-          level: "error",
-          message: `Storyboard failed: ${message}`,
-        },
-      });
-      // Re-thrown so startJob records the failure for GET polling + history.
-      throw err;
-    }
-  });
+  const accepted = await startJob(id, "storyboard", () => runStoryboardJob(id));
 
   return NextResponse.json(
     { accepted, generating: true },

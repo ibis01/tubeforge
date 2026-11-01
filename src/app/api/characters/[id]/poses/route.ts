@@ -2,11 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { startJob } from "@/lib/tubeforge/jobs";
-import {
-  generateCharacterPoses,
-  listPoses,
-  portraitExists,
-} from "@/lib/tubeforge/characters";
+import { listPoses, portraitExists } from "@/lib/tubeforge/characters";
+import { runPosesJob } from "@/lib/tubeforge/character-jobs";
 import { POSES } from "@/lib/tubeforge/types";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -50,20 +47,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
-  const started = await startJob(id, "poses", async () => {
-    const result = await generateCharacterPoses({
-      characterId: id,
-      identityAnchor: character.identityAnchor,
-    });
-    await db.activity.create({
-      data: {
-        organizationId: auth.ctx.organizationId,
-        userId: auth.ctx.userId,
-        stage: "character",
-        message: `Consistency sheet complete for ${character.name} — ${result.generated.length} identity-locked poses`,
-      },
-    });
-  });
+  // Job body is runPosesJob (character-jobs.ts) — shared with the
+  // crash-recovery handler; poses derive from the portrait + identity anchor.
+  const started = await startJob(id, "poses", () => runPosesJob(id));
 
   if (!started)
     return NextResponse.json({ error: "Pose generation already running" }, { status: 409 });

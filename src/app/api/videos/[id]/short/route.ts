@@ -1,21 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
-import path from "path";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
-import { startJob, isJobRunning, lastJobError, setJobProgress } from "@/lib/tubeforge/jobs";
+import { startJob, isJobRunning, lastJobError } from "@/lib/tubeforge/jobs";
 import { parseScenes } from "@/lib/tubeforge/story";
-import { renderShort } from "@/lib/tubeforge/shorts";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
-import { errorText } from "@/lib/tubeforge/redact";
-
-type Ctx = { params: Promise<{ id: string }> };
+import { runShortJob } from "@/lib/tubeforge/video-jobs";
 
 import { materialize } from "@/lib/tubeforge/storage";
+
+type Ctx = { params: Promise<{ id: string }> };
 
 /**
  * POST — cut a 9:16 vertical Short out of the rendered final video as a
  * background job (202). Body: { sceneIndex?: number } — omit for auto-pick.
+ * The job body is runShortJob (video-jobs.ts) — shared with the crash-
+ * recovery handler, so a restart resumes the cut.
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
@@ -58,57 +58,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // Clear any stale error before the job starts.
   await db.video.update({ where: { id }, data: { error: null } });
 
-  const accepted = await startJob(id, "short", async () => {
-    try {
-      const result = await renderShort({
-        videoId: id,
-        scenes,
-        sceneIndex,
-        motion: {
-          mode: (video.motionMode ?? "smart") as "smart" | "zoom" | "pan" | "off",
-          intensity: video.motionIntensity ?? 12,
-          curve: (video.motionCurve ?? "smooth") as "smooth" | "linear",
-          vary: video.motionVary ?? true,
-        },
-        transition: { style: video.transitionStyle, durationSec: video.transitionDuration },
-        onProgress: (label) => setJobProgress(id, "short", 1, 2, label),
-      });
-
-      await db.video.update({
-        where: { id },
-        data: {
-          hasShort: true,
-          shortScene: result.sceneIndex,
-          shortDuration: result.durationSec,
-          error: null,
-        },
-      });
-
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "short",
-          message: `Vertical Short cut from scene ${result.sceneIndex}${result.autoPicked ? " (auto-picked)" : ""} — ${result.durationSec.toFixed(1)}s 9:16`,
-        },
-      });
-    } catch (err) {
-      const message = errorText(err, "Short render failed");
-      await db.video.update({ where: { id }, data: { error: message } });
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "short",
-          level: "error",
-          message: `Short render failed: ${message}`,
-        },
-      });
-      throw err;
-    }
-  });
+  const accepted = await startJob(
+    id,
+    "short",
+    () => runShortJob(id, { sceneIndex }),
+    { payload: { sceneIndex } }
+  );
 
   return NextResponse.json(
     { accepted, generating: true },

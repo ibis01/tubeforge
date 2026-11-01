@@ -1,12 +1,16 @@
-// Standalone durable-queue worker (Stage 3, T-3.5).
+// Standalone durable-queue worker (Stage 3, T-3.5 + close-out).
 //
 //   npm run worker        (foreground)
 //   npm run worker:daemon (background, logs to scripts/worker-daemon.log)
 //
-// Runs the SAME claim loop the web process runs (queue.ts), but claims ONLY
-// handler-registered kinds (script / research / stock today) — the kinds
-// whose work rebuilds entirely from DB state. Route closures (voiceover,
-// render, …) still execute in the web process that created them.
+// Runs the SAME claim loop the web process runs (queue.ts) and claims ONLY
+// handler-registered kinds — after the Stage 3 close-out that is EVERY kind
+// the routes start (script, research, stock, voiceover, storyboard, scene,
+// render, short, convert, verify, comments, thumbnail, variants, slide,
+// portrait, poses): each registers a handler in queue-handlers.ts that
+// rebuilds the work from DB state + the Job row's payload. Route closures
+// still execute preferentially in the web process that created them; this
+// worker adds capacity and takes over whenever the web process dies.
 //
 // Deploy topology (SETUP.md §Production):
 //   single box   — web only (loop runs in-process); this worker is optional

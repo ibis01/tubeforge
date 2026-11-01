@@ -338,6 +338,12 @@ export function jobProgress(
  * the REQUEST's tenant context at enqueue time; the queue re-enters it for
  * execution, so tenant scoping survives the deferred call.
  *
+ * opts.payload — the request-scoped options (render mode, scene instruction,
+ * voiceover source pointer, …), JSON-encoded into the Job row. After a
+ * process crash the kind's registered handler re-runs the job from DB state
+ * + this payload, so the caller's choices survive the restart instead of
+ * degrading to factory defaults. Keep it small and plain-JSON.
+ *
  * Fallback: if the Job row cannot be created (DB hiccup) or there is no
  * tenant context to attribute it to, the closure runs untracked in-process
  * exactly like Stage 1 — a durability downgrade, never a functional one.
@@ -345,7 +351,8 @@ export function jobProgress(
 export async function startJob(
   entityId: string,
   kind: JobKind,
-  fn: () => Promise<void>
+  fn: () => Promise<void>,
+  opts: { payload?: unknown } = {}
 ): Promise<boolean> {
   await ensureRecovered();
 
@@ -373,6 +380,7 @@ export async function startJob(
           userId: jobCtx.userId,
           kind,
           entityId,
+          payload: opts.payload,
         })
       ).jobId;
     } catch (err) {

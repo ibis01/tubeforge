@@ -2,11 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { startJob, lastJobError } from "@/lib/tubeforge/jobs";
-import {
-  generateCharacterPortrait,
-  readPortrait,
-  serializeCharacter,
-} from "@/lib/tubeforge/characters";
+import { readPortrait, serializeCharacter } from "@/lib/tubeforge/characters";
+import { runPortraitJob } from "@/lib/tubeforge/character-jobs";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -27,29 +24,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
-  const started = await startJob(id, "portrait", async () => {
-    const result = await generateCharacterPortrait({
-      characterId: id,
-      name: character.name,
-      appearance: character.appearance,
-      identityAnchor: character.identityAnchor,
-      artStyle: character.artStyle,
-    });
-    await db.character.update({
-      where: { id },
-      data: { hasPortrait: true },
-    });
-    await db.activity.create({
-      data: {
-        organizationId: auth.ctx.organizationId,
-        userId: auth.ctx.userId,
-        stage: "character",
-        message: `Reference portrait generated for ${character.name} (${Math.round(
-          result.fileBytes / 1024
-        )} KB)`,
-      },
-    });
-  });
+  // Job body is runPortraitJob (character-jobs.ts) — shared with the
+  // crash-recovery handler; the character row carries every input.
+  const started = await startJob(id, "portrait", () => runPortraitJob(id));
 
   if (!started)
     return NextResponse.json({ error: "Portrait generation already running" }, { status: 409 });

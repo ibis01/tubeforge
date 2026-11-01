@@ -211,8 +211,8 @@ and `fly.toml` pick the command per service:
 
 | Role | Command | What runs there |
 |---|---|---|
-| **web** | `node .next/standalone/server.js` | Next.js server (port 3000) + the in-process queue loop for route-closure jobs (voiceover, render, thumbnails…) |
-| **worker** | `node --import tsx scripts/worker.mts` | Dedicated durable-queue worker for the DB-derivable heavy stages (script, research, stock). Scale horizontally — claims are atomic |
+| **web** | `node .next/standalone/server.js` | Next.js server (port 3000) + the in-process queue loop. Route closures run preferentially here; every kind ALSO has a DB-derivable handler (video-jobs.ts / character-jobs.ts), so the worker can take any job over when the web process dies |
+| **worker** | `node --import tsx scripts/worker.mts` | Dedicated durable-queue worker — claims every handler-registered kind (script, research, stock, voiceover, storyboard, scene, render, short, convert, verify, comments, thumbnail, variants, slide, portrait, poses) rebuilt from DB state + the Job row's `payload` options. Scale horizontally — claims are atomic |
 
 ### Option A — Docker Compose (one box)
 

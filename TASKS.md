@@ -89,6 +89,20 @@ Risks closed this session: R-CRIT-3, R-HIGH-1, R-HIGH-2, R-HIGH-3, R-HIGH-11, R-
 
 **Sandbox constraint noted up front:** this environment has ffmpeg + network but **no Redis and no Docker**. Stage 3's Redis-backed items are therefore built against a **DB-backed durable queue** (same semantics: claims, retries, backoff, cross-process cancellation, per-org caps — implemented with atomic `UPDATE ... WHERE status='pending'` claims that work on SQLite *and* Postgres). The `QueueDriver` seam stays one interface wide so a BullMQ/Redis driver can be dropped in when infrastructure is provisioned. S3/storage, SMTP and deploy-pipeline tasks ship as code-complete drivers + docs that activate purely via env vars.
 
+### Execution status — Stage 3 close-out (updated 2026-11-01, part 3 — durable resume for EVERY kind)
+
+The "backlog continues next session" item from part 2 is done: every JobKind the routes actually start now has a DB-derivable handler, so a process crash resumes the stage instead of marking it "interrupted". Verification: `tsc --noEmit` 0 errors · `eslint` 0 errors (257-warning baseline, −5) · **66/66 unit tests** (2 new queue units) · **queue integration test PASS** (three phases: registry completeness, payload roundtrip incl. corrupt-payload degradation, real-worker restart recovery incl. per-scene dispatch + honest interruption) · **11/11 Playwright e2e** (7 isolation + 4 smoke) · live smoke: register → custom-script create → voiceover URL-mode job → durable payload confirmed in the Job row → readable failure surfaced → guards intact → DELETE.
+
+| Change | Notes |
+|---|---|
+| `Job.payload` column | New TEXT column (migration `20261101070000_stage3c_job_payload`, Postgres + SQLite mirror + `db push`). Routes store their request-scoped options at enqueue; the crash-recovery handler re-runs the job with the SAME choices. Plain TEXT (not Json) so both providers behave identically. |
+| `startJob(entityId, kind, fn, { payload })` | Optional 4th arg, backward compatible — the 22 existing call sites kept working; the routes that HAVE request options now pass them. |
+| `video-jobs.ts` (new) | 11 extracted job bodies: voiceover (TTS + custom url/upload), storyboard (full), scene (re-roll/AI-edit), render (mode/subtitles/music/sceneLimit), short, convert, verify, comments, thumbnail, variants, slide. Route closures and the crash handler call the SAME function — one implementation, two entry points, no drift. Uploaded voice bytes are staged into object storage BEFORE enqueue (a request buffer cannot survive a restart; a storage key can) and cleaned up after ingest. |
+| `character-jobs.ts` (new) | portrait + poses job bodies, derived entirely from the character row. |
+| Per-scene stock fix | A crashed per-scene stock job (`entityId "<videoId>#scene<N>"`) used to resume as a SILENT NO-OP (the handler passed the composite id to `runStockRefresh`, whose findUnique came back null). New `runStockSceneJob` + entityId dispatch — caught by a regression probe in the queue test. |
+| `queue.ts` | `JobHandler` now receives `(entityId, payload)`; payload parsed once at claim (corrupt JSON degrades to null, never kills the job); `setClaiming()` for test/drain control; `voiceover`/`variants`/`poses` capped at 1 attempt (multi-call AI stages whose calls already retry internally — same rationale as `script`). |
+| `upload` stays unregistered | The ONLY kind without a handler — YouTube publishing wiring is Stage 6 and nothing enqueues it today; a crashed row interrupts honestly (pinned by test). |
+
 ### Execution order (dependency-sorted)
 
 | Task | Objective | Dependencies |
@@ -106,7 +120,7 @@ Risks closed this session: R-CRIT-3, R-HIGH-1, R-HIGH-2, R-HIGH-3, R-HIGH-11, R-
 | T-3.11 | `LegacySetting` lifecycle close-out — closes Stage 2 deviation 6 | — |
 | T-3.12 | Deploy pipeline: Dockerfile (standalone), docker-compose (app+worker+PG), `fly.toml`, SETUP.md production matrix | T-3.5 |
 
-**Completion gate (roadmap):** a video job survives an application restart, resumes safely where possible, and its assets reach the correct user. T-3.5 delivers exactly this for the DB-derivable kinds (`script`, `research`, `stock`); kinds whose closures capture request-scoped state are re-enqueued as handlers are extracted (backlog continues next session).
+**Completion gate (roadmap):** a video job survives an application restart, resumes safely where possible, and its assets reach the correct user. ✅ CLOSED — see "Stage 3 close-out" below (every kind the routes start is now resumable).
 
 ---
 

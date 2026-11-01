@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { startJob, isJobRunning, lastJobError } from "@/lib/tubeforge/jobs";
-import { verifyNarration, parseVerifyReport } from "@/lib/tubeforge/verify";
-import { errorText } from "@/lib/tubeforge/redact";
+import { parseVerifyReport } from "@/lib/tubeforge/verify";
+import { runVerifyJob } from "@/lib/tubeforge/video-jobs";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -34,26 +34,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // Clear any stale error from a previous failed attempt before polling starts.
   await db.video.update({ where: { id }, data: { error: null } });
 
-  const accepted = await startJob(id, "verify", async () => {
-    try {
-      await verifyNarration(id);
-    } catch (err) {
-      const message = errorText(err, "Narration check failed");
-      await db.video.update({ where: { id }, data: { error: message } });
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "verify",
-          level: "error",
-          message: `Narration check failed: ${message}`,
-        },
-      });
-      // Re-thrown so startJob records the failure for GET polling + history.
-      throw err;
-    }
-  });
+  const accepted = await startJob(id, "verify", () => runVerifyJob(id));
 
   return NextResponse.json(
     { accepted, generating: true },

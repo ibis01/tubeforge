@@ -104,7 +104,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // Stage 3 (T-3.5): the fetch body lives in queue-handlers.ts (runStockRefresh)
   // so the request path and the durable queue execute the SAME code — a restart
   // resumes from the video row (scenes re-parsed, force=false).
-  const accepted = await startJob(id, "stock", () => runStockRefresh(id, { force }));
+  const accepted = await startJob(
+    id,
+    "stock",
+    () => runStockRefresh(id, { force }),
+    { payload: { force } } // survives a crash — the handler re-runs with the same refresh semantics
+  );
 
   return NextResponse.json(
     { accepted, generating: true },

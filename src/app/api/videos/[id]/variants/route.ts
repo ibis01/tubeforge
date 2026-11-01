@@ -1,19 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
-import {
-  generateThumbnail,
-  deriveThumbnailConcept,
-  listVariants,
-  promoteVariant,
-  pickVariantStyles,
-  readMedia,
-} from "@/lib/tubeforge/ai";
-import { parseScenes } from "@/lib/tubeforge/story";
-import { deriveStatus } from "@/lib/tubeforge/status";
+import { listVariants, promoteVariant } from "@/lib/tubeforge/ai";
 import { isJobRunning, lastJobError, startJob } from "@/lib/tubeforge/jobs";
+import { runVariantsJob } from "@/lib/tubeforge/video-jobs";
 import { THUMB_STYLES, type VariantDTO } from "@/lib/tubeforge/types";
-import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -59,65 +50,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { error: "Video has no title yet — generate the script first" },
       { status: 400 }
     );
-  const title = video.title; // narrowed — safe to use inside the job closure
-
-  await startJob(id, "variants", async () => {
-    try {
-      const styles = pickVariantStyles(video.thumbStyle, 3);
-
-      // One concept per set — every variant paints the SAME story moment in a
-      // different style, so A/B testing compares style, not subject.
-      const firstScene = video.format === "story" ? parseScenes(video.scenes)[0] : null;
-      const concept = firstScene
-        ? `${firstScene.visual}. Mood: ${firstScene.mood || "cinematic"}`
-        : await deriveThumbnailConcept({ topic: video.topic, script: video.script });
-
-      for (const style of styles) {
-        await generateThumbnail({
-          title,
-          topic: video.topic,
-          style,
-          videoId: video.id,
-          variant: true,
-          concept,
-        });
-        // Ensure a primary thumbnail exists — promote the first variant
-        if (!(await readMedia(video.id, "thumbnail.png"))) {
-          await promoteVariant(video.id, style);
-        }
-      }
-
-      const nextStatus = deriveStatus(video, { hasThumbnail: true });
-      await db.video.update({
-        where: { id },
-        data: { hasThumbnail: true, status: nextStatus, error: null },
-      });
-
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "thumbnail",
-          message: `A/B thumbnail set generated for "${video.title}" (${styles.length} styles)`,
-        },
-      });
-    } catch (err) {
-      const message = errorText(err, "Variant generation failed");
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "thumbnail",
-          level: "error",
-          message: `A/B thumbnail set failed: ${message}`,
-        },
-      });
-      // Re-thrown so startJob records it in the registry for GET polling.
-      throw err;
-    }
-  });
+  await startJob(id, "variants", () => runVariantsJob(id));
 
   return NextResponse.json({ accepted: true, generating: true }, { status: 202 });
 }

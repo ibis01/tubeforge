@@ -2,14 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { startJob, isJobRunning, lastJobError } from "@/lib/tubeforge/jobs";
-import { generateEngagementKit, parseCommentsKit } from "@/lib/tubeforge/comments";
-import { errorText } from "@/lib/tubeforge/redact";
+import { parseCommentsKit } from "@/lib/tubeforge/comments";
+import { runCommentsJob } from "@/lib/tubeforge/video-jobs";
 
 type Ctx = { params: Promise<{ id: string }> };
 
 /**
  * POST — generate the launch-day engagement kit as a background job (202):
  * a pinned comment, 4 reply templates, heart targets and a playbook.
+ * The job body is runCommentsJob (video-jobs.ts) — shared with the crash-
+ * recovery handler, so a restart resumes the kit.
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
@@ -35,39 +37,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // Clear any stale error from a previous failed attempt before polling starts.
   await db.video.update({ where: { id }, data: { error: null } });
 
-  const title = video.title ?? video.topic;
-  const scriptExcerpt = (video.script ?? "").slice(0, 1200);
-
-  const accepted = await startJob(id, "comments", async () => {
-    try {
-      await generateEngagementKit({
-        videoId: id,
-        title,
-        topic: video.topic,
-        niche: video.niche,
-        tone: video.tone,
-        scriptExcerpt,
-        channelName: video.channel?.name ?? null,
-        characterName: video.character?.name ?? null,
-      });
-    } catch (err) {
-      const message =
-        errorText(err, "Engagement kit failed");
-      await db.video.update({ where: { id }, data: { error: message } });
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "comments",
-          level: "error",
-          message: `Engagement kit failed: ${message}`,
-        },
-      });
-      // Re-thrown so startJob records the failure for GET polling + history.
-      throw err;
-    }
-  });
+  const accepted = await startJob(id, "comments", () => runCommentsJob(id));
 
   return NextResponse.json(
     { accepted, generating: true },

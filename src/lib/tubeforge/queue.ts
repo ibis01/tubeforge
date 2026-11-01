@@ -55,12 +55,17 @@ const BACKOFF_CAP_MS = 10 * 60_000;
  * layer already retries transient 500s internally (budget.ts withRetry ×3) —
  * queue attempts are for whole-job re-runs (e.g. process death mid-stage).
  * script = 1 because runScriptJob carries its own 6-round storm patience;
- * queue-level retries would multiply 2.5h into 7.5h.
+ * queue-level retries would multiply 2.5h into 7.5h. voiceover / variants /
+ * poses = 1 for the same reason — they are multi-call AI stages whose calls
+ * already retry internally, and a whole-job re-run re-pays every call.
  */
 const MAX_ATTEMPTS_BY_KIND: Partial<Record<JobKind, number>> = {
   script: 1,
   research: 2,
   stock: 2,
+  voiceover: 1,
+  variants: 1,
+  poses: 1,
 };
 const DEFAULT_MAX_ATTEMPTS = 2;
 
@@ -106,6 +111,15 @@ export function initQueue(role: "web" | "worker" = "web"): void {
   state.role = role;
   state.workerId = `${role}:${process.pid}:${Date.now().toString(36)}`;
   startQueueLoop();
+}
+
+/**
+ * Pause/resume claiming in THIS process (in-flight jobs still finish).
+ * Test harnesses use it to hand the queue over to a spawned worker; a real
+ * deployment achieves the same with TUBEFORGE_NO_CLAIM=1 at boot.
+ */
+export function setClaiming(enabled: boolean): void {
+  state.noClaim = !enabled;
 }
 
 export function queueWorkerId(): string {
@@ -162,7 +176,12 @@ function emitFinished(
 // survive process death: boot recovery re-enqueues them and the standalone
 // worker (scripts/worker.mts) can execute them without the original closure.
 
-export type JobHandler = (entityId: string) => Promise<void>;
+export type JobHandler = (
+  entityId: string,
+  /** Parsed Job.payload — the enqueue-time request options (null when the
+   *  enqueuing route had nothing request-scoped to preserve). */
+  payload: unknown
+) => Promise<void>;
 
 const handlers = new Map<JobKind, JobHandler>();
 
@@ -190,6 +209,8 @@ export async function createPendingJob(input: {
   userId: string | null;
   kind: JobKind;
   entityId: string;
+  /** Request-scoped options for the crash-recovery handler (JSON-encoded). */
+  payload?: unknown;
 }): Promise<EnqueueResult> {
   const maxAttempts = MAX_ATTEMPTS_BY_KIND[input.kind] ?? DEFAULT_MAX_ATTEMPTS;
   const row = await db.job.create({
@@ -202,6 +223,9 @@ export async function createPendingJob(input: {
       maxAttempts,
       nextRunAt: new Date(),
       startedAt: new Date(),
+      ...(input.payload === undefined || input.payload === null
+        ? {}
+        : { payload: JSON.stringify(input.payload) }),
     },
   });
   return { jobId: row.id };
@@ -307,7 +331,7 @@ export async function tickQueue(): Promise<void> {
       // (bounded by MAX_ACTIVE_PER_PROCESS, incremented below before detach
       // so the loop can't oversubscribe in the await window).
       state.active += 1;
-      void executeClaimed(candidate.id, kind, candidate.entityId, candidate.organizationId, candidate.userId)
+      void executeClaimed(candidate.id, kind, candidate.entityId, candidate.organizationId, candidate.userId, candidate.payload ?? null)
         .finally(() => {
           state.active -= 1;
         });
@@ -329,7 +353,8 @@ async function executeClaimed(
   kind: JobKind,
   entityId: string,
   organizationId: string,
-  userId: string | null
+  userId: string | null,
+  payloadRaw: string | null
 ): Promise<void> {
   emitClaimed(jobId, kind, entityId);
 
@@ -379,7 +404,18 @@ async function executeClaimed(
     } else if (handler) {
       const ctx = await ctxFromRow(organizationId, userId);
       if (!ctx) throw new Error("Job row has no user to run as — cannot restore tenant context");
-      await withCtx(ctx, () => runWithCancelKey(jobKey, () => handler(entityId)));
+      // Parse the durable payload ONCE here — handlers receive plain data and
+      // stay free of storage/serialization concerns. A corrupt payload (hand-
+      // edited row, older writer) degrades to null instead of killing the job.
+      let payload: unknown = null;
+      if (payloadRaw) {
+        try {
+          payload = JSON.parse(payloadRaw);
+        } catch {
+          log.warn("job payload failed to parse — running with defaults", { jobId, kind });
+        }
+      }
+      await withCtx(ctx, () => runWithCancelKey(jobKey, () => handler(entityId, payload)));
     }
   } catch (err) {
     if (err instanceof JobCancelledError) {

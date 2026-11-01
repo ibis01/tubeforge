@@ -5,17 +5,8 @@ import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseScenes } from "@/lib/tubeforge/story";
 import { startJob, isJobRunning } from "@/lib/tubeforge/jobs";
-import { errorText } from "@/lib/tubeforge/redact";
-import { invalidateRenderedArtifacts } from "@/lib/tubeforge/render";
-import {
-  loadSlideDeck,
-  planSlides,
-  rerollSlideSpec,
-  saveSlideSpecAt,
-  renderSlidePngs,
-  slideBrandFor,
-  type SlideSpec,
-} from "@/lib/tubeforge/slides";
+import { runSlideJob } from "@/lib/tubeforge/video-jobs";
+import { loadSlideDeck, type SlideSpec } from "@/lib/tubeforge/slides";
 import type { SlideDTO } from "@/lib/tubeforge/types";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -96,71 +87,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const scene = scenes.find((s) => s.index === sceneIndex);
   if (!scene)
     return NextResponse.json({ error: `Scene ${sceneIndex} does not exist` }, { status: 400 });
-  const position = scenes.findIndex((s) => s.index === sceneIndex);
 
   // Clear any stale error before the job starts.
   await db.video.update({ where: { id }, data: { error: null } });
 
-  const accepted = await startJob(`${id}#slide${sceneIndex}`, "slide", async () => {
-    try {
-      // 1) Ensure a deck exists — a video can be re-rolled before its first
-      //    slides render (the deck would otherwise only appear at render time).
-      let deck = loadSlideDeck(id);
-      if (!deck || deck.length < scenes.length) {
-        const planned = await planSlides(id, scenes, {
-          topic: video.topic,
-          niche: video.niche,
-          tone: video.tone,
-        });
-        deck = planned.specs;
-      }
-      const previous = deck[position] ?? null;
-
-      // 2) Fresh design for exactly this slide.
-      const hasArt = fs.existsSync(uploadPath(id, `scene-${String(sceneIndex).padStart(2, "0")}.png`));
-      const { spec, source } = await rerollSlideSpec(
-        scene,
-        { topic: video.topic, niche: video.niche, tone: video.tone },
-        previous,
-        { hasImage: hasArt }
-      );
-      saveSlideSpecAt(id, position, spec);
-
-      // 3) Re-screenshot just this slide with the brand kit applied.
-      const brand = slideBrandFor(id, video.brandAccent, video.brandLogoOn);
-      await renderSlidePngs(id, [{ scene, spec }], { force: true, brand });
-
-      // 4) The rendered video embeds the old slide — it is stale now.
-      invalidateRenderedArtifacts(id);
-      await db.video.update({
-        where: { id },
-        data: { hasVideo: false, videoDuration: null, error: null },
-      });
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "storyboard",
-          message: `Slide ${sceneIndex} re-designed (${source === "llm" ? "fresh AI take" : "deterministic fallback"}): "${spec.headline.slice(0, 60)}"`,
-        },
-      });
-    } catch (err) {
-      const message = errorText(err, "Slide redesign failed");
-      await db.video.update({ where: { id }, data: { error: message } });
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "storyboard",
-          level: "error",
-          message: `Slide ${sceneIndex} redesign failed: ${message}`,
-        },
-      });
-      throw err;
-    }
-  });
+  // Job body is runSlideJob (video-jobs.ts) — shared with the crash-recovery
+  // handler; the entityId encodes the slide, everything else re-derives.
+  const jobKey = `${id}#slide${sceneIndex}`;
+  const accepted = await startJob(jobKey, "slide", () => runSlideJob(jobKey));
 
   return NextResponse.json(
     { accepted, generating: true },

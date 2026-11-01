@@ -3,9 +3,9 @@ import { z } from "zod";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseScenes } from "@/lib/tubeforge/story";
-import { readSceneStock, fetchStockForScenes, readStockKeys } from "@/lib/tubeforge/stock";
-import { startJob, isJobRunning, isJobCancelled, lastJobError, setJobProgress, JobCancelledError } from "@/lib/tubeforge/jobs";
-import { errorText } from "@/lib/tubeforge/redact";
+import { readSceneStock, readStockKeys } from "@/lib/tubeforge/stock";
+import { startJob, isJobRunning, lastJobError } from "@/lib/tubeforge/jobs";
+import { runStockSceneJob } from "@/lib/tubeforge/queue-handlers";
 
 type Ctx = { params: Promise<{ id: string; n: string }> };
 
@@ -76,41 +76,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
+  // Job body is runStockSceneJob (queue-handlers.ts) — shared with the
+  // crash-recovery handler; the entityId encodes the scene.
   const jobKey = `${id}#scene${index}`;
-  const accepted = await startJob(jobKey, "stock", async () => {
-    try {
-      await fetchStockForScenes({
-        videoId: id,
-        scenes,
-        force: true, // one scene — always refresh its clip
-        onlyScene: index,
-        shouldCancel: () => isJobCancelled(jobKey, "stock"),
-        onProgress: (current, total, label) =>
-          setJobProgress(jobKey, "stock", current, total, label),
-      });
-      await db.video.update({
-        where: { id },
-        data: { hasVideo: false, videoDuration: null, error: null },
-      });
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "stock",
-          message: scene.stock
-            ? `Scene ${index} stock clip re-matched`
-            : `Scene ${index} stock clip matched`,
-        },
-      });
-    } catch (err) {
-      if (err instanceof JobCancelledError || (err instanceof Error && err.message === "__CANCELLED__"))
-        throw new JobCancelledError();
-      const message = errorText(err, "Stock refetch failed");
-      await db.video.update({ where: { id }, data: { error: message } }).catch(() => {});
-      throw err;
-    }
-  });
+  const accepted = await startJob(jobKey, "stock", () => runStockSceneJob(jobKey));
 
   return NextResponse.json(
     {

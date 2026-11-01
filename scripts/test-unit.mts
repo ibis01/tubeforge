@@ -1113,6 +1113,55 @@ await test("email: smtp mode hides the link from responses and refuses empty con
   else delete process.env.TUBEFORGE_SMTP_HOST;
 });
 
+// ---------------------------------------------------------------------------
+// Stage 3 close-out — durable job entity ids (video-jobs.ts)
+// ---------------------------------------------------------------------------
+
+await test("queue: splitEntityId parses scene/slide composite ids, rejects garbage", async () => {
+  const { splitEntityId } = await import("../src/lib/tubeforge/video-jobs.ts");
+
+  const [v1, n1] = splitEntityId("abc123#scene4", "#scene");
+  eq(v1, "abc123", "scene videoId extracted");
+  eq(n1, "4", "scene index extracted");
+
+  const [v2, n2] = splitEntityId("abc123#slide12", "#slide");
+  eq(v2, "abc123", "slide videoId extracted");
+  eq(n2, "12", "slide index extracted");
+
+  // cuid2 ids contain no '#' — a plain videoId passes through untouched.
+  const [v3, n3] = splitEntityId("cmvx6yqo5000dp8beeas0kp7a", "#scene");
+  eq(v3, "cmvx6yqo5000dp8beeas0kp7a", "plain id preserved");
+  eq(n3, null, "no suffix -> null (handler falls back to payload/full-video mode)");
+
+  // A non-numeric suffix is NOT a scene index — reject it rather than guess.
+  const [v4, n4] = splitEntityId("abc#scenex", "#scene");
+  eq(v4, "abc", "videoId still extracted");
+  eq(n4, null, "non-numeric suffix rejected");
+
+  // The scene marker must not match a slide id (and vice versa).
+  const [, n5] = splitEntityId("abc#slide3", "#scene");
+  eq(n5, null, "slide id is not a scene id");
+});
+
+await test("queue: resumableKinds covers every kind the routes start", async () => {
+  // Static contract: the routes call startJob with these kinds (grep-checked
+  // in review); every one must be resumable after a crash. "upload" is the
+  // ONLY kind without a handler — YouTube publishing wiring is Stage 6 and
+  // nothing enqueues it yet.
+  const { resumableKinds } = await import("../src/lib/tubeforge/queue-handlers.ts");
+  const kinds = resumableKinds();
+  const expected = [
+    "script", "research", "stock", "voiceover", "storyboard", "scene",
+    "render", "short", "convert", "verify", "comments", "thumbnail",
+    "variants", "slide", "portrait", "poses",
+  ];
+  for (const k of expected) {
+    ok(kinds.includes(k), `"${k}" is resumable`);
+  }
+  eq(kinds.length, expected.length, "no unexpected resumable kinds");
+  ok(!kinds.includes("upload"), `"upload" (Stage 6) is not claimed by handlers`);
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

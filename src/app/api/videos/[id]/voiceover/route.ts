@@ -1,19 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
-import { generateVoiceover, readMedia } from "@/lib/tubeforge/ai";
-import { generateSceneVoiceovers, parseScenes } from "@/lib/tubeforge/story";
-import { ingestCustomAudio, MAX_AUDIO_BYTES, isValidAudioUrl } from "@/lib/tubeforge/voice";
-import { deriveStatus } from "@/lib/tubeforge/status";
-import { startJob, setJobProgress, isJobRunning } from "@/lib/tubeforge/jobs";
+import { readMedia } from "@/lib/tubeforge/ai";
+import { parseScenes } from "@/lib/tubeforge/story";
+import { MAX_AUDIO_BYTES, isValidAudioUrl } from "@/lib/tubeforge/voice";
+import { startJob, isJobRunning } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
-import { errorText } from "@/lib/tubeforge/redact";
+import { put, remove } from "@/lib/tubeforge/storage";
+import { runVoiceoverJob, type VoiceoverJobSource } from "@/lib/tubeforge/video-jobs";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-import { scratchDir } from "@/lib/tubeforge/storage";
+// Mirrors voice.ts AUDIO_EXT_RE — keeps the staged source extension demuxer-friendly.
+const AUDIO_EXT = /\.(mp3|wav|wave|m4a|aac|ogg|oga|opus|flac|webm|mp4|m4b|wma|aiff?|amr)$/i;
 
 /** POST — (re)generate the voiceover as a background job (returns 202 immediately).
  * Long synchronous requests were killed by the gateway with 502; the job runs
@@ -23,6 +22,12 @@ import { scratchDir } from "@/lib/tubeforge/storage";
  *   default / JSON {mode:"tts"}            → built-in TTS voices (scene videos get per-scene TTS)
  *   multipart/form-data (field "file")     → bring-your-own-voice: use an uploaded audio file
  *   JSON {mode:"url", url}                 → bring-your-own-voice: download audio from an internet link
+ *
+ * The job body is runVoiceoverJob (video-jobs.ts) — the SAME function the
+ * durable queue's crash-recovery handler runs, so a restart resumes the
+ * stage. Uploaded bytes are staged into object storage BEFORE enqueueing (a
+ * request buffer cannot survive a restart; a storage key can) and cleaned up
+ * after the ingest (win or lose the dedupe race).
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
@@ -85,18 +90,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
 
   const custom = mode.kind !== "tts";
-  // Narrow the union once so the job closure can use it without re-checking kind.
-  const customMode: { kind: "upload"; buffer: Buffer; filename: string } | {
-    kind: "url";
-    url: string;
-    label?: string;
-  } | null = custom
-    ? (mode as { kind: "upload"; buffer: Buffer; filename: string } | {
-        kind: "url";
-        url: string;
-        label?: string;
-      })
-    : null;
   const scenes = video.format === "story" ? parseScenes(video.scenes) : [];
   if (!custom && video.format === "story" && scenes.length === 0)
     return NextResponse.json(
@@ -129,116 +122,30 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     data: { error: null, hasVoiceover: false, audioDuration: null },
   });
 
-  const accepted = await startJob(id, "voiceover", async () => {
-    try {
-      let durationSec: number;
-      let voiceSource = "tts";
-      let voiceLabel: string | null = null;
-      let activityMsg: string;
+  // Durable source spec — uploaded bytes go to storage FIRST so the crash-
+  // recovery handler can re-read them; URL mode just carries the URL.
+  let source: VoiceoverJobSource | null = null;
+  if (custom && mode.kind === "upload") {
+    const extMatch = mode.filename.toLowerCase().match(AUDIO_EXT);
+    const ext = extMatch ? extMatch[0] : ".bin";
+    const storageKey = `${id}/voice-source${ext}`;
+    await put(storageKey, mode.buffer);
+    source = { kind: "upload", storageKey, label: mode.filename };
+  } else if (custom && mode.kind === "url") {
+    source = { kind: "url", url: mode.url, label: mode.label };
+  }
 
-      if (custom && customMode) {
-        // ----- Bring-your-own-voice: normalize + (scene videos) cut -----
-        const result = await ingestCustomAudio({
-          videoId: id,
-          source:
-            customMode.kind === "upload"
-              ? { kind: "upload", buffer: customMode.buffer, filename: customMode.filename }
-              : { kind: "url", url: customMode.url },
-          onProgress: (label) => setJobProgress(id, "voiceover", 1, 2, label),
-        });
-        durationSec = result.durationSec;
-        voiceSource = "custom";
-        voiceLabel =
-          customMode.kind === "upload" ? customMode.filename : (customMode.label ?? result.sourceLabel);
-        activityMsg = `Custom voice attached from ${mode.kind === "upload" ? "upload" : "web link"} — “${voiceLabel}”, ${Math.round(durationSec)}s${
-          result.scenesCut !== null ? `, cut across ${result.scenesCut} scenes` : ""
-        }`;
-      } else if (video.format === "story" && scenes.length > 0) {
-        // Per-scene narration → scene-XX.wav + merged voiceover.wav
-        const result = await generateSceneVoiceovers({
-          videoId: id,
-          scenes,
-          voice: video.voice,
-          speed: video.ttsSpeed,
-        });
-        durationSec = result.durationSec;
-        activityMsg = `Scene-by-scene voiceover rendered (${video.voice}, ${video.ttsSpeed}x) — ${Math.round(durationSec)}s across ${scenes.length} scenes`;
-      } else {
-        const result = await generateVoiceover({
-          script: video.script ?? "",
-          voice: video.voice,
-          speed: video.ttsSpeed,
-          videoId: id,
-        });
-        durationSec = result.durationSec;
-        activityMsg = `Voiceover rendered (${video.voice}, ${video.ttsSpeed}x) — ${Math.round(durationSec)}s of audio`;
-      }
+  const accepted = await startJob(
+    id,
+    "voiceover",
+    () => runVoiceoverJob(id, { source }),
+    { payload: { source } }
+  );
 
-      if (video.format === "story") {
-        // Old renders no longer match the new narration timing.
-        for (const f of [
-          "final.mp4",
-          "preview.mp4",
-          "subtitles.srt",
-          "short.mp4",
-          "short-thumb.png",
-        ]) {
-          fs.rmSync(path.join(scratchDir(id), f), { force: true }); // storage seam (T-3.7)
-        }
-      }
-
-      const fresh = await db.video.findUnique({ where: { id } });
-      const nextStatus = deriveStatus(video, {
-        hasVoiceover: true,
-        hasThumbnail: fresh?.hasThumbnail ?? video.hasThumbnail,
-      });
-
-      await db.video.update({
-        where: { id },
-        data: {
-          hasVoiceover: true,
-          audioDuration: Math.round(durationSec * 10) / 10,
-          voiceSource,
-          voiceLabel,
-          hasVideo: video.format === "story" ? false : video.hasVideo,
-          hasShort: video.format === "story" ? false : video.hasShort,
-          shortDuration: video.format === "story" ? null : video.shortDuration,
-          shortScene: video.format === "story" ? null : video.shortScene,
-          status: nextStatus,
-          error: null,
-        },
-      });
-
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "voiceover",
-          message: activityMsg,
-        },
-      });
-    } catch (err) {
-      const message =
-        errorText(err, "Voiceover failed");
-      await db.video.update({
-        where: { id },
-        data: { status: "failed", error: message },
-      });
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "voiceover",
-          level: "error",
-          message: `Voiceover failed: ${message}`,
-        },
-      });
-      // Re-thrown so startJob records the failure for GET polling + history.
-      throw err;
-    }
-  });
+  // Lost the dedupe race — nothing will consume the staged upload; drop it.
+  if (!accepted && source?.kind === "upload") {
+    await remove(source.storageKey).catch(() => {});
+  }
 
   // 202 Accepted — job already running (dedupe) or just started. The response
   // mirrors the CLEARED state so no client ever sees the stale flags.

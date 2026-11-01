@@ -1,36 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import path from "path";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
-import { generateThumbnail, deriveThumbnailConcept, readMedia, videoDir } from "@/lib/tubeforge/ai";
-import { parseScenes } from "@/lib/tubeforge/story";
-import { runQualityGate } from "@/lib/tubeforge/quality";
-import { deriveStatus } from "@/lib/tubeforge/status";
+import { readMedia } from "@/lib/tubeforge/ai";
 import { startJob } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
-import { errorText } from "@/lib/tubeforge/redact";
+import { runThumbnailJob } from "@/lib/tubeforge/video-jobs";
 
 type Ctx = { params: Promise<{ id: string }> };
 
 /**
- * Concept for the cover art, derived from the CONTENT so the thumbnail always
- * matches the story: scene videos paint their opening scene; classic videos
- * distill the script's most striking moment via a cheap LLM call.
+ * POST — kick off CogView thumbnail generation as a background job (returns 202 immediately).
+ * The job body is runThumbnailJob (video-jobs.ts) — shared with the crash-
+ * recovery handler; everything it needs (script-matched concept, style,
+ * character) is re-derived from the video row.
  */
-async function conceptFor(video: {
-  format: string;
-  scenes: string | null;
-  script: string | null;
-  topic: string;
-}): Promise<string> {
-  if (video.format === "story") {
-    const first = parseScenes(video.scenes)[0];
-    if (first) return `${first.visual}. Mood: ${first.mood || "cinematic"}`;
-  }
-  return deriveThumbnailConcept({ topic: video.topic, script: video.script });
-}
-
-/** POST — kick off CogView thumbnail generation as a background job (returns 202 immediately). */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -53,77 +36,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { error: "Video has no title yet — generate the script first" },
       { status: 400 }
     );
-  const title = video.title; // narrowed — safe to use inside the job closure
-
   // Clear any stale error from a previous failed attempt before polling starts.
   await db.video.update({ where: { id }, data: { error: null } });
 
-  await startJob(id, "thumbnail", async () => {
-    try {
-      // Script-derived concept keeps the cover matched to the story.
-      const concept = await conceptFor(video);
-
-      // Phase 3: VLM quality gate — inspect the thumbnail and re-roll once
-      // when it scores below the configured threshold (default mode: on).
-      await runQualityGate({
-        kind: "thumbnail",
-        videoId: id,
-        imagePath: path.join(videoDir(id), "thumbnail.png"),
-        context: `YouTube thumbnail (${video.thumbStyle} style) for the video "${video.title}" — it should depict: ${concept}`,
-        generate: () =>
-          generateThumbnail({
-            title,
-            topic: video.topic,
-            style: video.thumbStyle,
-            videoId: video.id,
-            concept,
-            character: video.character ?? null,
-          }),
-      });
-
-      const fresh = await db.video.findUnique({ where: { id } });
-      const nextStatus = deriveStatus(video, {
-        hasThumbnail: true,
-        hasVoiceover: fresh?.hasVoiceover ?? video.hasVoiceover,
-      });
-
-      await db.video.update({
-        where: { id },
-        data: { hasThumbnail: true, status: nextStatus, error: null },
-      });
-
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "thumbnail",
-          message: `Thumbnail generated from the script content (${video.thumbStyle} style)${
-            video.character ? ` featuring ${video.character.name}` : ""
-          } for "${video.title}"`,
-        },
-      });
-    } catch (err) {
-      const message =
-        errorText(err, "Thumbnail failed");
-      await db.video.update({
-        where: { id },
-        data: { status: "failed", error: message },
-      });
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "thumbnail",
-          level: "error",
-          message: `Thumbnail failed: ${message}`,
-        },
-      });
-      // Re-thrown so startJob records the failure for GET polling + history.
-      throw err;
-    }
-  });
+  await startJob(id, "thumbnail", () => runThumbnailJob(id));
 
   // 202 Accepted — job already running (dedupe) or just started.
   return NextResponse.json(
