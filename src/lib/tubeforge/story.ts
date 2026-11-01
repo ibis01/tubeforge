@@ -20,6 +20,7 @@ import { chatComplete } from "./providers/chat";
 import { ttsSynthesize } from "./providers/tts";
 import { imageEdit, imageGenerate, imageEditSupported } from "./providers/image";
 import * as storage from "./storage";
+import { getApprovedAddendum } from "./director-plan";
 
 const execFileAsync = promisify(execFile);
 
@@ -563,8 +564,12 @@ export async function generateSceneImage(opts: {
   // The no-text clause stays (numbers/charts come out as gibberish glyphs).
   // A per-scene art style (Scene Studio) is woven in right after the subject
   // so the taste override steers the whole render, not just the edges.
+  // Stage 5: under an APPROVED director plan the shot's framing / lens /
+  // composition / visual mood join the prompt too ("AI suggests, human
+  // approves" — an unapproved or missing plan changes nothing).
   const styleClause = sceneStylePrompt(scene.style);
-  const artPrompt = `${scene.visual}.${styleClause ? ` ${styleClause}.` : ""} ${scene.mood}. Wide 16:9 cinematic frame, ONE dominant subject filling the frame, highly detailed, professional color grading, storytelling composition. The frame must depict exactly the moment described — the named subject is the single dominant element. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
+  const directorClause = await getApprovedAddendum(opts.videoId, scene.index);
+  const artPrompt = `${scene.visual}.${styleClause ? ` ${styleClause}.` : ""}${directorClause ? ` ${directorClause}.` : ""} ${scene.mood}. Wide 16:9 cinematic frame, ONE dominant subject filling the frame, highly detailed, professional color grading, storytelling composition. The frame must depict exactly the moment described — the named subject is the single dominant element. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
 
   const portrait =
     scene.hostInScene && opts.character?.id

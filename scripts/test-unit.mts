@@ -1253,11 +1253,92 @@ await test("tenant-db: every org-scoped model matches the lowercased lookup", as
   const expected = [
     "channel", "character", "video", "activity", "researchsession",
     "scheduleslot", "videostat", "voiceprofile", "musictrack", "job", "membership",
+    "characterappearance",
   ];
   for (const m of expected) {
     ok(ORG_SCOPED_MODELS.has(m), `"${m}" is org-scoped`);
   }
   eq(ORG_SCOPED_MODELS.size, expected.length, "no unexpected scoped models");
+});
+
+// ---------------------------------------------------------------------------
+// Stage 5 (T-5.1) — AI Director plan layer: parse/normalize contract
+// ---------------------------------------------------------------------------
+
+await test("director-plan: parsePlan normalizes junk into the vocabularies", async () => {
+  const { parsePlan } = await import("../src/lib/tubeforge/director-plan.ts");
+  const plan = parsePlan(
+    JSON.stringify({
+      concept: "Slow burn, escalation at the midpoint.",
+      scenes: [
+        {
+          sceneIndex: 2,
+          mood: "cold moonlight",
+          transitionIn: "not-a-transition", // → snapped to "fade"
+          motion: "SPIN", // → not in {smart,zoom,pan,off} → "smart"
+          needsI2V: "yes", // → not boolean true → false
+          shots: [
+            { shotIndex: 1, framing: "EXTREME CLOSE-UP", camera: "warp-drive", lens: "85mm f/1.8", composition: "golden ratio", duration: 99, imagePrompt: "the reveal" },
+            { shotIndex: 0, framing: "wide", camera: "push-in", duration: 0.1 }, // clamped to 0.5
+          ],
+        },
+        { sceneIndex: 1, mood: "dawn", transitionIn: "fadeblack", shots: [{ shotIndex: 0, framing: "aerial", camera: "drone", duration: 3 }] },
+      ],
+    })
+  );
+  ok(plan !== null, "plan parsed");
+  eq(plan!.scenes.length, 2, "both scenes kept");
+  eq(plan!.scenes[0].sceneIndex, 1, "scenes sorted by index");
+  eq(plan!.scenes[0].transitionIn, "", "scene 1 transitionIn forced empty — nothing precedes it");
+  eq(plan!.scenes[1].transitionIn, "fade", "unknown transition snapped to fade");
+  eq(plan!.scenes[1].motion, "smart", "unknown motion snapped to smart");
+  eq(plan!.scenes[1].needsI2V, false, "non-boolean needsI2V coerced false");
+  const shots = plan!.scenes[1].shots;
+  eq(shots[0].shotIndex, 0, "shots sorted by shotIndex");
+  eq(shots[0].framing, "wide", "shot 0 kept its lowercase-safe framing");
+  eq(shots[1].framing, "extreme close-up", "framing lowercased into vocabulary");
+  eq(shots[1].camera, "static", "unknown camera snapped to static");
+  eq(shots[1].duration, 10, "duration clamped to the 0.5..10 band");
+});
+
+await test("director-plan: corrupt / empty / null plans degrade to null", async () => {
+  const { parsePlan } = await import("../src/lib/tubeforge/director-plan.ts");
+  eq(parsePlan(null), null, "null → null");
+  eq(parsePlan(undefined), null, "undefined → null");
+  eq(parsePlan(""), null, "empty → null");
+  eq(parsePlan("{not json"), null, "corrupt JSON → null");
+  eq(parsePlan('{"scenes":"nope"}'), null, "non-array scenes → null");
+  eq(parsePlan('{"scenes":[{"sceneIndex":"x"}]}'), null, "scene without a valid index dropped → empty plan");
+});
+
+await test("director-plan: addendum + duration + transition accessors", async () => {
+  const { parsePlan, directorImageAddendum, planSceneDuration, planTransitionIn } = await import(
+    "../src/lib/tubeforge/director-plan.ts"
+  );
+  const plan = parsePlan(
+    JSON.stringify({
+      concept: "",
+      scenes: [
+        { sceneIndex: 1, mood: "amber dusk", shots: [{ shotIndex: 0, framing: "wide", camera: "push-in", lens: "35mm", composition: "rule of thirds", duration: 2.5, imagePrompt: "" }] },
+        { sceneIndex: 2, mood: "cold neon", transitionIn: "cut", shots: [{ shotIndex: 0, framing: "close-up", camera: "static", lens: "85mm f/1.8", composition: "leading lines", duration: 2.8, imagePrompt: "" }, { shotIndex: 1, framing: "medium", camera: "pan-left", lens: "35mm", composition: "rule of thirds", duration: 3.2, imagePrompt: "" }] },
+      ],
+    })
+  );
+  ok(plan !== null);
+  eq(planTransitionIn(plan, 2), "cut", "planned transition-in read back");
+  eq(planTransitionIn(plan, 9), "", "missing scene → empty transition");
+  eq(Math.round(planSceneDuration(plan, 2) * 10) / 10, 6, "scene duration = sum of shot durations");
+  eq(
+    directorImageAddendum(plan, 2),
+    "close-up shot, 85mm f/1.8, leading lines, cold neon",
+    "addendum = shot-0 framing + non-default lens + non-default composition + mood"
+  );
+  eq(
+    directorImageAddendum(plan, 1),
+    "wide shot, amber dusk",
+    "defaults (35mm, rule of thirds) are omitted from the addendum"
+  );
+  eq(directorImageAddendum(null, 1), "", "no plan → empty addendum");
 });
 
 // ---------- summary ----------

@@ -42,6 +42,8 @@ import {
   runConvertJob,
   runVerifyJob,
   runCommentsJob,
+  runDirectorJob,
+  runContinuityJob,
   runThumbnailJob,
   runVariantsJob,
   runSlideJob,
@@ -285,6 +287,8 @@ export function registerDefaultHandlers(): void {
   registerJobHandler("convert", (videoId) => runConvertJob(videoId));
   registerJobHandler("verify", (videoId) => runVerifyJob(videoId));
   registerJobHandler("comments", (videoId) => runCommentsJob(videoId));
+  registerJobHandler("director", (videoId) => runDirectorJob(videoId));
+  registerJobHandler("continuity", (videoId) => runContinuityJob(videoId));
   registerJobHandler("thumbnail", (videoId) => runThumbnailJob(videoId));
   registerJobHandler("variants", (videoId) => runVariantsJob(videoId));
   registerJobHandler("slide", (entityId) => runSlideJob(entityId));

@@ -66,6 +66,11 @@ const MAX_ATTEMPTS_BY_KIND: Partial<Record<JobKind, number>> = {
   voiceover: 1,
   variants: 1,
   poses: 1,
+  // Stage 5 — the director pass and continuity check are single LLM/VLM
+  // stages whose calls already retry internally (budget.ts withRetry);
+  // a whole-job re-run would re-pay every call.
+  director: 1,
+  continuity: 1,
 };
 const DEFAULT_MAX_ATTEMPTS = 2;
 

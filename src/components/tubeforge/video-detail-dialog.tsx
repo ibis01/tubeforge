@@ -31,6 +31,7 @@ import { MotionControlsCard, type MotionPickerValue } from "@/components/tubefor
 import { TransitionControlsCard, type TransitionPickerValue } from "@/components/tubeforge/transition-controls";
 import { BrandKitCard } from "@/components/tubeforge/brand-kit";
 import { SceneEditorDialog } from "@/components/tubeforge/scene-editor";
+import { DirectorCard } from "@/components/tubeforge/director-card";
 import { CircleCheck, CircleX, CircleHelp, Ban, Brush } from "lucide-react";
 import {
   pollVoiceover,
@@ -998,6 +999,41 @@ export function VideoDetailDialog({
     }
   };
 
+  // Stage 5 — one-click repaint of a continuity-flagged scene (AI Director
+  // card): same endpoint the Scene Studio re-roll uses, fire-and-forget poll.
+  const rerollScene = async (index: number) => {
+    if (busy) return;
+    setBusy(`scene-${index}`);
+    try {
+      const res = await fetch(`/api/videos/${video.id}/storyboard`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scene: index }),
+      });
+      const d = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(d.error ?? "Scene re-roll failed");
+      toast({ title: `Repainting scene ${index}…` });
+      void pollScene(video.id, index)
+        .then(async () => {
+          await reloadScenes(video.id);
+          await refreshVideo(video.id);
+          bumpRefresh();
+          toast({ title: `Scene ${index} repainted`, description: "Run Check continuity to re-score it." });
+        })
+        .catch(() => {
+          void reloadScenes(video.id);
+        });
+    } catch (e) {
+      toast({
+        title: "Scene re-roll failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   // Per-slide design re-roll (keynote slides) — one fresh AI take on ONE
   // slide; the rest of the deck, the narration and the scene art stay put.
   const rerollSlide = async (index: number, title: string) => {
@@ -1250,6 +1286,14 @@ export function VideoDetailDialog({
 
   const storyboardTab = (
     <div className="space-y-4">
+      {/* Stage 5 — AI Director: proposes the shot plan, human approves; VLM
+          continuity flags + one-click repaint for drifted scenes. */}
+      <DirectorCard
+        videoId={video.id}
+        hasCast={Boolean(video.characterName)}
+        storyGenerating={boardGenerating || busy === "storyboard"}
+        onRepaintScene={(sceneIndex) => void rerollScene(sceneIndex)}
+      />
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2.5 flex-wrap">
           <p className="text-sm text-muted-foreground">

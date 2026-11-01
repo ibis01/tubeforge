@@ -24,6 +24,7 @@ import path from "path";
 import { db } from "./tenant-db";
 import { assertCtx } from "./tenant";
 import { errorText } from "@/lib/tubeforge/redact";
+import { runDirectorPass, runContinuityCheck } from "./director";
 import {
   generateVoiceover,
   generateThumbnail,
@@ -755,6 +756,61 @@ export async function runCommentsJob(videoId: string): Promise<void> {
         stage: "comments",
         level: "error",
         message: `Engagement kit failed: ${message}`,
+      },
+    });
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 5 — AI Director
+
+/** LLM shot-list pass → Video.shotList with directorState "proposed".
+ *  The route closure AND the durable-queue handler both call this. */
+export async function runDirectorJob(videoId: string): Promise<void> {
+  const ctx = assertCtx("runDirectorJob");
+  const video = await db.video.findUnique({ where: { id: videoId } });
+  if (!video) return;
+  try {
+    await runDirectorPass(videoId);
+  } catch (err) {
+    const message = errorText(err, "AI Director pass failed");
+    await db.video.update({
+      where: { id: videoId },
+      data: { error: message, directorState: null },
+    });
+    await db.activity.create({
+      data: {
+        organizationId: video.organizationId,
+        userId: ctx.userId,
+        videoId,
+        stage: "director",
+        level: "error",
+        message: `AI Director pass failed: ${message}`,
+      },
+    });
+    throw err;
+  }
+}
+
+/** VLM per-scene continuity check → Video.consistency report. */
+export async function runContinuityJob(videoId: string): Promise<void> {
+  const ctx = assertCtx("runContinuityJob");
+  const video = await db.video.findUnique({ where: { id: videoId } });
+  if (!video) return;
+  try {
+    await runContinuityCheck(videoId);
+  } catch (err) {
+    const message = errorText(err, "Continuity check failed");
+    await db.video.update({ where: { id: videoId }, data: { error: message } });
+    await db.activity.create({
+      data: {
+        organizationId: video.organizationId,
+        userId: ctx.userId,
+        videoId,
+        stage: "continuity",
+        level: "error",
+        message: `Continuity check failed: ${message}`,
       },
     });
     throw err;

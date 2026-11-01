@@ -46,7 +46,9 @@ export type JobKind =
   | "convert" // classic narration script -> scene-based story
   | "stock" // stock b-roll fetch (Pexels/Pixabay)
   | "research" // Topic Radar scan (Stage 1, T-1.10 — jobbed off the request path)
-  | "script"; // (re)generate the script package — retry after a failed create, or re-roll
+  | "script" // (re)generate the script package — retry after a failed create, or re-roll
+  | "director" // Stage 5 — LLM shot-list pass (AI suggests, human approves)
+  | "continuity"; // Stage 5 — VLM per-scene character-continuity check
 
 export type JobStatus = "pending" | "running" | "done" | "failed" | "interrupted" | "cancelled";
 
