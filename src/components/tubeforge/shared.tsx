@@ -161,6 +161,149 @@ export function timeAgo(iso: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Stage 4a design-system primitives (T-4.1)
+// ---------------------------------------------------------------------------
+
+/** Compact formatter: 1.2K / 3.4M / 900 — KPI cards + palette rows. */
+export function compactNumber(n: number | null | undefined): string {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  if (Math.abs(n) < 1000) return String(n);
+  if (Math.abs(n) < 1_000_000) return `${(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}K`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+/** Keyboard-key chip (paired with the .tf-kbd utility class). */
+export function Kbd({ children }: { children: React.ReactNode }) {
+  return <kbd className="tf-kbd">{children}</kbd>;
+}
+
+/** Colored status dot with an optional live pulse. */
+export function Dot({
+  tone = "neutral",
+  pulse = false,
+  className,
+}: {
+  tone?: "positive" | "warning" | "danger" | "info" | "neutral";
+  pulse?: boolean;
+  className?: string;
+}) {
+  const color =
+    tone === "positive" ? "bg-emerald-400"
+    : tone === "warning" ? "bg-amber-400"
+    : tone === "danger" ? "bg-red-400"
+    : tone === "info" ? "bg-sky-300"
+    : "bg-white/30";
+  return (
+    <span
+      aria-hidden
+      className={clsx(
+        "inline-block h-1.5 w-1.5 rounded-full shrink-0",
+        color,
+        pulse && "animate-pulse",
+        className
+      )}
+    />
+  );
+}
+
+/**
+ * Pure-SVG sparkline for KPI trend context (no chart lib, no JS layout).
+ * Values are min-max normalized; a single value renders a flat baseline.
+ */
+export function Sparkline({
+  values,
+  width = 96,
+  height = 28,
+  stroke = "rgb(255 92 60 / 85%)",
+  fill = true,
+  className,
+}: {
+  values: number[];
+  width?: number;
+  height?: number;
+  stroke?: string;
+  fill?: boolean;
+  className?: string;
+}) {
+  if (!values.length) return null;
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const span = max - min || 1;
+  const pad = 2;
+  const pts = values.map((v, i) => {
+    const x = values.length === 1 ? width / 2 : pad + (i / (values.length - 1)) * (width - pad * 2);
+    const y = height - pad - ((v - min) / span) * (height - pad * 2);
+    return [x, y] as const;
+  });
+  const line = pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const area = `${pad},${height - pad} ${line} ${width - pad},${height - pad}`;
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className={className}
+      aria-hidden
+      role="presentation"
+    >
+      {fill && <polygon points={area} fill={stroke} opacity={0.12} />}
+      <polyline points={line} fill="none" stroke={stroke} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Signed delta chip — "+12%" / "−3" with accessible trend color. */
+export function TrendDelta({
+  value,
+  suffix = "",
+  neutralWhenZero = true,
+}: {
+  value: number | null | undefined;
+  suffix?: string;
+  neutralWhenZero?: boolean;
+}) {
+  if (value === null || value === undefined || Number.isNaN(value)) return null;
+  if (value === 0 && neutralWhenZero) {
+    return <span className="tf-num text-xs text-[color:var(--tf-text-3)]">±0{suffix}</span>;
+  }
+  const up = value > 0;
+  return (
+    <span
+      className={clsx(
+        "tf-num inline-flex items-center gap-0.5 text-xs font-medium",
+        up ? "text-emerald-400" : "text-red-400"
+      )}
+    >
+      {up ? "▲" : "▼"} {Math.abs(value) >= 1000 ? compactNumber(Math.abs(value)) : Math.abs(value)}
+      {suffix}
+    </span>
+  );
+}
+
+/** Consistent loading placeholder for list-shaped content. */
+export function SkeletonRows({
+  rows = 4,
+  className,
+  rowClassName = "h-14",
+}: {
+  rows?: number;
+  className?: string;
+  rowClassName?: string;
+}) {
+  return (
+    <div className={clsx("space-y-2.5", className)} aria-busy="true" aria-label="Loading">
+      {Array.from({ length: rows }).map((_, i) => (
+        <div
+          key={i}
+          className={clsx("tf-card animate-pulse", rowClassName)}
+          style={{ opacity: 1 - i * 0.15 }}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Voice preview — "hear it before you pick it".
 //
 // One module-level audio element + tiny pub/sub store so ALL pickers share

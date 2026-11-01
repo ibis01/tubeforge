@@ -705,3 +705,112 @@ audio::-webkit-media-controls-panel {
     animation-play-state: paused !important;
   }
 }
+
+/* ==========================================================================
+   Stage 4a design system (T-4.1) — semantic tokens + shared utilities.
+   The app stays dark-only; these tokens give NEW surfaces a single source
+   of truth for text hierarchy, hairlines, status color and motion, instead
+   of the arbitrary-value sprawl the audit flagged (bg-white/3, text-[11px]…).
+   Text tones are AA-checked against the oklch(0.128) background.
+   ========================================================================== */
+
+:root {
+  /* Text hierarchy (all ≥ 4.5:1 on the dark background) */
+  --tf-text-1: rgb(255 255 255 / 96%); /* headings + values          */
+  --tf-text-2: rgb(255 255 255 / 74%); /* body / secondary           */
+  --tf-text-3: rgb(255 255 255 / 57%); /* captions / metadata (AA)   */
+
+  /* Hairlines + surfaces */
+  --tf-hairline: rgb(255 255 255 / 8%);
+  --tf-hairline-strong: rgb(255 255 255 / 15%);
+  --tf-surface-1: rgb(255 255 255 / 3%);
+  --tf-surface-2: rgb(255 255 255 / 5.5%);
+
+  /* Status (AA on dark) */
+  --tf-positive: #34d399;
+  --tf-warning: #fbbf24;
+  --tf-danger: #f87171;
+  --tf-info: #7dd3fc;
+
+  /* Motion */
+  --tf-dur-fast: 120ms;
+  --tf-dur: 200ms;
+  --tf-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+@layer utilities {
+  /* Standard elevated surface for cards/panels */
+  .tf-card {
+    background: var(--tf-surface-1);
+    border: 1px solid var(--tf-hairline);
+    border-radius: 0.75rem;
+  }
+
+  /* Interactive card — lifts on hover */
+  .tf-card-hover {
+    transition:
+      transform var(--tf-dur) var(--tf-ease),
+      border-color var(--tf-dur) var(--tf-ease),
+      background var(--tf-dur) var(--tf-ease);
+  }
+  .tf-card-hover:hover {
+    transform: translateY(-2px);
+    border-color: var(--tf-hairline-strong);
+    background: var(--tf-surface-2);
+  }
+
+  /* Small uppercase section label */
+  .tf-kicker {
+    font-size: 11px;
+    line-height: 1.2;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--tf-text-3);
+    font-weight: 600;
+  }
+
+  /* Aligned numerals for KPI grids + timing bars */
+  .tf-num {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* One focus style everywhere — visible ring, never suppressed */
+  .tf-focusable:focus-visible {
+    outline: 2px solid rgb(255 92 60 / 80%);
+    outline-offset: 2px;
+    border-radius: 0.5rem;
+  }
+
+  /* Horizontal filmstrip scroller */
+  .tf-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(255 255 255 / 16%) transparent;
+    scroll-snap-type: x proximity;
+  }
+  .tf-scroll > * {
+    scroll-snap-align: start;
+  }
+
+  /* Edge fade for overflowing filmstrips */
+  .tf-fade-x {
+    mask-image: linear-gradient(to right, transparent, black 16px, black calc(100% - 16px), transparent);
+  }
+
+  /* Shortcut hint chip */
+  .tf-kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.4rem;
+    height: 1.4rem;
+    padding: 0 0.35rem;
+    border-radius: 0.375rem;
+    border: 1px solid var(--tf-hairline-strong);
+    border-bottom-width: 2px;
+    background: var(--tf-surface-2);
+    color: var(--tf-text-2);
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
+  }
+}

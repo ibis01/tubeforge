@@ -24,8 +24,9 @@ import {
   SheetTrigger,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { Menu, Plus } from "lucide-react";
+import { Menu, Plus, Search } from "lucide-react";
 import { TubeForgeLogo, TubeForgeWordmark } from "@/components/tubeforge/logo";
+import { CommandPalette } from "@/components/tubeforge/command-palette";
 
 const VIEW_META: Record<ViewId, { title: string; subtitle: string }> = {
   dashboard: {
@@ -97,8 +98,11 @@ export default function Home() {
     setMobileNavOpen(false);
   };
 
+  const setPaletteOpen = useAppStore((s) => s.setPaletteOpen);
+
   return (
     <AuthGate>
+      <CommandPalette />
       <div className="min-h-screen flex bg-background">
         {/* Desktop sidebar */}
         <AppSidebar />
@@ -137,6 +141,17 @@ export default function Home() {
                   {meta.subtitle}
                 </p>
               </div>
+
+              {/* ⌘K palette trigger (T-4.1) — also bound globally */}
+              <button
+                onClick={() => setPaletteOpen(true)}
+                aria-label="Open command palette (Command K)"
+                className="tf-focusable hidden md:flex items-center gap-2 h-9 px-3 rounded-lg border border-white/10 bg-white/3 hover:bg-white/6 text-xs text-white/45 hover:text-white/70 transition-colors"
+              >
+                <Search className="h-3.5 w-3.5" />
+                <span>Search…</span>
+                <kbd className="tf-kbd ml-1">⌘K</kbd>
+              </button>
 
               {view !== "create" && view !== "settings" ? (
                 <Button

@@ -36,6 +36,10 @@ interface AppState {
   /** Video to preselect in the Calendar "new slot" dialog */
   scheduleVideoId: string | null;
   setScheduleVideoId: (id: string | null) => void;
+
+  /** Stage 4a — ⌘K command palette open state (page-level singleton) */
+  paletteOpen: boolean;
+  setPaletteOpen: (open: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -56,4 +60,7 @@ export const useAppStore = create<AppState>((set) => ({
 
   scheduleVideoId: null,
   setScheduleVideoId: (id) => set({ scheduleVideoId: id }),
+
+  paletteOpen: false,
+  setPaletteOpen: (open) => set({ paletteOpen: open }),
 }));
