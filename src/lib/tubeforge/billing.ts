@@ -232,6 +232,49 @@ export function hasCredits(resolved: ResolvedPlan, microCredits: number): boolea
   return resolved.creditBalance >= microCredits;
 }
 
+// ---------- cost estimation ----------
+//
+// The UsageRecord row is the GROUND TRUTH of what ran; its costMicroUsd
+// stays 0 today (provider-level token reporting is a Stage 3+ follow-up).
+// The credit ledger needs a number NOW, so every capability carries a
+// PER-CALL ESTIMATE in micro-USD. These are PLACEHOLDERS — the MASTER_PLAN
+// explicitly says "do not set final prices until we know the real cost per
+// generated minute". When real provider costs land, update this table (or
+// replace it with token-based math) — the ledger's shape does not change,
+// so the reconciliation test keeps working either way.
+//
+// Units: 1 microCredit = 1 micro-USD (1e-6 USD). A "credit" in the UI is
+// 1000 microCredits = $0.001 (see CREDITS_PER_USD).
+
+export const CREDITS_PER_USD = 1000; // 1 credit = $0.001 — placeholder pricing unit
+
+export const ESTIMATED_COST_MICRO: Record<string, number> = {
+  // Per AI CALL (not per token) — the metered unit budget.ts records today.
+  chat: 3000, // LLM script/director/verify passes
+  tts: 2000, // voiceover synthesis
+  image: 4000, // storyboard art / thumbnails
+  video: 40000, // CogVideoX i2v — by far the most expensive call
+  search: 1000, // web_search grounding (module A)
+  asr: 1500, // caption alignment
+};
+
+/** Per-call cost estimate in micro-USD for a capability. Unknown
+ *  capabilities fall back to the chat estimate (conservative middle). */
+export function getEstimatedCostMicro(capability: string): number {
+  return ESTIMATED_COST_MICRO[capability] ?? ESTIMATED_COST_MICRO.chat;
+}
+
+/** Flat estimate for one full render, in micro-USD. Used by the render
+ *  route's plan gate (before enqueue) — the actual spend is recorded
+ *  per-second by the render job on success. Placeholder: revisit with
+ *  real per-minute render costs. */
+export const RENDER_ESTIMATE_MICRO = 50000; // $0.05 per render attempt
+
+/** Per-second render cost recorded on success (micro-USD per second of
+ *  final video). Placeholder — the ledger row's note carries the measured
+ *  duration so the reconciliation can re-derive it. */
+export const RENDER_MICRO_PER_SEC = 500; // $0.0005/s ≈ $0.03/min
+
 // ---------- webhook handler ----------
 
 export interface StripeEvent {
@@ -260,6 +303,14 @@ export async function handleStripeEvent(event: StripeEvent): Promise<void> {
       const plan = PLAN_DEFAULTS[planTier] ?? PLAN_DEFAULTS.starter;
       if (!userId || !customerId || !subscriptionId) {
         console.warn("[billing/webhook] checkout.session.completed missing fields", obj);
+        break;
+      }
+      // The user must exist (the client_reference_id carries our userId).
+      // An unknown user would fail the FK — ack with a warning instead so
+      // Stripe does not retry a permanently-unprocessable event forever.
+      const userExists = await rawDb.user.findUnique({ where: { id: userId }, select: { id: true } });
+      if (!userExists) {
+        console.warn(`[billing/webhook] checkout.session.completed for unknown user ${userId} — acking without a write`);
         break;
       }
       // Upsert the Subscription. Use a Plan row from the DB if one exists

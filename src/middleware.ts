@@ -39,6 +39,11 @@ const PUBLIC_API = new Set<string>([
   // OAuth redirect target — Google hits it with ?code&state and NO session
   // cookie; the route authenticates via the signed state token instead.
   "/api/youtube/callback",
+  // Stage 7 (T-7.5) — Stripe webhook. Stripe POSTs server-to-server with no
+  // session cookie; the `stripe-signature` HMAC (verified in the route
+  // against TUBEFORGE_STRIPE_WEBHOOK_SECRET) is the auth. The middleware's
+  // per-IP rate limit still applies (Stripe retries on 429 — fine).
+  "/api/billing/webhook",
 ]);
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);

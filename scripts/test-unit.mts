@@ -1738,6 +1738,27 @@ await test("billing: resolveUserPlan returns the Starter default when no Subscri
   eq(resolved.creditBalance, PLAN_DEFAULTS.starter.monthlyCredits, "fresh credits");
 });
 
+await test("billing: getEstimatedCostMicro covers every metered capability with positive costs", async () => {
+  const billing = await import("../src/lib/tubeforge/billing.ts");
+  const { getEstimatedCostMicro, ESTIMATED_COST_MICRO } = billing;
+  // Every capability budget.ts can report (CAPABILITY_OF in budget.ts) must
+  // carry a positive per-call estimate — a missing entry silently falls back
+  // to the chat estimate, which would misprice video renders.
+  for (const cap of ["chat", "tts", "image", "video", "search", "asr"]) {
+    ok(
+      typeof ESTIMATED_COST_MICRO[cap] === "number" && ESTIMATED_COST_MICRO[cap] > 0,
+      `capability "${cap}" has a positive estimate`
+    );
+    eq(getEstimatedCostMicro(cap), ESTIMATED_COST_MICRO[cap], `${cap} resolves its own estimate`);
+  }
+  // Unknown → chat fallback (conservative middle).
+  eq(getEstimatedCostMicro("nonexistent"), ESTIMATED_COST_MICRO.chat, "unknown capability falls back to chat");
+  // Ordering sanity: video is the most expensive per call, search the least.
+  ok(ESTIMATED_COST_MICRO.video > ESTIMATED_COST_MICRO.image, "video > image");
+  ok(ESTIMATED_COST_MICRO.image > ESTIMATED_COST_MICRO.chat, "image > chat");
+  ok(ESTIMATED_COST_MICRO.chat > ESTIMATED_COST_MICRO.search, "chat > search");
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

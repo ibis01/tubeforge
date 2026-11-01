@@ -6,6 +6,7 @@ import { isJobRunning, lastJobError, jobProgress, startJob } from "@/lib/tubefor
 import { runRenderJob, type RenderJobOptions } from "@/lib/tubeforge/video-jobs";
 import { resolveMusicForVideo } from "@/lib/tubeforge/music";
 import { sanitizeTransition } from "@/lib/tubeforge/transitions";
+import { resolveUserPlan, hasCredits, RENDER_ESTIMATE_MICRO, planSupportsResolution } from "@/lib/tubeforge/billing";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -92,6 +93,35 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { error: "Generate the voiceover first — narration drives the scene timing" },
       { status: 400 }
     );
+
+  // Stage 7 (T-7.5 wiring) — plan gate. Resolution gating by tier + credit
+  // check for paid plans (the Starter/free tier never hard-blocks). Runs
+  // BEFORE the enqueue so an overdrawn paid account gets a 402 with a
+  // readable message instead of a failed job row after the queue claims it.
+  // The render pipeline is 1080p in every geometry today (aspect ≠
+  // resolution); when 1440p/2160p rendering lands, `requestedResolution`
+  // reads from the body and this gate starts differentiating by tier.
+  const resolvedPlan = await resolveUserPlan(auth.ctx.userId);
+  const requestedResolution = "1080p";
+  if (!planSupportsResolution(resolvedPlan.plan, requestedResolution)) {
+    return NextResponse.json(
+      {
+        error: `Your ${resolvedPlan.plan.name} plan renders up to ${resolvedPlan.plan.maxResolution} — upgrade to render ${requestedResolution}`,
+        plan: resolvedPlan.plan.tier,
+      },
+      { status: 402 }
+    );
+  }
+  if (!hasCredits(resolvedPlan, RENDER_ESTIMATE_MICRO)) {
+    return NextResponse.json(
+      {
+        error: "Not enough credits for this render — upgrade your plan or wait for the next monthly grant",
+        creditBalance: resolvedPlan.creditBalance,
+        plan: resolvedPlan.plan.tier,
+      },
+      { status: 402 }
+    );
+  }
 
   // Keynote slides: captions duplicate the slide headlines — default OFF.
   const mode = ["animated", "stock", "slides"].includes(body?.mode) ? body.mode : "kenburns";

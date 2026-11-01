@@ -279,7 +279,7 @@ async function recordAiUsage(
     } catch {
       /* defaults are fine — the row still counts the call */
     }
-    await rawDatabase.usageRecord.create({
+    const usage = await rawDatabase.usageRecord.create({
       data: {
         organizationId: ctx.organizationId,
         userId: ctx.userId,
@@ -295,6 +295,29 @@ async function recordAiUsage(
         costMicroUsd: 0,
       },
     });
+
+    // Stage 7 (T-7.5 wiring) — the credit ledger. Every metered AI call
+    // also appends a CreditLedger row linked to its UsageRecord via
+    // usageRecordId, so the reconciliation test can join the two and
+    // verify exact credit accounting (the ROADMAP §7 gate). The cost is
+    // the per-call ESTIMATE from billing.ts (real token-level costs land
+    // with provider reporting; the ledger shape does not change). Failed
+    // calls still spend (the provider may have billed for the attempt) —
+    // marked in the note so a refund policy can be applied later.
+    try {
+      const billing = await import("./billing");
+      await billing.recordCreditSpend({
+        userId: ctx.userId,
+        subscriptionId: null, // the resolver looks the Subscription up by userId
+        kind: "ai_call",
+        microCredits: billing.getEstimatedCostMicro(capability),
+        usageRecordId: usage.id,
+        note: `${capability} ${ok ? "ok" : "FAILED"} via ${provider} — ${label.slice(0, 60)}`,
+      });
+    } catch {
+      /* billing write is best-effort — the UsageRecord row is the record of truth */
+    }
+
     if (!ok) {
       console.warn(`[usage] ${service} call failed after ${attempts} attempt(s): ${label.slice(0, 80)}`);
     }

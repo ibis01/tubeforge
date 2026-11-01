@@ -33,6 +33,7 @@ import {
 } from "@/lib/tubeforge/types";
 import { MusicLibrarySection } from "@/components/tubeforge/settings-music";
 import { SecurityAccessCard } from "@/components/tubeforge/security-card";
+import { PlanCard } from "@/components/tubeforge/plan-card";
 import {
   Save,
   Loader2,
@@ -689,6 +690,8 @@ export function SettingsView() {
 
   return (
     <div className="max-w-2xl space-y-5">
+      {/* Stage 7 (T-7.5 wiring) — plan & credits card, first in the page. */}
+      <PlanCard />
       <Card className="glass rounded-2xl p-5 sm:p-6">
         <div className="flex items-center gap-2.5 mb-5">
           <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center glow-red-soft shrink-0">

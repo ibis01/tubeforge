@@ -624,6 +624,23 @@ export async function runRenderJob(
             `QC ${report.passed ? "passed" : "flagged " + report.checks.filter((c) => !c.pass).length + " check(s)"}`,
         },
       });
+
+      // Stage 7 (T-7.5 wiring) — record the render spend. Per-second of the
+      // final video (RENDER_MICRO_PER_SEC); the note carries the measured
+      // duration so the reconciliation can re-derive the cost. Full renders
+      // only — previews are free (the user is iterating on scene 1).
+      try {
+        const billing = await import("./billing");
+        await billing.recordCreditSpend({
+          userId: ctx.userId,
+          subscriptionId: null,
+          kind: "render_minute",
+          microCredits: Math.max(1, Math.round(result.durationSec * billing.RENDER_MICRO_PER_SEC)),
+          note: `render ${Math.round(result.durationSec)}s ${mode} (qc ${report.passed ? "pass" : "flagged"})`,
+        });
+      } catch {
+        /* billing write is best-effort */
+      }
     } else {
       await db.video.update({ where: { id: videoId }, data: { hasPreview: true, error: null } });
       await db.activity.create({
