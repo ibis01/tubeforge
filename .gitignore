@@ -86,3 +86,4 @@ Thumbs.db
 # local screenshot scratch
 /.zshots/
 /.zanalysis/
+test-results/
