@@ -128,6 +128,13 @@ export interface RenderOptions {
    *  render pipeline's FPS constant becomes a runtime value; downstream
    *  ffmpeg `-r` and `-framerate` flags read this instead. Default 30. */
   frameRate?: 24 | 30 | 60;
+  /** Stage 6 (T-6.10) — per-scene durations (seconds) from the assembled
+   *  timeline. When present and aligned to the scene list, these OVERRIDE
+   *  the per-scene voiceover-derived durations (so the Editing Studio's
+   *  trims survive the render). Out-of-range or malformed values fall back
+   *  to the measured WAV durations — the timeline is a projection, never
+   *  the source of truth. */
+  sceneDurationsSec?: number[];
   onProgress?: (current: number, total: number, label: string) => void;
 }
 
@@ -828,9 +835,24 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     const wavs = await Promise.all(
       scenes.map((s) => probeDuration(path.join(dir, sceneWavFile(s.index))))
     );
-    const durations = wavs.map(
+    const wavDurations = wavs.map(
       (d) => Math.max(d + LEAD_SEC + TAIL_SEC, MIN_SEG_SEC)
     );
+    // Stage 6 (T-6.10) — when the assembled timeline supplied per-scene
+    // durations, override the voiceover-derived defaults. Only honor values
+    // that align to the scene list AND sit inside a sane range (a clip trim
+    // can shorten a scene, but a trim that drops below MIN_SEG_SEC would
+    // break the compositor; a "trim" longer than 3× the narration is almost
+    // certainly a stale timeline from a different scene list).
+    const timelineDurations = opts.sceneDurationsSec ?? [];
+    const durations = wavDurations.map((d, i) => {
+      const t = timelineDurations[i];
+      if (typeof t !== "number" || !Number.isFinite(t)) return d;
+      if (t < MIN_SEG_SEC) return d;
+      // Cap at 3× the measured narration so a stale timeline can't silently
+      // extend a scene to minutes of dead air.
+      return Math.min(t, d * 3);
+    });
     const segments = durations.map((d, i) => ({
       start: durations.slice(0, i).reduce((a, b) => a + b, 0),
       duration: d,

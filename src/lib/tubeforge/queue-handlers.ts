@@ -251,6 +251,15 @@ function parseRenderPayload(payload: unknown): RenderJobOptions {
     out.aspectRatio = p.aspectRatio;
   if (p.frameRate === 24 || p.frameRate === 30 || p.frameRate === 60)
     out.frameRate = p.frameRate;
+  // Stage 6 (T-6.10) — per-scene duration overrides from the assembled
+  // timeline (the route can pass them explicitly to disable timeline
+  // consumption by sending []).
+  if (Array.isArray(p.sceneDurationsSec)) {
+    const arr = p.sceneDurationsSec.filter(
+      (d): d is number => typeof d === "number" && Number.isFinite(d) && d > 0
+    );
+    if (arr.length === p.sceneDurationsSec.length) out.sceneDurationsSec = arr;
+  }
   return out;
 }
 

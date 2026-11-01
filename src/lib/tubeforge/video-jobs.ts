@@ -57,6 +57,7 @@ import {
 } from "./music";
 import { qcForVideo } from "./qc";
 import { parsePlan, getApprovedAudioMap } from "./director-plan";
+import { parseTimeline } from "./timeline";
 import { sanitizeTransition, transitionSummary } from "./transitions";
 import {
   loadSlideDeck,
@@ -441,6 +442,12 @@ export interface RenderJobOptions {
   /** Stage 6 (T-6.8) — per-render frame-rate override (24|30|60).
    *  When unset, the job falls back to the video row's `frameRate`, then 30. */
   frameRate?: 24 | 30 | 60;
+  /** Stage 6 (T-6.10) — per-scene duration overrides from the assembled
+   *  timeline (the Editing Studio's trims survive the render). When absent,
+   *  the job reads `Video.timeline` itself; an explicit empty array
+   *  disables timeline consumption (the route uses this when the user
+   *  clicks "render without timeline"). */
+  sceneDurationsSec?: number[];
 }
 
 /** Render the final/preview MP4 (+ QC battery on full renders). */
@@ -485,6 +492,28 @@ export async function runRenderJob(
           ? video.aspectRatio
           : "16:9");
   const frameRate = opts.frameRate ?? (video.frameRate === 24 || video.frameRate === 60 ? video.frameRate : 30);
+
+  // Stage 6 (T-6.10) — per-scene duration overrides from the assembled timeline.
+  // Precedence: per-render opts.sceneDurationsSec > Video.timeline (per-scene
+  // durationSec) > measured WAV durations (the render's own default). An
+  // explicit empty array on opts disables timeline consumption (the route
+  // uses this when the user clicks "render without timeline"). The render's
+  // own safety clamps (MIN_SEG_SEC + 3× the measured narration) still apply.
+  let sceneDurationsSec: number[] | undefined;
+  if (Array.isArray(opts.sceneDurationsSec)) {
+    sceneDurationsSec = opts.sceneDurationsSec;
+  } else {
+    const timeline = parseTimeline(video.timeline);
+    if (timeline && timeline.scenes.length === scenes.length) {
+      const ds = timeline.scenes.map((s) => s.durationSec);
+      // Only honor when every entry is a positive finite number — a single
+      // bad value falls back to the WAV-derived durations for ALL scenes
+      // (a half-overridden timeline would produce a broken render).
+      if (ds.every((d) => typeof d === "number" && Number.isFinite(d) && d > 0)) {
+        sceneDurationsSec = ds;
+      }
+    }
+  }
 
   if (!video.hasStoryboard && mode !== "slides")
     throw new Error("Generate the storyboard first — there is no scene art yet");
@@ -534,6 +563,7 @@ export async function runRenderJob(
       sceneLimit,
       aspectRatio: aspect,
       frameRate,
+      sceneDurationsSec,
       motion: {
         mode: (video.motionMode ?? "smart") as "smart" | "zoom" | "pan" | "off",
         intensity: video.motionIntensity ?? 12,

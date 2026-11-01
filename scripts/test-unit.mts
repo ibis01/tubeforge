@@ -1556,6 +1556,44 @@ await test("timeline: parseTimeline degrades bad/legacy payloads to null", async
 });
 
 // ---------------------------------------------------------------------------
+// Stage 6 (T-6.10) — timeline → render duration override shape
+// ---------------------------------------------------------------------------
+
+await test("timeline: render-job consumes per-scene durationSec from the assembled timeline", async () => {
+  const { assembleTimeline, serializeTimeline, parseTimeline } =
+    await import("../src/lib/tubeforge/timeline.ts");
+
+  // The render job reads `parseTimeline(video.timeline).scenes.map(s => s.durationSec)`
+  // when no per-render override is supplied. The shape must be (a) finite
+  // positive numbers, (b) aligned to the scene list (one entry per scene).
+  const scenes = [
+    { index: 1, title: "Open", narration: "Welcome.", visual: "v", camera: "c", mood: "m", caption: "", hostInScene: false, rehook: false, sfx: "none" } as never,
+    { index: 2, title: "Body",  narration: "Here is the substance.", visual: "v", camera: "c", mood: "m", caption: "", hostInScene: false, rehook: false, sfx: "none" } as never,
+    { index: 3, title: "Close", narration: "Bye.", visual: "v", camera: "c", mood: "m", caption: "", hostInScene: false, rehook: false, sfx: "none" } as never,
+  ];
+  const timeline = assembleTimeline(scenes, { ttsSpeed: 1 });
+  const round = parseTimeline(serializeTimeline(timeline));
+  ok(round !== null, "roundtrip succeeds");
+  ok(
+    round!.scenes.every((s) => typeof s.durationSec === "number" && Number.isFinite(s.durationSec) && s.durationSec > 0),
+    "every durationSec is a finite positive number"
+  );
+  eq(round!.scenes.length, scenes.length, "one duration per scene");
+
+  // A corrupt timeline (missing durationSec on one scene) must NOT be honored
+  // — the runRenderJob "single bad value falls back for ALL scenes" rule.
+  const corrupt = JSON.parse(serializeTimeline(timeline)) as { scenes: { durationSec?: number }[] };
+  corrupt.scenes[1].durationSec = undefined;
+  const parsedCorrupt = parseTimeline(JSON.stringify(corrupt));
+  ok(parsedCorrupt !== null, "parseTimeline still parses the partial payload");
+  const ds = parsedCorrupt!.scenes.map((s) => s.durationSec);
+  ok(
+    !ds.every((d) => typeof d === "number" && Number.isFinite(d) && d > 0),
+    "a missing durationSec fails the runRenderJob safety check"
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Stage 6 (T-6.7) — captions SRT -> VTT (captions.ts)
 // ---------------------------------------------------------------------------
 

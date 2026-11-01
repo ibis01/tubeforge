@@ -118,6 +118,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       ? body.frameRate
       : undefined;
 
+  // Stage 6 (T-6.10) — when the user explicitly clicks "render without
+  // timeline" (the route body carries `ignoreTimeline: true`), pass an empty
+  // array so the job skips timeline consumption. Otherwise the job reads
+  // Video.timeline itself. Per-scene durations in the body are NOT honored
+  // here — the timeline is the source of truth for trims; the body's role
+  // is to disable timeline consumption, not to override it ad hoc.
+  const sceneDurationsSec: number[] | undefined = body?.ignoreTimeline === true ? [] : undefined;
+
   // Durable render options — the job re-derives scenes/motion/transition/
   // brand/music from the video row; the payload preserves the user's picks.
   const renderOpts: RenderJobOptions = {
@@ -128,6 +136,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     sceneLimit,
     aspectRatio,
     frameRate,
+    sceneDurationsSec,
   };
 
   // Response-time music resolution (the job re-resolves for itself).
