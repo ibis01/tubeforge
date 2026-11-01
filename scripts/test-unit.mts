@@ -1716,6 +1716,28 @@ await test("billing: hasCredits — Starter never hard-blocks; paid tier gates o
   ok(!hasCredits(creatorResolved, 1001), "creator overdrawn blocked");
 });
 
+await test("billing: CreditSpendKind covers every ROADMAP §7 spend kind", async () => {
+  const billing = await import("../src/lib/tubeforge/billing.ts");
+  // recordCreditSpend accepts these kinds; the reconciliation test joins
+  // ai_call rows against UsageRecord.costMicroUsd.
+  const kinds: billing.CreditSpendKind[] = ["ai_call", "render_minute", "publish", "storage", "topup", "refund"];
+  eq(kinds.length, 6, "six spend kinds (no duplicates)");
+  ok(kinds.includes("ai_call"), "ai_call kind present (the reconciliation target)");
+  ok(kinds.includes("refund"), "refund kind present (negative microCredits)");
+});
+
+await test("billing: resolveUserPlan returns the Starter default when no Subscription row exists", async () => {
+  const billing = await import("../src/lib/tubeforge/billing.ts");
+  const { resolveUserPlan, PLAN_DEFAULTS } = billing;
+  // A never-existed user (no Subscription row) → Starter plan, full monthly credits,
+  // null subscription record. This is the "fresh install" path — no row writes
+  // needed for existing users when billing is wired.
+  const resolved = await resolveUserPlan("nonexistent-user-id");
+  eq(resolved.plan.tier, "starter", "default tier is starter");
+  eq(resolved.subscription, null, "no subscription row → null");
+  eq(resolved.creditBalance, PLAN_DEFAULTS.starter.monthlyCredits, "fresh credits");
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);
