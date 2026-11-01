@@ -17,8 +17,14 @@ import { clsx } from "clsx";
 /** Voice catalog of the ACTIVE voiceover provider (Z.ai or OpenAI-compatible).
  *  Falls back to the built-in Z.ai list until the endpoint answers.
  *  Cloned voices arrive merged in the same payload (zhipu provider) and every
- *  picker live-updates when a voice is cloned or deleted. */
+ *  picker live-updates when a voice is cloned or deleted.
+ *
+ *  `cloneStatus` carries the inline-clone setup state: "ready" the clone can
+ *  synthesize immediately, "needs-setup" the clone will be saved but synthesis
+ *  needs a server URL+key (shown inline), "zhipu-ready" a zhipu key is set. */
 export const VOICES_CHANGED_EVENT = "tubeforge:voices-changed";
+
+export type CloneStatus = "ready" | "needs-setup" | "zhipu-ready" | "unknown";
 
 export function useVoices() {
   const [voices, setVoices] = useState<{ id: string; label: string }[]>(() =>
@@ -26,6 +32,9 @@ export function useVoices() {
   );
   const [provider, setProvider] = useState("zai");
   const [canClone, setCanClone] = useState(false);
+  const [cloneStatus, setCloneStatus] = useState<CloneStatus>("unknown");
+  const [cloneHint, setCloneHint] = useState<string>("");
+  const [cloneProvider, setCloneProvider] = useState<string>("selfhost");
 
   useEffect(() => {
     let cancelled = false;
@@ -39,6 +48,17 @@ export function useVoices() {
           setCanClone(Boolean(d.canClone));
         })
         .catch(() => {});
+      // Fetch the clone-provider state in parallel — used by the inline
+      // Clone tab to decide whether to show a one-line URL+key form.
+      fetch("/api/voices/clone-providers", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (cancelled || !d?.pick) return;
+          setCloneStatus(d.pick.status as CloneStatus);
+          setCloneHint(d.pick.hint ?? "");
+          setCloneProvider(d.pick.provider ?? "selfhost");
+        })
+        .catch(() => {});
     };
     load();
     // A fresh clone (or a delete) re-fetches so every open picker updates.
@@ -49,7 +69,7 @@ export function useVoices() {
     };
   }, []);
 
-  return { voices, provider, canClone };
+  return { voices, provider, canClone, cloneStatus, cloneHint, cloneProvider };
 }
 
 export function StatusBadge({

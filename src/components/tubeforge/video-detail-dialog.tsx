@@ -29,6 +29,7 @@ import { StatusBadge, formatDuration, timeAgo, useVoices, VoiceSelectWithPreview
 import { MusicPickerCard, type MusicPickerValue } from "@/components/tubeforge/music-controls";
 import { MotionControlsCard, type MotionPickerValue } from "@/components/tubeforge/motion-controls";
 import { TransitionControlsCard, type TransitionPickerValue } from "@/components/tubeforge/transition-controls";
+import { InlineCloneSetup } from "@/components/tubeforge/inline-clone-setup";
 import { BrandKitCard } from "@/components/tubeforge/brand-kit";
 import { SceneEditorDialog } from "@/components/tubeforge/scene-editor";
 import { DirectorCard } from "@/components/tubeforge/director-card";
@@ -205,7 +206,7 @@ export function VideoDetailDialog({
   const [voiceUrl, setVoiceUrl] = useState("");
   const [voiceFile, setVoiceFile] = useState<File | null>(null);
   const [pickedVoice, setPickedVoice] = useState<string>(video?.voice ?? "jam");
-  const { voices, canClone } = useVoices();
+  const { voices, cloneStatus, cloneHint } = useVoices();
 
   // Voice cloning (Zhipu GLM-TTS-Clone) — clone a voice from a short sample,
   // then narrate with it like any studio voice.
@@ -2205,110 +2206,114 @@ export function VideoDetailDialog({
                   >
                     Manage &amp; clone voices in the Voice Studio →
                   </button>
-                  {!canClone ? (
-                    <p className="text-[11px] leading-relaxed text-amber-300/90 rounded-lg border border-amber-400/20 bg-amber-400/8 px-2.5 py-2">
-                      Voice cloning runs on the <b>Zhipu GLM-TTS</b> provider — switch to it in
-                      Settings → AI Providers → Voiceover and paste a bigmodel.cn API key,
-                      then come back here to clone any voice from a 3–30s recording.
+                  {/* Inline clone form — always available. The clone itself
+                      needs no provider setup: the sample is stored locally
+                      and synthesis routes to the owning provider when the
+                      user generates the voiceover. When no clone-capable
+                      provider is fully configured, show a one-line inline
+                      setup form (server URL+key) so the user never has to
+                      leave this dialog. */}
+                  {cloneStatus === "needs-setup" && (
+                    <InlineCloneSetup hint={cloneHint} />
+                  )}
+                  {cloneStatus !== "unknown" && cloneHint && (
+                    <p className="text-[10px] leading-relaxed text-sky-300/80">
+                      {cloneHint}
                     </p>
-                  ) : (
-                    <>
-                      <label className="flex items-center gap-2 rounded-lg border border-dashed border-white/15 bg-white/3 px-3 py-2.5 cursor-pointer hover:bg-white/6 transition-colors">
-                        <Wand2 className="h-3.5 w-3.5 text-primary shrink-0" />
-                        <span className="text-xs text-muted-foreground truncate">
-                          {cloneFile ? cloneFile.name : "Pick a 3–30s voice sample (mp3, wav, m4a…)"}
-                        </span>
-                        <input
-                          type="file"
-                          accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.oga,.opus,.flac,.webm,.mp4"
-                          className="sr-only"
-                          disabled={cloning}
-                          onChange={(e) => setCloneFile(e.target.files?.[0] ?? null)}
-                        />
-                      </label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <Input
-                          value={cloneName}
-                          onChange={(e) => setCloneName(e.target.value)}
-                          placeholder='Voice name (e.g. "My voice")'
-                          className="bg-white/5 h-9 text-xs"
-                          disabled={cloning}
-                        />
-                        <Input
-                          value={cloneSampleText}
-                          onChange={(e) => setCloneSampleText(e.target.value)}
-                          placeholder="What the sample says (optional, improves fidelity)"
-                          className="bg-white/5 h-9 text-xs"
-                          disabled={cloning}
-                        />
-                      </div>
-                      <Button
-                        size="sm"
-                        className="w-full bg-brand-gradient hover:opacity-90 font-medium"
-                        disabled={cloning || !cloneFile}
-                        onClick={doClone}
-                      >
-                        {cloning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
-                        {cloning ? "Cloning the voice…" : "Clone this voice"}
-                      </Button>
-                      <p className="text-[10px] text-muted-foreground leading-relaxed">
-                        The sample is sent to Zhipu GLM-TTS-Clone and becomes a reusable narration
-                        voice (list below + the AI voices picker). Only clone voices you own or
-                        have permission to use.
-                      </p>
+                  )}
+                  <label className="flex items-center gap-2 rounded-lg border border-dashed border-white/15 bg-white/3 px-3 py-2.5 cursor-pointer hover:bg-white/6 transition-colors">
+                    <Wand2 className="h-3.5 w-3.5 text-primary shrink-0" />
+                    <span className="text-xs text-muted-foreground truncate">
+                      {cloneFile ? cloneFile.name : "Pick a 3–30s voice sample (mp3, wav, m4a…)"}
+                    </span>
+                    <input
+                      type="file"
+                      accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.oga,.opus,.flac,.webm,.mp4"
+                      className="sr-only"
+                      disabled={cloning}
+                      onChange={(e) => setCloneFile(e.target.files?.[0] ?? null)}
+                    />
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input
+                      value={cloneName}
+                      onChange={(e) => setCloneName(e.target.value)}
+                      placeholder='Voice name (e.g. "My voice")'
+                      className="bg-white/5 h-9 text-xs"
+                      disabled={cloning}
+                    />
+                    <Input
+                      value={cloneSampleText}
+                      onChange={(e) => setCloneSampleText(e.target.value)}
+                      placeholder="What the sample says (optional, improves fidelity)"
+                      className="bg-white/5 h-9 text-xs"
+                      disabled={cloning}
+                    />
+                  </div>
+                  <Button
+                    size="sm"
+                    className="w-full bg-brand-gradient hover:opacity-90 font-medium"
+                    disabled={cloning || !cloneFile}
+                    onClick={doClone}
+                  >
+                    {cloning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+                    {cloning ? "Cloning the voice…" : "Clone this voice"}
+                  </Button>
+                  <p className="text-[10px] text-muted-foreground leading-relaxed">
+                    The sample becomes a reusable narration voice — pick it under AI voices and hit
+                    Generate voice. Only clone voices you own or have permission to use.
+                  </p>
 
-                      {cloneProfiles.length > 0 && (
-                        <div className="space-y-1.5 pt-1">
-                          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
-                            Cloned voices
-                          </p>
-                          <div className="max-h-40 overflow-y-auto space-y-1 pr-0.5">
-                            {cloneProfiles.map((p) => (
-                              <div
-                                key={p.id}
-                                className="flex items-center gap-2 rounded-lg border border-white/8 bg-white/3 px-2.5 py-1.5"
-                              >
-                                <button
-                                  type="button"
-                                  disabled={!p.hasAudition || cloning}
-                                  onClick={() => playAudition(p.id)}
-                                  title={p.hasAudition ? "Hear the clone" : "No cached audition — use ▶ in the picker"}
-                                  className={clsx(
-                                    "grid h-6 w-6 shrink-0 place-items-center rounded-full border transition-colors",
-                                    p.hasAudition
-                                      ? auditionPlaying === p.id
-                                        ? "border-primary/60 bg-primary/20 text-primary"
-                                        : "border-white/10 bg-white/8 text-muted-foreground hover:bg-white/15 hover:text-foreground"
-                                      : "opacity-40"
-                                  )}
-                                >
-                                  {auditionPlaying === p.id ? (
-                                    <Square className="h-2.5 w-2.5 fill-current" />
-                                  ) : (
-                                    <Play className="h-3 w-3 fill-current" />
-                                  )}
-                                </button>
-                                <span className="text-xs truncate flex-1" title={p.providerVoiceId}>
-                                  {p.name}
-                                  {p.durationSec ? (
-                                    <span className="text-muted-foreground"> · {p.durationSec.toFixed(0)}s sample</span>
-                                  ) : null}
-                                </span>
-                                <button
-                                  type="button"
-                                  disabled={cloning}
-                                  onClick={() => deleteClone(p.id, p.name)}
-                                  title="Delete this cloned voice"
-                                  className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-white/10 bg-white/8 text-muted-foreground hover:bg-red-500/15 hover:text-red-300 transition-colors"
-                                >
-                                  <Trash2 className="h-3 w-3" />
-                                </button>
-                              </div>
-                            ))}
+                  {cloneProfiles.length > 0 && (
+                    <div className="space-y-1.5 pt-1">
+                      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                        Cloned voices
+                      </p>
+                      <div className="max-h-40 overflow-y-auto space-y-1 pr-0.5">
+                        {cloneProfiles.map((p) => (
+                          <div
+                            key={p.id}
+                            className="flex items-center gap-2 rounded-lg border border-white/8 bg-white/3 px-2.5 py-1.5"
+                          >
+                            <button
+                              type="button"
+                              disabled={!p.hasAudition || cloning}
+                              onClick={() => playAudition(p.id)}
+                              title={p.hasAudition ? "Hear the clone" : "No cached audition — use ▶ in the picker"}
+                              className={clsx(
+                                "grid h-6 w-6 shrink-0 place-items-center rounded-full border transition-colors",
+                                p.hasAudition
+                                  ? auditionPlaying === p.id
+                                    ? "border-primary/60 bg-primary/20 text-primary"
+                                    : "border-white/10 bg-white/8 text-muted-foreground hover:bg-white/15 hover:text-foreground"
+                                  : "opacity-40"
+                              )}
+                            >
+                              {auditionPlaying === p.id ? (
+                                <Square className="h-2.5 w-2.5 fill-current" />
+                              ) : (
+                                <Play className="h-3 w-3 fill-current" />
+                              )}
+                            </button>
+                            <span className="text-xs truncate flex-1" title={p.providerVoiceId}>
+                              {p.name}
+                              {p.durationSec ? (
+                                <span className="text-muted-foreground"> · {p.durationSec.toFixed(0)}s sample</span>
+                              ) : null}
+                            </span>
+                            <button
+                              type="button"
+                              disabled={cloning}
+                              onClick={() => deleteClone(p.id, p.name)}
+                              title="Delete this cloned voice"
+                              className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-white/10 bg-white/8 text-muted-foreground hover:bg-red-500/15 hover:text-red-300 transition-colors"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
                           </div>
-                        </div>
-                      )}
-                    </>
+                        ))}
+                      </div>
+                    </div>
                   )}
                 </div>
               )}

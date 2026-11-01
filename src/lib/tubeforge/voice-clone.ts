@@ -25,7 +25,7 @@ import { promisify } from "util";
 import { randomUUID } from "crypto";
 import { db } from "./tenant-db";
 import { currentCtx } from "./tenant";
-import { getCapability } from "./providers/settings";
+import { getCapability, getProviderCredential } from "./providers/settings";
 import { providerMeta } from "./providers/registry";
 import { joinUrl, providerFetch, providerFetchJson } from "./providers/http";
 import { safeFetch } from "./net-guard";
@@ -61,6 +61,83 @@ export type CloneProvider = (typeof CLONE_PROVIDERS)[number];
 
 export function isCloneProvider(provider: string): provider is CloneProvider {
   return (CLONE_PROVIDERS as readonly string[]).includes(provider);
+}
+
+/**
+ * Pick the clone-capable provider to use for a fresh clone, regardless of
+ * which TTS provider is currently "active". Order of preference:
+ *   1. selfhost — free, open-source Chatterbox, NO network call at clone
+ *      time (the sample is stored on the VoiceProfile row; the server URL+key
+ *      are only needed when synthesizing). Lets users clone right away from
+ *      the video dialog without first flipping Settings.
+ *   2. zhipu   — if it has a saved bigmodel.cn key (the clone API needs it).
+ *   3. selfhost unconditionally — even with no server configured the clone
+ *      succeeds (sample stored); the server URL+key can be supplied later
+ *      at voiceover generation.
+ *
+ * Returns the chosen provider and a one-line status the UI can show inline.
+ */
+export async function pickCloneProvider(): Promise<{
+  provider: CloneProvider;
+  /** "ready" — fully configured, "needs-setup" — clone works but synth will
+   *  fail until URL/key are supplied, "zhipu-ready" — zhipu key present. */
+  status: "ready" | "needs-setup" | "zhipu-ready";
+  /** Human-readable reason for the status, surfaced in the UI. */
+  hint: string;
+}> {
+  // Prefer selfhost — the clone itself needs no server, and synthesis uses
+  // saved selfhost credentials (which may be added inline later).
+  const selfhostCred = await getProviderCredential("tts", "selfhost");
+  if (selfhostCred?.baseUrl?.trim()) {
+    return {
+      provider: "selfhost",
+      status: "ready",
+      hint: "Clones use your self-hosted Chatterbox server.",
+    };
+  }
+  // Zhipu with a saved key can clone + synthesize immediately.
+  const zhipuCred = await getProviderCredential("tts", "zhipu");
+  if (zhipuCred?.apiKey?.trim()) {
+    return {
+      provider: "zhipu",
+      status: "zhipu-ready",
+      hint: "Clones use your Zhipu GLM-TTS account.",
+    };
+  }
+  // Nothing configured yet — default to selfhost; the clone succeeds (sample
+  // stored locally), and the user supplies the server URL+key before synth.
+  return {
+    provider: "selfhost",
+    status: "needs-setup",
+    hint:
+      "The clone is saved now — paste your self-hosted server URL + key to synthesize, " +
+      "or add a Zhipu GLM-TTS key.",
+  };
+}
+
+/**
+ * Look up the provider that owns a cloned voice id (the VoiceProfile row's
+ * `provider`). Used by ttsSynthesize to route a cloned-voice request to the
+ * right backend even when the active TTS provider isn't that provider — so a
+ * user with active Z.ai can still synthesize a self-host clone without first
+ * flipping Settings.
+ *
+ * Returns null when the voice id isn't a stored clone (stock studio voice,
+ * unknown id, or DB hiccup).
+ */
+export async function voiceProfileProvider(
+  voiceId: string,
+): Promise<CloneProvider | null> {
+  try {
+    const row = await db.voiceProfile.findFirst({
+      where: { providerVoiceId: voiceId },
+      select: { provider: true },
+    });
+    if (!row || !isCloneProvider(row.provider)) return null;
+    return row.provider;
+  } catch {
+    return null;
+  }
 }
 
 export function toVoiceProfileDTO(row: {
@@ -248,22 +325,18 @@ export async function prepareSample(
 // ───────────────────────── Zhipu platform calls ─────────────────────────
 
 async function zhipuConfig() {
-  const config = await getCapability("tts");
-  if (config.provider !== "zhipu") {
-    // The clone API key lives in the zhipu TTS capability — clone buttons are
-    // only shown when zhipu is active, so this is defense in depth.
-    throw new Error(
-      "Voice cloning uses the Zhipu GLM-TTS provider — switch Voiceover to it in Settings → AI Providers first"
-    );
-  }
-  const key = config.apiKey?.trim();
+  // The active TTS provider may not be zhipu — clones can be requested inline
+  // from the video dialog while the active voiceover is Z.ai. Read the saved
+  // zhipu credential directly instead of requiring the active provider.
+  const cred = await getProviderCredential("tts", "zhipu");
+  const key = cred?.apiKey?.trim();
   if (!key)
     throw new Error(
       "Add your bigmodel.cn API key under Settings → AI Providers → Voiceover (Zhipu GLM-TTS) first"
     );
   const meta = providerMeta("tts", "zhipu");
   const baseUrl =
-    config.baseUrl?.trim() || meta?.defaultBaseUrl || "https://open.bigmodel.cn/api/paas/v4";
+    cred?.baseUrl?.trim() || meta?.defaultBaseUrl || "https://open.bigmodel.cn/api/paas/v4";
   return { baseUrl, key };
 }
 

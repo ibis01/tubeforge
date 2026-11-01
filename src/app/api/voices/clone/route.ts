@@ -14,7 +14,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { getCapability } from "@/lib/tubeforge/providers/settings";
-import { cloneVoice, isCloneProvider } from "@/lib/tubeforge/voice-clone";
+import { cloneVoice, isCloneProvider, pickCloneProvider } from "@/lib/tubeforge/voice-clone";
 import { errorText } from "@/lib/tubeforge/redact";
 
 export async function POST(req: NextRequest) {
@@ -22,26 +22,21 @@ export async function POST(req: NextRequest) {
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
   auth.enter(); // tenant scope: handler + spawned job closures
 
-  // Fail fast with a pointed message when the provider isn't set up — better
-  // than a 500 from deep inside the clone flow.
-  const config = await getCapability("tts");
-  if (!isCloneProvider(config.provider)) {
-    return NextResponse.json(
-      {
-        error:
-          "Voice cloning needs a clone-capable voiceover provider — Settings → AI Providers → Voiceover → pick “Zhipu GLM-TTS (voice cloning)” (bigmodel.cn key) or “My Machine (self-hosted)” (free, runs on your PC)",
-      },
-      { status: 409 }
-    );
-  }
-  if (config.provider === "zhipu" && !config.apiKey?.trim()) {
-    return NextResponse.json(
-      {
-        error:
-          "Add your bigmodel.cn API key under Settings → AI Providers → Voiceover first (Zhipu GLM-TTS)",
-      },
-      { status: 409 }
-    );
+  // Auto-pick a clone-capable provider regardless of which TTS provider is
+  // currently active. The active provider wins only if it's clone-capable AND
+  // fully configured; otherwise pickCloneProvider prefers selfhost (the clone
+  // itself needs no server — the sample is stored on the VoiceProfile row;
+  // the server URL+key are only needed at synthesis time). This unblocks the
+  // inline "Clone" flow in the video detail dialog: users clone right away
+  // without first flipping Settings → Voiceover.
+  const active = await getCapability("tts");
+  let provider = (await pickCloneProvider()).provider;
+  if (isCloneProvider(active.provider)) {
+    if (active.provider === "selfhost" && (active.baseUrl?.trim() || active.apiKey?.trim())) {
+      provider = "selfhost";
+    } else if (active.provider === "zhipu" && active.apiKey?.trim()) {
+      provider = "zhipu";
+    }
   }
 
   let form: FormData;
@@ -81,7 +76,7 @@ export async function POST(req: NextRequest) {
       name,
       sampleText,
       auditionText,
-      provider: config.provider,
+      provider,
     });
     return NextResponse.json({
       ok: true,

@@ -25,6 +25,8 @@ import {
   upsertProviderCredential,
 } from "../settings";
 
+export { getProviderCredential };
+
 export interface CapabilityConfig {
   provider: ProviderId;
   /** "" = provider default. */

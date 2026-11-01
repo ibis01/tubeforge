@@ -10,11 +10,11 @@
 // voice keeps working after switching to OpenAI (falls back to "alloy").
 
 import { zaiClientFor } from "../zai-client";
-import { getCapability, type CapabilityConfig } from "./settings";
+import { getCapability, getProviderCredential, type CapabilityConfig } from "./settings";
 import { providerMeta, OPENAI_VOICES, type ProviderId } from "./registry";
 import { VOICES } from "../types";
 import { joinUrl, providerFetch, ProviderHttpError } from "./http";
-import { getSampleWavByVoiceId } from "../voice-clone";
+import { getSampleWavByVoiceId, voiceProfileProvider } from "../voice-clone";
 import { applyPronunciations, loadPronunciations } from "../pronounce";
 
 export interface TtsRequest {
@@ -71,7 +71,7 @@ export async function ttsSynthesize(
   req: TtsRequest,
   overrides?: Partial<CapabilityConfig>,
 ): Promise<Buffer> {
-  const config = await getCapability("tts", overrides);
+  let config = await getCapability("tts", overrides);
 
   // T-4.11 — the acting user's pronunciation overrides, applied at the ONE
   // synthesis choke point so every flow inherits them (full-script voiceover,
@@ -81,6 +81,32 @@ export async function ttsSynthesize(
   const pron = await loadPronunciations();
   if (pron.length) {
     request = { ...req, input: applyPronunciations(req.input, pron) };
+  }
+
+  // Cloned-voice routing: a clone is owned by the provider that created it
+  // (zhipu or selfhost) — even if the active TTS provider is something else
+  // (zai, openai). When the requested voice is a stored clone, route to the
+  // owning provider using its saved credentials. This lets a user clone
+  // inline from the video dialog and immediately synthesize the voiceover,
+  // without first flipping Settings → Voiceover.
+  if (isClonedVoiceId(request.voice)) {
+    const ownerProvider = await voiceProfileProvider(request.voice);
+    if (ownerProvider && ownerProvider !== config.provider) {
+      const cred = await getProviderCredential("tts", ownerProvider);
+      if (cred?.apiKey?.trim() || cred?.baseUrl?.trim()) {
+        config = {
+          ...config,
+          provider: ownerProvider,
+          apiKey: cred.apiKey ?? "",
+          baseUrl: cred.baseUrl ?? "",
+          model: config.model, // selfhost ignores; zhipu uses glm-tts
+        };
+      }
+      // If the owning provider has no saved creds, fall through to the
+      // active provider — the synthesis call will then surface a clear
+      // "configure the self-hosted server URL+key" error from selfhostTts,
+      // or fall back to a stock voice on the active provider.
+    }
   }
 
   if (config.provider === "openai") {

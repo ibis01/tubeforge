@@ -41,6 +41,7 @@ import {
   useVoices,
   VOICES_CHANGED_EVENT,
 } from "@/components/tubeforge/shared";
+import { InlineCloneSetup } from "@/components/tubeforge/inline-clone-setup";
 import type { CharacterDTO } from "@/lib/tubeforge/types";
 
 /** Mirrors VoiceProfileDTO (voice-clone.ts) without importing server code. */
@@ -64,7 +65,7 @@ const PROVIDER_LABELS: Record<string, string> = {
 
 export function VoiceView() {
   const { toast } = useToast();
-  const { voices, provider, canClone } = useVoices();
+  const { voices, provider, cloneStatus, cloneHint } = useVoices();
   const { loading, playing, error: previewError, togglePreview } = useVoicePreview();
 
   // Management list (all clones regardless of the active provider) + usage data.
@@ -646,27 +647,32 @@ export function VoiceView() {
           </div>
         </div>
 
-        {!canClone ? (
-          <p className="text-xs leading-relaxed text-amber-300/90 rounded-lg border border-amber-400/20 bg-amber-400/8 px-3 py-2.5 mt-3">
-            Voice cloning runs on a clone-capable provider — switch to it in Settings →
-            AI Providers → Voiceover and pick “Zhipu GLM-TTS (voice cloning)”
-            (bigmodel.cn key) or “My Machine (self-hosted)” (free, runs on your PC).
-            Your existing clones below stay safe.
-          </p>
-        ) : (
-          <div className="mt-4 space-y-3">
-            <div className="inline-flex rounded-lg border border-white/10 bg-white/3 p-0.5" role="group" aria-label="Sample source">
-              {(
-                [
-                  { id: "upload", label: "Upload a file", icon: Upload },
-                  { id: "link", label: "Direct link", icon: Link2 },
-                ] as const
-              ).map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => setCloneMode(m.id)}
-                  aria-pressed={cloneMode === m.id}
+        {/* Inline clone form — always available. The clone itself needs no
+            provider setup (sample stored locally); when no clone-capable
+            provider is fully configured, the inline setup form below lets the
+            user paste their self-hosted server URL+key without leaving this
+            page. Existing clones below stay safe across the switch. */}
+        {cloneStatus === "needs-setup" && (
+          <div className="mt-3">
+            <InlineCloneSetup hint={cloneHint} />
+          </div>
+        )}
+        {cloneStatus !== "unknown" && cloneHint && (
+          <p className="text-[10px] leading-relaxed text-sky-300/80 mt-2">{cloneHint}</p>
+        )}
+        <div className="mt-4 space-y-3">
+          <div className="inline-flex rounded-lg border border-white/10 bg-white/3 p-0.5" role="group" aria-label="Sample source">
+            {(
+              [
+                { id: "upload", label: "Upload a file", icon: Upload },
+                { id: "link", label: "Direct link", icon: Link2 },
+              ] as const
+            ).map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => setCloneMode(m.id)}
+                aria-pressed={cloneMode === m.id}
                   className={clsx(
                     "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-all",
                     cloneMode === m.id
@@ -750,11 +756,10 @@ export function VoiceView() {
               {cloning ? "Cloning the voice…" : "Clone this voice"}
             </Button>
             <p className="text-[10px] text-muted-foreground leading-relaxed">
-              The sample goes to the clone provider and becomes a reusable narration voice
-              in every picker. Only clone voices you own or have permission to use.
+              The sample becomes a reusable narration voice in every picker. Only clone voices you
+              own or have permission to use.
             </p>
-          </div>
-        )}
+        </div>
       </Card>
 
       {/* Clone library */}
