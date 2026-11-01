@@ -1,0 +1,78 @@
+# TubeForge CI (T-1.5, restored)
+#
+# Contract: the `check` job runs on every push/PR; the `e2e` job runs on PRs
+# only (Playwright boots its own dev server via playwright.config.ts).
+#
+# NOTE: `npm run test:billing` is intentionally NOT part of CI — it needs the
+# local SQLite DB with seeded plans (see scripts/test-billing.mts header).
+# The unit suite renders its QC fixtures with ffmpeg, so the runner needs it.
+#
+# Pushing this file requires a PAT with `workflow` scope (GitHub rejects
+# workflow files otherwise). See worklog T-1.5 / T-5.2.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck · Lint · Unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install ffmpeg (QC fixtures + render pipeline)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Install dependencies (postinstall bootstraps SQLite + Prisma)
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit + regression suite
+        run: npm run test
+
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    needs: check
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install ffmpeg (render pipeline)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E suite (boots its own dev server on :3000)
+        run: npm run test:e2e
+        env:
+          CI: true
