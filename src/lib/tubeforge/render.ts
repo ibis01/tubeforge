@@ -525,9 +525,13 @@ async function sceneAudio(
   }
   if (ambPath) {
     inputs.push("-stream_loop", "-1", "-t", totalSec.toFixed(3), "-i", ambPath);
-    chains.push(`[${idx}:a]volume=0.85[amb]`);
+    // Beds ride at 0.10 (−20 dB under the voice): they are synthesized
+    // from filtered noise + LFOs, and at the old 0.22 they read as an
+    // annoying constant hiss under the whole narration (Battle Yamuk
+    // feedback). Felt at most, never heard.
+    chains.push(`[${idx}:a]volume=0.85,highpass=f=120[amb]`);
     labels.push("[amb]");
-    weights.push("0.22");
+    weights.push("0.10");
   }
   return {
     inputs,
@@ -840,18 +844,24 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     );
     // Stage 6 (T-6.10) — when the assembled timeline supplied per-scene
     // durations, override the voiceover-derived defaults. Only honor values
-    // that align to the scene list AND sit inside a sane range (a clip trim
-    // can shorten a scene, but a trim that drops below MIN_SEG_SEC would
-    // break the compositor; a "trim" longer than 3× the narration is almost
-    // certainly a stale timeline from a different scene list).
+    // that align to the scene list AND sit inside a sane range. A timeline
+    // value may EXTEND a scene (deliberate dramatic hold, up to 3× the
+    // narration) or trim its tail padding — but it can NEVER shorten a scene
+    // below what its narration needs: cutting words mid-sentence is how a
+    // −34 s drift video ships (Battle Yamuk: an approved director plan's
+    // invented 111 s of pacing silenced the last 34 s of a 143 s narration).
+    // The floor keeps narration + lead-in + a slim 0.3 s tail; the full
+    // 0.85 s breathing tail may be trimmed by an editor.
     const timelineDurations = opts.sceneDurationsSec ?? [];
     const durations = wavDurations.map((d, i) => {
       const t = timelineDurations[i];
       if (typeof t !== "number" || !Number.isFinite(t)) return d;
       if (t < MIN_SEG_SEC) return d;
+      // Floor: the narration must always fit (wav minus most of its tail).
+      const narrationFloor = Math.max(d - TAIL_SEC + 0.3, MIN_SEG_SEC);
       // Cap at 3× the measured narration so a stale timeline can't silently
       // extend a scene to minutes of dead air.
-      return Math.min(t, d * 3);
+      return Math.min(Math.max(t, narrationFloor), d * 3);
     });
     const segments = durations.map((d, i) => ({
       start: durations.slice(0, i).reduce((a, b) => a + b, 0),

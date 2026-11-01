@@ -330,7 +330,9 @@ await test("normalizationFilter(null): dynamic fallback, no measured_ fields", (
   const f = normalizationFilter(null);
   ok(!f.includes("measured_"), "fallback must not carry measurement fields");
   ok(f.includes("loudnorm=I="), f);
-  ok(f.includes("alimiter=limit=0.891:level=false"), f);
+  // 0.841 linear = −1.5 dBFS sample ceiling: true-peak-safe for the AAC
+  // overshoot the QC gate measures on the encoded file.
+  ok(f.includes("alimiter=limit=0.841:level=false"), f);
   ok(f.includes("aresample=48000"), f);
 });
 
@@ -341,7 +343,7 @@ await test("normalizationFilter(m): linear two-pass with measurement + limiter +
   ok(f.includes("measured_LRA=6.10"), f);
   ok(f.includes("measured_thresh=-24.30"), f);
   ok(f.includes("offset=-0.20:linear=true"), f);
-  ok(f.includes("alimiter=limit=0.891"), f);
+  ok(f.includes("alimiter=limit=0.841"), f);
   ok(f.includes("aresample=48000"), f);
 });
 
@@ -418,6 +420,42 @@ await test("parseSrt: two clean cues", () => {
 await test("parseSrt: garbage and empty inputs → no cues, no crash", () => {
   eq(parseSrt("this is not a subtitle file"), []);
   eq(parseSrt(""), []);
+});
+
+await test("formatSrtCues: hard non-overlap — the earlier cue always yields (Battle Yamuk 54 overlaps)", async () => {
+  const { formatSrtCues } = await import("../src/lib/tubeforge/captions.ts");
+  // Cue 1 runs into cue 2's window; cue 2 runs past cue 3's start; cue 4
+  // arrives out of order (blended-timeline shift). NONE may overlap after
+  // the pass, whatever the inputs do.
+  const srt = formatSrtCues([
+    { start: 0, end: 3.0, text: "first cue too long" },
+    { start: 2.0, end: 6.0, text: "second overlaps third" },
+    { start: 5.5, end: 7.0, text: "third" },
+    { start: 1.0, end: 1.6, text: "disordered early blip" },
+  ]);
+  const cues = parseSrt(srt);
+  eq(cues.length, 4, "all cues survive");
+  // Sorted by start: first(0.0), blip(1.0), second(2.0), third(5.5).
+  approx(cues[0].start, 0.0, 1e-9, "earliest cue first");
+  // The out-of-order blip (start 1.0, end 1.6) landed in slot 2.
+  approx(cues[1].start, 1.0, 1e-9, "out-of-order cue sorted into place");
+  approx(cues[1].end, 1.6, 1e-9, "blip end preserved (nothing to yield to)");
+  for (let i = 1; i < cues.length; i++) {
+    ok(cues[i].start >= cues[i - 1].end, `cue ${i + 1} starts at/after cue ${i} ends (${cues[i - 1].end} → ${cues[i].start})`);
+  }
+  // The yielding cue still got its 50ms gap, not a hard cut to equal.
+  ok(cues[2].end <= cues[3].start, "gap respected");
+});
+
+await test("formatSrtCues: sane cues pass through untouched", async () => {
+  const { formatSrtCues } = await import("../src/lib/tubeforge/captions.ts");
+  const srt = formatSrtCues([
+    { start: 0, end: 1.5, text: "a" },
+    { start: 2.0, end: 3.5, text: "b" },
+  ]);
+  const cues = parseSrt(srt);
+  approx(cues[0].end, 1.5, 1e-9, "non-overlapping end preserved");
+  approx(cues[1].start, 2.0, 1e-9, "start preserved");
 });
 
 // ---------- suite: QC fixtures (real ffmpeg) ----------
@@ -828,10 +866,14 @@ await test("timeoutFor: no timeout regression — youtube.ts routes through the 
 suiteStart("Stage 3 — queue claim liveness (multi-process safety)");
 
 await test("claimIsStale: null claim, own claim, dead pid, live foreign pid, prior incarnation", async () => {
-  // SAFETY: this test process must NEVER claim real jobs from the live DB —
-  // set before the first queue.ts import so its module state sees it.
+  // SAFETY: this test process must NEVER claim real jobs from the live DB.
+  // Belt AND suspenders: the env var covers the case where queue.ts has not
+  // been imported yet (module init reads it); setClaiming(false) covers the
+  // case where an EARLIER test (e.g. the captions suite, whose import chain
+  // captions → story → jobs → queue) already initialized the module.
   process.env.TUBEFORGE_NO_CLAIM = "1";
   const queue = await import("../src/lib/tubeforge/queue.ts");
+  queue.setClaiming(false);
   queue.initQueue("web");
   const myId = queue.queueWorkerId();
   ok(queue.queueStats().noClaim, "test process runs in enqueue-only mode");
@@ -1555,6 +1597,52 @@ await test("timeline: assembleTimeline derives per-scene start/end + caption tim
   eq(timeline.scenes[2].audio.sfx.enabled, true, "scene 3 has SFX (sting)");
   // No shot info without an approved plan.
   eq(timeline.scenes[0].shot, null, "no shot under no plan");
+});
+
+await test("timeline: plan duration can only EXTEND a scene, never cut narration (Battle Yamuk −34s drift)", async () => {
+  const { assembleTimeline } = await import("../src/lib/tubeforge/timeline.ts");
+  // Two chunky scenes; measured voiceover says 30s total.
+  const scenes = [
+    { index: 1, title: "A", narration: "word ".repeat(40).trim(), visual: "v", camera: "c", mood: "m", caption: "", hostInScene: false, rehook: false, sfx: "none" },
+    { index: 2, title: "B", narration: "word ".repeat(40).trim(), visual: "v", camera: "c", mood: "m", caption: "", hostInScene: false, rehook: false, sfx: "none" },
+  ] as never[];
+  // Approved plan invents tight 5s scenes (sum 10s ≪ 30s measured).
+  const plan = {
+    concept: "x",
+    scenes: [
+      { sceneIndex: 1, durationSec: 5, shots: [{ duration: 2.5 }, { duration: 2.5 }], transitionIn: "" },
+      { sceneIndex: 2, durationSec: 5, shots: [{ duration: 2.5 }, { duration: 2.5 }], transitionIn: "fade" },
+    ],
+    musicMood: null,
+  } as never;
+  const timeline = assembleTimeline(scenes, {
+    ttsSpeed: 1,
+    shotPlan: plan,
+    audioDurationSec: 30,
+    renderMode: "kenburns",
+  });
+  // Floor: each scene ≥ its narration share (15s each), even though the
+  // plan wanted 5s.
+  ok(timeline.scenes[0].durationSec >= 14.5, `plan 5s must not cut narration share (got ${timeline.scenes[0].durationSec})`);
+  ok(timeline.scenes[1].durationSec >= 14.5, `plan 5s must not cut narration share (got ${timeline.scenes[1].durationSec})`);
+  ok(timeline.totalDurationSec >= 29, `total must track the measured voiceover (got ${timeline.totalDurationSec})`);
+  // And the extension case still works: a plan that wants MORE than the
+  // share wins (dramatic hold).
+  const holdPlan = {
+    concept: "x",
+    scenes: [
+      { sceneIndex: 1, durationSec: 25, shots: [{ duration: 12.5 }, { duration: 12.5 }], transitionIn: "" },
+      { sceneIndex: 2, durationSec: 5, shots: [{ duration: 2.5 }, { duration: 2.5 }], transitionIn: "fade" },
+    ],
+    musicMood: null,
+  } as never;
+  const held = assembleTimeline(scenes, {
+    ttsSpeed: 1,
+    shotPlan: holdPlan,
+    audioDurationSec: 30,
+    renderMode: "kenburns",
+  });
+  ok(held.scenes[0].durationSec >= 25, `dramatic hold preserved (got ${held.scenes[0].durationSec})`);
 });
 
 await test("timeline: parseTimeline degrades bad/legacy payloads to null", async () => {

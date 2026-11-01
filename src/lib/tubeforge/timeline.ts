@@ -166,11 +166,14 @@ export function assembleTimeline(scenes: Scene[], opts: AssembleOptions = {}): A
   });
 
   const out: TimelineScene[] = scenes.map((scene, i) => {
-    // Plan-determined duration takes precedence when an approved plan exists
-    // (it carries the AI Director's per-scene pacing); else fall back to the
-    // narration-derived estimate (or the proportional measured-voiceover split).
+    // Plan-determined duration can only EXTEND a scene beyond its narration
+    // share (deliberate dramatic hold) — never shorten it. The narration
+    // share is the floor: a plan whose invented pacing totals less than the
+    // measured voiceover (Battle Yamuk: 111 s plan vs 143 s narration)
+    // otherwise ships a timeline that cuts words at render time.
     const planDuration = plan ? planSceneDuration(plan, scene.index) : 0;
-    const durationSec = planDuration > 0 ? planDuration : Math.max(0.5, durations[i] ?? 1.5);
+    const narrationSec = Math.max(0.5, durations[i] ?? 1.5);
+    const durationSec = planDuration > 0 ? Math.max(planDuration, narrationSec) : narrationSec;
     const startSec = cursor;
     const endSec = cursor + durationSec;
     cursor = endSec;
@@ -228,7 +231,9 @@ export function assembleTimeline(scenes: Scene[], opts: AssembleOptions = {}): A
         },
         ambient: {
           enabled: ambientKind !== null,
-          level: ambientKind ? 0.22 : 0,
+          // Mirrors the render mix (sceneAudio): beds sit at 0.10 —
+          // synthesized noise beds any louder read as constant hiss.
+          level: ambientKind ? 0.1 : 0,
           kind: ambientKind,
         },
       },

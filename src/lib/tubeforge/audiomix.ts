@@ -234,7 +234,13 @@ export function normalizationFilter(m: LoudnessMeasurement | null): string {
       : "";
   // loudnorm upsamples internally (up to 192 kHz) — aresample returns the
   // track to 48 kHz before the AAC encode.
-  return `${base}${measured},alimiter=limit=0.891:level=false,aresample=48000`;
+  // The limiter ceiling is −1.5 dBFS (0.841 linear), NOT the delivery −1.0
+  // dBTP: alimiter caps SAMPLE peaks, but the QC gate measures TRUE
+  // (inter-sample) peaks on the encoded AAC, which overshoot sample peaks by
+  // up to ~0.5 dB. Capping samples at −1.5 keeps the measured true peak
+  // inside the −1.0 dBTP delivery target (Battle Yamuk shipped −0.5 dBTP
+  // with the old 0.891 ceiling).
+  return `${base}${measured},alimiter=limit=0.841:level=false,aresample=48000`;
 }
 
 // ---------- visual pacing (static-shot detection) ----------

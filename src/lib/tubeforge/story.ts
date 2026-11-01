@@ -504,7 +504,7 @@ Return JSON with exactly these keys:
     {
       "title": "short scene label (2-4 words)",
       "narration": "the spoken narration for this scene (${wordsPerScene} words, gripping and rhythmic; scene 1 opens with the hook, the last scene closes with a call-to-action)",
-      "visual": "detailed image prompt for the scene art: main subject, setting, action, composition, time of day. NO camera or lighting words here",
+      "visual": "detailed image prompt for the scene art: main subject, setting, action, composition, time of day. Depict the exact moment the narration describes — the image must show what the viewer is hearing about, not a generic stand-in. When people are involved, describe real human presence: facial expression, emotion, body language. Prefer concrete human-scale moments (hands, faces, crowds reacting) over abstract symbols. NO camera or lighting words here",
       "camera": "one of: zoom-in, zoom-out, pan-left, pan-right, push-in",
       "mood": "color palette + lighting mood keywords, e.g. 'teal shadows, cold moonlight, volumetric haze'",
       "caption": "punchy on-screen subtitle under 45 characters (no quotes, no emojis)",
@@ -598,7 +598,12 @@ export async function generateSceneImage(opts: {
     : "";
   const worldClause = await getApprovedWorldClause(opts.videoId, scene.index);
   const continuityClauses = [appearanceClause, worldClause].filter(Boolean).join(" ");
-  const artPrompt = `${scene.visual}.${styleClause ? ` ${styleClause}.` : ""}${directorClause ? ` ${directorClause}.` : ""}${continuityClauses ? ` ${continuityClauses}` : ""} ${scene.mood}. Wide 16:9 cinematic frame, ONE dominant subject filling the frame, highly detailed, professional color grading, storytelling composition. The frame must depict exactly the moment described — the named subject is the single dominant element. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
+  // Photorealistic-by-default look (Battle Yamuk feedback): the base
+  // language steers the image model toward documentary-cinema photography
+  // with real human emotion, not the illustrated/digital-art look generic
+  // "highly detailed" prompts drift into. Explicit per-scene styles
+  // (anime, watercolor, …) still override via styleClause.
+  const artPrompt = `${scene.visual}.${styleClause ? ` ${styleClause}.` : ""}${directorClause ? ` ${directorClause}.` : ""}${continuityClauses ? ` ${continuityClauses}` : ""} ${scene.mood}. Wide 16:9 cinematic frame, ultra-realistic photograph shot on a full-frame cinema camera with a 35mm lens, natural depth of field, physically accurate lighting for the time of day, lifelike skin, fabric and material textures, authentic human emotion and natural body language on every person in frame, documentary realism, ONE dominant subject filling the frame, professional cinematic color grading, storytelling composition. The frame must depict exactly the moment described — the named subject is the single dominant element. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
 
   const portrait =
     scene.hostInScene && opts.character?.id
@@ -999,11 +1004,12 @@ export function buildSrtFromSegments(
     let end = seg.start + seg.duration;
     const next = segments[i + 1];
     if (next && next.start - 0.05 < end) {
-      // Overlap with the next cue — cap, but keep a readable minimum.
-      end = Math.max(next.start - 0.05, seg.start + 0.4);
+      // Overlap with the next cue — the earlier cue ALWAYS yields (a too-
+      // short cue is cosmetic; an overlap fails the QC captions check).
+      end = Math.max(next.start - 0.05, seg.start + 0.15);
     }
     parts.push(
-      `${i + 1}\n${srtTime(seg.start)} --> ${srtTime(Math.max(end, seg.start + 0.4))}\n${caption}\n`
+      `${i + 1}\n${srtTime(seg.start)} --> ${srtTime(Math.max(end, seg.start + 0.15))}\n${caption}\n`
     );
   });
   return parts.join("\n");

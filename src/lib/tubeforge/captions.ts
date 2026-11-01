@@ -278,6 +278,33 @@ export interface SmartCaptionOpts {
  * timeline: segmentStart + LEAD + time-inside-scene-WAV (mirrors the adelay
  * the compositor applies to narration).
  */
+/** A caption cue in video time (seconds). */
+export interface SrtCue {
+  start: number;
+  end: number;
+  text: string;
+}
+
+/** Render cues as an SRT with a HARD non-overlap pass (Battle Yamuk shipped
+ *  54 overlapping cues): the earlier cue ALWAYS yields — trimmed to the next
+ *  cue's start minus a 50 ms refresh gap. A too-short cue is a cosmetic nit;
+ *  an overlapping cue fails the QC captions check. Cues are sorted by start
+ *  first so blended-timeline shifts (which pull later scenes' starts earlier)
+ *  can't disorder the stream. Pure — unit-pinned. */
+export function formatSrtCues(input: SrtCue[]): string {
+  const cues = [...input].sort((a, b) => a.start - b.start);
+  return cues
+    .map((cue, i) => {
+      const nextStart = i + 1 < cues.length ? cues[i + 1].start : null;
+      let end = cue.end;
+      if (nextStart !== null && end > nextStart - 0.05) {
+        end = Math.max(nextStart - 0.05, cue.start + 0.15);
+      }
+      return `${i + 1}\n${srtTime(cue.start)} --> ${srtTime(Math.max(end, cue.start + 0.15))}\n${cue.text}\n`;
+    })
+    .join("\n");
+}
+
 export async function buildSmartSrt(
   opts: SmartCaptionOpts
 ): Promise<SmartCaptionResult> {
@@ -368,17 +395,5 @@ export async function buildSmartSrt(
     });
   }
 
-  const srt = cues
-    .map((cue, i) => {
-      const nextStart = i + 1 < cues.length ? cues[i + 1].start : null;
-      let end = cue.end;
-      // Leave a 50ms gap before the next cue so text visibly refreshes,
-      // but never below the minimum readable duration.
-      if (nextStart !== null && nextStart - 0.05 < end && cue.start + 0.3 < nextStart - 0.05)
-        end = nextStart - 0.05;
-      return `${i + 1}\n${srtTime(cue.start)} --> ${srtTime(Math.max(end, cue.start + 0.4))}\n${cue.text}\n`;
-    })
-    .join("\n");
-
-  return { srt, cueCount: cues.length, method };
+  return { srt: formatSrtCues(cues), cueCount: cues.length, method };
 }

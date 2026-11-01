@@ -250,12 +250,17 @@ export async function runQcReport(opts: {
   // 2) Duration vs narration — audio/video sync sanity.
   if (opts.narrationSec && opts.narrationSec > 0) {
     const drift = duration - opts.narrationSec;
+    // Asymmetric tolerance: the video may run LONGER than the narration
+    // (scene lead-ins, holds, dramatic pauses — up to +20%), but never
+    // meaningfully SHORTER. A video shorter than its narration means words
+    // were cut mid-sentence — the −34 s Battle Yamuk class — and must fail
+    // hard, not ride a ±20% band.
     const tolerance = Math.max(8, opts.narrationSec * 0.2);
     checks.push(
       check(
         "duration",
         "Video length matches the narration",
-        Math.abs(drift) <= tolerance ? "pass" : "fail",
+        drift >= -2 && drift <= tolerance ? "pass" : "fail",
         `video ${duration.toFixed(1)}s vs narration ${opts.narrationSec.toFixed(1)}s`,
         `drift ${drift >= 0 ? "+" : ""}${drift.toFixed(1)}s (tolerance ±${tolerance.toFixed(0)}s — scene lead-ins add a few seconds)`
       )
