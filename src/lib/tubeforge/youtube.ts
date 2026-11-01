@@ -389,6 +389,12 @@ export interface UploadInput {
   filePath: string; // final.mp4 on disk
   fileSize: number;
   thumbnailPath?: string | null; // thumbnail.png on disk
+  /** Optional scheduled-publish time (ISO 8601). YouTube only honors
+   *  `publishAt` when `privacyStatus === "private"` — a "public"/"unlisted"
+   *  upload with a future publishAt publishes immediately. The caller is
+   *  responsible for the privacy/publishAt pairing; we pass it straight
+   *  through and let YouTube's API enforce the constraint. */
+  publishAt?: string | null;
 }
 
 export interface UploadResult {
@@ -405,6 +411,19 @@ export async function uploadToYouTube(input: UploadInput): Promise<UploadResult>
     throw new Error(`Invalid privacy status "${privacyStatus}"`);
 
   // 1) Initiate the resumable session with the video metadata.
+  // `publishAt` is only honored when `privacyStatus === "private"`; for
+  // "public"/"unlisted" uploads YouTube ignores it and publishes immediately.
+  // We pass it through as-is — the route UI is responsible for explaining
+  // the constraint to the user.
+  const statusMetadata: { privacyStatus: string; selfDeclaredMadeForKids: boolean; embeddable: boolean; publishAt?: string } = {
+    privacyStatus,
+    selfDeclaredMadeForKids: false,
+    embeddable: true,
+  };
+  if (input.publishAt) {
+    const iso = new Date(input.publishAt).toISOString();
+    if (!Number.isNaN(Date.parse(iso))) statusMetadata.publishAt = iso;
+  }
   const metadata = {
     snippet: {
       title: input.title.slice(0, 100),
@@ -412,11 +431,7 @@ export async function uploadToYouTube(input: UploadInput): Promise<UploadResult>
       tags: input.tags.slice(0, 30),
       categoryId,
     },
-    status: {
-      privacyStatus,
-      selfDeclaredMadeForKids: false,
-      embeddable: true,
-    },
+    status: statusMetadata,
   };
 
   const init = await ytFetch(

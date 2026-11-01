@@ -1555,6 +1555,35 @@ await test("timeline: parseTimeline degrades bad/legacy payloads to null", async
   eq(round!.scenes[0].index, 1, "scene index preserved");
 });
 
+// ---------------------------------------------------------------------------
+// Stage 6 (T-6.7) — captions SRT -> VTT (captions.ts)
+// ---------------------------------------------------------------------------
+
+await test("captions: srtToVtt header + fractional separator + cue-number strip", async () => {
+  const { srtToVtt, looksLikeSrt } = await import("../src/lib/tubeforge/captions.ts");
+  const srt = [
+    "1",
+    "00:00:01,000 --> 00:00:04,500",
+    "Welcome to the show.",
+    "",
+    "2",
+    "00:00:04,500 --> 00:00:07,000",
+    "Here is the substance.",
+    "",
+  ].join("\n");
+
+  ok(looksLikeSrt(srt), "looksLikeSrt true for a real SRT body");
+  ok(!looksLikeSrt("<html>"), "looksLikeSrt false for an HTML error page");
+
+  const vtt = srtToVtt(srt);
+  ok(vtt.startsWith("WEBVTT\n\n"), "VTT starts with the WEBVTT header + blank line");
+  ok(!/^\d+$/m.test(vtt.split("\n")[2]), "SRT cue numbers are stripped (no bare integer line)");
+  ok(vtt.includes("00:00:01.000 --> 00:00:04.500"), "fractional separator , -> .");
+  ok(!vtt.includes(","), "no comma survives inside the timestamps");
+  ok(vtt.includes("Welcome to the show."), "cue text preserved");
+  ok(vtt.includes("Here is the substance."), "second cue preserved");
+});
+
 await test("research: matchSourcesToIdeas attaches only keyword-relevant sources", async () => {
   const { matchSourcesToIdeas } = await import("../src/lib/tubeforge/research.ts");
   const idea = (id: string, keywords: string[]) =>

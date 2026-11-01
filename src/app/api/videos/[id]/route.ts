@@ -169,6 +169,19 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     data.transitionDuration = sanitizeTransitionDuration(body.transitionDuration);
   if (body.transitionDuration === null) data.transitionDuration = null;
 
+  // Stage 6 render defaults — per-project aspect ratio, frame rate, caption
+  // burn-in (T-6.7/T-6.8). These ride alongside the existing overrides; the
+  // render job reads them from the video row when no per-render override
+  // is supplied in the POST /render body. null = "16:9" / 30 fps / sidecar SRT.
+  if (typeof body.aspectRatio === "string" && ["16:9", "9:16", "1:1"].includes(body.aspectRatio))
+    data.aspectRatio = body.aspectRatio;
+  if (body.aspectRatio === null) data.aspectRatio = null;
+  if (typeof body.frameRate === "number" && [24, 30, 60].includes(body.frameRate))
+    data.frameRate = body.frameRate;
+  if (body.frameRate === null) data.frameRate = null;
+  if (typeof body.burnCaptions === "boolean") data.burnCaptions = body.burnCaptions;
+  if (body.burnCaptions === null) data.burnCaptions = null;
+
   // Status transitions (publish / mark ready / retry)
   if (typeof body.status === "string") {
     const allowed = ["draft", "scripted", "voiced", "ready", "published", "failed"];

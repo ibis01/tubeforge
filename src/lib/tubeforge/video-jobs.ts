@@ -1254,6 +1254,7 @@ export async function runUploadJob(
       filePath: mp4Path,
       fileSize,
       thumbnailPath,
+      publishAt: opts.publishAt,
     });
 
     await db.video.update({
