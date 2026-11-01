@@ -47,6 +47,9 @@ import {
   runThumbnailJob,
   runVariantsJob,
   runSlideJob,
+  runQcJob,
+  runUploadJob,
+  type PublishJobOptions,
   splitEntityId,
   type VoiceoverJobSource,
   type RenderJobOptions,
@@ -252,6 +255,33 @@ function parseShortPayload(payload: unknown): { sceneIndex?: number | null } {
   return {};
 }
 
+/** T-6.3 — the publish options survive a crash so the resumed upload uses
+ *  the SAME title/description/privacy the user picked. Strings are
+ *  clamped to YouTube's API limits; junk shapes degrade to safe defaults
+ *  (the route's own Zod schema is the strict gate; this is the tolerant
+ *  resume path). */
+function parsePublishPayload(payload: unknown): PublishJobOptions {
+  const p = asRecord(payload);
+  if (!p) {
+    return { title: "", description: "", tags: [] };
+  }
+  const title = typeof p.title === "string" ? p.title.slice(0, 100) : "";
+  const description = typeof p.description === "string" ? p.description.slice(0, 4900) : "";
+  const tagsRaw = Array.isArray(p.tags) ? p.tags.filter((t): t is string => typeof t === "string") : [];
+  const tags = tagsRaw.slice(0, 30).map((t) => t.slice(0, 80));
+  const thumbnailStorageKey =
+    typeof p.thumbnailStorageKey === "string" && p.thumbnailStorageKey.trim()
+      ? p.thumbnailStorageKey.trim().slice(0, 256)
+      : null;
+  const privacyStatus =
+    typeof p.privacyStatus === "string" && ["public", "unlisted", "private"].includes(p.privacyStatus)
+      ? p.privacyStatus
+      : undefined;
+  const publishAt =
+    typeof p.publishAt === "string" && p.publishAt.trim() ? p.publishAt.trim().slice(0, 40) : null;
+  return { title, description, tags, thumbnailStorageKey, privacyStatus, publishAt };
+}
+
 // ---------------------------------------------------------------------------
 // Registry
 
@@ -293,6 +323,17 @@ export function registerDefaultHandlers(): void {
   registerJobHandler("variants", (videoId) => runVariantsJob(videoId));
   registerJobHandler("slide", (entityId) => runSlideJob(entityId));
 
+  // Stage 6 — QC re-run + YouTube publish. The "upload" kind was the only
+  // unregistered kind left after the Stage 3 close-out; it's now wired so a
+  // crashed upload resumes with the SAME title/description/privacy the user
+  // picked (parsePublishPayload tolerates a payload written by an older
+  // route version — defaults are safe, never silent). QC re-run is bounded
+  // ffmpeg work (≤ ~1 min for typical videos) and never re-renders.
+  registerJobHandler("qc", (videoId) => runQcJob(videoId));
+  registerJobHandler("upload", (videoId, payload) =>
+    runUploadJob(videoId, parsePublishPayload(payload))
+  );
+
   // Character stages — Stage 3 close-out
   registerJobHandler("portrait", (characterId) => runPortraitJob(characterId));
   registerJobHandler("poses", (characterId) => runPosesJob(characterId));
@@ -317,5 +358,7 @@ export function resumableKinds(): JobKind[] {
     "slide",
     "portrait",
     "poses",
+    "qc",
+    "upload",
   ];
 }

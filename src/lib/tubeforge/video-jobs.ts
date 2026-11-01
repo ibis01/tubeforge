@@ -68,6 +68,7 @@ import {
 } from "./slides";
 import { get, remove, materialize } from "./storage";
 import { promoteVariant, pickVariantStyles } from "./ai";
+import { uploadToYouTube } from "./youtube";
 import {
   JobCancelledError,
   isJobCancelled,
@@ -1101,4 +1102,204 @@ export function splitEntityId(
   if (idx === -1) return [entityId, null];
   const suffix = entityId.slice(idx + marker.length);
   return [entityId.slice(0, idx), /^\d+$/.test(suffix) ? suffix : null];
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6 — qc re-run + youtube publish
+
+/** Durable publish payload — the route enqueues this so a restart resumes
+ *  the upload with the SAME title/description/privacy the user picked. */
+export interface PublishJobOptions {
+  title: string;
+  description: string;
+  tags: string[];
+  /** Storage key for a custom thumbnail (e.g. "videos/<id>/thumb-variant-2.png").
+   *  null/undefined → use the video's primary thumbnail.png when present. */
+  thumbnailStorageKey?: string | null;
+  /** "public" | "unlisted" | "private" — falls back to the account default. */
+  privacyStatus?: string;
+  /** ISO date for scheduled publishing (YouTube's publishAt). Null = now. */
+  publishAt?: string | null;
+}
+
+/**
+ * T-6.2 — re-run the QC battery against the existing final.mp4 without
+ * re-rendering. Useful after the user manually edits a scene's narration or
+ * caption and wants a fresh report. Crashes here surface on the video row
+ * (same contract as every other kind); a missing final.mp4 throws a readable
+ * error so the user knows to render first.
+ */
+export async function runQcJob(videoId: string): Promise<void> {
+  const ctx = assertCtx("runQcJob");
+  const video = await db.video.findUnique({ where: { id: videoId } });
+  if (!video) return; // deleted while queued — end quietly
+  if (!video.hasVideo || video.videoDuration == null) {
+    throw new Error("Cannot re-run QC — render the video first");
+  }
+
+  try {
+    setJobProgress(videoId, "qc", 0, 1, "Re-running QC battery");
+    const approvedPlan =
+      video.directorState === "approved" ? parsePlan(video.shotList) : null;
+    const aspect = (video.aspectRatio === "9:16" ? "9:16" : "16:9") as
+      | "16:9"
+      | "9:16";
+    const report = await qcForVideo(
+      videoId,
+      video.videoDuration,
+      video.audioDuration,
+      [], // no designed black windows stored — any detected black reads as "unexplained"
+      aspect,
+      approvedPlan,
+      {
+        i2vEverywhere: video.renderMode === "animated",
+        stockEverywhere: video.renderMode === "stock",
+      }
+    );
+    await db.video.update({
+      where: { id: videoId },
+      data: { qcReport: JSON.stringify(report) },
+    });
+    setJobProgress(videoId, "qc", 1, 1, report.passed ? "QC passed" : "QC failed");
+    await db.activity.create({
+      data: {
+        organizationId: ctx.organizationId,
+        userId: ctx.userId,
+        videoId,
+        stage: "qc",
+        message: report.passed
+          ? `QC re-run passed — ${report.checks.length} checks clean`
+          : `QC re-run flagged ${report.checks.filter((c) => c.status !== "pass").length} issue(s)`,
+      },
+    });
+  } catch (err) {
+    if (err instanceof JobCancelledError) throw err;
+    const message = errorText(err, "QC re-run failed");
+    await db.video.update({ where: { id: videoId }, data: { error: message } }).catch(() => {});
+    await db.activity
+      .create({
+        data: {
+          organizationId: ctx.organizationId,
+          userId: ctx.userId,
+          videoId,
+          stage: "qc",
+          level: "error",
+          message: `QC re-run failed: ${message}`,
+        },
+      })
+      .catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * T-6.3 — YouTube publish job. Wires the dead `uploadToYouTube` scaffolding
+ * (D-06, D-07). Loads the final.mp4 + thumbnail from storage, calls the
+ * existing resumable upload path, and on success writes `Video.youtubeUrl`
+ * + `Video.publishedAt` + flips `Video.status` to "published". An
+ * `invalid_grant` (revoked refresh token) is already handled inside
+ * `getAccessToken` (the YouTubeAccount row is wiped, surfacing a
+ * "reconnect in Settings" error); a transient failure retries with the
+ * queue's exponential backoff.
+ */
+export async function runUploadJob(
+  videoId: string,
+  opts: PublishJobOptions
+): Promise<void> {
+  const ctx = assertCtx("runUploadJob");
+  const video = await db.video.findUnique({ where: { id: videoId } });
+  if (!video) return; // deleted while queued — end quietly
+  if (video.youtubeUrl) {
+    // Already published (a resumed job after a partial success). Idempotent.
+    await db.activity
+      .create({
+        data: {
+          organizationId: ctx.organizationId,
+          userId: ctx.userId,
+          videoId,
+          stage: "upload",
+          message: "Already published — skipping",
+        },
+      })
+      .catch(() => {});
+    return;
+  }
+  if (!video.hasVideo) {
+    throw new Error("Cannot publish — render the video first");
+  }
+
+  try {
+    setJobProgress(videoId, "upload", 0, 1, "Materializing video + thumbnail");
+
+    // Materialize from the storage driver — local: returns the uploads path;
+    // s3: downloads to a temp scratch file. fs.readFile works on both.
+    const mp4Path = await materialize(`${videoId}/final.mp4`);
+    let thumbnailPath: string | null = null;
+    if (opts.thumbnailStorageKey) {
+      thumbnailPath = await materialize(opts.thumbnailStorageKey);
+    } else if (video.hasThumbnail) {
+      // Default to the project's primary thumbnail if one was generated.
+      thumbnailPath = await materialize(`${videoId}/thumbnail.png`).catch(() => null);
+    }
+
+    const fs = await import("fs");
+    const fileSize = fs.statSync(mp4Path).size;
+
+    setJobProgress(videoId, "upload", 0, 1, "Uploading to YouTube");
+
+    const result = await uploadToYouTube({
+      title: opts.title,
+      description: opts.description,
+      tags: opts.tags,
+      filePath: mp4Path,
+      fileSize,
+      thumbnailPath,
+    });
+
+    await db.video.update({
+      where: { id: videoId },
+      data: {
+        youtubeUrl: result.url,
+        publishedAt: new Date(),
+        status: "published",
+        error: null,
+      },
+    });
+    setJobProgress(videoId, "upload", 1, 1, "Published");
+    await db.activity.create({
+      data: {
+        organizationId: ctx.organizationId,
+        userId: ctx.userId,
+        videoId,
+        stage: "upload",
+        message: `Published to YouTube${result.thumbnailSet ? " (custom thumbnail set)" : ""}`,
+      },
+    });
+
+    // Note: materialize() returns either the uploads/ path (local driver —
+    // the source of truth, never deleted) or an etag-pinned cache file (s3
+    // driver — the cache manages its own lifecycle). No cleanup needed here.
+  } catch (err) {
+    if (err instanceof JobCancelledError) throw err;
+    const message = errorText(err, "YouTube publish failed");
+    await db.video
+      .update({
+        where: { id: videoId },
+        data: { status: "publish-failed", error: message },
+      })
+      .catch(() => {});
+    await db.activity
+      .create({
+        data: {
+          organizationId: ctx.organizationId,
+          userId: ctx.userId,
+          videoId,
+          stage: "upload",
+          level: "error",
+          message: `Publish failed: ${message}`,
+        },
+      })
+      .catch(() => {});
+    throw err;
+  }
 }

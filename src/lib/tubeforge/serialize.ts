@@ -101,6 +101,11 @@ export async function serializeVideo(
     researchSources: parseResearchSources(
       (v as { researchSources?: string | null }).researchSources
     ),
+    // Stage 6 — assembled preview timeline + per-project render defaults.
+    timeline: parseTimeline((v as { timeline?: string | null }).timeline),
+    aspectRatio: (v as { aspectRatio?: string | null }).aspectRatio ?? null,
+    frameRate: (v as { frameRate?: number | null }).frameRate ?? null,
+    burnCaptions: (v as { burnCaptions?: boolean | null }).burnCaptions ?? null,
     stats: opts.stats ?? null,
     createdAt: v.createdAt.toISOString(),
     updatedAt: v.updatedAt.toISOString(),
@@ -113,6 +118,26 @@ function parseQc(raw: string | null): import("./types").QcReportDTO | null {
   try {
     const parsed = JSON.parse(raw) as import("./types").QcReportDTO;
     return parsed && typeof parsed.passed === "boolean" && Array.isArray(parsed.checks) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Parse the stored assembled-timeline JSON safely (bad/legacy → null).
+ * Mirrors parseQc's tolerance — bad payloads never break GET /videos. */
+function parseTimeline(raw: string | null | undefined): import("./types").AssembledTimelineDTO | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const obj = parsed as { scenes?: unknown; sceneCount?: unknown; totalDurationSec?: unknown; generatedAt?: unknown };
+    if (!Array.isArray(obj.scenes)) return null;
+    return {
+      scenes: obj.scenes as import("./types").TimelineSceneDTO[],
+      sceneCount: Number(obj.sceneCount) || 0,
+      totalDurationSec: Number(obj.totalDurationSec) || 0,
+      generatedAt: typeof obj.generatedAt === "string" ? obj.generatedAt : new Date().toISOString(),
+    };
   } catch {
     return null;
   }

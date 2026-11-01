@@ -1168,21 +1168,21 @@ await test("queue: splitEntityId parses scene/slide composite ids, rejects garba
 
 await test("queue: resumableKinds covers every kind the routes start", async () => {
   // Static contract: the routes call startJob with these kinds (grep-checked
-  // in review); every one must be resumable after a crash. "upload" is the
-  // ONLY kind without a handler — YouTube publishing wiring is Stage 6 and
-  // nothing enqueues it yet.
+  // in review); every one must be resumable after a crash. Stage 6 wired the
+  // final two unregistered kinds — "qc" (re-run the QC battery against the
+  // existing final.mp4) and "upload" (YouTube publish) — so a crashed upload
+  // resumes with the SAME title/description the user picked.
   const { resumableKinds } = await import("../src/lib/tubeforge/queue-handlers.ts");
   const kinds = resumableKinds();
   const expected = [
     "script", "research", "stock", "voiceover", "storyboard", "scene",
     "render", "short", "convert", "verify", "comments", "thumbnail",
-    "variants", "slide", "portrait", "poses",
+    "variants", "slide", "portrait", "poses", "qc", "upload",
   ];
   for (const k of expected) {
     ok(kinds.includes(k), `"${k}" is resumable`);
   }
   eq(kinds.length, expected.length, "no unexpected resumable kinds");
-  ok(!kinds.includes("upload"), `"upload" (Stage 6) is not claimed by handlers`);
 });
 
 // ---------------------------------------------------------------------------
@@ -1483,6 +1483,76 @@ await test("director-plan: module E audio fields normalize + pacing factors", as
   eq(pacingSpeedFactor("fast"), 1.12, "fast = +12%");
   eq(pacingSpeedFactor("normal"), 1, "normal = untouched");
   eq(pacingSpeedFactor("garbage"), 1, "unknown = untouched");
+});
+
+// ---------------------------------------------------------------------------
+// Stage 6 (T-6.1) — timeline assembly (timeline.ts)
+// ---------------------------------------------------------------------------
+
+await test("timeline: estimateNarrationSec clamps + scales with TTS speed", async () => {
+  const { estimateNarrationSec, sumEstimatedDuration } =
+    await import("../src/lib/tubeforge/timeline.ts");
+  // Empty / whitespace-only narration still needs a visible beat.
+  eq(estimateNarrationSec("   "), 1.5, "empty narration gets a 1.5s floor");
+  // A short sentence ~6 words at 1.0x = 6/2.5 + 0.4 lead-in ≈ 2.8s
+  const six = estimateNarrationSec("one two three four five six");
+  ok(six >= 2.7 && six <= 2.9, `6-word narration ≈ 2.8s (got ${six})`);
+  // Faster TTS speed reduces duration.
+  const sixFast = estimateNarrationSec("one two three four five six", 1.5);
+  ok(sixFast < six, "faster TTS speed shortens the scene");
+  // Slower TTS speed extends duration.
+  const sixSlow = estimateNarrationSec("one two three four five six", 0.7);
+  ok(sixSlow > six, "slower TTS speed lengthens the scene");
+  // Sum across mixed scenes.
+  const sum = sumEstimatedDuration(
+    [{ narration: "a b c" } as never, { narration: "x y z w" } as never],
+    1
+  );
+  ok(sum > 0, "sum is positive for non-empty scenes");
+});
+
+await test("timeline: assembleTimeline derives per-scene start/end + caption timing", async () => {
+  const { assembleTimeline } = await import("../src/lib/tubeforge/timeline.ts");
+  const scenes = [
+    { index: 1, title: "Open", narration: "Welcome to the show.", visual: "studio", camera: "pan-right", mood: "warm", caption: "Welcome", hostInScene: true, rehook: false, sfx: "none" },
+    { index: 2, title: "Body", narration: "Here is the substance of the episode you came for.", visual: "b-roll", camera: "static", mood: "neutral", caption: "The substance", hostInScene: false, rehook: false, sfx: "whoosh" },
+    { index: 3, title: "Close", narration: "Subscribe for more.", visual: "studio", camera: "zoom-in", mood: "warm", caption: "Subscribe", hostInScene: true, rehook: false, sfx: "sting" },
+  ] as never[];
+
+  const timeline = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "kenburns" });
+  eq(timeline.sceneCount, 3, "sceneCount matches");
+  ok(timeline.totalDurationSec > 0, "totalDurationSec is positive");
+  // Scenes are contiguous — scene 2 starts where scene 1 ends.
+  eq(timeline.scenes[0].endSec, timeline.scenes[1].startSec, "scenes are contiguous");
+  eq(timeline.scenes[1].endSec, timeline.scenes[2].startSec, "scenes are contiguous");
+  // Caption timing matches the scene window.
+  eq(timeline.scenes[0].caption?.text, "Welcome", "caption text propagated");
+  eq(timeline.scenes[0].caption?.startSec, timeline.scenes[0].startSec, "caption starts at scene start");
+  // SFX enabled only on scenes that asked for one.
+  eq(timeline.scenes[0].audio.sfx.enabled, false, "scene 1 has no SFX (sfx:none)");
+  eq(timeline.scenes[1].audio.sfx.enabled, true, "scene 2 has SFX (whoosh)");
+  eq(timeline.scenes[2].audio.sfx.enabled, true, "scene 3 has SFX (sting)");
+  // No shot info without an approved plan.
+  eq(timeline.scenes[0].shot, null, "no shot under no plan");
+});
+
+await test("timeline: parseTimeline degrades bad/legacy payloads to null", async () => {
+  const { parseTimeline, serializeTimeline, assembleTimeline } =
+    await import("../src/lib/tubeforge/timeline.ts");
+  eq(parseTimeline(null), null, "null in → null out");
+  eq(parseTimeline(""), null, "empty string → null out");
+  eq(parseTimeline("not-json"), null, "non-JSON → null out");
+  eq(parseTimeline(JSON.stringify({ foo: "bar" })), null, "non-timeline shape → null");
+  eq(parseTimeline(JSON.stringify({ scenes: "not-array" })), null, "non-array scenes → null");
+  // A real roundtrip survives.
+  const original = assembleTimeline(
+    [{ index: 1, title: "t", narration: "n", visual: "v", camera: "c", mood: "m", caption: "", hostInScene: false, rehook: false, sfx: "none" } as never],
+    { ttsSpeed: 1 }
+  );
+  const round = parseTimeline(serializeTimeline(original));
+  ok(round !== null, "roundtrip succeeds");
+  eq(round!.sceneCount, 1, "sceneCount preserved");
+  eq(round!.scenes[0].index, 1, "scene index preserved");
 });
 
 await test("research: matchSourcesToIdeas attaches only keyword-relevant sources", async () => {

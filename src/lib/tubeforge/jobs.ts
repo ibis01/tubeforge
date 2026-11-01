@@ -48,7 +48,8 @@ export type JobKind =
   | "research" // Topic Radar scan (Stage 1, T-1.10 — jobbed off the request path)
   | "script" // (re)generate the script package — retry after a failed create, or re-roll
   | "director" // Stage 5 — LLM shot-list pass (AI suggests, human approves)
-  | "continuity"; // Stage 5 — VLM per-scene character-continuity check
+  | "continuity" // Stage 5 — VLM per-scene character-continuity check
+  | "qc"; // Stage 6 — re-run the QC battery against the existing final.mp4
 
 export type JobStatus = "pending" | "running" | "done" | "failed" | "interrupted" | "cancelled";
 
@@ -111,6 +112,7 @@ const STAGE_LABEL: Record<string, string> = {
   stock: "stock b-roll",
   research: "Topic Radar scan",
   script: "script",
+  qc: "quality check",
 };
 
 /** Human label for an interrupted stage ("voiceover" -> "Voiceover"). */
@@ -182,7 +184,7 @@ async function runRecovery(): Promise<void> {
         });
 
         // Surface the interruption where the UI already looks for errors.
-        if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "slide", "verify", "comments", "upload", "short", "convert", "script", "stock"].includes(row.kind)) {
+        if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "slide", "verify", "comments", "upload", "short", "convert", "script", "stock", "qc"].includes(row.kind)) {
           const videoId = baseEntityId(row.entityId);
           const video = await rawDb.video.findUnique({ where: { id: videoId } });
           // Only set the error if the artifact never landed (completed after the row went stale).
@@ -200,7 +202,8 @@ async function runRecovery(): Promise<void> {
               (row.kind === "short" && video.hasShort) ||
               (row.kind === "convert" && video.format === "story") ||
               (row.kind === "script" && Boolean(video.script)) ||
-              (row.kind === "stock" && Boolean(video.scenes && video.scenes.includes('"stock"')));
+              (row.kind === "stock" && Boolean(video.scenes && video.scenes.includes('"stock"'))) ||
+              (row.kind === "qc" && Boolean(video.qcReport));
             if (!artifactLanded && !video.error)
               await rawDb.video.update({ where: { id: videoId }, data: { error: message } });
           }
@@ -434,6 +437,7 @@ export function jobSnapshot(videoId: string): {
   convert: boolean;
   script: boolean;
   stock: boolean;
+  qc: boolean;
 } {
   return {
     voiceover: isJobRunning(videoId, "voiceover"),
@@ -448,6 +452,7 @@ export function jobSnapshot(videoId: string): {
     convert: isJobRunning(videoId, "convert"),
     script: isJobRunning(videoId, "script"),
     stock: isJobRunning(videoId, "stock"),
+    qc: isJobRunning(videoId, "qc"),
   };
 }
 

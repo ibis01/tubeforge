@@ -318,6 +318,18 @@ model Video {
   researchSources String?
   appearances   CharacterAppearance[]
 
+  // Stage 6 — the assembled preview timeline (per-scene start/end times,
+  // transitions, audio levels, caption cues) produced by POST /assemble.
+  // Plain JSON like every other JSON column. The render job consumes this
+  // when present (T-6.10) so the Editing Studio can edit before final render.
+  timeline     String?
+  // Stage 6 (Rendering Engine) — per-project defaults the render respects.
+  // aspectRatio: "16:9" | "9:16" | "1:1"; frameRate: 24 | 30 | 60;
+  // burnCaptions: true = burned into the frame, false (null) = sidecar SRT.
+  aspectRatio  String?
+  frameRate    Int?
+  burnCaptions Boolean?
+
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)

@@ -1010,3 +1010,33 @@ R-CRIT-3, R-HIGH-1, R-HIGH-2, R-HIGH-3, R-HIGH-4, R-HIGH-9 (partial), R-HIGH-10,
 R-CRIT-1, R-CRIT-2 (Stage 2), R-HIGH-5, R-HIGH-6, R-HIGH-7, R-HIGH-8, R-HIGH-9 (rest), R-HIGH-12, R-HIGH-13, R-HIGH-15, R-HIGH-16, R-HIGH-17, R-HIGH-18, R-HIGH-19, R-HIGH-20, R-HIGH-21, R-HIGH-22, R-HIGH-23, R-HIGH-24, R-HIGH-25, R-HIGH-26, R-HIGH-27, R-HIGH-28 (rest) (Stages 2-3), R-MED-2, R-MED-3, R-MED-4, R-MED-5, R-MED-6, R-MED-7, R-MED-13 (Stages 2-3), R-X-1, R-X-2, R-X-3, R-X-4, R-X-5 (cross-cutting; Stages 3, 5, 7).
 
 Stage 2 starts immediately after Stage 1 completion.
+
+---
+
+## Stage 6 — Editing, rendering & publishing — task list
+
+**Status:** in progress (T-6.1 → T-6.3 done; T-6.4 → T-6.11 pending).
+**Last updated:** 2026-11-02
+**Source:** `ROADMAP.md` §Stage 6 + `FOUNDATION_AUDIT.md` defects D-06, D-07 (dead `uploadToYouTube` scaffolding) + the audit's "no separate QC re-run endpoint" gap.
+
+| Task | Status | Notes |
+|---|---|---|
+| T-6.1 Scene Assembly endpoint | ✅ Done | `POST /api/videos/[id]/assemble` (+ GET / PUT / DELETE) — pure `timeline.ts` builds the preview from scenes + shotList + audio settings; per-scene start/end/transition/audio/caption/shot; persists to `Video.timeline`; roundtrip unit-pinned |
+| T-6.2 Separate QC endpoint | ✅ Done | `POST /api/videos/[id]/qc` (+ GET) — new `runQcJob` body re-runs the 12-check battery against the existing final.mp4 without re-rendering; registered `"qc"` job kind + durable recovery |
+| T-6.3 YouTube publish route | ✅ Done | `POST /api/videos/[id]/publish` (+ GET) — new `runUploadJob` body wires the dead `uploadToYouTube` (D-06, D-07); `"upload"` job kind now registered (was the only unregistered kind); persists `Video.youtubeUrl` + `publishedAt` + `status:"published"` on success; `invalid_grant` → reconnect (handled inside getAccessToken) |
+| T-6.4 Per-user OAuth account picker | ✅ Already exists (Stage 2) | `YouTubeAccount` model + OAuth flow + `/api/youtube/connect` + `/api/youtube/status` pre-date Stage 6; the publish route re-checks `isConnected()` and rejects with 400 if no channel |
+| T-6.5 Title/description generation (LLM) + thumbnail variant selection | ⏳ Pending | LLM-driven title/description from script + niche; UI for variant selection |
+| T-6.6 Scheduled publishing (publishAt) + invalid_grant retry | ⏳ Partial | `publishAt` flows through `publishSchema` + payload; full `publishAt` server-side pass-through to YouTube's `publishAt` API still TODO |
+| T-6.7 Caption burn-in toggle + SRT/VTT export | ⏳ Pending | `Video.burnCaptions` schema added; render-job wiring + VTT export TODO |
+| T-6.8 Aspect-ratio (16:9/9:16/1:1) + frame-rate (24/30/60) defaults | ⏳ Partial | `Video.aspectRatio` + `Video.frameRate` schema added; render-job consumption + UI control TODO |
+| T-6.9 Editing Studio UI (scene timeline + drag-drop + audio + undo/redo) | ⏳ Pending | The big UI task — uses `@dnd-kit/sortable` (already in deps); consumes the `/assemble` JSON |
+| T-6.10 Render job consumes the assembled timeline | ⏳ Pending | Render currently computes the timeline inline; T-6.10 reads `Video.timeline` when present (the saved Edit-Studio choices survive the render) |
+| T-6.11 Stage 6 sweep + close-out | ⏳ Pending | tsc + eslint + tests + worklog + TASKS.md + push; live smoke against a connected YouTube channel when a credential is available |
+
+### Stage 6 progress (2026-11-02)
+
+Three of the eleven Stage 6 tasks are closed in this session. The two ROADMAP §6 endpoints that didn't exist (`/assemble`, `/qc`) now exist; the third ROADMAP §6 endpoint (`/publish`) now wires the audit's dead `uploadToYouTube` (D-06, D-07) and writes `Video.youtubeUrl`. The `Video.timeline`, `Video.aspectRatio`, `Video.frameRate`, `Video.burnCaptions` schema additions are in place — T-6.7/T-6.8/T-6.10 can consume them without further schema work.
+
+The first three tasks are the smallest in the stage (server-side; the heavy work is the Editing Studio UI in T-6.9 and the render-job timeline consumption in T-6.10). The T-6.9 UI work is the next-highest-leverage piece — it's the surface that actually lets a user edit, render, review, export and publish without leaving TubeForge (the Stage 6 completion gate).
+
+Final gate for this session: tsc 0 · eslint 0 errors / 267 warnings · **79/79 unit** · live route smoke 401×4 on the new endpoints. Push status: Stage 6 commits push cleanly (no workflow file in the diff). The CI workflow file (T-1.5) still requires a workflow-scoped PAT to push — pending.

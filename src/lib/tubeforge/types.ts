@@ -420,10 +420,56 @@ export interface VideoDTO {
   // video was greenlit from (or attached at create). The Script tab links
   // out to them — the fact-check surface. Empty array when none.
   researchSources: ResearchSource[];
+  // Stage 6 — assembled preview timeline (POST /assemble produces, the
+  // render job consumes). null until the user assembles.
+  timeline: AssembledTimelineDTO | null;
+  // Stage 6 (Rendering Engine) — per-project render defaults.
+  aspectRatio: string | null; // "16:9" | "9:16" | "1:1" (null = "16:9")
+  frameRate: number | null; // 24 | 30 | 60 (null = 30)
+  burnCaptions: boolean | null; // true = burned into frame, false/null = sidecar SRT
   // Latest synced performance (Phase 5, null before the first sync)
   stats: { views: number; likes: number; comments: number } | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// Stage 6 — preview timeline returned by POST /api/videos/[id]/assemble.
+// The Editing Studio edits this; the render job consumes the saved version.
+export interface TimelineSceneDTO {
+  index: number;
+  title: string;
+  narration: string;
+  visual: string;
+  startSec: number;
+  endSec: number;
+  durationSec: number;
+  transitionIn: string | null;
+  transitionOut: string | null;
+  audio: {
+    voice: { enabled: boolean; level: number };
+    music: { enabled: boolean; level: number; ducking: boolean };
+    sfx: { enabled: boolean; level: number; kind: string | null };
+    ambient: { enabled: boolean; level: number; kind: string | null };
+  };
+  caption: { text: string; startSec: number; endSec: number } | null;
+  source: "ai" | "stock" | "slides";
+  stockSource: string | null;
+  stockQuery: string | null;
+  shot: {
+    framing: string | null;
+    camera: string | null;
+    lens: string | null;
+    composition: string | null;
+    motion: string | null;
+    mood: string | null;
+  } | null;
+}
+
+export interface AssembledTimelineDTO {
+  scenes: TimelineSceneDTO[];
+  sceneCount: number;
+  totalDurationSec: number;
+  generatedAt: string;
 }
 
 export type QcStatusDTO = "pass" | "fail" | "unmeasured";

@@ -145,3 +145,49 @@ export const researchSchema = z.object({
   topic: z.string().trim().min(1).max(200),
   niche: z.string().trim().max(80).optional(),
 });
+
+// ------------------------------------------------------------- Stage 6 schemas
+
+/** POST /api/videos/[id]/publish — enqueue a YouTube upload job.
+ *  Title/description/tags clamp to YouTube's own limits (the upload path
+ *  re-clamps too; this lets the UI show "97/100 chars" against the same
+ *  boundary). publishAt accepts a future ISO timestamp (or null = publish
+ *  immediately). thumbnailStorageKey is the storage key of a custom thumbnail
+ *  the user picked from the variant set; null/omitted → use the project's
+ *  primary thumbnail.png. */
+export const publishSchema = z.object({
+  title: z.string().trim().min(1, "Title is required").max(100, "YouTube caps titles at 100 chars"),
+  description: z.string().trim().max(4900, "YouTube caps descriptions at ~5000 chars").default(""),
+  tags: z.array(z.string().trim().min(1).max(80)).max(30).default([]),
+  thumbnailStorageKey: z.string().trim().max(256).nullish(),
+  privacyStatus: z.enum(["public", "unlisted", "private"]).optional(),
+  publishAt: z.string().trim().max(40).nullish(), // ISO date or null
+});
+
+/** PUT /api/videos/[id]/assemble — save a user-edited timeline.
+ *  The body is the AssembledTimeline JSON itself; the schema validates
+ *  structure (not the deep scene content — that's the video row's job).
+ *  The route persists it so the render job consumes the saved version. */
+export const assembleSaveSchema = z.object({
+  scenes: z
+    .array(
+      z.object({
+        index: z.number().int().min(1),
+        startSec: z.number().min(0),
+        endSec: z.number().min(0),
+        durationSec: z.number().min(0.1),
+      }).passthrough()
+    )
+    .min(1, "Timeline must contain at least one scene"),
+  totalDurationSec: z.number().min(0),
+  generatedAt: z.string().optional(),
+});
+
+/** PATCH /api/videos/[id] — Stage 6 render defaults (aspect / frameRate /
+ *  burnCaptions). These ride alongside the existing fields on the same
+ *  PATCH endpoint (route-level schema extension). */
+export const renderDefaultsSchema = z.object({
+  aspectRatio: z.enum(["16:9", "9:16", "1:1"]).optional(),
+  frameRate: z.union([z.literal(24), z.literal(30), z.literal(60)]).optional(),
+  burnCaptions: z.boolean().optional(),
+});
