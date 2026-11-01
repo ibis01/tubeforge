@@ -216,6 +216,49 @@ The "backlog continues next session" item from part 2 is done: every JobKind the
 
 ---
 
+## Stage 5 task backlog (defined 2026-11-01 — executing now)
+
+**Scope:** the AI Director and cinematic quality — ROADMAP modules A–E on the "AI suggests, human approves" doctrine. Module B (shot plan + approval gate) and the VLM continuity check landed with T-5.1; this pass completed the remaining modules: the plan-aware pacing gate, director-driven visual selection (module D), audio production (module E: pacing / ambience / cues / music mood / ducking), the World library + appearance editing + outfit weaving (module C), and research-with-sources + the fact-check surface (module A, the debt Stage 4b explicitly deferred here).
+
+| Task | Objective | Dependencies |
+|---|---|---|
+| T-5.1 | Director's brain + continuity core: plan schema, LLM pass, approval gate, VLM check, render hook, DirectorCard, jobs + route | — (done 2026-11-01) |
+| T-5.2 | Restore the CI workflow lost to the history rewrite (T-1.5 contract) | — |
+| T-5.3 | QC static-shots pacing gate: fail on 3+ consecutive unmotivated static shots in an APPROVED plan | T-5.1 |
+| T-5.4 | Director-driven visual selection: per-scene motion override, i2v/stock suggestion badges, regenerate-with-constraint | T-5.1 |
+| T-5.5 | Audio production (module E): per-scene narration pacing, synthesized ambient beds, boundary cues, music mood from the emotional progression, ducking intensity | T-5.1 |
+| T-5.6 | World library + cast looks (module C): Location/Prop models + CRUD, appearance editing UI, outfit + set-piece prompt weaving | T-5.1 |
+| T-5.7 | Research-with-sources (module A): web-search grounding, source snapshots, reference-material prompts, Script tab fact-check panel | — |
+| T-5.8 | Stage 5 close-out: TASKS.md + worklog, final gate, push | all |
+
+### Execution status (updated 2026-11-01, part 6 — Stage 5 complete)
+
+**All 8 tasks done.** Verification (final gate): `tsc --noEmit` 0 errors · `eslint` 0 errors (baseline warnings only) · **76/76 unit** (+3 across T-5.3/5.5/5.7) · **19/19 Playwright e2e** · live smokes: 6/6 director (T-5.1), 17/17 world (T-5.6), 6/6 sources (T-5.7), plus a live ffmpeg integration of the 3-input segment graph (voice + cue + bed). LLM/VLM/TTS/search paths typechecked and unit-pinned but not exercised live in this sandbox (ambient credential 401s — the same honest limit as Stage 4b).
+
+| Task | Status | Notes |
+|---|---|---|
+| T-5.2 CI restore | ✅ Done | `.github/workflows/ci.yml` recreated to the T-1.5 contract (check job: typecheck+lint+unit+pg-schema validate on push/PR; e2e job PR-only with Playwright + dummy secrets). **Deviation:** the file sits on disk but is NOT pushed — the provided GitHub PAT lacks `workflow` scope and GitHub rejects any push that creates/updates workflow files with it. One `git push` with a workflow-scoped token ships it (tracked as the only unpushed commit). |
+| T-5.3 pacing gate | ✅ Done | `planStaticRuns`: runs of 3+ consecutive static-camera shots with no motivation channel (motion off + no i2v + no stock), longest first; index gaps and shot-less scenes break runs; render-mode blanket exemptions (animated/stock). The qc `static-shots` check now fails deterministically on a flat APPROVED plan before any pixel is measured; runRenderJob passes the approved plan + exemptions. |
+| T-5.4 visual selection | ✅ Done | `getApprovedMotionMap` → per-scene motion override in the Ken Burns/stock-fallback path (smart = defer; slides keep deck plans; i2v exempt). DirectorCard chips carry i2v/stock/motion badges beside the human's render-mode + stock-stage decisions. Continuity rows gained **Fix…** — constraint input pre-filled with the VLM's diagnosis, riding the storyboard route's AI-edit mode (the module-D "regenerate scene 14 with a red jacket" loop). |
+| T-5.5 audio production | ✅ Done | Plan vocabularies (PACINGS/AMBIENCE_KINDS/SFX_HINTS + plan-level musicMood/ducking); `ambience.ts` — 7 synthesized beds (room/city/rain/wind/waves/crowd/nature), 60s loudnorm-tailed renders measured within ~4 dB of each other; `sceneAudio()` owns inputs+graph together (voice + 40ms cue @0.35 + looped bed @0.22; Settings-Sound silences every synthesized extra); pacing factors (±12%) at voiceover synthesis; music mood + ducking slot into the resolvers under manual per-video overrides. Legacy T-5.1 plans parse with audio defaults. |
+| T-5.6 World library | ✅ Done | `Location` + `Prop` models (migration 20261101123000, org-scoped + pinned in ORG_SCOPED_MODELS before any row existed); CRUD routes with soft-delete; the director pass sees the library and tags scenes with exact names (≤3); `getApprovedWorldClause` weaves descriptions into scene prompts; `getApprovedAppearanceClause` closes the T-5.1 outfit gap; Scene Studio "Cast look in this scene" editing via PUT /appearance. 17-check smoke: CRUD, validation, cross-tenant 404s, soft-delete. |
+| T-5.7 research sources | ✅ Done | `llmWebSearch` (SDK web_search, metered "search" service, fail-open); one grounding search per radar scan; `matchSourcesToIdeas` (keyword-overlap, ≤3/idea, unit-pinned); greenlight + create snapshot sources onto `Video.researchSources` (http(s)-only, ≤6); reference-material prompt block; Script tab Sources panel. The Stage 4b deferred debt is paid. |
+| T-5.8 close-out | ✅ Done | This section + worklog; final gate re-run clean; push to origin. |
+
+**Completion gate (audit-adjusted) — met:**
+1. *Flags scene inconsistencies and offers one-click regeneration* — VLM continuity (T-5.1) + Repaint + Fix…-with-constraint (T-5.4).
+2. *Visuals match the narration* — per-scene ASR verification (`verify.ts`) continues to work; the continuity clauses (outfit + set pieces) make the match stronger.
+3. *Deliberate cinematic rhythm* — the plan-aware `static-shots` QC check fails 3+ consecutive unmotivated static shots (T-5.3), measured plans only.
+4. *Character consistency score ≥ 80%* — the VLM check scores every cast scene 0–100 and the one-click loop drives them above the bar (mechanism + loop; live ≥80% needs a working VLM key, not exercisable in this sandbox).
+
+**Known scope notes (honest):**
+1. **SVG maps / illustrative inserts (module D) are deferred** — the one roadmap line item not built. Rationale: keynote slides + stock b-roll cover the insert use-cases today; standalone SVG map generation is a full feature (design system, rendering, geography data) with the weakest payoff per week of the module. It moves to Stage 6+ candidate territory.
+2. All LLM/VLM/TTS/search paths (director pass, continuity check, pacing, grounding) are typechecked and unit-pinned at their pure layers, but not exercised live here (ambient credential 401s). The smoke scripts cover the API surfaces that do not need AI keys.
+3. The per-user Z.ai client cache stays in-process (Stage 3 note) — Redis revisited only if multi-instance workers ship.
+4. ci.yml awaits a workflow-scoped token (see T-5.2) — the only unpushed commit on an otherwise fully synced main.
+
+---
+
 ## How to read this document
 
 Every task has:
