@@ -1626,11 +1626,14 @@ export function VideoDetailDialog({
           canPreview={video.hasVoiceover}
         />
 
-        {/* Per-video Smart Motion — mode, intensity, easing, variation */}
+        {/* Per-video Smart Motion — mode, intensity, easing, variation.
+            The live preview animates the video's own first storyboard frame
+            when art exists, so the camera work is judged on the real image. */}
         <MotionControlsCard
           value={motionDraft}
           onChange={onMotionChange}
           disabled={Boolean(busy)}
+          frame={scenes.find((s) => s.imageUrl)?.imageUrl ?? null}
           note={
             renderMode === "animated"
               ? "Image Motion applies to Ken Burns renders — the animated mode generates real video per scene instead."
@@ -1638,8 +1641,15 @@ export function VideoDetailDialog({
           }
         />
 
-        {/* Per-video scene transitions — style + blend length (debounced PATCH) */}
-        <TransitionControlsCard value={transitionDraft} onChange={onTransitionChange} disabled={Boolean(busy)} />
+        {/* Per-video scene transitions — style + blend length (debounced PATCH).
+            Scene A/B preview the first two storyboard frames when available. */}
+        <TransitionControlsCard
+          value={transitionDraft}
+          onChange={onTransitionChange}
+          disabled={Boolean(busy)}
+          frameA={scenes.filter((s) => s.imageUrl)[0]?.imageUrl ?? null}
+          frameB={scenes.filter((s) => s.imageUrl)[1]?.imageUrl ?? null}
+        />
 
         {/* Brand kit (keynote slides) — accent recolor + corner logo badge */}
         {renderMode === "slides" && (

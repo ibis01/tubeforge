@@ -10,15 +10,20 @@
 // "cut" keeps the classic hard-cut concat; every other style runs one chained
 // xfade/acrossfade pass so scenes blend with matching audio crossfades.
 //
-// Visual previews (globals.css `.tf-tx-*`): every style plays on a two-frame
-// micro-stage — photographic Scene A (cool mountain dawn) underneath, Scene B
-// (warm city golden hour) on top — with the reveal window fixed at 30–60% of
-// the cycle. Tiles rest PAUSED at the cycle midpoint (a scannable
+// Visual previews (globals.css `.tf-tx-*` + bundled photographic plates):
+// every style plays on a two-frame micro-stage — photographic Scene A (cool
+// mountain dawn) underneath, Scene B (warm city golden hour) on top — with
+// the reveal window fixed at 30–60% of the cycle. Both plates are static
+// imports (fingerprinted /_next/static/media URLs) so they load in every
+// serving mode; real storyboard art takes precedence when passed in
+// (detail dialog). Tiles rest PAUSED at the cycle midpoint (a scannable
 // "frozen mid-transition" catalog), play on hover, and loop when selected.
 // The hero strip always loops the current style at the chosen blend length so
 // the slider has visible cause-and-effect.
 
 import type { CSSProperties } from "react";
+import sceneAAsset from "@/assets/scene-a.jpg";
+import sceneBAsset from "@/assets/scene-b.jpg";
 import { Card } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
@@ -36,6 +41,18 @@ export interface TransitionPickerValue {
 }
 
 export const TRANSITION_PICKER_DEFAULTS = TRANSITION_DEFAULT;
+
+/**
+ * Static image imports resolve to a plain URL string under webpack
+ * (production builds) but a `{ src, height, width }` object under Turbopack
+ * (dev). Normalize so the preview works in both bundlers.
+ */
+function assetUrl(a: string | { src: string }): string {
+  return typeof a === "string" ? a : a.src;
+}
+
+const sceneAPlate = assetUrl(sceneAAsset);
+const sceneBPlate = assetUrl(sceneBAsset);
 
 /** The active settings after applying defaults (for display + payload). */
 export function effectiveTransition(v: TransitionPickerValue) {
@@ -63,20 +80,28 @@ function previewCycleSec(style: TransitionStyle, blendSec: number): number {
  * The two-frame transition stage. `mode`:
  *   • "run"   — loop continuously (hero strip, selected tile)
  *   • "hover" — paused at the cycle midpoint; plays while hovered
- * Frames + keyframe families live in globals.css (`.tf-tx-*`).
+ * Keyframe families live in globals.css (`.tf-tx-*`); the plates are bundled
+ * assets unless real scene art is passed in via `frameA`/`frameB`.
  */
 export function TransitionStage({
   style,
   cycleSec,
   mode,
+  frameA,
+  frameB,
   className,
 }: {
   style: TransitionStyle;
   cycleSec: number;
   mode: "run" | "hover";
+  /** Real scene art (storyboard imageUrls); null = bundled stock plate. */
+  frameA?: string | null;
+  frameB?: string | null;
   className?: string;
 }) {
   const dip = style === "fadeblack" || style === "fadewhite";
+  const aUrl = frameA || sceneAPlate;
+  const bUrl = frameB || sceneBPlate;
   return (
     <div
       className={clsx(
@@ -88,7 +113,10 @@ export function TransitionStage({
       style={{ "--tf-t": `${cycleSec.toFixed(2)}s` } as CSSProperties}
       aria-hidden
     >
-      <div className="tf-tx-frame tf-tx-a" />
+      <div
+        className="tf-tx-frame tf-tx-a"
+        style={{ backgroundImage: `url("${aUrl}")` }}
+      />
       {dip && (
         <div
           className={clsx(
@@ -97,7 +125,10 @@ export function TransitionStage({
           )}
         />
       )}
-      <div className="tf-tx-frame tf-tx-b" />
+      <div
+        className="tf-tx-frame tf-tx-b"
+        style={{ backgroundImage: `url("${bUrl}")` }}
+      />
     </div>
   );
 }
@@ -112,12 +143,17 @@ export function TransitionControlsCard({
   compact = false,
   disabled = false,
   note,
+  frameA,
+  frameB,
 }: {
   value: TransitionPickerValue;
   onChange: (v: TransitionPickerValue) => void;
   compact?: boolean;
   disabled?: boolean;
   note?: string | null;
+  /** Real scene art for the A/B preview (detail dialog); null = stock plates. */
+  frameA?: string | null;
+  frameB?: string | null;
 }) {
   const t = effectiveTransition(value);
   const isCut = t.style === "cut";
@@ -139,7 +175,14 @@ export function TransitionControlsCard({
           blend length, so dragging the slider visibly retimes it. */}
       <div className={clsx(disabled && "opacity-50")}>
         <div className="relative rounded-lg overflow-hidden border border-white/10">
-          <TransitionStage style={t.style} cycleSec={cycle} mode="run" className="h-20" />
+          <TransitionStage
+            style={t.style}
+            cycleSec={cycle}
+            mode="run"
+            frameA={frameA}
+            frameB={frameB}
+            className="h-20"
+          />
           <span className="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[9px] font-medium text-white pointer-events-none">
             SCENE A
           </span>
@@ -179,6 +222,8 @@ export function TransitionControlsCard({
                   style={def.id}
                   cycleSec={cycle}
                   mode={selected ? "run" : "hover"}
+                  frameA={frameA}
+                  frameB={frameB}
                   className={clsx(
                     "h-8",
                     selected

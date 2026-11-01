@@ -214,6 +214,10 @@ audio::-webkit-media-controls-panel {
   background-size: cover;
   background-position: center;
 }
+/* Fallback plates — the components set an inline background-image from a
+   webpack-bundled copy of these photos (fingerprinted /_next/static/media
+   URL) which wins the cascade; these public/ paths only apply if the
+   inline style is absent. Both point at the same art. */
 .tf-tx-a {
   background-image: url("/transitions/scene-a.jpg");
 }
@@ -361,6 +365,9 @@ audio::-webkit-media-controls-panel {
 .tf-kb-frame {
   position: absolute;
   inset: 0;
+  /* Fallback plate — the component sets an inline background-image from a
+     webpack-bundled copy of the photo (fingerprinted /_next/static/media
+     URL) which wins the cascade; this public/ path is the safety net. */
   background-image: url("/transitions/scene-a.jpg");
   background-size: cover;
   background-position: center;

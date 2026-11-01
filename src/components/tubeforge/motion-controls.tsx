@@ -10,13 +10,16 @@
 // semantics: smart scene-aware plans, 12% default zoom intensity, smooth
 // easing, direction variation between scenes.
 //
-// Visual preview (globals.css `.tf-kb-*`): a photographic hero strip loops
+// Visual preview (globals.css `.tf-kb-*` + a bundled photographic plate):
+// the frame image is a static import (fingerprinted /_next/static/media URL),
+// so the preview shows a real photograph in every serving mode; it loops
 // the current camera move — zooms scale from 1, pans ride a pre-zoom — with
 // the picker's live settings driving amplitude (--kb-zoom/--kb-move),
 // easing (--kb-ease) and direction variety, so every control has visible
 // cause and effect.
 
 import type { CSSProperties } from "react";
+import kbFrameAsset from "@/assets/scene-a.jpg";
 import { Card } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -44,6 +47,18 @@ const MODES = [
   { id: "pan", label: "Pan only", desc: "Pans & tilts, no zooms" },
   { id: "off", label: "Off", desc: "Static images" },
 ] as const;
+
+/**
+ * Static image imports resolve to a plain URL string under webpack
+ * (production builds) but a `{ src, height, width }` object under Turbopack
+ * (dev). Normalize so the preview works in both bundlers — stringifying the
+ * object would yield url("[object Object]") and an empty frame.
+ */
+function assetUrl(a: string | { src: string }): string {
+  return typeof a === "string" ? a : a.src;
+}
+
+const kbFrame = assetUrl(kbFrameAsset);
 
 /** The active settings after applying defaults (for display + payload). */
 export function effectiveMotion(v: MotionPickerValue) {
@@ -105,18 +120,26 @@ function kbAnimationClass(
  * the renderer will move storyboard art, driven by the picker's current
  * settings (intensity scales the amplitude, curve picks the easing, vary
  * alternates direction). Loops continuously like the transition hero strip.
+ *
+ * The frame art is a webpack-bundled asset (fingerprinted /_next/static/media
+ * URL) so the preview never depends on a runtime public/ path; when a video's
+ * own storyboard art is available (detail dialog) it takes precedence via
+ * `frame`, previewing the real scene instead of the stock plate.
  */
 export function MotionStage({
   mode,
   intensity,
   curve,
   vary,
+  frame,
   className,
 }: {
   mode: string;
   intensity: number;
   curve: string;
   vary: boolean;
+  /** Real scene art (storyboard imageUrl); null/undefined = bundled plate. */
+  frame?: string | null;
   className?: string;
 }) {
   const anim = kbAnimationClass(mode, vary);
@@ -127,9 +150,13 @@ export function MotionStage({
     "--kb-ease":
       curve === "linear" ? "linear" : "cubic-bezier(0.45, 0, 0.25, 1)",
   } as CSSProperties;
+  const frameUrl = frame || kbFrame;
   return (
     <div className={clsx("tf-kb", anim.cls, className)} style={style} aria-hidden>
-      <div className="tf-kb-frame" />
+      <div
+        className="tf-kb-frame"
+        style={{ backgroundImage: `url("${frameUrl}")` }}
+      />
       <span className="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[9px] font-medium text-white pointer-events-none">
         {anim.chip.toUpperCase()}
       </span>
@@ -139,7 +166,8 @@ export function MotionStage({
 
 /**
  * Image Motion card. `disabled` greys everything (busy renders);
- * `appliesTo` explains the scope when the current render mode ignores it.
+ * `note` explains the scope when the current render mode ignores it.
+ * `frame` previews a real storyboard image when one exists (detail dialog).
  */
 export function MotionControlsCard({
   value,
@@ -147,12 +175,14 @@ export function MotionControlsCard({
   compact = false,
   disabled = false,
   note,
+  frame,
 }: {
   value: MotionPickerValue;
   onChange: (v: MotionPickerValue) => void;
   compact?: boolean;
   disabled?: boolean;
   note?: string | null;
+  frame?: string | null;
 }) {
   const m = effectiveMotion(value);
   const motionOff = m.mode === "off" || m.intensity < 1;
@@ -178,6 +208,7 @@ export function MotionControlsCard({
           intensity={m.intensity}
           curve={m.curve}
           vary={m.vary}
+          frame={frame}
           className="h-20 border border-white/10"
         />
       </div>
