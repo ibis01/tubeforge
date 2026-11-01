@@ -169,6 +169,8 @@ export function VideoDetailDialog({
   const transitionPatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Scene Studio — which scene's editor dialog is open (null = closed).
   const [editingScene, setEditingScene] = useState<number | null>(null);
+  // Stage 4a (T-4.5) — storyboard density: comfortable grid ↔ filmstrip.
+  const [boardDensity, setBoardDensity] = useState<"grid" | "film">("grid");
   const [renderLabel, setRenderLabel] = useState<string | null>(null);
 
   // Narration check state (Phase 3 — ASR proofreading)
@@ -1216,26 +1218,78 @@ export function VideoDetailDialog({
 
   const tags = video.tags ? video.tags.split(",").map((t) => t.trim()).filter(Boolean) : [];
 
-  // ---------- Storyboard tab ----------
+  // ---------- Storyboard tab (Stage 4a, T-4.5 — density toggle, explicit
+  // per-scene status chips, timing bars; every existing action preserved) ----------
+  const wordsPerSecond = 2.6 * (video.ttsSpeed ?? 1);
+  const sceneEstimate = (narration: string) =>
+    narration.split(/\s+/).filter(Boolean).length / wordsPerSecond;
+  const totalEstimate = scenes.reduce((acc, s) => acc + sceneEstimate(s.narration), 0);
+
+  const sceneStatus = (s: SceneDTO, slide: SlideDTO | null): { label: string; cls: string } => {
+    if (s.generating || boardGenerating)
+      return { label: "Painting…", cls: "border-primary/30 bg-primary/15 text-red-200" };
+    if (renderMode === "slides" && slide?.hasPng)
+      return { label: "Slide", cls: "border-violet-500/30 bg-violet-500/15 text-violet-200" };
+    if (s.hasStock)
+      return { label: `Stock · ${s.stockSource ?? "clip"}`, cls: "border-emerald-500/30 bg-emerald-500/15 text-emerald-200" };
+    if (s.hasImage)
+      return { label: "Art ready", cls: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300" };
+    return { label: "Awaiting art", cls: "border-white/12 bg-white/5 text-white/50" };
+  };
+
   const storyboardTab = (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-sm text-muted-foreground">
-          {scenes.length} scenes · {video.characterName ? `host: ${video.characterName}` : "no host"}
-        </p>
-        <Button
-          size="sm"
-          disabled={Boolean(busy) || boardGenerating}
-          onClick={generateStoryboard}
-          className="bg-brand-gradient hover:opacity-90 font-medium"
-        >
-          {busy === "storyboard" || boardGenerating ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <LayoutGrid className="h-3.5 w-3.5" />
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <p className="text-sm text-muted-foreground">
+            {scenes.length} scenes · {video.characterName ? `host: ${video.characterName}` : "no host"}
+          </p>
+          {scenes.length > 0 && (
+            <Badge variant="outline" className="tf-num border-white/12 bg-white/4 text-muted-foreground text-[10px] font-normal">
+              ≈ {formatDuration(totalEstimate)} spoken
+            </Badge>
           )}
-          {video.hasStoryboard ? "Re-roll storyboard" : "Generate storyboard"}
-        </Button>
+        </div>
+        <div className="flex items-center gap-2">
+          {/* Density toggle (T-4.5) */}
+          <div className="flex rounded-lg border border-white/10 bg-white/4 p-0.5" role="group" aria-label="Storyboard density">
+            <button
+              type="button"
+              onClick={() => setBoardDensity("grid")}
+              aria-pressed={boardDensity === "grid"}
+              title="Comfortable grid"
+              className={`tf-focusable h-7 w-8 rounded-md flex items-center justify-center transition-colors ${
+                boardDensity === "grid" ? "bg-white/10 text-foreground" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setBoardDensity("film")}
+              aria-pressed={boardDensity === "film"}
+              title="Filmstrip"
+              className={`tf-focusable h-7 w-8 rounded-md flex items-center justify-center transition-colors ${
+                boardDensity === "film" ? "bg-white/10 text-foreground" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Clapperboard className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <Button
+            size="sm"
+            disabled={Boolean(busy) || boardGenerating}
+            onClick={generateStoryboard}
+            className="bg-brand-gradient hover:opacity-90 font-medium"
+          >
+            {busy === "storyboard" || boardGenerating ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <LayoutGrid className="h-3.5 w-3.5" />
+            )}
+            {video.hasStoryboard ? "Re-roll storyboard" : "Generate storyboard"}
+          </Button>
+        </div>
       </div>
 
       {scenes.length === 0 ? (
@@ -1259,16 +1313,27 @@ export function VideoDetailDialog({
           </Button>
         </div>
       ) : (
-        <div className="grid sm:grid-cols-2 gap-3">
+        <div
+          className={
+            boardDensity === "film"
+              ? "tf-scroll tf-fade-x flex gap-3 overflow-x-auto pb-2 -mx-1 px-1"
+              : "grid sm:grid-cols-2 gap-3"
+          }
+        >
           {scenes.map((s) => {
             const slide = slides?.find((sl) => sl.index === s.index) ?? null;
             // Keynote slides: the composed slide is what viewers see — show it
             // when it exists, fall back to the raw scene art otherwise.
             const showSlideTile = renderMode === "slides" && slide?.hasPng;
+            const status = sceneStatus(s, slide);
+            const est = sceneEstimate(s.narration);
             return (
             <div
               key={s.index}
-              className="rounded-xl border border-white/10 bg-white/3 overflow-hidden flex flex-col"
+              className={clsx(
+                "rounded-xl border border-white/10 bg-white/3 overflow-hidden flex flex-col",
+                boardDensity === "film" && "w-64 sm:w-72 shrink-0"
+              )}
             >
               <div className="relative">
                 {showSlideTile ? (
@@ -1311,8 +1376,21 @@ export function VideoDetailDialog({
                     <Zap className="h-2.5 w-2.5" /> REHOOK
                   </Badge>
                 )}
+                {/* Timing bar (T-4.5) — this scene's share of the spoken track */}
+                <div className="absolute inset-x-0 bottom-0 h-1 bg-black/45">
+                  <div
+                    className="h-full bg-primary/80"
+                    style={{ width: `${totalEstimate > 0 ? Math.max(4, (est / totalEstimate) * 100) : 0}%` }}
+                  />
+                </div>
               </div>
               <div className="p-3 flex-1 flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <Badge variant="outline" className={clsx("text-[9px] font-normal px-1.5 h-5", status.cls)}>
+                    {status.label}
+                  </Badge>
+                  <span className="tf-num text-[10px] text-muted-foreground">≈ {Math.round(est)}s</span>
+                </div>
                 <div>
                   <p className="text-sm font-medium">{showSlideTile ? slide.headline || s.title : s.title}</p>
                   <p className="text-[11px] text-muted-foreground leading-snug mt-0.5 line-clamp-3">
@@ -2328,7 +2406,7 @@ export function VideoDetailDialog({
   // One editing home for both formats: story = per-scene cards with structure
   // + emotion maps and timing; classic = a full autosaving editor. The ASR
   // accuracy check lives here too — it verifies exactly this text.
-  const wordsPerSecond = 2.6 * (video?.ttsSpeed ?? 1);
+  // (wordsPerSecond + sceneEstimate are defined with the storyboard helpers.)
   const scriptWords = isStory
     ? scenes.reduce((acc, s) => acc + s.narration.split(/\s+/).filter(Boolean).length, 0)
     : (scriptDraft || "").split(/\s+/).filter(Boolean).length;
