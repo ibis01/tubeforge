@@ -149,6 +149,26 @@ The "backlog continues next session" item from part 2 is done: every JobKind the
 
 **Completion gate (roadmap):** Dashboard, Project creation, Script editor, Storyboard, Scene editor feel like an established professional creative product (SUS ≥ 75 with 5 internal users — not measurable in this sandbox; verified instead by live browser review + e2e assertions).
 
+### Execution status (updated 2026-11-01, part 4 — Stage 4a complete)
+
+**All 8 tasks done.** Verification: `tsc --noEmit` 0 errors · `eslint` 0 errors (262-warning baseline) · **67/67 unit tests** (+1 storage list) · **14/14 Playwright e2e** (7 isolation + 4 smoke + **3 new premium-ux**: ⌘K palette filter+navigate, wizard gating+draft roundtrip, Script-tab autosave write-through) · live agent-browser pass at 1440px and 390px (dashboard / wizard / dialog: no horizontal overflow, mobile nav sheet intact) with a seeded story video exercising the Script tab end-to-end (narration edit persisted; stale-voiceover invalidation flipped hasVoiceover/hasVideo).
+
+| Task | Status | Notes |
+|---|---|---|
+| T-4.0 storage migration finish | ✅ Done | Found during survey: the script-invalidating PATCH and DELETE in `videos/[id]` were raw `fs` with PRE-T-3.7 file names (render.mp4, scene-N-clip.*) — silently no-op under s3, wrong files locally; `invalidateRenderedArtifacts`/`invalidateSlidePngs`, the whole characters module (portrait/poses read/write/list), brand-logo GET/POST/DELETE, `clearStock` and the voiceover-job stale-render wipe were all raw fs too. All migrated behind a new `storage.list(prefix)` primitive (local recursive readdir + s3 ListObjectsV2 w/ continuation tokens); DELETE uses `removePrefix` (quota-decrementing). |
+| T-4.1 design system | ✅ Done | `--tf-*` semantic tokens (AA text hierarchy, hairlines, surfaces, status, motion) + utilities (`.tf-card/-hover/.tf-kicker/.tf-num/.tf-focusable/.tf-scroll/.tf-fade-x/.tf-kbd`); shared primitives `Kbd/Dot/Sparkline/TrendDelta/SkeletonRows/compactNumber`; `useHotkeys` (typing-target suppression, React-compiler-safe ref updates); ⌘K command palette (actions + 9 views + recent videos w/ status badges, ↑↓/↵ navigation, group headers) + `?` shortcut sheet + top-bar Search trigger. |
+| T-4.2 dashboard | ✅ Done | `GET /api/stats` gains a `performance` block over VideoStat snapshots (views/likes/comments totals, **stable-cohort 7-day delta** — a freshly-synced back catalog can't fake growth —, 7-point cumulative series, syncedVideos). Dashboard: quick-start hero (Generate/Research CTAs + one-tap topic chips on a fresh install), Published KPI (+failed sub-line), performance strip (sparkline + TrendDelta), Continue-where-you-left-off, clickable Recent Projects grid (thumb/status/duration/views), activity rows drill into their video, chart aria-label + hover titles, Failed pipeline segment. |
+| T-4.3 guided brief | ✅ Done | Left card → 4-step wizard (Concept → Format → Voice & art → Launch) with clickable step rail, per-step gating, Back/Next, "Your brief" review chips on the launch step, series batch in Destination; localStorage draft autosave (debounced, never mid-run, cleared once the video exists) + amber restore banner + Discard; production line untouched. |
+| T-4.4 Script tab | ✅ Done | Dialog tabs: story = Package\|Script\|Storyboard\|Video (Script default before artifacts), classic = Package\|Script. Story: narrative-structure strip (hook/context/escalation/payoff + rehook pivots, click-to-jump) + emotional-progression map + `SceneScriptCard`s (autosaving narration+caption, per-scene words/est-seconds, structure/mood badges). Classic: autosaving editor + ⌘Z chunk-undo (25 deep) + "typo fix only" preserve toggle. ASR accuracy check moved here. Server: `narration` on `PATCH /scenes` with script-equivalent invalidation + `{invalidated}` response. **Hooks-order regression caught live and fixed** (new hooks must sit above the dialog's early return). |
+| T-4.5 storyboard polish | ✅ Done | Grid ↔ filmstrip density toggle (snap-scroll + edge fade); explicit status chips (Painting…/Slide/Stock·source/Art ready/Awaiting art); per-scene ≈s + share-of-spoken bar; header ≈ total spoken; every existing action preserved. |
+| T-4.6 Scene Studio | ✅ Done | Narration + caption editors ride the existing Save (invalidated-voiceover toast via the T-4.4 contract); re-roll/AI-edit/upload keep the dialog open with an in-place "Repainting…" overlay (local 3s poll) and a uniform Before/After compare over the art. |
+| T-4.7 cross-cutting | ✅ Done | 3 new e2e tests (above); 390px responsive sweep (dashboard/wizard/dialog: no overflow); AA-checked tokens power every new surface; `bun.lock` drift re-deleted + gitignored (T-1.2 hygiene). Deviations 1–4 stand as documented. |
+
+**Known scope notes (honest):**
+1. The narration invalidation semantics are whole-voiceover (Stage 6 adds per-scene re-synthesis); the UI says so at every narration edit.
+2. `sceneEstimate`'s 156-wpm model is an estimate — the TTS render remains the timing source of truth (the QC gate checks real duration).
+3. The premium-ux e2e suite covers the classic Script-tab path (deterministic, no AI); the story scene-card path was verified live with a seeded script (`scripts/seed-story-scene.mjs`) because story seeding needs DB access the API deliberately doesn't expose.
+
 ---
 
 ## How to read this document

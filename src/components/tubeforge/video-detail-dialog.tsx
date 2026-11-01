@@ -3083,12 +3083,16 @@ function SceneScriptCard({
   const [narration, setNarration] = useState(scene.narration);
   const [caption, setCaption] = useState(scene.caption);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const syncedRef = useRef({ narration: scene.narration, caption: scene.caption });
+  // The last SERVER-synced text — state for render-time comparisons, ref
+  // mirror for effect/handler-time reads (never read refs during render).
+  const [synced, setSynced] = useState({ narration: scene.narration, caption: scene.caption });
+  const syncedRef = useRef(synced);
 
   // Re-sync when the scene changes on the server (regeneration / re-audit).
   useEffect(() => {
     if (scene.narration !== syncedRef.current.narration || scene.caption !== syncedRef.current.caption) {
       syncedRef.current = { narration: scene.narration, caption: scene.caption };
+      setSynced({ narration: scene.narration, caption: scene.caption });
       setNarration(scene.narration);
       setCaption(scene.caption);
       setSaveState("idle");
@@ -3108,6 +3112,7 @@ function SceneScriptCard({
       const ok = await onSave(scene.index, patch);
       if (ok) {
         syncedRef.current = { narration, caption };
+        setSynced({ narration, caption });
         setSaveState("saved");
       } else {
         setSaveState("error");
@@ -3191,7 +3196,7 @@ function SceneScriptCard({
           className="h-7 bg-white/5 text-xs"
         />
       </div>
-      {narration !== syncedRef.current.narration && (
+      {narration !== synced.narration && (
         <p className="text-[10px] text-amber-300/80 mt-1.5 leading-snug">
           Saving this narration clears the stale voiceover — re-render it from the Package tab.
         </p>
