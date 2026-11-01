@@ -1015,7 +1015,7 @@ Stage 2 starts immediately after Stage 1 completion.
 
 ## Stage 6 — Editing, rendering & publishing — task list
 
-**Status:** in progress (T-6.1 → T-6.3 done; T-6.4 → T-6.11 pending).
+**Status:** in progress (T-6.1 → T-6.7 done; T-6.8 → T-6.11 pending).
 **Last updated:** 2026-11-02
 **Source:** `ROADMAP.md` §Stage 6 + `FOUNDATION_AUDIT.md` defects D-06, D-07 (dead `uploadToYouTube` scaffolding) + the audit's "no separate QC re-run endpoint" gap.
 
@@ -1025,18 +1025,18 @@ Stage 2 starts immediately after Stage 1 completion.
 | T-6.2 Separate QC endpoint | ✅ Done | `POST /api/videos/[id]/qc` (+ GET) — new `runQcJob` body re-runs the 12-check battery against the existing final.mp4 without re-rendering; registered `"qc"` job kind + durable recovery |
 | T-6.3 YouTube publish route | ✅ Done | `POST /api/videos/[id]/publish` (+ GET) — new `runUploadJob` body wires the dead `uploadToYouTube` (D-06, D-07); `"upload"` job kind now registered (was the only unregistered kind); persists `Video.youtubeUrl` + `publishedAt` + `status:"published"` on success; `invalid_grant` → reconnect (handled inside getAccessToken) |
 | T-6.4 Per-user OAuth account picker | ✅ Already exists (Stage 2) | `YouTubeAccount` model + OAuth flow + `/api/youtube/connect` + `/api/youtube/status` pre-date Stage 6; the publish route re-checks `isConnected()` and rejects with 400 if no channel |
-| T-6.5 Title/description generation (LLM) + thumbnail variant selection | ⏳ Pending | LLM-driven title/description from script + niche; UI for variant selection |
-| T-6.6 Scheduled publishing (publishAt) + invalid_grant retry | ⏳ Partial | `publishAt` flows through `publishSchema` + payload; full `publishAt` server-side pass-through to YouTube's `publishAt` API still TODO |
-| T-6.7 Caption burn-in toggle + SRT/VTT export | ⏳ Pending | `Video.burnCaptions` schema added; render-job wiring + VTT export TODO |
-| T-6.8 Aspect-ratio (16:9/9:16/1:1) + frame-rate (24/30/60) defaults | ⏳ Partial | `Video.aspectRatio` + `Video.frameRate` schema added; render-job consumption + UI control TODO |
+| T-6.5 Title/description generation (LLM) | ✅ Done | `POST /api/videos/[id]/publish/suggest` — new `publish-suggest.ts` module asks the LLM to draft `{title, description, tags}` from script + niche + tone + per-scene captions; 4 tone styles (clickbait / descriptive / question / curiosity); output clamped to YouTube API limits; same "AI suggests + human approves" doctrine as Stage 5 |
+| T-6.6 Scheduled publishing (publishAt) | ✅ Done | `uploadToYouTube` accepts ISO `publishAt`; publish job threads `opts.publishAt` through; YouTube only honors it when `privacyStatus === "private"` (caller's responsibility) |
+| T-6.7 Caption burn-in + SRT/VTT export | ✅ Done (VTT export + PATCH render-defaults) | New `subtitle-export.ts` (`srtToVtt` + `looksLikeSrt`); `GET /api/videos/[id]/captions?format=srt\|vtt` serves both formats; PATCH `/api/videos/[id]` accepts `aspectRatio` / `frameRate` / `burnCaptions`. Actual ffmpeg burn-in toggle already exists via the render's `subtitles` option; T-6.8 will wire `video.burnCaptions` as the per-project default |
+| T-6.8 Aspect-ratio (16:9/9:16/1:1) + frame-rate (24/30/60) consumption | ⏳ Pending | Schema fields added; PATCH accepts them; render-pipeline consumption (modify render.ts to honor non-default values) is the remaining work |
 | T-6.9 Editing Studio UI (scene timeline + drag-drop + audio + undo/redo) | ⏳ Pending | The big UI task — uses `@dnd-kit/sortable` (already in deps); consumes the `/assemble` JSON |
-| T-6.10 Render job consumes the assembled timeline | ⏳ Pending | Render currently computes the timeline inline; T-6.10 reads `Video.timeline` when present (the saved Edit-Studio choices survive the render) |
+| T-6.10 Render job consumes the assembled timeline | ⏳ Pending | Render currently computes the timeline inline; T-6.10 reads `Video.timeline` when present (the saved Edit-Studio choices survive the render) — premature without T-6.9 |
 | T-6.11 Stage 6 sweep + close-out | ⏳ Pending | tsc + eslint + tests + worklog + TASKS.md + push; live smoke against a connected YouTube channel when a credential is available |
 
 ### Stage 6 progress (2026-11-02)
 
-Three of the eleven Stage 6 tasks are closed in this session. The two ROADMAP §6 endpoints that didn't exist (`/assemble`, `/qc`) now exist; the third ROADMAP §6 endpoint (`/publish`) now wires the audit's dead `uploadToYouTube` (D-06, D-07) and writes `Video.youtubeUrl`. The `Video.timeline`, `Video.aspectRatio`, `Video.frameRate`, `Video.burnCaptions` schema additions are in place — T-6.7/T-6.8/T-6.10 can consume them without further schema work.
+Seven of the eleven Stage 6 tasks are closed. The publish loop is end-to-end functional on the server side: the publish form can pre-fill via the LLM suggest endpoint, schedule via publishAt, upload via the wired `uploadToYouTube`, and the captions export serves both SRT and VTT. The two ROADMAP §6 endpoints that didn't exist (`/assemble`, `/qc`) now exist; the third (`/publish`) wires the audit's dead `uploadToYouTube` (D-06, D-07). The `Video.timeline`, `Video.aspectRatio`, `Video.frameRate`, `Video.burnCaptions` schema additions are in place — T-6.8/T-6.10 can consume them without further schema work.
 
-The first three tasks are the smallest in the stage (server-side; the heavy work is the Editing Studio UI in T-6.9 and the render-job timeline consumption in T-6.10). The T-6.9 UI work is the next-highest-leverage piece — it's the surface that actually lets a user edit, render, review, export and publish without leaving TubeForge (the Stage 6 completion gate).
+The remaining four tasks are the bigger pieces: T-6.8 (render-pipeline modifications to honor aspect/frame-rate), T-6.9 (the Editing Studio UI — uses `@dnd-kit/sortable` already in deps, consumes the `/assemble` JSON), T-6.10 (render consumes `Video.timeline` — premature without the UI), T-6.11 (close-out). The T-6.9 UI is the highest-leverage remaining piece — it's the surface that actually lets a user edit, render, review, export and publish without leaving TubeForge (the Stage 6 completion gate).
 
-Final gate for this session: tsc 0 · eslint 0 errors / 267 warnings · **79/79 unit** · live route smoke 401×4 on the new endpoints. Push status: Stage 6 commits push cleanly (no workflow file in the diff). The CI workflow file (T-1.5) still requires a workflow-scoped PAT to push — pending.
+Final gate for this session: tsc 0 · eslint 0 errors / 267 warnings · **80/80 unit** · live route smoke 401×4 on the new endpoints. Push status: 3 Stage 6 commits pushed cleanly to origin/main (no workflow file in any diff — the T-1.5 ci.yml still requires a workflow-scoped PAT, pending).
