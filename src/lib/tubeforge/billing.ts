@@ -22,10 +22,17 @@
 //     the paid plan, past_due keeps it on a grace period, canceled (and
 //     any unknown status) falls back to Starter — enforced in
 //     resolveUserPlan, tested per status.
-//   * The remaining balance = sum(grants in the active period) − sum(ledger
-//     spends), computed USER-SCOPED (never via the subscription's ledger
-//     relation) so legacy null-linked spend rows still count. Computed on
-//     demand; never denormalized into Subscription.
+//   * The remaining balance is PERIOD-SCOPED (Stage 7.2 fix A): grants
+//     covering now minus ledger activity recorded inside the grants'
+//     window — never lifetime spending. Credits do not roll over; each
+//     period starts fresh. USER-SCOPED (never via the subscription's
+//     ledger relation) so legacy null-linked in-window rows still count.
+//     Computed on demand; never denormalized into Subscription.
+//   * AI calls RESERVE before they run (Stage 7.2 fix B): reserveCredits
+//     holds the estimated cost transactionally, the call executes, then
+//     settleCreditHold reconciles the hold to the actual cost (or releases
+//     it on failure). A double settlement is impossible — the settlement
+//     row's reconcilesId is UNIQUE at the database level.
 //   * The Stripe webhook updates the Subscription on `invoice.paid` /
 //     `customer.subscription.updated`; `customer.subscription.deleted` →
 //     status:"canceled"; the resolver then falls back to Starter.
@@ -47,6 +54,7 @@
 //     the Starter plan when no Subscription exists, so this is unnecessary
 //     and avoids a write on every register.
 
+import { Prisma } from "@prisma/client";
 import { db as rawDb } from "@/lib/db";
 
 // ---------- plan catalog ----------
@@ -113,6 +121,62 @@ export function creditsToMicro(credits: number): number {
  *  balance). e.g. 9,999 microCredits shows as 9 credits. */
 export function microToCredits(micro: number): number {
   return Math.floor(micro / MICROS_PER_CREDIT);
+}
+
+// ---------- period-scoped balance (Stage 7.2 fix A) ----------
+//
+// Problem A (external review): the resolver and spendCredits subtracted the
+// user's ALL-TIME ledger from the CURRENT period's grants, so month 2's
+// balance came out as grant2 − (month 1 + month 2 spending) — a customer who
+// used 9,000 of 10,000 credits saw 1,000 after renewal instead of 10,000.
+//
+// ROLLOVER RULE (explicit): credits do NOT roll over. A period's balance =
+// that period's grants − net ledger activity recorded INSIDE that period.
+// Leftover credits expire at period end; a refund benefits whichever period
+// it is RECORDED in.
+//
+// The window follows the GRANTS: CreditGrant.periodStart/End are the
+// periods Stripe actually invoiced (invoice.paid handler), so they are the
+// ground truth of "now is inside period N" — the Subscription row only
+// carries currentPeriodEnd and can lag the webhook.
+
+export interface PeriodBalance {
+  /** Covering grants' total, in microCredits. */
+  granted: number;
+  /** Positive (spend-side) ledger rows inside the window. */
+  spent: number;
+  /** |negative| ledger rows inside the window (refunds / releases). */
+  refunded: number;
+  /** granted − spent + refunded. */
+  balance: number;
+  /** Earliest covering grant's periodStart — where the ledger window opens. */
+  windowStart: Date | null;
+}
+
+type BalanceDbx = Pick<Prisma.TransactionClient, "creditGrant" | "creditLedger">;
+
+/** Compute the period-scoped balance. Works against the raw client OR an
+ *  open transaction client (spendCredits / reserveCredits run it inside
+ *  the tx so the check and the write commit atomically). */
+async function computePeriodBalance(dbx: BalanceDbx, userId: string, now: Date): Promise<PeriodBalance> {
+  const grants = await dbx.creditGrant.findMany({
+    where: { userId, periodStart: { lte: now }, periodEnd: { gte: now } },
+    select: { grantedMicroCredits: true, periodStart: true },
+    orderBy: { periodStart: "asc" },
+  });
+  const granted = grants.reduce((acc, g) => acc + g.grantedMicroCredits, 0);
+  if (!grants.length) return { granted: 0, spent: 0, refunded: 0, balance: 0, windowStart: null };
+  // Widest window wins: several covering grants (operator top-ups, a late
+  // webhook racing a renewal) open the ledger at the EARLIEST periodStart —
+  // the conservative reading that favors the platform.
+  const windowStart = grants[0].periodStart;
+  const ledger = await dbx.creditLedger.findMany({
+    where: { userId, createdAt: { gte: windowStart } },
+    select: { microCredits: true },
+  });
+  const spent = ledger.reduce((acc, l) => acc + Math.max(0, l.microCredits), 0);
+  const refunded = ledger.reduce((acc, l) => acc + Math.abs(Math.min(0, l.microCredits)), 0);
+  return { granted, spent, refunded, balance: granted - spent + refunded, windowStart };
 }
 
 // ---------- resolver ----------
@@ -237,23 +301,12 @@ export async function resolveUserPlan(userId: string): Promise<ResolvedPlan> {
       }
     : PLAN_DEFAULTS[subscription.planId] ?? PLAN_DEFAULTS.starter;
 
-  // Sum grants + ledger for the balance — USER-SCOPED, both sides, so the
-  // unit story is: grants are written in microCredits (converted from the
-  // plan's UI-credit allowance at grant time) and spends are microCredits.
-  // Grants in the active period only; ledger is all-time (refunds can come
-  // from any period).
-  const now = new Date();
-  const [grants, ledger] = await Promise.all([
-    rawDb.creditGrant.findMany({
-      where: { userId, periodStart: { lte: now }, periodEnd: { gte: now } },
-      select: { grantedMicroCredits: true },
-    }),
-    rawDb.creditLedger.findMany({ where: { userId }, select: { microCredits: true } }),
-  ]);
-  const granted = grants.reduce((acc, g) => acc + g.grantedMicroCredits, 0);
-  const spent = ledger.reduce((acc, l) => acc + Math.max(0, l.microCredits), 0);
-  const refunded = ledger.reduce((acc, l) => acc + Math.abs(Math.min(0, l.microCredits)), 0);
-  const creditBalance = granted - spent + refunded;
+  // Stage 7.2 fix A: the balance is PERIOD-SCOPED — grants covering now
+  // minus ledger activity recorded inside the grants' window (never
+  // lifetime spending). USER-SCOPED on both sides, so the unit story is:
+  // grants are written in microCredits (converted from the plan's
+  // UI-credit allowance at grant time) and ledger rows are microCredits.
+  const { balance: creditBalance } = await computePeriodBalance(rawDb, userId, new Date());
 
   return {
     plan,
@@ -270,7 +323,17 @@ export async function resolveUserPlan(userId: string): Promise<ResolvedPlan> {
 
 // ---------- ledger writes ----------
 
-export type CreditSpendKind = "ai_call" | "render_minute" | "publish" | "storage" | "topup" | "refund";
+export type CreditSpendKind =
+  | "ai_call" // unmetered (starter) post-call record
+  | "render_minute"
+  | "publish"
+  | "storage"
+  | "topup"
+  | "refund"
+  // Stage 7.2 — reservation kinds (pre-call AI spend enforcement):
+  | "hold" // positive — estimated cost reserved BEFORE the provider call
+  | "adjustment" // signed — settlement delta: actual − estimate (ok calls)
+  | "hold_release"; // negative — reservation refunded (call failed)
 
 export interface CreditSpendOptions {
   userId: string;
@@ -365,85 +428,17 @@ function queueSpend<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-/** Transactionally check-and-spend credits — THE overspend guard (Stage 7.1
- *  fix #6). Reads the balance INSIDE the transaction (user-scoped grants −
- *  ledger, same math as resolveUserPlan), rejects the spend when the paid
- *  balance can't cover `microCredits`, and only then inserts the ledger
- *  row (linking the user's active subscription). Concurrent calls are
- *  serialized — in-process by the queue above, cross-process by the
- *  transaction (SQLite file lock / Postgres Serializable with retry) — so
- *  parallel metered spends can never drive a balance below zero.
- *
- *  `force: true` bypasses the check and records unconditionally — for
- *  costs that already happened (the enforcement point is the pre-gate,
- *  not the post-hoc record). The Starter/free tier is never hard-blocked
- *  (mirrors hasCredits) — the check still runs and reports the balance.
- *
- *  Idempotent on the caller — never call this twice for the same spend. */
-export async function spendCredits(opts: CreditSpendOptions & { force?: boolean }): Promise<SpendResult> {
+// Shared transaction wrapper for every check-and-write billing primitive
+// (spendCredits / reserveCredits / settleCreditHold): Postgres runs
+// SERIALIZABLE so two transactions can't both read "balance = 100" and both
+// spend 80; SQLite serializes writers at the file level. Transient
+// conflicts (P2034 / SQLite busy) retry with exponential backoff.
+async function runBilledTx<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
   const isPostgres = (process.env.DATABASE_URL ?? "").startsWith("postgres");
   const MAX_ATTEMPTS = 5;
-
-  return queueSpend(async () => {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      return await rawDb.$transaction(
-        async (tx) => {
-          const subscription = await tx.subscription.findUnique({
-            where: { userId: opts.userId },
-            select: { id: true, status: true, planId: true, plan: { select: { tier: true } } },
-          });
-          const access = subscriptionAccess(subscription?.status);
-          // Enforcement tier follows the ACCESS decision, not the stored
-          // plan row: a canceled creator subscription has already fallen
-          // back to Starter (resolveUserPlan), so it must not be gated
-          // against its stale creator grants here either.
-          const tier = access === "none" ? "starter" : (subscription?.plan?.tier ?? "starter");
-
-          const now = new Date();
-          const [grants, ledger] = await Promise.all([
-            tx.creditGrant.findMany({
-              where: { userId: opts.userId, periodStart: { lte: now }, periodEnd: { gte: now } },
-              select: { grantedMicroCredits: true },
-            }),
-            tx.creditLedger.findMany({
-              where: { userId: opts.userId },
-              select: { microCredits: true },
-            }),
-          ]);
-          const granted = grants.reduce((acc, g) => acc + g.grantedMicroCredits, 0);
-          const spent = ledger.reduce((acc, l) => acc + Math.max(0, l.microCredits), 0);
-          const refunded = ledger.reduce((acc, l) => acc + Math.abs(Math.min(0, l.microCredits)), 0);
-          const balance = granted - spent + refunded;
-
-          // Enforcement: paid tiers must cover the spend; the free tier
-          // never hard-blocks (documented overdraft design).
-          const enough = balance >= opts.microCredits;
-          if (!enough && !opts.force && tier !== "starter") {
-            return { recorded: false, reason: "insufficient_credits" as const, balanceMicro: balance };
-          }
-
-          await tx.creditLedger.create({
-            data: {
-              userId: opts.userId,
-              // Link inside the tx — a canceled/unpaid subscription must
-              // not collect rows (its balance math is user-scoped anyway).
-              subscriptionId:
-                opts.subscriptionId ??
-                (access !== "none" ? (subscription?.id ?? null) : null),
-              kind: opts.kind,
-              microCredits: opts.microCredits,
-              usageRecordId: opts.usageRecordId ?? null,
-              note: opts.note ?? null,
-            },
-          });
-          return { recorded: true, reason: null, balanceMicro: balance - Math.max(0, opts.microCredits) };
-        },
-        // Postgres needs SERIALIZABLE so two transactions can't both read
-        // "balance = 100" and both spend 80; SQLite serializes writers at
-        // the file level and does not support the isolationLevel option.
-        isPostgres ? { isolationLevel: "Serializable" } : undefined
-      );
+      return await rawDb.$transaction(fn, isPostgres ? { isolationLevel: "Serializable" } : undefined);
     } catch (err) {
       if (attempt < MAX_ATTEMPTS && isTransientTxError(err)) {
         // Exponential backoff — concurrent metering bursts resolve in ms.
@@ -454,16 +449,251 @@ export async function spendCredits(opts: CreditSpendOptions & { force?: boolean 
     }
   }
   // Unreachable (the loop returns or throws) — keeps TS happy.
-  throw new Error("spendCredits: transaction retry loop exhausted");
-  });
+  throw new Error("runBilledTx: transaction retry loop exhausted");
+}
+
+/** Transactionally check-and-spend credits — THE overspend guard (Stage 7.1
+ *  fix #6). Reads the balance INSIDE the transaction (period-scoped grants
+ *  − ledger, the same math as resolveUserPlan), rejects the spend when the
+ *  paid balance can't cover `microCredits`, and only then inserts the
+ *  ledger row (linking the user's active subscription). Concurrent calls
+ *  are serialized — in-process by the queue above, cross-process by the
+ *  transaction (SQLite file lock / Postgres Serializable with retry) — so
+ *  parallel metered spends can never drive a balance below zero.
+ *
+ *  `force: true` bypasses the check and records unconditionally — for
+ *  costs that already happened (the enforcement point is the pre-gate,
+ *  not the post-hoc record). The Starter/free tier is never hard-blocked
+ *  (mirrors hasCredits) — the check still runs and reports the balance.
+ *
+ *  Idempotent on the caller — never call this twice for the same spend. */
+export async function spendCredits(opts: CreditSpendOptions & { force?: boolean }): Promise<SpendResult> {
+  return queueSpend(() =>
+    runBilledTx(async (tx) => {
+      const subscription = await tx.subscription.findUnique({
+        where: { userId: opts.userId },
+        select: { id: true, status: true, planId: true, plan: { select: { tier: true } } },
+      });
+      const access = subscriptionAccess(subscription?.status);
+      // Enforcement tier follows the ACCESS decision, not the stored
+      // plan row: a canceled creator subscription has already fallen
+      // back to Starter (resolveUserPlan), so it must not be gated
+      // against its stale creator grants here either.
+      const tier = access === "none" ? "starter" : (subscription?.plan?.tier ?? "starter");
+
+      // Stage 7.2 fix A: the balance is PERIOD-SCOPED — grants covering
+      // now minus ledger activity recorded inside the grants' window.
+      const balance = await computePeriodBalance(tx, opts.userId, new Date());
+
+      // Enforcement: paid tiers must cover the spend; the free tier
+      // never hard-blocks (documented overdraft design).
+      const enough = balance.balance >= opts.microCredits;
+      if (!enough && !opts.force && tier !== "starter") {
+        return { recorded: false, reason: "insufficient_credits" as const, balanceMicro: balance.balance };
+      }
+
+      await tx.creditLedger.create({
+        data: {
+          userId: opts.userId,
+          // Link inside the tx — a canceled/unpaid subscription must
+          // not collect rows (its balance math is user-scoped anyway).
+          subscriptionId:
+            opts.subscriptionId ??
+            (access !== "none" ? (subscription?.id ?? null) : null),
+          kind: opts.kind,
+          microCredits: opts.microCredits,
+          usageRecordId: opts.usageRecordId ?? null,
+          note: opts.note ?? null,
+        },
+      });
+      return { recorded: true, reason: null, balanceMicro: balance.balance - Math.max(0, opts.microCredits) };
+    })
+  );
+}
+
+// ---------- credit reservations (Stage 7.2 fix B) ----------
+//
+// Problem B (external review): the AI provider call ran BEFORE the credit
+// check — spendCredits() could only refuse to RECORD an unaffordable call
+// that had already executed. The reservation pattern enforces BEFORE:
+//
+//   1. reserveCredits()   — transactional balance check + a positive `hold`
+//      row for the estimated cost, BEFORE the provider call.
+//   2. Execute the AI call.
+//   3. settleCreditHold() — ONE signed settlement row per hold:
+//        ok     → `adjustment` (actual − estimate; a zero marker when equal)
+//        failed → `hold_release` (− estimate — the reservation is refunded)
+//      reconcilesId (UNIQUE) carries the hold's id, so the double-deduct
+//      the review warned about is impossible at the DATABASE level.
+//
+// Semantics pinned here:
+//   * The hold counts against the balance the moment it is written — a
+//     caller with an open hold sees their remaining credits shrink, and a
+//     second reservation cannot borrow against it.
+//   * FAILED calls RELEASE (net 0). The old post-call path charged
+//     failures ("the provider may have billed for the attempt") — with a
+//     hold, the honest default is the user pays for what was delivered.
+//   * Starter/free tier never reserves (documented overdraft design) —
+//     those calls keep the post-call spendCredits accounting.
+//   * Enforcement is FAIL-CLOSED: if the reservation cannot be verified
+//     (transaction error after retries), the caller must NOT run the
+//     provider call — budget.ts turns a reserveCredits throw into a
+//     CreditBlockedError, never a free call.
+//   * Known limitation: a hard process crash mid-call leaves an unsettled
+//     hold that keeps counting (fail-closed). An operator sweep can release
+//     stale holds (kind 'hold', no settlement row) — a follow-up, not a
+//     correctness defect: the balance errs CONSERVATIVELY.
+
+export type CreditHold =
+  | { mode: "held"; holdId: string; estimatedMicro: number; balanceMicro: number }
+  | { mode: "unmetered"; balanceMicro: number }
+  | { mode: "blocked"; estimatedMicro: number; balanceMicro: number };
+
+/** Typed rejection for a blocked pre-call reservation — jobs and routes
+ *  surface message directly; instanceof lets them map to a 402. */
+export class CreditBlockedError extends Error {
+  constructor(
+    public readonly capability: string,
+    public readonly estimatedMicro: number,
+    public readonly balanceMicro: number
+  ) {
+    super(
+      `Insufficient credits: ${capability} needs ${microToCredits(estimatedMicro)} credits, ` +
+        `but the balance is ${microToCredits(balanceMicro)}. Wait for the next billing period or upgrade the plan.`
+    );
+    this.name = "CreditBlockedError";
+  }
+}
+
+/** Which tiers enforce reservations. Starter = overdraft design (documented
+ *  in hasCredits) — its calls stay on post-call accounting. Pure, unit-pinned. */
+export function reservationEnforcement(tier: string): "unmetered" | "enforced" {
+  return tier === "starter" ? "unmetered" : "enforced";
+}
+
+/** Reserve the estimated cost of an AI call BEFORE it runs. Transactional
+ *  check-and-hold, serialized exactly like spendCredits. Returns held (go
+ *  run the call, then settle), unmetered (starter/free — no hold needed,
+ *  post-call accounting applies) or blocked (do NOT run the call). */
+export async function reserveCredits(opts: {
+  userId: string;
+  estimatedMicro: number;
+  capability?: string;
+  note?: string | null;
+}): Promise<CreditHold> {
+  return queueSpend(() =>
+    runBilledTx(async (tx) => {
+      const subscription = await tx.subscription.findUnique({
+        where: { userId: opts.userId },
+        select: { id: true, status: true, planId: true, plan: { select: { tier: true } } },
+      });
+      const access = subscriptionAccess(subscription?.status);
+      const tier = access === "none" ? "starter" : (subscription?.plan?.tier ?? "starter");
+      const balance = await computePeriodBalance(tx, opts.userId, new Date());
+      if (reservationEnforcement(tier) === "unmetered")
+        return { mode: "unmetered" as const, balanceMicro: balance.balance };
+      if (balance.balance < opts.estimatedMicro)
+        return { mode: "blocked" as const, estimatedMicro: opts.estimatedMicro, balanceMicro: balance.balance };
+      const row = await tx.creditLedger.create({
+        data: {
+          userId: opts.userId,
+          subscriptionId: access !== "none" ? (subscription?.id ?? null) : null,
+          kind: "hold",
+          microCredits: opts.estimatedMicro,
+          note: opts.note ?? (opts.capability ? `${opts.capability} hold` : "reservation hold"),
+        },
+      });
+      return {
+        mode: "held" as const,
+        holdId: row.id,
+        estimatedMicro: opts.estimatedMicro,
+        balanceMicro: balance.balance - opts.estimatedMicro,
+      };
+    })
+  );
+}
+
+export type SettleResult =
+  | { settled: true; kind: "adjustment" | "hold_release"; deltaMicro: number; balanceMicro: number }
+  | { settled: false; reason: "unknown_hold" | "already_settled" };
+
+/** Settle (or release) a reservation — exactly once per hold, enforced by
+ *  the UNIQUE reconcilesId: a duplicate settle returns already_settled and
+ *  changes nothing. ok=true reconciles the hold toward the actual cost
+ *  (default: the held estimate — today's per-call estimates are the ground
+ *  truth until provider-level token metering lands); ok=false releases the
+ *  hold in full (the call failed — nothing was delivered).
+ *
+ *  Best-effort enrichment: the settlement row AND the hold row carry the
+ *  UsageRecord id, so a reconciliation join on usageRecordId sees
+ *  hold(+estimate) + adjustment(±delta) = actual for every call. */
+export async function settleCreditHold(opts: {
+  holdId: string;
+  ok: boolean;
+  actualMicro?: number;
+  usageRecordId?: string | null;
+  note?: string | null;
+}): Promise<SettleResult> {
+  return queueSpend(() =>
+    runBilledTx(async (tx) => {
+      const hold = await tx.creditLedger.findUnique({ where: { id: opts.holdId } });
+      if (!hold || hold.kind !== "hold")
+        return { settled: false as const, reason: "unknown_hold" as const };
+      const target = opts.ok ? Math.max(0, Math.round(opts.actualMicro ?? hold.microCredits)) : 0;
+      const delta = target - hold.microCredits;
+      try {
+        // ALWAYS a settlement row — even when delta = 0 (a zero-amount
+        // marker) — so the unique reconcilesId proves "settled" for every
+        // hold and a duplicate settle can never adjust twice.
+        await tx.creditLedger.create({
+          data: {
+            userId: hold.userId,
+            subscriptionId: hold.subscriptionId,
+            kind: opts.ok ? "adjustment" : "hold_release",
+            microCredits: delta,
+            usageRecordId: opts.usageRecordId ?? null,
+            reconcilesId: hold.id,
+            note:
+              opts.note ??
+              (opts.ok
+                ? `hold settled — actual ${target} vs estimate ${hold.microCredits}`
+                : `hold released — AI call failed`),
+          },
+        });
+      } catch (err) {
+        if ((err as { code?: string } | null)?.code === "P2002")
+          return { settled: false as const, reason: "already_settled" as const };
+        throw err;
+      }
+      // Enrich the hold with the usage link (metadata only — amounts and
+      // kinds never change on an existing row).
+      if (opts.usageRecordId) {
+        await tx.creditLedger
+          .update({ where: { id: hold.id }, data: { usageRecordId: opts.usageRecordId } })
+          .catch(() => {});
+      }
+      const balance = await computePeriodBalance(tx, hold.userId, new Date());
+      return {
+        settled: true as const,
+        kind: opts.ok ? ("adjustment" as const) : ("hold_release" as const),
+        deltaMicro: delta,
+        balanceMicro: balance.balance,
+      };
+    })
+  );
 }
 
 // ---------- reconciliation ----------
 
-/** Sum the ledger's AI-call spends for a user over a period. The
- *  reconciliation test joins this against UsageRecord.costMicroUsd to verify
- *  the credit accounting matches the metered AI costs (the ROADMAP's
- *  "exact credit accounting" gate). */
+/** Sum a user's NET metered AI spend over a window. Stage 7.2: the AI-call
+ *  family spans hold (estimate) + adjustment (settlement delta) +
+ *  hold_release (failed-call release, kind still included so a failed call
+ *  nets to 0) + ai_call (the unmetered/starter post-call record). The
+ *  reconciliation test joins this against UsageRecords to verify the
+ *  credit accounting matches the metered AI costs (the ROADMAP's "exact
+ *  credit accounting" gate). */
+export const AI_SPEND_KINDS = ["ai_call", "hold", "adjustment", "hold_release"] as const;
+
 export async function sumAICallSpends(
   userId: string,
   from: Date,
@@ -472,7 +702,7 @@ export async function sumAICallSpends(
   const rows = await rawDb.creditLedger.findMany({
     where: {
       userId,
-      kind: "ai_call",
+      kind: { in: [...AI_SPEND_KINDS] },
       createdAt: { gte: from, lte: to },
     },
     select: { microCredits: true },

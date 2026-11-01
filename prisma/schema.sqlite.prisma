@@ -693,9 +693,10 @@ model CreditLedger {
   id              String   @id @default(cuid())
   userId          String
   subscriptionId  String?
-  kind            String // ai_call | render_minute | publish | storage | topup | refund
+  kind            String // ai_call | render_minute | publish | storage | topup | refund | hold | adjustment | hold_release
   microCredits    Int // signed; positive = spent, negative = refunded
   usageRecordId   String? // link to UsageRecord for reconciliation
+  reconcilesId    String? @unique // Stage 7.2: the reservation (hold) row this row settles — DB-enforced single settlement per hold
   note            String?
   user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   subscription    Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)

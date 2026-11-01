@@ -8,6 +8,14 @@
 //   * 429 penalties — when upstream rate-limits a service, every caller of
 //               that service backs off for a shared cool-down window instead
 //               of each job retrying into the same wall
+//   * Stage 7.2 fix B — CREDIT RESERVATION before execution: the acting
+//               user's estimated cost is held transactionally (reserveCredits)
+//               BEFORE the provider runs, then reconciled (settleCreditHold)
+//               after — released in full when the call failed. A blocked
+//               reservation throws CreditBlockedError and the provider call
+//               NEVER runs (the old path ran the call first and could only
+//               refuse to record it). Enforcement is fail-closed: a paid
+//               call never runs on an unverifiable balance.
 // The budget never deadlocks: waiters proceed after a hard 10-minute cap.
 //
 // Stage 2 note: the per-minute limits are per user; the pacing/concurrency
@@ -16,6 +24,7 @@
 
 import { currentCtx } from "./tenant";
 import { getUserSettings } from "./settings";
+import type { CreditHold } from "./billing";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -203,14 +212,44 @@ export async function withRetry<T>(
     : new Error(`${label} failed after ${attempts} attempts`);
 }
 
+/** Stage 7.2 fix B — the pre-call credit reservation. Resolves the acting
+ *  user's hold for this service's estimated cost; returns held (run the
+ *  call, then settle) or unmetered (starter/free — post-call accounting
+ *  only). Throws CreditBlockedError when the balance can't cover the
+ *  estimate — the caller must NOT run the provider call — and rethrows
+ *  when the reservation itself cannot be verified (fail-closed: a paid
+ *  call never runs on an unknown balance). */
+async function reserveForCall(
+  service: AiService,
+  label: string
+): Promise<Exclude<CreditHold, { mode: "blocked" }>> {
+  const ctx = currentCtx();
+  if (!ctx) return { mode: "unmetered", balanceMicro: 0 }; // platform path — no user to bill
+  const billing = await import("./billing");
+  const capability = CAPABILITY_OF[service];
+  const hold = await billing.reserveCredits({
+    userId: ctx.userId,
+    estimatedMicro: billing.getEstimatedCostMicro(capability),
+    capability,
+    note: `${capability} hold — ${label.slice(0, 80)}`,
+  });
+  if (hold.mode === "blocked") {
+    throw new billing.CreditBlockedError(capability, hold.estimatedMicro, hold.balanceMicro);
+  }
+  return hold;
+}
+
 /**
  * Budget-aware AI call: acquire a service slot (pacing + concurrency + shared
- * 429 penalties), run `fn` with retries, always release the slot.
+ * 429 penalties), RESERVE the estimated credit cost, run `fn` with retries,
+ * settle (or release) the reservation, always release the slot.
  * Every AI call site in the pipeline goes through here.
  *
  * Stage 3 (T-3.8): every call is also metered — one UsageRecord row per
  * aiCall (attempts collapsed into one row: ok=false means the whole retry
- * chain failed). Recording is fire-and-forget and NEVER breaks the call.
+ * chain failed). Recording is fire-and-forget and NEVER breaks the call —
+ * except that a HELD reservation settles deterministically (awaited) so
+ * the next call sees the settled balance immediately.
  */
 export async function aiCall<T>(
   service: AiService,
@@ -221,16 +260,25 @@ export async function aiCall<T>(
   const release = await acquire(service);
   const startedAt = Date.now();
   try {
-    const result = await withRetry(label, fn, retryOpts.attempts ?? 3, retryOpts.baseDelayMs ?? 2000, {
-      onRetry: (msg) => {
-        if (/429|too many requests/i.test(msg)) noteRateLimit(service);
-      },
-    });
-    void recordAiUsage(service, label, Date.now() - startedAt, true, retryOpts.attempts ?? 3);
-    return result;
-  } catch (err) {
-    void recordAiUsage(service, label, Date.now() - startedAt, false, retryOpts.attempts ?? 3);
-    throw err;
+    // Stage 7.2 fix B — reserve BEFORE the provider call. A blocked
+    // reservation throws here, so `fn` (and withRetry) never run.
+    const hold = await reserveForCall(service, label);
+    try {
+      const result = await withRetry(label, fn, retryOpts.attempts ?? 3, retryOpts.baseDelayMs ?? 2000, {
+        onRetry: (msg) => {
+          if (/429|too many requests/i.test(msg)) noteRateLimit(service);
+        },
+      });
+      if (hold.mode === "held")
+        await recordAiUsage(service, label, Date.now() - startedAt, true, retryOpts.attempts ?? 3, hold);
+      else void recordAiUsage(service, label, Date.now() - startedAt, true, retryOpts.attempts ?? 3, hold);
+      return result;
+    } catch (err) {
+      if (hold.mode === "held")
+        await recordAiUsage(service, label, Date.now() - startedAt, false, retryOpts.attempts ?? 3, hold);
+      else void recordAiUsage(service, label, Date.now() - startedAt, false, retryOpts.attempts ?? 3, hold);
+      throw err;
+    }
   } finally {
     release();
   }
@@ -260,10 +308,11 @@ async function recordAiUsage(
   label: string,
   latencyMs: number,
   ok: boolean,
-  attempts: number
-): Promise<void> {
+  attempts: number,
+  hold: CreditHold
+): Promise<string | null> {
   const ctx = currentCtx();
-  if (!ctx) return; // platform path (boot recovery) — no user to attribute
+  if (!ctx) return null; // platform path (boot recovery) — no user to attribute
   try {
     const [{ rawDatabase }, settingsMod] = await Promise.all([
       import("./tenant-db"),
@@ -296,20 +345,48 @@ async function recordAiUsage(
       },
     });
 
-    // Stage 7 (T-7.5 wiring) — the credit ledger. Every metered AI call
-    // also appends a CreditLedger row linked to its UsageRecord via
-    // usageRecordId, so the reconciliation test can join the two and
-    // verify exact credit accounting (the ROADMAP §7 gate). The cost is
-    // the per-call ESTIMATE from billing.ts (real token-level costs land
-    // with provider reporting; the ledger shape does not change). Failed
+    // Stage 7.2 (fix B) — HELD reservations settle here, deterministically:
+    // ok=true reconciles the hold toward the actual cost (today the estimate
+    // IS the ground truth); ok=false RELEASES it — the old path charged
+    // failed calls, but with a reservation the user pays for what was
+    // delivered, not for a failed attempt. The settlement row carries the
+    // UsageRecord id, so reconciliation joins stay exact.
+    if (hold.mode === "held") {
+      try {
+        const billing = await import("./billing");
+        const settled = await billing.settleCreditHold({
+          holdId: hold.holdId,
+          ok,
+          usageRecordId: usage.id,
+          note: ok ? undefined : `${capability} call failed — hold released — ${label.slice(0, 60)}`,
+        });
+        if (!settled.settled) {
+          console.warn(
+            `[usage] hold ${hold.holdId} not settled (${settled.reason}) — balance may overstate; ${label.slice(0, 60)}`
+          );
+        }
+      } catch (err) {
+        // A settlement failure leaves the hold open (fail-closed, warned) —
+        // never break the pipeline that just ran the call.
+        console.warn("[usage] hold settlement failed (hold stays open):", err instanceof Error ? err.message : err);
+      }
+      if (!ok) {
+        console.warn(`[usage] ${service} call failed after ${attempts} attempt(s): ${label.slice(0, 80)}`);
+      }
+      return usage.id;
+    }
+
+    // Stage 7 (T-7.5 wiring) — the credit ledger for UNMETERED callers
+    // (starter/free tier — the documented overdraft design; these calls
+    // never reserved). Every metered AI call appends a CreditLedger row
+    // linked to its UsageRecord via usageRecordId, so the reconciliation
+    // test can join the two and verify exact credit accounting. Failed
     // calls still spend (the provider may have billed for the attempt) —
     // marked in the note so a refund policy can be applied later.
     //
     // Stage 7.1: spendCredits (not recordCreditSpend) — the transactional
     // check-and-spend attaches the user's active subscriptionId (fixes the
-    // null-linkage defect) and REJECTS the spend when a paid balance can't
-    // cover it (fixes overspend). A rejected row simply isn't written; the
-    // UsageRecord above stays the record of truth for what ran.
+    // null-linkage defect); the free tier is never hard-blocked.
     try {
       const billing = await import("./billing");
       const result = await billing.spendCredits({
@@ -332,8 +409,10 @@ async function recordAiUsage(
     if (!ok) {
       console.warn(`[usage] ${service} call failed after ${attempts} attempt(s): ${label.slice(0, 80)}`);
     }
+    return usage.id;
   } catch (err) {
     // Never let metering break the pipeline.
     console.warn("[usage] record failed (non-fatal):", err instanceof Error ? err.message : err);
+    return null;
   }
 }

@@ -1737,14 +1737,56 @@ await test("billing: hasCredits — Starter never hard-blocks; paid tier gates o
   ok(!hasCredits(creatorResolved, 1001), "creator overdrawn blocked");
 });
 
-await test("billing: CreditSpendKind covers every ROADMAP §7 spend kind", async () => {
+await test("billing: CreditSpendKind covers every ROADMAP §7 spend kind + Stage 7.2 reservation kinds", async () => {
   const billing = await import("../src/lib/tubeforge/billing.ts");
   // recordCreditSpend accepts these kinds; the reconciliation test joins
-  // ai_call rows against UsageRecord.costMicroUsd.
-  const kinds: billing.CreditSpendKind[] = ["ai_call", "render_minute", "publish", "storage", "topup", "refund"];
-  eq(kinds.length, 6, "six spend kinds (no duplicates)");
-  ok(kinds.includes("ai_call"), "ai_call kind present (the reconciliation target)");
+  // the AI-spend family (ai_call/hold/adjustment/hold_release) against
+  // UsageRecord.costMicroUsd.
+  const kinds: billing.CreditSpendKind[] = [
+    "ai_call",
+    "render_minute",
+    "publish",
+    "storage",
+    "topup",
+    "refund",
+    "hold",
+    "adjustment",
+    "hold_release",
+  ];
+  eq(kinds.length, 9, "nine spend kinds (no duplicates)");
+  ok(kinds.includes("ai_call"), "ai_call kind present (the unmetered reconciliation target)");
   ok(kinds.includes("refund"), "refund kind present (negative microCredits)");
+  ok(kinds.includes("hold"), "hold kind present (Stage 7.2 pre-call reservation)");
+  ok(kinds.includes("adjustment"), "adjustment kind present (settlement delta)");
+  ok(kinds.includes("hold_release"), "hold_release kind present (failed-call release)");
+  // The AI-spend family used by sumAICallSpends covers exactly the kinds a
+  // metered call can write — a failed call must NET to 0 (hold + release).
+  eq([...billing.AI_SPEND_KINDS].sort(), ["adjustment", "ai_call", "hold", "hold_release"], "AI_SPEND_KINDS");
+});
+
+await test("billing: reservationEnforcement — starter is unmetered, paid tiers enforce", async () => {
+  const billing = await import("../src/lib/tubeforge/billing.ts");
+  const { reservationEnforcement } = billing;
+  eq(reservationEnforcement("starter"), "unmetered", "starter never reserves (overdraft design)");
+  eq(reservationEnforcement("creator"), "enforced", "creator reserves before the call");
+  eq(reservationEnforcement("studio"), "enforced", "studio reserves before the call");
+  // An unknown tier FAILS CLOSED — a new plan tier enforces by default.
+  eq(reservationEnforcement("brand_new_tier"), "enforced", "unknown tiers enforce");
+});
+
+await test("billing: CreditBlockedError carries readable balance facts", async () => {
+  const billing = await import("../src/lib/tubeforge/billing.ts");
+  const err = new billing.CreditBlockedError("video", 40_000, 3_000);
+  ok(err instanceof Error, "is an Error");
+  eq(err.name, "CreditBlockedError", "typed name (routes can instanceof it)");
+  eq(err.capability, "video", "capability recorded");
+  eq(err.estimatedMicro, 40_000, "estimate recorded");
+  eq(err.balanceMicro, 3_000, "balance recorded");
+  ok(/insufficient credits/i.test(err.message), "message says insufficient credits");
+  ok(err.message.includes("video"), "message names the capability");
+  // Display units are UI credits (microToCredits): 40 micro = 40 credits.
+  ok(err.message.includes("40"), "message quotes the cost in credits");
+  ok(err.message.includes("3"), "message quotes the balance in credits");
 });
 
 await test("billing: resolveUserPlan returns the Starter default when no Subscription row exists", async () => {
