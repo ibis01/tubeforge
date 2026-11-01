@@ -34,7 +34,11 @@ interface PlanResponse {
     currentPeriodEnd: string | null;
     stripeCustomerId: string | null;
   } | null;
+  // Stage 7.1: "full" (active/trialing) | "grace" (past_due — dunning) |
+  // "none" (canceled/etc. — the plan already fell back to Starter).
+  access: "full" | "grace" | "none";
   creditBalance: number;
+  creditBalanceMicro: number;
 }
 
 const TIER_BADGE: Record<string, string> = {
@@ -135,6 +139,16 @@ export function PlanCard() {
               {data.plan.priorityRendering ? " · priority rendering" : ""}
             </span>
           </div>
+
+          {/* Stage 7.1 — payment-failed banner while a paid subscription is
+              in dunning (past_due): plan still works, but the card must say
+              why the next invoice matters. */}
+          {data.access === "grace" && (
+            <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
+              The last payment failed — your plan keeps working for now, but update your payment method in the
+              customer portal to avoid losing paid features.
+            </p>
+          )}
 
           {/* Credit balance — bar + numbers (1 credit = $0.001 placeholder unit) */}
           <div className="space-y-1.5">

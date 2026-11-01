@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/tubeforge/tenant";
-import { resolveUserPlan } from "@/lib/tubeforge/billing";
+import { resolveUserPlan, microToCredits } from "@/lib/tubeforge/billing";
 
 export async function GET(req: NextRequest) {
   const auth = await requireUser(req);
@@ -15,6 +15,9 @@ export async function GET(req: NextRequest) {
   auth.enter();
 
   const resolved = await resolveUserPlan(auth.ctx.userId);
+  // Display unit = UI credits (the plan's monthlyCredits unit). The ledger's
+  // canonical microCredits stay internal; creditBalanceMicro carries the
+  // exact remainder for anything that needs sub-credit precision.
   return NextResponse.json({
     plan: {
       tier: resolved.plan.tier,
@@ -25,6 +28,11 @@ export async function GET(req: NextRequest) {
       teamMembers: resolved.plan.teamMembers,
     },
     subscription: resolved.subscription,
-    creditBalance: resolved.creditBalance,
+    // Stage 7.1: paid-plan access level — "grace" (past_due) renders the
+    // payment-failed banner in the UI, "none" means the plan already fell
+    // back to Starter.
+    access: resolved.access,
+    creditBalance: microToCredits(resolved.creditBalance),
+    creditBalanceMicro: resolved.creditBalance,
   });
 }

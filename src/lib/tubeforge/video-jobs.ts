@@ -629,11 +629,18 @@ export async function runRenderJob(
       // final video (RENDER_MICRO_PER_SEC); the note carries the measured
       // duration so the reconciliation can re-derive the cost. Full renders
       // only — previews are free (the user is iterating on scene 1).
+      //
+      // Stage 7.1: recordCreditSpend (not spendCredits) — the cost ALREADY
+      // happened, so this is accounting truth, not enforcement; it must
+      // never be rejected or the ledger would under-report real provider
+      // costs (overspend is prevented at the render route's pre-gate).
+      // The subscriptionId is auto-resolved by the ledger writer (the old
+      // explicit null left every render spend unlinked from its
+      // subscription, hiding it from the balance).
       try {
         const billing = await import("./billing");
         await billing.recordCreditSpend({
           userId: ctx.userId,
-          subscriptionId: null,
           kind: "render_minute",
           microCredits: Math.max(1, Math.round(result.durationSec * billing.RENDER_MICRO_PER_SEC)),
           note: `render ${Math.round(result.durationSec)}s ${mode} (qc ${report.passed ? "pass" : "flagged"})`,

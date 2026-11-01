@@ -1728,14 +1728,17 @@ await test("billing: CreditSpendKind covers every ROADMAP §7 spend kind", async
 
 await test("billing: resolveUserPlan returns the Starter default when no Subscription row exists", async () => {
   const billing = await import("../src/lib/tubeforge/billing.ts");
-  const { resolveUserPlan, PLAN_DEFAULTS } = billing;
+  const { resolveUserPlan, PLAN_DEFAULTS, creditsToMicro } = billing;
   // A never-existed user (no Subscription row) → Starter plan, full monthly credits,
   // null subscription record. This is the "fresh install" path — no row writes
   // needed for existing users when billing is wired.
   const resolved = await resolveUserPlan("nonexistent-user-id");
   eq(resolved.plan.tier, "starter", "default tier is starter");
   eq(resolved.subscription, null, "no subscription row → null");
-  eq(resolved.creditBalance, PLAN_DEFAULTS.starter.monthlyCredits, "fresh credits");
+  eq(resolved.access, "none", "no subscription row → no paid access");
+  // Stage 7.1: balances are MICROCREDITS — the Starter allowance converts
+  // from UI credits at the resolver boundary.
+  eq(resolved.creditBalance, creditsToMicro(PLAN_DEFAULTS.starter.monthlyCredits), "fresh credits (in microCredits)");
 });
 
 await test("billing: getEstimatedCostMicro covers every metered capability with positive costs", async () => {
@@ -1757,6 +1760,74 @@ await test("billing: getEstimatedCostMicro covers every metered capability with 
   ok(ESTIMATED_COST_MICRO.video > ESTIMATED_COST_MICRO.image, "video > image");
   ok(ESTIMATED_COST_MICRO.image > ESTIMATED_COST_MICRO.chat, "image > chat");
   ok(ESTIMATED_COST_MICRO.chat > ESTIMATED_COST_MICRO.search, "chat > search");
+});
+
+await test("billing: subscriptionAccess maps every Stripe status — unknown statuses fail CLOSED", async () => {
+  const { subscriptionAccess } = await import("../src/lib/tubeforge/billing.ts");
+  eq(subscriptionAccess("active"), "full", "active → full");
+  eq(subscriptionAccess("trialing"), "full", "trialing → full");
+  eq(subscriptionAccess("past_due"), "grace", "past_due → grace (dunning keeps the plan)");
+  eq(subscriptionAccess("canceled"), "none", "canceled → none (falls back to Starter)");
+  eq(subscriptionAccess("unpaid"), "none", "unpaid → none");
+  eq(subscriptionAccess("incomplete"), "none", "incomplete → none");
+  eq(subscriptionAccess("incomplete_expired"), "none", "incomplete_expired → none");
+  eq(subscriptionAccess("paused"), "none", "paused → none");
+  eq(subscriptionAccess("some_new_stripe_status"), "none", "UNKNOWN status → none (fail-closed, never grants)");
+  eq(subscriptionAccess(""), "none", "empty → none");
+  eq(subscriptionAccess(null), "none", "null → none");
+  eq(subscriptionAccess(undefined), "none", "undefined → none");
+});
+
+await test("billing: credit units — microCredits are canonical, conversion is total (no mixed-unit sums)", async () => {
+  const { MICROS_PER_CREDIT, creditsToMicro, microToCredits, PLAN_DEFAULTS } = await import(
+    "../src/lib/tubeforge/billing.ts"
+  );
+  eq(MICROS_PER_CREDIT, 1000, "1 UI credit = 1,000 microCredits");
+  eq(creditsToMicro(1), 1000, "1 credit → 1,000 micro");
+  eq(creditsToMicro(10000), 10_000_000, "Creator allowance converts to the canonical unit (10,000 × 1,000)");
+  eq(creditsToMicro(0), 0, "zero converts to zero");
+  eq(microToCredits(creditsToMicro(12345)), 12345, "round-trip is total for whole credits");
+  eq(microToCredits(9999), 9, "display conversion FLOORS (never overstate a balance)");
+  eq(microToCredits(-500), -1, "negative balances floor away from zero (conservative display)");
+  // The exact defect this fixes: a full Creator allowance MUST cover the
+  // render pre-check (RENDER_ESTIMATE_MICRO) with room to spare.
+  const creatorAllowanceMicro = creditsToMicro(PLAN_DEFAULTS.creator.monthlyCredits);
+  const { RENDER_ESTIMATE_MICRO } = await import("../src/lib/tubeforge/billing.ts");
+  ok(
+    creatorAllowanceMicro > RENDER_ESTIMATE_MICRO,
+    `Creator allowance (${creatorAllowanceMicro} micro) covers the render pre-check (${RENDER_ESTIMATE_MICRO} micro)`
+  );
+});
+
+await test("billing: verifyStripeSignature rejects tampered, stale, and malformed signatures", async () => {
+  const { verifyStripeSignature } = await import("../src/lib/tubeforge/billing.ts");
+  const secret = "whsec_test_secret_unit";
+  const payload = JSON.stringify({ id: "evt_1", type: "invoice.paid" });
+  const t = Math.floor(Date.now() / 1000);
+  const sign = (body: string, ts: number) =>
+    crypto.createHmac("sha256", secret).update(`${ts}.${body}`).digest("hex");
+
+  ok(
+    await verifyStripeSignature(payload, `t=${t},v1=${sign(payload, t)}`, secret),
+    "fresh, correctly signed payload verifies"
+  );
+  ok(
+    !(await verifyStripeSignature(payload + " ", `t=${t},v1=${sign(payload, t)}`, secret)),
+    "tampered payload rejected"
+  );
+  ok(
+    !(await verifyStripeSignature(payload, `t=${t},v1=${sign(payload, t)}`, "whsec_wrong")),
+    "wrong secret rejected"
+  );
+  const stale = t - 400; // beyond the 300s replay window
+  ok(
+    !(await verifyStripeSignature(payload, `t=${stale},v1=${sign(payload, stale)}`, secret)),
+    "valid HMAC with a STALE timestamp rejected (replay window)"
+  );
+  ok(!(await verifyStripeSignature(payload, `t=${t}`, secret)), "missing v1 rejected");
+  ok(!(await verifyStripeSignature(payload, `v1=${sign(payload, t)}`, secret)), "missing t rejected");
+  ok(!(await verifyStripeSignature(payload, `t=notanumber,v1=${"a".repeat(64)}`, secret)), "non-numeric timestamp rejected");
+  ok(!(await verifyStripeSignature(payload, "garbage", secret)), "garbage header rejected");
 });
 
 // ---------- summary ----------

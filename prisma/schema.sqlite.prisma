@@ -663,13 +663,22 @@ model Subscription {
 // Monthly credit allotment per subscription. The remaining balance is the
 // sum of grants minus the ledger's spent rows for the user (resolved in
 // code; never denormalized into the Subscription).
+//
+// Stage 7.1: ALL credit math is in MICROCREDITS (1 UI credit = 1,000
+// microCredits, see billing.ts MICROS_PER_CREDIT) — the ledger's unit. The
+// column was renamed from grantedCredits so the unit can never be mixed
+// again at a sum site. `stripeInvoiceId` is the idempotency key: Stripe
+// retries webhook delivery, and the unique index makes a duplicate
+// invoice.paid grant physically impossible (billing.ts invoice.paid
+// upserts on it).
 model CreditGrant {
-  id              String   @id @default(cuid())
-  userId          String
-  subscriptionId  String
-  grantedCredits  Int // credits granted this period
-  periodStart     DateTime
-  periodEnd       DateTime
+  id                String   @id @default(cuid())
+  userId            String
+  subscriptionId    String
+  grantedMicroCredits Int // microCredits granted this period (1 credit = 1,000 micro)
+  stripeInvoiceId   String?  @unique // Stripe invoice id (in_…) — idempotency key for grants
+  periodStart       DateTime
+  periodEnd         DateTime
   user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   subscription    Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
   createdAt       DateTime     @default(now())
@@ -694,3 +703,14 @@ model CreditLedger {
 
   @@index([userId, createdAt])
 }
+
+// Stage 7.1 — every processed Stripe event id, recorded BEFORE the handler
+// runs (create-then-handle). Stripe retries delivery until it gets a 2xx;
+// a duplicate delivery hits the primary-key and is acked as a duplicate
+// without re-running the handler, so no handler can double-apply an event.
+model ProcessedWebhookEvent {
+  id         String   @id // Stripe event id (evt_…)
+  type       String
+  receivedAt DateTime @default(now())
+}
+

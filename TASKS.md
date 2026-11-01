@@ -1068,6 +1068,27 @@ All code-side Stage 7 tasks are closed. The test scaffolding + the billing found
 
 **Final gate for Stage 7 (code side):** tsc 0 · eslint 0 errors / 283 warnings · **86/86 unit** · backup test ALL GREEN · pipeline + mobile-sweep e2e specs typecheck-verified · Stages 1→7 all closed at the code level. Push status: 2 Stage 7 commits pushed cleanly to origin/main; no workflow file in any diff.
 
+## Stage 7.1 — Billing integrity & security — task list
+
+**Source:** the pre-launch billing review (five production blockers + two hardening asks). **Gate:** no commercial feature ships until every defect below is closed AND pinned by a regression test.
+
+| Task | Status | Notes |
+|---|---|---|
+| B-1 Webhook auth fail-closed | ✅ Done | `POST /api/billing/webhook`: with the secret set, a missing `stripe-signature` header is now a **401** (was: silently skipped verification) and a bad signature stays 401. With the secret unset the endpoint accepts NOTHING — 401 in dev, 500 under `NODE_ENV=production`. The only unsigned path is the explicit `TUBEFORGE_ALLOW_UNSIGNED_WEBHOOKS=1` dev opt-in (refused in production regardless). `verifyStripeSignature` gained a 300s timestamp replay window + constant-time compare. |
+| B-2 Canonical credit units | ✅ Done | ONE ledger unit: the **microCredit** (1 UI credit = 1,000 micro, `MICROS_PER_CREDIT`). `CreditGrant.grantedCredits` renamed → `grantedMicroCredits` (migration `20261102020000_stage71_billing_integrity`), grants converted from the plan's UI-credit allowance at grant time, balances converted back only at the display edge (`microToCredits`). The exact regression — a full Creator allowance failing the 50,000-micro render pre-check — is pinned in both suites. |
+| B-3 Ledger↔subscription linkage | ✅ Done | Spends auto-attach the user's active subscriptionId (`recordCreditSpend`/`spendCredits` resolve it internally — callers can no longer write null-linked rows by omission). Balance math is **user-scoped** (grants + ledger filtered by userId directly, never via the subscription relation), so legacy null-linked rows still count and nothing spent can resurrect. Canceled subscriptions collect no new linked rows. |
+| B-4 Subscription status enforcement | ✅ Done | `subscriptionAccess(status)`: active/trialing → `full`, past_due → `grace` (paid plan continues while dunning runs; plan card shows a payment-failed banner), canceled/unpaid/incomplete/incomplete_expired/paused/**unknown** → `none` → resolver falls back to Starter (fail-closed on new Stripe statuses). Enforcement tier in `spendCredits` follows the access decision, not the stored plan row. Every status is tested. |
+| B-5 Idempotent invoice grants | ✅ Done | Two layers: (1) `ProcessedWebhookEvent` records every handled Stripe event id BEFORE the handler runs (create-then-handle; a failed handler frees the id so Stripe's retry re-runs it); (2) `CreditGrant.stripeInvoiceId` is `@unique` and `invoice.paid` upserts on it, so the same invoice under a different event id still grants exactly once. A paid invoice also re-activates a non-canceled subscription (renewal clears past_due, period end tracks Stripe). |
+| B-6 Concurrent-spend / overspend protection | ✅ Done | New `spendCredits()` — the enforcement primitive: a transactional check-and-spend that re-reads the balance INSIDE the transaction (in-process promise-chain queue + SQLite `BEGIN IMMEDIATE` file lock / Postgres Serializable with P2034+busy retry). AI-call metering (`budget.ts`) now goes through it; rejected spends leave no ledger row. Render actuals stay `recordCreditSpend` (accounting truth — the cost already happened; enforcement is the render route's pre-gate). 10 parallel spends of 30,000 micro against a 100,000-micro grant → exactly 3 recorded, 7 rejected, balance ≥ 0. |
+| B-7 Billing lifecycle tests | ✅ Done | New `scripts/test-billing.mts` (`npm run test:billing`, wired into `npm run check`) — 16 tests against the real DB + the REAL route handler in-process: full webhook auth matrix (8), canonical units, grant idempotency ×2 (same event id; same invoice/different event), linkage ×2, the 7-status matrix + renewal-after-past_due, canceled-sub spend behavior, and the concurrency probe. Unit suite gained 3 more (status map, unit conversions, signature tamper/stale/malformed). |
+| B-8 Docs + env contract | ✅ Done | `.env.example` documents the fail-closed webhook + the dev opt-in. Migration `20261102020000_stage71_billing_integrity` carries the Postgres DDL; the SQLite mirror was regenerated and pushed (dev grant rows reset — pre-production data, the next `invoice.paid` re-grants in the correct unit). |
+
+### Stage 7.1 progress (2026-11-02)
+
+All five production blockers are fixed and pinned. **Final gate for Stage 7.1:** tsc 0 · eslint 0 errors / 295 warnings · **90/90 unit** · **16/16 billing integration** · schema pushed to the dev DB (both providers) · Postgres migration written.
+
+Not yet established (operational, unchanged from Stage 7): real Stripe test-mode Checkout + webhook lifecycle against Stripe itself, staging k6 run, live beta. **The exposed GitHub PAT still needs rotation** — outside the repo's reach.
+
 ### Whole-program summary (Stages 1 → 7)
 
 | Stage | Status | Commits |

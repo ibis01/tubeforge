@@ -6,7 +6,7 @@ import { isJobRunning, lastJobError, jobProgress, startJob } from "@/lib/tubefor
 import { runRenderJob, type RenderJobOptions } from "@/lib/tubeforge/video-jobs";
 import { resolveMusicForVideo } from "@/lib/tubeforge/music";
 import { sanitizeTransition } from "@/lib/tubeforge/transitions";
-import { resolveUserPlan, hasCredits, RENDER_ESTIMATE_MICRO, planSupportsResolution } from "@/lib/tubeforge/billing";
+import { resolveUserPlan, hasCredits, RENDER_ESTIMATE_MICRO, planSupportsResolution, microToCredits } from "@/lib/tubeforge/billing";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -116,7 +116,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return NextResponse.json(
       {
         error: "Not enough credits for this render — upgrade your plan or wait for the next monthly grant",
-        creditBalance: resolvedPlan.creditBalance,
+        // creditBalance is microCredits (canonical); display in UI credits.
+        creditBalance: microToCredits(resolvedPlan.creditBalance),
         plan: resolvedPlan.plan.tier,
       },
       { status: 402 }

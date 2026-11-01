@@ -304,16 +304,27 @@ async function recordAiUsage(
     // with provider reporting; the ledger shape does not change). Failed
     // calls still spend (the provider may have billed for the attempt) —
     // marked in the note so a refund policy can be applied later.
+    //
+    // Stage 7.1: spendCredits (not recordCreditSpend) — the transactional
+    // check-and-spend attaches the user's active subscriptionId (fixes the
+    // null-linkage defect) and REJECTS the spend when a paid balance can't
+    // cover it (fixes overspend). A rejected row simply isn't written; the
+    // UsageRecord above stays the record of truth for what ran.
     try {
       const billing = await import("./billing");
-      await billing.recordCreditSpend({
+      const result = await billing.spendCredits({
         userId: ctx.userId,
-        subscriptionId: null, // the resolver looks the Subscription up by userId
         kind: "ai_call",
         microCredits: billing.getEstimatedCostMicro(capability),
         usageRecordId: usage.id,
         note: `${capability} ${ok ? "ok" : "FAILED"} via ${provider} — ${label.slice(0, 60)}`,
       });
+      if (!result.recorded) {
+        console.warn(
+          `[usage] credit spend rejected (${result.reason}) — balance ${result.balanceMicro} microCredits, ` +
+            `${capability} call ran without a ledger row: ${label.slice(0, 60)}`
+        );
+      }
     } catch {
       /* billing write is best-effort — the UsageRecord row is the record of truth */
     }
