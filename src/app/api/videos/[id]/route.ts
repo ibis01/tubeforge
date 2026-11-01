@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { latestStatsFor } from "@/lib/tubeforge/analytics";
@@ -10,6 +8,7 @@ import { RENDER_MODES } from "@/lib/tubeforge/types";
 import { TRANSITIONS, sanitizeTransitionDuration } from "@/lib/tubeforge/transitions";
 import { isDuckIntensity } from "@/lib/tubeforge/audiomix";
 import { isMusicMoodId } from "@/lib/tubeforge/music";
+import * as storage from "@/lib/tubeforge/storage";
 
 const TRANSITION_IDS = new Set(TRANSITIONS.map((t) => t.id));
 
@@ -76,26 +75,20 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       newScript.trim() !== oldScript.trim();
 
     if (changedEnough && !preserveArtifacts && oldScript.trim()) {
+      // Stage 4a (T-4.0): storage-backed invalidation. The old raw-fs pass
+      // both bypassed the s3 driver AND matched stale pre-T-3.7 file names
+      // (render.mp4, scene-N-clip.*) — under local it silently missed
+      // final/preview/scene-NN clips, under s3 it removed nothing at all.
+      // Artifacts keyed off the OLD narration die; scene art PNGs, stock
+      // clips and thumbnails stay (they depend on visuals, not narration).
       try {
-        const dir = path.join(process.cwd(), "uploads", id);
-        if (fs.existsSync(dir)) {
-          for (const f of fs.readdirSync(dir)) {
-            // voiceover (.wav/.mp3), final mp4, the short, scenes' rendered
-            // clips — anything keyed off the old narration.
-            if (
-              f === "voiceover.wav" ||
-              f === "voiceover.mp3" ||
-              f === "render.mp4" ||
-              f === "short.mp4" ||
-              /^scene-\d+-clip\.(mp4|webm)$/.test(f) ||
-              /^scene-\d+-voice\.(wav|mp3)$/.test(f)
-            ) {
-              fs.rmSync(path.join(dir, f), { force: true });
-            }
-          }
-        }
+        const keys = await storage.list(id);
+        const stale = keys.filter((k) =>
+          /\/(voiceover\.wav|voice-source\.\w+|final\.mp4|preview\.mp4|subtitles\.srt|short\.mp4|short-thumb\.png|scene-\d{2}\.(wav|mp4))$/.test(k)
+        );
+        await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));
       } catch {
-        /* directory may not exist yet — non-fatal */
+        /* prefix may not exist yet — non-fatal */
       }
       data.hasVoiceover = false;
       data.audioDuration = null;
@@ -236,15 +229,14 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   await db.video.delete({ where: { id } });
 
   // Stage 1 (task T-1.13, audit defect D-05): the DB row cascade no longer
-  // orphans the media tree — scene art, voiceovers, renders and thumbnails
-  // all live under uploads/<id>/ and are removed with it. Stage 3 replaces
-  // this with storage.delete(videoId) when artifacts move to object storage.
+  // orphans the media tree. Stage 4a (T-4.0): the wipe goes through the
+  // storage driver — removePrefix works under local AND s3, and decrements
+  // the org quota (the old raw-fs rmSync was a silent no-op under s3).
   try {
-    const dir = path.join(process.cwd(), "uploads", id);
-    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    await storage.removePrefix(id);
   } catch {
-    // best-effort — a stuck file must not fail the delete; a periodic
-    // uploads/ sweep can clean strays later.
+    // best-effort — a stuck object must not fail the delete; a periodic
+    // orphan sweep can clean strays later.
   }
 
   return NextResponse.json({ success: true });

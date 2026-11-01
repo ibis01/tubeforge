@@ -14,7 +14,9 @@ export async function GET(req: NextRequest) {
     include: { _count: { select: { videos: true } } },
   });
   return NextResponse.json({
-    characters: characters.map((c) => serializeCharacter(c, c._count.videos)),
+    characters: await Promise.all(
+      characters.map((c) => serializeCharacter(c, c._count.videos))
+    ),
   });
 }
 
@@ -60,7 +62,7 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json(
-      { character: serializeCharacter(character, character._count.videos) },
+      { character: await serializeCharacter(character, character._count.videos) },
       { status: 201 }
     );
   } catch (err) {

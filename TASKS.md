@@ -124,6 +124,33 @@ The "backlog continues next session" item from part 2 is done: every JobKind the
 
 ---
 
+## Stage 4a task backlog (defined 2026-11-01 — executing now)
+
+**Scope:** premium UX for the core 5 surfaces (Dashboard, Project creation, Script editor, Storyboard, Scene editor) + the design-system foundation the roadmap requires (tokens, keyboard model, loading/error states, responsive). Survey finding that shapes the plan: *the data layer is ahead of the UI* — per-video YouTube stats, published/failed counts, QC reports and per-scene stock data all exist in DTOs but are not surfaced; and the detail dialog (2,643 lines, 3 overloaded tabs) is where script/storyboard/scene work actually happens.
+
+**Carry-in defect (found during survey):** two raw-`fs` media paths in `src/app/api/videos/[id]/route.ts` (script-artifact invalidation in PATCH, media-tree cleanup in DELETE) bypass the T-3.7 storage abstraction — under the s3 driver they silently no-op (DELETE leaks the whole `<id>/` prefix, quota never decremented). `storage.removePrefix()` was built for exactly this and never wired.
+
+| Task | Objective | Dependencies |
+|---|---|---|
+| T-4.0 | Migrate the two raw-`fs` sites in `PATCH/DELETE /api/videos/[id]` to `storage.remove()`/`removePrefix()` (driver-correct, quota-decrementing) | — |
+| T-4.1 | Design-system foundation: semantic tokens + utility classes in `globals.css`; shared primitives (`Kbd`, `Sparkline`, `TrendDelta`…); `useHotkeys` + ⌘K command palette + `?` shortcut sheet; store palette state | — |
+| T-4.2 | Dashboard redesign: performance KPI row (views/likes/comments + 7-day delta, from new `GET /api/stats` aggregates over VideoStat), published/failed surfaced, quick-start actions, continue-where-you-left-off, clickable recent projects + activity rows, richer chart | T-4.1 |
+| T-4.3 | Project creation → guided brief: 4-step wizard (Concept → Format → Voice & art → Destination & launch) with per-step validation, localStorage draft autosave + restore, review summary; production line untouched | T-4.1 |
+| T-4.4 | Script editor as a real tab in the detail dialog (both formats): classic = editable script w/ autosave + undo/redo + word count/est duration + preserve-artifacts option; story = per-scene narration/caption editing (needs `narration` on `PATCH /api/videos/[id]/scenes` w/ script-equivalent invalidation), timing, narrative-structure strip, emotional-progression map, ASR accuracy panel | T-4.1 |
+| T-4.5 | Storyboard polish: density toggle (grid ↔ filmstrip), explicit per-scene status chips (art ready / re-rolling / stock / slide), timing bars, keep every existing action | T-4.1 |
+| T-4.6 | Scene editor upgrade: narration + caption fields, before/after compare for AI edits, in-dialog regeneration progress (poll inside the dialog instead of closing it) | T-4.4 |
+| T-4.7 | Cross-cutting sweep: responsive (390px) verification, WCAG AA contrast on new surfaces, loading/error/empty states, e2e additions, docs | all |
+
+**Documented deviations (up front):**
+1. **Fact-check side panel with source URLs is deferred.** `ResearchIdea` carries no source URLs (LLM-synthesized radar: title/angle/keywords/volume/competition/score) and `Video` has no research linkage — there is no source data to link out to. The Script tab ships the **ASR accuracy panel** (existing `verify.ts` report) as its accuracy surface instead; real citation-backed fact-checking needs research-with-sources (Stage 5+ server work).
+2. **Drag-reorder / add-delete scene stays in Stage 6** (roadmap puts the scene timeline there); 4a polishes layout, status and per-scene controls.
+3. **Per-scene voice re-synthesis stays in Stage 6** (roadmap: "re-synthesizes only that scene's voiceover"); 4a's narration edit invalidates stale voiceover via the existing full-run semantics and the UI says so.
+4. **MDX-style markup** is not introduced; the script editor is structured per-scene text (the product's scripts are plain narration + scene metadata, not rich docs).
+
+**Completion gate (roadmap):** Dashboard, Project creation, Script editor, Storyboard, Scene editor feel like an established professional creative product (SUS ≥ 75 with 5 internal users — not measurable in this sandbox; verified instead by live browser review + e2e assertions).
+
+---
+
 ## How to read this document
 
 Every task has:

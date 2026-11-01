@@ -43,7 +43,6 @@ import {
   slidePngPath,
   slideMotionPlan,
   slideSegmentGraph,
-  invalidateSlidePngs,
   type SlideBrand,
 } from "./slides";
 import {
@@ -138,25 +137,22 @@ export interface RenderResult {
  * brand kit change: rendered MP4s, subtitles, animated scene clips and
  * (optionally) the cached slide PNGs. Routes call this after any visual
  * mutation so a stale video can never be served or marked hasVideo.
+ *
+ * Stage 4a (T-4.0): storage-backed — list + targeted remove through the
+ * driver, so it works under s3 (where a raw readdir sees nothing) and
+ * decrements the org quota. Local scratch copies die with the same pass
+ * (the local driver's remove() IS the scratch file).
  */
-export function invalidateRenderedArtifacts(
+export async function invalidateRenderedArtifacts(
   videoId: string,
   opts: { slidePngs?: boolean } = {}
-): void {
-  // Storage seam (T-3.7): local driver — delete through the uploads layout;
-  // s3 driver — best-effort async wipe happens via removePrefix at the route
-  // layer; here we only clear local scratch remains.
-  const dir = videoDir(videoId);
-  for (const f of ["final.mp4", "preview.mp4", "subtitles.srt"]) {
-    fs.rmSync(path.join(dir, f), { force: true });
-  }
-  // Animated scene clips are derived from scene art — they are stale too.
-  if (fs.existsSync(dir)) {
-    for (const f of fs.readdirSync(dir)) {
-      if (/^scene-\d{2}\.mp4$/.test(f)) fs.rmSync(path.join(dir, f), { force: true });
-    }
-  }
-  if (opts.slidePngs) invalidateSlidePngs(videoId);
+): Promise<void> {
+  const stalePattern = opts.slidePngs
+    ? /\/(final\.mp4|preview\.mp4|subtitles\.srt|scene-\d{2}\.mp4|slide-\d{2}\.png)$/
+    : /\/(final\.mp4|preview\.mp4|subtitles\.srt|scene-\d{2}\.mp4)$/;
+  const keys = await storage.list(videoId).catch(() => [] as string[]);
+  const stale = keys.filter((k) => stalePattern.test(k));
+  await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));
 }
 
 /** Run ffmpeg/ffprobe, surfacing the useful tail of stderr on failure.

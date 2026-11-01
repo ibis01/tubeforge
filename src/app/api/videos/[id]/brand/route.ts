@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { invalidateRenderedArtifacts } from "@/lib/tubeforge/render";
-import { brandLogoFile, sanitizeBrandAccent } from "@/lib/tubeforge/slides";
+import { brandLogoKey, sanitizeBrandAccent } from "@/lib/tubeforge/slides";
+import * as storage from "@/lib/tubeforge/storage";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -28,12 +27,17 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!video)
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-  const file = brandLogoFile(id);
-  if (!file)
+  const key = await brandLogoKey(id);
+  if (!key)
     return NextResponse.json({ error: "No brand logo uploaded" }, { status: 404 });
 
-  const ext = path.extname(file).slice(1).toLowerCase();
-  const body = fs.readFileSync(file);
+  const ext = key.split(".").pop() ?? "";
+  let body: Buffer;
+  try {
+    body = await storage.get(key);
+  } catch {
+    return NextResponse.json({ error: "No brand logo uploaded" }, { status: 404 });
+  }
   return new NextResponse(new Uint8Array(body), {
     status: 200,
     headers: {
@@ -84,16 +88,16 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (file.size > MAX_LOGO_BYTES)
     return NextResponse.json({ error: "Logo exceeds the 5 MB limit" }, { status: 413 });
 
-  const dir = path.join(process.cwd(), "uploads", id);
-  fs.mkdirSync(dir, { recursive: true });
   // One logo per video — remove other variants first (ext may change).
+  // Stage 4a (T-4.0): the logo is a storage object, so variant swaps go
+  // through the driver (s3-safe, quota-correct).
   for (const e of Object.keys(LOGO_MIME)) {
-    if (e !== ext) fs.rmSync(path.join(dir, `brand-logo.${e}`), { force: true });
+    if (e !== ext) await storage.remove(`${id}/brand-logo.${e}`).catch(() => {});
   }
-  fs.writeFileSync(path.join(dir, `brand-logo.${ext}`), Buffer.from(await file.arrayBuffer()));
+  await storage.put(`${id}/brand-logo.${ext}`, Buffer.from(await file.arrayBuffer()));
 
   // The badge is baked into slide PNGs at screenshot time — stale now.
-  invalidateRenderedArtifacts(id, { slidePngs: true });
+  await invalidateRenderedArtifacts(id, { slidePngs: true });
   await db.video.update({
     where: { id },
     data: { brandLogoOn: true, hasVideo: false, videoDuration: null, error: null },
@@ -153,7 +157,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   if (!changed)
     return NextResponse.json({ error: "Nothing to update — send accent or showLogo" }, { status: 400 });
 
-  invalidateRenderedArtifacts(id, { slidePngs: true });
+  await invalidateRenderedArtifacts(id, { slidePngs: true });
   const updated = await db.video.update({
     where: { id },
     data: { ...data, hasVideo: false, videoDuration: null, error: null },
@@ -177,12 +181,11 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   if (!video)
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-  const dir = path.join(process.cwd(), "uploads", id);
   for (const e of Object.keys(LOGO_MIME)) {
-    fs.rmSync(path.join(dir, `brand-logo.${e}`), { force: true });
+    await storage.remove(`${id}/brand-logo.${e}`).catch(() => {});
   }
 
-  invalidateRenderedArtifacts(id, { slidePngs: true });
+  await invalidateRenderedArtifacts(id, { slidePngs: true });
   await db.video.update({ where: { id }, data: { brandLogoOn: null } });
   await db.activity.create({
     data: {

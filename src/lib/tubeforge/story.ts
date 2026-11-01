@@ -568,7 +568,7 @@ export async function generateSceneImage(opts: {
 
   const portrait =
     scene.hostInScene && opts.character?.id
-      ? readPortrait(opts.character.id)
+      ? await readPortrait(opts.character.id)
       : null;
 
   const imagePath = path.join(videoDir(opts.videoId), sceneImageFile(scene.index));

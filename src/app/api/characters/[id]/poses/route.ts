@@ -19,7 +19,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!character)
     return NextResponse.json({ error: "Character not found" }, { status: 404 });
 
-  const existing = new Set(listPoses(id));
+  const existing = new Set(await listPoses(id));
   return NextResponse.json({
     poses: POSES.filter((p) => existing.has(p.id)).map((p) => ({
       pose: p.id,
@@ -41,7 +41,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (!character)
     return NextResponse.json({ error: "Character not found" }, { status: 404 });
 
-  if (!portraitExists(id))
+  if (!(await portraitExists(id)))
     return NextResponse.json(
       { error: "Generate the reference portrait first" },
       { status: 400 }

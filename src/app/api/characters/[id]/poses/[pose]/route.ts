@@ -18,7 +18,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!character)
     return NextResponse.json({ error: "Character not found" }, { status: 404 });
 
-  const png = readPose(id, pose);
+  const png = await readPose(id, pose);
   if (!png)
     return NextResponse.json({ error: "Pose not generated yet" }, { status: 404 });
   return new NextResponse(new Uint8Array(png), {

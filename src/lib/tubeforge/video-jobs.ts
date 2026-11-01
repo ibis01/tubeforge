@@ -179,6 +179,8 @@ export async function runVoiceoverJob(
 
     if (video.format === "story") {
       // Old renders no longer match the new narration timing.
+      // Stage 4a (T-4.0): driver-correct removal (s3-safe, quota-decrementing)
+      // + local scratch cleanup for the copies the render pipeline retains.
       for (const f of [
         "final.mp4",
         "preview.mp4",
@@ -186,7 +188,8 @@ export async function runVoiceoverJob(
         "short.mp4",
         "short-thumb.png",
       ]) {
-        fs.rmSync(path.join(videoDir(videoId), f), { force: true }); // storage seam (T-3.7)
+        await remove(`${videoId}/${f}`).catch(() => {});
+        fs.rmSync(path.join(videoDir(videoId), f), { force: true });
       }
     }
 
@@ -266,7 +269,7 @@ export async function runStoryboardJob(videoId: string): Promise<void> {
         setJobProgress(videoId, "storyboard", i + 1, total, `Painting scene ${i + 1} of ${total}`),
     });
 
-    invalidateRenderedArtifacts(videoId, { slidePngs: true });
+    await invalidateRenderedArtifacts(videoId, { slidePngs: true });
     await db.video.update({
       where: { id: videoId },
       data: {
@@ -375,7 +378,7 @@ export async function runSceneJob(
       });
       await generateSceneImage({ videoId, scene, character: await castOptsFor(video) });
     }
-    invalidateRenderedArtifacts(videoId, { slidePngs: true });
+    await invalidateRenderedArtifacts(videoId, { slidePngs: true });
     await db.video.update({
       where: { id: videoId },
       data: {
@@ -479,7 +482,7 @@ export async function runRenderJob(
   );
 
   // Brand kit (keynote slides): accent recolor + corner logo badge.
-  const brand = mode === "slides" ? slideBrandFor(videoId, video.brandAccent, video.brandLogoOn) : null;
+  const brand = mode === "slides" ? await slideBrandFor(videoId, video.brandAccent, video.brandLogoOn) : null;
 
   try {
     const result = await renderVideo({
@@ -968,11 +971,11 @@ export async function runSlideJob(entityId: string): Promise<void> {
     saveSlideSpecAt(videoId, position, spec);
 
     // 3) Re-screenshot just this slide with the brand kit applied.
-    const brand = slideBrandFor(videoId, video.brandAccent, video.brandLogoOn);
+    const brand = await slideBrandFor(videoId, video.brandAccent, video.brandLogoOn);
     await renderSlidePngs(videoId, [{ scene, spec }], { force: true, brand });
 
     // 4) The rendered video embeds the old slide — it is stale now.
-    invalidateRenderedArtifacts(videoId);
+    await invalidateRenderedArtifacts(videoId);
     await db.video.update({
       where: { id: videoId },
       data: { hasVideo: false, videoDuration: null, error: null },

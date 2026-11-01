@@ -47,7 +47,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!character)
     return NextResponse.json({ error: "Character not found" }, { status: 404 });
 
-  const png = readPortrait(id);
+  const png = await readPortrait(id);
   if (!png)
     return NextResponse.json({ error: "Portrait not generated yet" }, { status: 404 });
   return new NextResponse(new Uint8Array(png), {
@@ -71,7 +71,7 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   if (!character)
     return NextResponse.json({ error: "Character not found" }, { status: 404 });
   return NextResponse.json({
-    character: serializeCharacter(character, 0),
+    character: await serializeCharacter(character, 0),
     lastError: error,
   });
 }

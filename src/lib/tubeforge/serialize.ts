@@ -94,7 +94,7 @@ export async function serializeVideo(
     transitionStyle: v.transitionStyle,
     transitionDuration: v.transitionDuration,
     brandAccent: v.brandAccent,
-    brandHasLogo: isStory && hasBrandLogo(v.id),
+    brandHasLogo: isStory && (await hasBrandLogo(v.id)),
     brandLogoOn: v.brandLogoOn ?? true,
     qc: parseQc(v.qcReport),
     stats: opts.stats ?? null,

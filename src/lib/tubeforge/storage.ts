@@ -456,6 +456,49 @@ export async function exists(key: string): Promise<boolean> {
   return (await stat(key)) !== null;
 }
 
+/**
+ * List every object key under a prefix (Stage 4a, T-4.0). Backs targeted
+ * invalidation passes (render.ts, the script-edit route) and directory-style
+ * reads (character pose sheets) — patterns the raw-fs code used readdir for.
+ * Local driver: recursive readdir. s3: ListObjectsV2 with continuation tokens.
+ * A missing prefix is an empty list, never an error.
+ */
+export async function list(prefix: string): Promise<string[]> {
+  const p = normalizeKey(prefix);
+  if (storageDriverKind() === "local") {
+    const target = localPathForKey(p);
+    const out: string[] = [];
+    try {
+      for (const f of await fsp.readdir(target, { recursive: true, withFileTypes: true })) {
+        if (f.isFile()) {
+          const rel = path.relative(target, path.join(f.parentPath, f.name)).split(path.sep).join("/");
+          out.push(`${p}/${rel}`);
+        }
+      }
+    } catch {
+      /* prefix absent — empty list */
+    }
+    return out;
+  }
+
+  const cfg = s3Config();
+  if (!cfg) throw new Error("storage: s3 driver selected but TUBEFORGE_S3_* env is incomplete");
+  const keys: string[] = [];
+  let token: string | null = null;
+  for (;;) {
+    let url = `${cfg.endpoint}/${cfg.bucket}?list-type=2&prefix=${encodeURIComponent(p + "/")}&max-keys=1000`;
+    if (token) url += `&continuation-token=${encodeURIComponent(token)}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`storage: LIST "${p}" → ${res.status}`);
+    const text = await res.text();
+    for (const m of text.matchAll(/<Key>([^<]+)<\/Key>/g)) keys.push(decodeURIComponent(m[1]));
+    const next = text.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/);
+    if (!next) break;
+    token = next[1];
+  }
+  return keys;
+}
+
 export async function remove(key: string): Promise<void> {
   const k = normalizeKey(key);
   const prior = await stat(k);

@@ -40,6 +40,7 @@ import { videoDir } from "./ai";
 import { aiCall } from "./budget";
 import { chatComplete } from "./providers/chat";
 import { parseJsonLoose } from "./ai";
+import * as storage from "./storage";
 import { FOCAL_CENTER, zoompanForShot, OUTPUT_SIZES, type MotionScenePlan, type MotionSettings } from "./motion";
 
 // ---------------------------------------------------------------------------
@@ -101,32 +102,36 @@ export function brandCssVars(brand: SlideBrand | null): string {
   return `:root{--brand:${brand.accentHex};--brand-ink:${readableInk(brand.accentHex)};}`;
 }
 
-/** The video's uploaded logo file (any supported ext), null when absent. */
-export function brandLogoFile(videoId: string): string | null {
-  const dir = videoDir(videoId);
+/** The video's uploaded logo STORAGE KEY (any supported ext), null when absent.
+ *  Stage 4a (T-4.0): storage-backed — the logo is a persistent per-video
+ *  object, so it must live in the bucket under s3, not on the web pod's disk. */
+export async function brandLogoKey(videoId: string): Promise<string | null> {
   for (const ext of ["png", "webp", "svg"]) {
-    const p = path.join(dir, `brand-logo.${ext}`);
-    if (fs.existsSync(p)) return p;
+    const key = `${videoId}/brand-logo.${ext}`;
+    if (await storage.exists(key)) return key;
   }
   return null;
 }
 
-export function hasBrandLogo(videoId: string): boolean {
-  return brandLogoFile(videoId) !== null;
+export async function hasBrandLogo(videoId: string): Promise<boolean> {
+  return (await brandLogoKey(videoId)) !== null;
 }
 
-/** Resolve a video row's brand fields into the composer shape (null = catalog). */
-export function slideBrandFor(
+/** Resolve a video row's brand fields into the composer shape (null = catalog).
+ *  The logo is materialized to a local path for the browser's file:// URL
+ *  (no-op locally, etag-pinned cache copy under s3). */
+export async function slideBrandFor(
   videoId: string,
   brandAccent: string | null,
   brandLogoOn: boolean | null
-): SlideBrand | null {
+): Promise<SlideBrand | null> {
   const accentHex = sanitizeBrandAccent(brandAccent);
-  const logoFile = brandLogoOn === false ? null : brandLogoFile(videoId);
-  if (!accentHex && !logoFile) return null;
+  const logoKey = brandLogoOn === false ? null : await brandLogoKey(videoId);
+  const logoPath = logoKey ? await storage.materialize(logoKey).catch(() => null) : null;
+  if (!accentHex && !logoPath) return null;
   return {
     accentHex,
-    logoUrl: logoFile ? `file://${logoFile}` : null,
+    logoUrl: logoPath ? `file://${logoPath}` : null,
   };
 }
 
@@ -851,12 +856,12 @@ export function readSlideImage(videoId: string, sceneIndex: number): Buffer | nu
 }
 
 /** Delete every cached slide PNG — brand/art changes re-screenshot at render. */
-export function invalidateSlidePngs(videoId: string): void {
-  const dir = videoDir(videoId);
-  if (!fs.existsSync(dir)) return;
-  for (const f of fs.readdirSync(dir)) {
-    if (/^slide-\d{2}\.png$/.test(f)) fs.rmSync(path.join(dir, f), { force: true });
-  }
+export async function invalidateSlidePngs(videoId: string): Promise<void> {
+  // Storage seam (T-3.7 / Stage 4a T-4.0): driver-correct wipe of the cached
+  // slide PNGs — works under the s3 driver and decrements the org quota.
+  const keys = await storage.list(videoId).catch(() => [] as string[]);
+  const stale = keys.filter((k) => /\/slide-\d{2}\.png$/.test(k));
+  await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));
 }
 
 /**

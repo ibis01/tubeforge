@@ -412,20 +412,17 @@ export async function fetchStockForScenes(opts: {
   return { matched, fetched, skipped: Math.max(opts.scenes.length - matched, 0) };
 }
 
-/** Remove all stock clips + refs (storyboard stays untouched). */
+/** Remove all stock clips + refs (storyboard stays untouched).
+ *  Stage 4a (T-4.0): clips are storage objects — removal goes through the
+ *  driver (s3-safe, decrements the org quota). */
 export async function clearStock(videoId: string, scenes: Scene[]): Promise<number> {
-  const dir = videoDir(videoId);
   let cleared = 0;
   for (const scene of scenes) {
     if (scene.stock) {
       scene.stock = undefined;
       cleared++;
     }
-    if (fs.existsSync(dir)) {
-      for (const f of fs.readdirSync(dir)) {
-        if (f === stockFile(scene.index)) fs.rmSync(path.join(dir, f), { force: true });
-      }
-    }
+    await storage.remove(`${videoId}/${stockFile(scene.index)}`).catch(() => {});
   }
   if (cleared > 0)
     await db.video.update({ where: { id: videoId }, data: { scenes: JSON.stringify(scenes) } });

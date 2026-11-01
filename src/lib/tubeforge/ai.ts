@@ -312,7 +312,7 @@ export async function generateThumbnail(opts: {
   // Preferred path — visually seed the generation with the character's portrait
   // so the host keeps their real likeness inside the scene.
   const { readPortrait, characterSceneFragment } = await import("./characters");
-  const portrait = opts.character?.id ? readPortrait(opts.character.id) : null;
+  const portrait = opts.character?.id ? await readPortrait(opts.character.id) : null;
 
   let buffer: Buffer | null = null;
   if (opts.character && portrait && (await imageEditSupported())) {

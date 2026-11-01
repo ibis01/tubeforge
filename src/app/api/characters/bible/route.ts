@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json({
         bible,
-        character: serializeCharacter(updated, updated._count.videos),
+        character: await serializeCharacter(updated, updated._count.videos),
       });
     }
 

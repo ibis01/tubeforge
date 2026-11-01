@@ -3,8 +3,6 @@
 // The `identityAnchor` is the canonical visual description reused verbatim in
 // every future generation so the character stays recognizable across scenes.
 
-import fs from "fs";
-import path from "path";
 import type { Character } from "@prisma/client";
 import { POSES, ART_STYLES } from "./types";
 import { parseJsonLoose } from "./ai";
@@ -14,15 +12,21 @@ import { chatComplete } from "./providers/chat";
 import { imageEdit, imageGenerate, imageEditSupported } from "./providers/image";
 import { getCapability } from "./providers/settings";
 import { voiceCatalog } from "./providers/tts";
+import * as storage from "./storage";
 
-const CHARACTER_ROOT = path.join(process.cwd(), "uploads", "characters");
+// Character assets live under the characters/<id>/ prefix in object storage
+// (same layout the raw-fs era used under uploads/ — zero data migration).
+// Stage 4a, T-4.0: every read/write/list/delete goes through the storage
+// seam so portraits survive a web/worker split and work under the s3 driver.
+const characterKey = (characterId: string, file: string) =>
+  `characters/${characterId}/${file}`;
 
 /** Shape a Prisma character row (with optional video count) into the API DTO. */
-export function serializeCharacter(
+export async function serializeCharacter(
   c: Character,
   videoCount = 0
-): import("./types").CharacterDTO {
-  const poseIds = new Set(listPoses(c.id));
+): Promise<import("./types").CharacterDTO> {
+  const poseIds = new Set(await listPoses(c.id));
   return {
     id: c.id,
     name: c.name,
@@ -48,44 +52,40 @@ export function serializeCharacter(
   };
 }
 
-export function characterDir(characterId: string) {
-  const dir = path.join(CHARACTER_ROOT, characterId);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  return dir;
+export async function portraitExists(characterId: string): Promise<boolean> {
+  return storage.exists(characterKey(characterId, "portrait.png"));
 }
 
-export function portraitExists(characterId: string): boolean {
-  return fs.existsSync(path.join(CHARACTER_ROOT, characterId, "portrait.png"));
+export async function readPortrait(characterId: string): Promise<Buffer | null> {
+  try {
+    return await storage.get(characterKey(characterId, "portrait.png"));
+  } catch {
+    return null;
+  }
 }
 
-export function readPortrait(characterId: string): Buffer | null {
-  const p = path.join(CHARACTER_ROOT, characterId, "portrait.png");
-  if (!fs.existsSync(p)) return null;
-  return fs.readFileSync(p);
-}
-
-export function readPose(
+export async function readPose(
   characterId: string,
   pose: string
-): Buffer | null {
+): Promise<Buffer | null> {
   if (!POSES.some((p) => p.id === pose)) return null;
-  const p = path.join(CHARACTER_ROOT, characterId, `pose-${pose}.png`);
-  if (!fs.existsSync(p)) return null;
-  return fs.readFileSync(p);
+  try {
+    return await storage.get(characterKey(characterId, `pose-${pose}.png`));
+  } catch {
+    return null;
+  }
 }
 
-export function listPoses(characterId: string): string[] {
-  const dir = path.join(CHARACTER_ROOT, characterId);
-  if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir)
+export async function listPoses(characterId: string): Promise<string[]> {
+  const keys = await storage.list(`characters/${characterId}`);
+  return keys
+    .map((k) => k.split("/").pop() ?? "")
     .filter((f) => /^pose-[\w-]+\.png$/.test(f))
-    .map((f) => f.replace("pose-", "").replace(".png", ""));
+    .map((f) => f.slice("pose-".length, -".png".length));
 }
 
-export function deleteCharacterFiles(characterId: string) {
-  const dir = path.join(CHARACTER_ROOT, characterId);
-  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+export async function deleteCharacterFiles(characterId: string): Promise<void> {
+  await storage.removePrefix(`characters/${characterId}`).catch(() => {});
 }
 
 /** Fallback anchor built from user fields when GLM hasn't crafted one. */
@@ -174,10 +174,7 @@ export async function generateCharacterPortrait(opts: {
 
   if (buffer.length < 1000) throw new Error("Generated portrait is empty");
 
-  fs.writeFileSync(
-    path.join(characterDir(opts.characterId), "portrait.png"),
-    buffer
-  );
+  await storage.put(characterKey(opts.characterId, "portrait.png"), buffer);
   return { fileBytes: buffer.length };
 }
 
@@ -190,7 +187,7 @@ export async function generateCharacterPoses(opts: {
   characterId: string;
   identityAnchor: string | null;
 }): Promise<{ generated: string[] }> {
-  const portrait = readPortrait(opts.characterId);
+  const portrait = await readPortrait(opts.characterId);
   if (!portrait)
     throw new Error("Generate the reference portrait first — poses are derived from it");
 
@@ -200,7 +197,6 @@ export async function generateCharacterPoses(opts: {
     );
 
   const anchor = opts.identityAnchor?.trim();
-  const dir = characterDir(opts.characterId);
   const generated: string[] = [];
 
   for (const [i, pose] of POSES.entries()) {
@@ -219,7 +215,7 @@ export async function generateCharacterPoses(opts: {
       { attempts: 4, baseDelayMs: 5000 }
     );
     if (buffer.length < 1000) throw new Error(`Pose "${pose.id}" image is empty`);
-    fs.writeFileSync(path.join(dir, `pose-${pose.id}.png`), buffer);
+    await storage.put(characterKey(opts.characterId, `pose-${pose.id}.png`), buffer);
     generated.push(pose.id);
     // Pace the edit calls — back-to-back image calls trip upstream burst limits.
     if (i < POSES.length - 1) await new Promise((r) => setTimeout(r, 2000));

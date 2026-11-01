@@ -1064,6 +1064,29 @@ await test("storage: scratchDir tracks the driver (uploads locally, tmp under s3
   delete process.env.TUBEFORGE_SCRATCH_ROOT;
 });
 
+await test("storage: list() enumerates a prefix and tolerates absence (T-4.0)", async () => {
+  const mod = await import("../src/lib/tubeforge/storage.ts");
+  delete process.env.TUBEFORGE_STORAGE_DRIVER;
+  const probe = `tf-list-probe-${Date.now()}`;
+  // Two nested objects + one sibling prefix that must NOT leak in.
+  await mod.put(`${probe}/scene-01.png`, Buffer.from([1, 2, 3]));
+  await mod.put(`${probe}/sub/final.mp4`, Buffer.from([4, 5]));
+  await mod.put(`${probe}-other/x.png`, Buffer.from([9]));
+  const keys = await mod.list(probe);
+  ok(keys.length === 2, `list returns exactly the prefix's objects (got ${keys.length}: ${keys.join(", ")})`);
+  ok(keys.includes(`${probe}/scene-01.png`), "flat key listed");
+  ok(keys.includes(`${probe}/sub/final.mp4`), "nested key listed with its sub-path");
+  const absent = await mod.list("tf-list-probe-does-not-exist");
+  ok(Array.isArray(absent) && absent.length === 0, "missing prefix → empty list, not an error");
+  // Targeted invalidation pattern the routes rely on (script-edit PATCH).
+  const stale = keys.filter((k) => /\/(final\.mp4|scene-\d{2}\.(wav|mp4))$/.test(k));
+  ok(stale.length === 1 && stale[0] === `${probe}/sub/final.mp4`, "stale-artifact filter matches final.mp4 only");
+  await Promise.all(keys.map((k) => mod.remove(k).catch(() => {})));
+  await mod.remove(`${probe}-other/x.png`).catch(() => {});
+  const after = await mod.list(probe);
+  ok(after.length === 0, "removed objects no longer list");
+});
+
 // ---------------------------------------------------------------------------
 // Stage 3 — email adapter (T-3.9)
 // ---------------------------------------------------------------------------

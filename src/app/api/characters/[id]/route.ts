@@ -41,7 +41,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!character)
     return NextResponse.json({ error: "Character not found" }, { status: 404 });
   return NextResponse.json({
-    character: serializeCharacter(character, character._count.videos),
+    character: await serializeCharacter(character, character._count.videos),
   });
 }
 
@@ -91,7 +91,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     include: { _count: { select: { videos: true } } },
   });
   return NextResponse.json({
-    character: serializeCharacter(updated, updated._count.videos),
+    character: await serializeCharacter(updated, updated._count.videos),
   });
 }
 
@@ -108,6 +108,6 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "Character not found" }, { status: 404 });
 
   await db.character.delete({ where: { id } });
-  deleteCharacterFiles(id);
+  await deleteCharacterFiles(id);
   return NextResponse.json({ success: true });
 }
