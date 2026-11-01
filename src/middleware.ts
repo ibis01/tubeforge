@@ -109,16 +109,42 @@ export async function middleware(req: NextRequest) {
   }
 
   // CSRF guard for cookie-authenticated mutations: if an Origin is present it
-  // must match this host (Bearer-token clients like curl/scripts send none).
+  // must match a trusted origin. Trust is decided in this order:
+  //   1. TUBEFORGE_ALLOWED_ORIGINS — explicit allow-list (comma-separated,
+  //      host only or full origin), for deployments behind a proxy that
+  //      rewrites the Host header (preview environments, load balancers).
+  //   2. The request's own Host header (direct connections, no proxy).
+  // A Bearer-token client (curl/scripts) sends no Origin and is allowed by
+  // default; the cookie-session case is the only one this guard polices.
   if (payload.s === "session" && MUTATING.has(req.method)) {
     const origin = req.headers.get("origin");
     if (origin) {
+      let ok = false;
       try {
-        if (new URL(origin).host !== req.headers.get("host"))
-          return NextResponse.json({ error: "Cross-origin request rejected" }, { status: 403 });
+        const originHost = new URL(origin).host;
+        const allowed = (process.env.TUBEFORGE_ALLOWED_ORIGINS ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (allowed.length > 0) {
+          ok = allowed.some((entry) => {
+            try {
+              // entries may be "host:port" or a full "https://…/"; compare
+              // both as a host and as an origin URL for convenience.
+              if (entry.includes("://")) return new URL(entry).host === originHost;
+              return entry === originHost;
+            } catch {
+              return entry === originHost;
+            }
+          });
+        } else if (originHost === req.headers.get("host")) {
+          ok = true;
+        }
       } catch {
-        return NextResponse.json({ error: "Cross-origin request rejected" }, { status: 403 });
+        ok = false;
       }
+      if (!ok)
+        return NextResponse.json({ error: "Cross-origin request rejected" }, { status: 403 });
     }
   }
 
