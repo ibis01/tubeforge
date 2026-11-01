@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { generateCharacterBible } from "@/lib/tubeforge/characters";
 import { serializeCharacter } from "@/lib/tubeforge/characters";
 import { errorText } from "@/lib/tubeforge/redact";
@@ -18,6 +19,10 @@ import { errorText } from "@/lib/tubeforge/redact";
  * with a synthetic run id once the client can poll a drafts endpoint.
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   try {
     const body = await req.json();
     const name = String(body.name ?? "").trim();

@@ -1,16 +1,28 @@
-// YouTube Data API v3 integration (Phase 4 — one-click OAuth upload).
+// YouTube Data API v3 integration — Stage 2 per-user edition.
 //
-// Full OAuth 2.0 install-app flow:
-//   consent URL -> callback exchanges the code for a refresh token (stored in
-//   the Setting table) -> uploads use the stored refresh token.
+// OAuth 2.0 install-app flow, one connection PER USER (YouTubeAccount rows;
+// refresh/access tokens AES-256-GCM encrypted at rest):
+//   consent URL (state = signed short-lived token carrying uid)
+//   -> callback verifies the state signature + uid
+//   -> exchanges the code for a refresh token
+//   -> fetches the channel id/title/thumb -> upserts YouTubeAccount
+//
+// The OAuth client id/secret are server-wide: env TUBEFORGE_YT_CLIENT_ID /
+// TUBEFORGE_YT_CLIENT_SECRET first; the claiming owner's legacy rows
+// (UserSetting yt.clientId / yt.clientSecret, migrated from the old Setting
+// table) serve as the fallback — see the register claim flow.
 //
 // Upload = YouTube resumable API: initiate a session with video metadata,
 // PUT the MP4 bytes, then set the custom thumbnail. No external deps — plain
 // fetch against Google endpoints, with actionable error surfacing so users
 // can fix quota / auth / scope problems without reading Google's docs.
 
-import { db } from "@/lib/db";
-import { redactText } from "@/lib/tubeforge/redact";
+import { db as rawDb } from "@/lib/db";
+import { decryptSecret, encryptSecret } from "./crypto";
+import { currentCtx } from "./tenant";
+import { getUserSettings, setUserSetting } from "./settings";
+import { createSignedToken, getAuthSecret, verifyToken } from "./auth-token";
+import { redactText } from "./redact";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -19,38 +31,48 @@ const SCOPES = [
   "https://www.googleapis.com/auth/youtube.readonly",
 ].join(" ");
 
-// ---------- settings helpers ----------
+// ---------- OAuth client (server-wide) ----------
 
-async function getSetting(key: string): Promise<string | null> {
-  const row = await db.setting.findUnique({ where: { key } });
-  return row?.value ?? null;
-}
+async function getYtOAuthClient(): Promise<{ clientId: string; clientSecret: string }> {
+  const envId = process.env.TUBEFORGE_YT_CLIENT_ID?.trim() || "";
+  const envSecret = process.env.TUBEFORGE_YT_CLIENT_SECRET?.trim() || "";
+  if (envId && envSecret) return { clientId: envId, clientSecret: envSecret };
 
-export async function setSetting(key: string, value: string | null) {
-  if (value === null) {
-    await db.setting.deleteMany({ where: { key } });
-    return;
+  // Legacy fallback: the claiming owner's migrated rows (same exposure model
+  // as the old global Setting rows; moves to encrypted storage in Stage 3).
+  const ctx = currentCtx();
+  if (ctx) {
+    const map = await getUserSettings(["yt.clientId", "yt.clientSecret"]);
+    const id = map.get("yt.clientId")?.trim() || "";
+    const secret = map.get("yt.clientSecret")?.trim() || "";
+    if (id && secret) return { clientId: id, clientSecret: secret };
   }
-  await db.setting.upsert({
-    where: { key },
-    update: { value },
-    create: { key, value },
-  });
+  throw new Error("YouTube OAuth client is not configured");
 }
 
-// ---------- OAuth ----------
+// ---------- helpers ----------
 
 export function callbackUrlFor(origin: string): string {
   return `${origin.replace(/\/$/, "")}/api/youtube/callback`;
 }
 
-/** Consent URL the settings UI opens in a new tab. */
-export async function buildAuthUrl(origin: string): Promise<string> {
-  const clientId = await getSetting("ytClientId");
-  if (!clientId) throw new Error("Add your Google OAuth client ID first");
+function requireCtx() {
+  const ctx = currentCtx();
+  if (!ctx) throw new Error("This YouTube action requires a signed-in user");
+  return ctx;
+}
 
-  const state = crypto.randomUUID();
-  await setSetting("ytOAuthState", state);
+// ---------- OAuth ----------
+
+/** Consent URL the settings UI opens in a new tab. State = signed token (uid inside). */
+export async function buildAuthUrl(origin: string): Promise<string> {
+  const { clientId } = await getYtOAuthClient();
+  const ctx = requireCtx();
+
+  const secret = getAuthSecret();
+  if (!secret) throw new Error("TUBEFORGE_AUTH_SECRET is not configured");
+  const state = await createSignedToken("state", 600, secret, { uid: ctx.userId });
+  if (!state) throw new Error("Could not sign the OAuth state");
 
   const params = new URLSearchParams({
     client_id: clientId,
@@ -64,12 +86,22 @@ export async function buildAuthUrl(origin: string): Promise<string> {
   return `${AUTH_URL}?${params.toString()}`;
 }
 
-/** Exchange the consent callback code for tokens; persists the refresh token. */
+/** Verify a returned OAuth state token -> the uid that started the flow. */
+export async function verifyOAuthState(
+  state: string | null | undefined
+): Promise<{ uid: string } | null> {
+  const secret = getAuthSecret();
+  if (!secret || !state) return null;
+  const payload = await verifyToken(state, secret);
+  return payload && payload.s === "state" && payload.uid ? { uid: payload.uid } : null;
+}
+
+/** Exchange the consent callback code for tokens; persists the per-user account. */
 export async function exchangeCode(code: string, origin: string): Promise<void> {
-  const clientId = await getSetting("ytClientId");
-  const clientSecret = await getSetting("ytClientSecret");
-  if (!clientId || !clientSecret)
+  const ctx = requireCtx();
+  const { clientId, clientSecret } = await getYtOAuthClient().catch(() => {
     throw new Error("YouTube OAuth client is not configured");
+  });
 
   const res = await fetch(TOKEN_URL, {
     method: "POST",
@@ -85,46 +117,78 @@ export async function exchangeCode(code: string, origin: string): Promise<void> 
 
   const data = await res.json().catch(() => ({}));
   const refreshToken = (data as { refresh_token?: string }).refresh_token;
-  if (!res.ok || !refreshToken) {
+  const accessToken = (data as { access_token?: string }).access_token;
+  if (!res.ok || !refreshToken || !accessToken) {
     const reason = (data as { error_description?: string }).error_description;
     throw new Error(
       `Google rejected the OAuth code${reason ? `: ${reason}` : ""} — reconnect the channel and complete consent again.`
     );
   }
 
-  await setSetting("ytRefreshToken", refreshToken);
+  // Learn the channel id/title/thumb right away (also proves the token works).
+  const channel = await fetch(
+    "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  if (!channel.ok) {
+    throw new Error("Connected, but the channel lookup failed — reconnect to retry.");
+  }
+  const chData = (await channel.json()) as {
+    items?: { id?: string; snippet?: { title?: string; thumbnails?: { default?: { url?: string } } } }[];
+  };
+  const item = chData.items?.[0];
+  if (!item?.id) throw new Error("This Google account has no YouTube channel");
+
+  // Replace any earlier connection for this user (one channel per user).
+  await rawDb.youTubeAccount.deleteMany({ where: { userId: ctx.userId } });
+  await rawDb.youTubeAccount.create({
+    data: {
+      userId: ctx.userId,
+      channelId: item.id,
+      channelTitle: item.snippet?.title ?? null,
+      channelThumb: item.snippet?.thumbnails?.default?.url ?? null,
+      refreshToken: encryptSecret(refreshToken),
+      accessToken: encryptSecret(accessToken),
+      tokenExpiresAt: new Date(Date.now() + 50 * 60 * 1000),
+    },
+  });
 }
 
-// ---------- access tokens (refresh on demand, cached in memory) ----------
+// ---------- account lookup + access tokens ----------
 
-interface TokenState {
-  token: string | null;
-  expiresAt: number;
+async function getAccount(userId: string) {
+  return rawDb.youTubeAccount.findFirst({ where: { userId } });
 }
-
-const g = globalThis as typeof globalThis & { __tfYtToken?: TokenState };
-const tokenState: TokenState = (g.__tfYtToken ??= { token: null, expiresAt: 0 });
 
 export async function isConnected(): Promise<boolean> {
-  return Boolean(await getSetting("ytRefreshToken"));
+  const ctx = currentCtx();
+  if (!ctx) return false;
+  return Boolean(await getAccount(ctx.userId));
 }
 
-/** Fresh access token via the stored refresh token (cached ~50 min). */
+interface TokenCache {
+  token: string;
+  expiresAt: number;
+}
+const g = globalThis as typeof globalThis & { __tfYtTokens?: Map<string, TokenCache> };
+const tokenCache: Map<string, TokenCache> = (g.__tfYtTokens ??= new Map());
+
+/** Fresh access token for the acting user (cached ~50 min, encrypted at rest). */
 export async function getAccessToken(): Promise<string> {
-  if (tokenState.token && Date.now() < tokenState.expiresAt)
-    return tokenState.token;
+  const ctx = requireCtx();
+  const cached = tokenCache.get(ctx.userId);
+  if (cached && Date.now() < cached.expiresAt) return cached.token;
 
-  const refreshToken = await getSetting("ytRefreshToken");
-  const clientId = await getSetting("ytClientId");
-  const clientSecret = await getSetting("ytClientSecret");
-  if (!refreshToken || !clientId || !clientSecret)
-    throw new Error("YouTube channel is not connected — add OAuth credentials and connect");
+  const account = await getAccount(ctx.userId);
+  if (!account)
+    throw new Error("YouTube channel is not connected — connect it in Settings → Channel");
 
+  const { clientId, clientSecret } = await getYtOAuthClient();
   const res = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      refresh_token: refreshToken,
+      refresh_token: decryptSecret(account.refreshToken),
       client_id: clientId,
       client_secret: clientSecret,
       grant_type: "refresh_token",
@@ -135,10 +199,10 @@ export async function getAccessToken(): Promise<string> {
   const accessToken = (data as { access_token?: string }).access_token;
   if (!res.ok || !accessToken) {
     const err = (data as { error?: string; error_description?: string });
-    // A dead refresh token requires re-consent — clear it so the UI says so.
+    // A dead refresh token requires re-consent — clear the connection so the UI says so.
     if (err.error === "invalid_grant") {
-      await setSetting("ytRefreshToken", null);
-      await setSetting("ytChannelTitle", null);
+      await rawDb.youTubeAccount.deleteMany({ where: { userId: ctx.userId } });
+      tokenCache.delete(ctx.userId);
       throw new Error(
         "Google session expired — reconnect the channel in Settings (the stored token was revoked)."
       );
@@ -148,8 +212,15 @@ export async function getAccessToken(): Promise<string> {
     );
   }
 
-  tokenState.token = accessToken;
-  tokenState.expiresAt = Date.now() + 50 * 60 * 1000;
+  const expiresAt = Date.now() + 50 * 60 * 1000;
+  tokenCache.set(ctx.userId, { token: accessToken, expiresAt });
+  await rawDb.youTubeAccount.update({
+    where: { id: account.id },
+    data: {
+      accessToken: encryptSecret(accessToken),
+      tokenExpiresAt: new Date(expiresAt),
+    },
+  });
   return accessToken;
 }
 
@@ -162,6 +233,11 @@ export interface ChannelInfo {
 
 /** Fetch the connected channel's title + avatar (also proves the token works). */
 export async function fetchChannelInfo(): Promise<ChannelInfo> {
+  const ctx = requireCtx();
+  const account = await getAccount(ctx.userId);
+  if (account?.channelTitle) {
+    return { title: account.channelTitle, thumbUrl: account.channelThumb ?? null };
+  }
   const token = await getAccessToken();
   const res = await fetch(
     "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
@@ -184,7 +260,7 @@ export async function fetchChannelInfo(): Promise<ChannelInfo> {
   };
 }
 
-// ---------- performance stats (Phase 5) ----------
+// ---------- performance stats ----------
 
 /** https://youtu.be/<id> -> <id> (also accepts watch?v= and /shorts/ forms). */
 export function youtubeIdFromUrl(url: string): string | null {
@@ -252,6 +328,24 @@ export async function fetchVideoStats(youtubeIds: string[]): Promise<Map<string,
   return out;
 }
 
+// ---------- per-user connection settings (privacy status / category) ----------
+
+export async function getPublishDefaults(): Promise<{ privacyStatus: string; categoryId: string }> {
+  const ctx = currentCtx();
+  if (!ctx) return { privacyStatus: "unlisted", categoryId: "27" };
+  const map = await getUserSettings(["ytPrivacyStatus", "ytCategoryId"]);
+  const account = await getAccount(ctx.userId);
+  const privacyStatus = map.get("ytPrivacyStatus")?.trim() || account?.privacyStatus || "unlisted";
+  const categoryId = map.get("ytCategoryId")?.trim() || account?.categoryId || "27";
+  return { privacyStatus, categoryId };
+}
+
+export async function savePublishDefaults(privacyStatus: string, categoryId: string): Promise<void> {
+  const ctx = requireCtx();
+  await setUserSetting("ytPrivacyStatus", privacyStatus);
+  await setUserSetting("ytCategoryId", categoryId);
+}
+
 // ---------- upload ----------
 
 /** Extract Google's API error reason into a human-readable message. */
@@ -291,8 +385,7 @@ export interface UploadResult {
 /** Resumable upload: initiate session, PUT the bytes, set the custom thumbnail. */
 export async function uploadToYouTube(input: UploadInput): Promise<UploadResult> {
   const token = await getAccessToken();
-  const privacyStatus = (await getSetting("ytPrivacyStatus")) ?? "unlisted";
-  const categoryId = (await getSetting("ytCategoryId")) ?? "27"; // Education
+  const { privacyStatus, categoryId } = await getPublishDefaults();
   if (!["public", "unlisted", "private"].includes(privacyStatus))
     throw new Error(`Invalid privacy status "${privacyStatus}"`);
 

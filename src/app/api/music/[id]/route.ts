@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { serializeTrack, trackAbsolutePath } from "@/lib/tubeforge/music";
 
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
@@ -10,6 +11,10 @@ type Ctx = { params: Promise<{ id: string }> };
 
 /** PATCH — rename, retag, toggle active, or edit the license record. */
 export async function PATCH(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const track = await db.musicTrack.findUnique({ where: { id } });
   if (!track) return NextResponse.json({ error: "Track not found" }, { status: 404 });
@@ -35,8 +40,14 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 }
 
 /** DELETE — remove a track: DB row + file (originals can be re-synthesized). */
-export async function DELETE(_req: NextRequest, ctx: Ctx) {
+export async function DELETE(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
+  // Scoped lookup FIRST — the uploads/_music file is only removed after the
+  // row is proven to belong to the caller's organization.
   const track = await db.musicTrack.findUnique({ where: { id } });
   if (!track) return NextResponse.json({ error: "Track not found" }, { status: 404 });
 

@@ -6,9 +6,10 @@
 //                       (OpenAI, DeepSeek, Groq, Mistral, OpenRouter, Ollama,
 //                       LM Studio, vLLM …) configured in Settings → AI Provider.
 //
-// Config lives in the Setting table (aiProvider / aiBaseUrl / aiApiKey / aiModel),
-// cached briefly like the rate budget. If the custom provider is half-configured
-// the layer fails safe and falls back to the Z.ai gateway.
+// Stage 2: config lives in the ACTING USER's UserSetting rows (aiProvider /
+// aiBaseUrl / aiModel) with the API key in ProviderCredential (encrypted at
+// rest), cached ~8s per user. If the custom provider is half-configured the
+// layer fails safe and falls back to the Z.ai gateway.
 //
 // The response shape matches zai.chat.completions.create —
 // { choices: [{ message: { content } }] } — so call sites stay untouched.
@@ -16,9 +17,10 @@
 // APIs are not standardized across providers.
 
 import ZAI from "z-ai-web-dev-sdk";
-import { db } from "@/lib/db";
 import { safeFetch } from "./net-guard";
 import { allowPrivateProviderHosts } from "./providers/http";
+import { currentCtx } from "./tenant";
+import { getProviderCredential, getUserSettings } from "./settings";
 
 export type LLMProvider = "zai" | "openai";
 
@@ -29,36 +31,39 @@ export interface LLMSettings {
   model: string;
 }
 
-const SETTING_KEYS = ["aiProvider", "aiBaseUrl", "aiApiKey", "aiModel"];
-
 const g = globalThis as typeof globalThis & {
-  __tfLLM?: { cache: { at: number; cfg: LLMSettings } | null };
+  __tfLLM?: { cache: Map<string, { at: number; cfg: LLMSettings }> };
 };
-const llmGlobal = (g.__tfLLM ??= { cache: null });
+const llmGlobal = (g.__tfLLM ??= { cache: new Map() });
 
 /** Call after saving provider settings so new calls pick them up instantly. */
 export function invalidateLLMSettings() {
-  llmGlobal.cache = null;
+  llmGlobal.cache.clear();
 }
 
-/** Raw saved settings (may be an incomplete "openai" config). Cached ~8s. */
+/** Raw saved settings for the ACTING USER (may be an incomplete "openai" config). Cached ~8s. */
 async function readLLMSettings(): Promise<LLMSettings> {
   const now = Date.now();
-  if (llmGlobal.cache && now - llmGlobal.cache.at < 8_000) return llmGlobal.cache.cfg;
+  const ctx = currentCtx();
+  if (!ctx) return { provider: "zai", baseUrl: "", apiKey: "", model: "" }; // no acting user (platform path) — Z.ai gateway
+  const cached = llmGlobal.cache.get(ctx.userId);
+  if (cached && now - cached.at < 8_000) return cached.cfg;
 
   const cfg: LLMSettings = { provider: "zai", baseUrl: "", apiKey: "", model: "" };
   try {
-    const rows = await db.setting.findMany({ where: { key: { in: SETTING_KEYS } } });
-    const map = new Map(rows.map((r) => [r.key, r.value]));
+    const map = await getUserSettings(["aiProvider", "aiBaseUrl", "aiModel"]);
     cfg.provider = map.get("aiProvider") === "openai" ? "openai" : "zai";
     cfg.baseUrl = (map.get("aiBaseUrl") ?? "").trim().replace(/\/+$/, "");
-    cfg.apiKey = (map.get("aiApiKey") ?? "").trim();
     cfg.model = (map.get("aiModel") ?? "").trim();
+    if (cfg.provider === "openai") {
+      const cred = await getProviderCredential("chat", "openai");
+      cfg.apiKey = cred?.apiKey?.trim() ?? "";
+    }
   } catch (err) {
     console.warn("[llm] settings read failed, defaulting to Z.ai:", err);
   }
 
-  llmGlobal.cache = { at: now, cfg };
+  llmGlobal.cache.set(ctx.userId, { at: now, cfg });
   return cfg;
 }
 

@@ -12,11 +12,16 @@
 // 400/409/502 → { error } with a human-readable reason.
 
 import { NextRequest, NextResponse } from "next/server";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { getCapability } from "@/lib/tubeforge/providers/settings";
 import { cloneVoice, isCloneProvider } from "@/lib/tubeforge/voice-clone";
 import { errorText } from "@/lib/tubeforge/redact";
 
 export async function POST(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   // Fail fast with a pointed message when the provider isn't set up — better
   // than a 500 from deep inside the clone flow.
   const config = await getCapability("tts");

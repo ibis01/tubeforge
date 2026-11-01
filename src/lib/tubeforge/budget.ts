@@ -3,14 +3,19 @@
 // All upstream AI calls (GLM chat, TTS, CogView / image-edit, CogVideoX i2v)
 // flow through aiCall(), which coordinates:
 //   * pacing  — minimum spacing between call STARTS per service (per-minute
-//               budget from Settings, cached 25s)
+//               budget from the ACTING USER's settings, cached 25s per user)
 //   * concurrency caps per service (e.g. one image call at a time)
 //   * 429 penalties — when upstream rate-limits a service, every caller of
 //               that service backs off for a shared cool-down window instead
 //               of each job retrying into the same wall
 // The budget never deadlocks: waiters proceed after a hard 10-minute cap.
+//
+// Stage 2 note: the per-minute limits are per user; the pacing/concurrency
+// queues themselves stay shared platform-wide (a conservative posture that
+// protects upstream) — per-user queues arrive with Redis in Stage 3.
 
-import { db } from "@/lib/db";
+import { currentCtx } from "./tenant";
+import { getUserSettings } from "./settings";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -39,7 +44,7 @@ interface ServiceState {
 
 interface BudgetState {
   services: Record<AiService, ServiceState>;
-  cfgCache: { at: number; enabled: boolean; perMin: Record<AiService, number> } | null;
+  cfgCache: Map<string, { at: number; enabled: boolean; perMin: Record<AiService, number> }>;
 }
 
 const g = globalThis as typeof globalThis & { __tfBudget?: BudgetState };
@@ -50,7 +55,7 @@ const budget: BudgetState = (g.__tfBudget ??= {
     image: { active: 0, lastStart: 0, penaltyUntil: 0, queue: Promise.resolve() },
     video: { active: 0, lastStart: 0, penaltyUntil: 0, queue: Promise.resolve() },
   },
-  cfgCache: null,
+  cfgCache: new Map(),
 });
 
 // ---------- settings (cached) ----------
@@ -62,18 +67,24 @@ const DEFAULT_PER_MIN: Record<AiService, number> = {
   video: 4,
 };
 
-/** Read budget settings with a 25s cache so hot paths never hit the DB. */
+/** Read the ACTING USER's budget settings with a 25s cache so hot paths never hit the DB. */
 async function getBudgetConfig() {
   const now = Date.now();
-  if (budget.cfgCache && now - budget.cfgCache.at < 25_000) return budget.cfgCache;
+  const ctx = currentCtx();
+  if (!ctx) return { enabled: true, perMin: { ...DEFAULT_PER_MIN } }; // platform path — defaults
+  const cached = budget.cfgCache.get(ctx.userId);
+  if (cached && now - cached.at < 25_000) return cached;
 
   let enabled = true;
   const perMin = { ...DEFAULT_PER_MIN };
   try {
-    const rows = await db.setting.findMany({
-      where: { key: { in: ["aiBudgetEnabled", "aiLlmPerMin", "aiTtsPerMin", "aiImagePerMin", "aiVideoPerMin"] } },
-    });
-    const map = new Map(rows.map((r) => [r.key, r.value]));
+    const map = await getUserSettings([
+      "aiBudgetEnabled",
+      "aiLlmPerMin",
+      "aiTtsPerMin",
+      "aiImagePerMin",
+      "aiVideoPerMin",
+    ]);
     enabled = (map.get("aiBudgetEnabled") ?? "true") !== "false";
     for (const [key, svc] of [
       ["aiLlmPerMin", "llm"],
@@ -88,8 +99,8 @@ async function getBudgetConfig() {
     console.warn("[budget] settings read failed, using defaults:", err);
   }
 
-  budget.cfgCache = { at: now, enabled, perMin };
-  return budget.cfgCache;
+  budget.cfgCache.set(ctx.userId, { at: now, enabled, perMin });
+  return { at: now, enabled, perMin };
 }
 
 // ---------- slot acquisition ----------

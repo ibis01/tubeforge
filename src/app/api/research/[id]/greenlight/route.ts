@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
 import { serializeSession } from "@/lib/tubeforge/research";
 import { startJob } from "@/lib/tubeforge/jobs";
@@ -27,6 +28,10 @@ type Ctx = { params: Promise<{ id: string }> };
  * a fully scripted video (scene-based story by default).
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
 
   try {
@@ -88,6 +93,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     // Create the draft first so every later step has a stable id.
     const video = await db.video.create({
       data: {
+        organizationId: auth.ctx.organizationId,
         topic,
         niche: session.niche,
         tone,
@@ -105,6 +111,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
     await db.activity.create({
       data: {
+        organizationId: auth.ctx.organizationId,
+        userId: auth.ctx.userId,
         videoId: video.id,
         stage: "create",
         message: `Greenlit from Topic Radar: "${topic}" (${session.niche} · ${idea.viralScore}/100 viral score) → ${format === "story" ? "scene story" : "narration script"}`,

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { setSetting } from "@/lib/tubeforge/youtube";
+import { requireUser } from "@/lib/tubeforge/tenant";
+import { getPublishDefaults, savePublishDefaults } from "@/lib/tubeforge/youtube";
+import { setUserSetting } from "@/lib/tubeforge/settings";
 import { errorText } from "@/lib/tubeforge/redact";
 
 /**
@@ -8,6 +10,10 @@ import { errorText } from "@/lib/tubeforge/redact";
  * Empty clientSecret keeps the existing secret (edit forms send blanks).
  */
 export async function PUT(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   try {
     const body = await req.json();
 
@@ -16,11 +22,22 @@ export async function PUT(req: NextRequest) {
     const privacyStatus = String(body.privacyStatus ?? "unlisted").trim();
     const categoryId = String(body.categoryId ?? "").trim();
 
-    if (clientId) await setSetting("ytClientId", clientId);
-    if (clientSecret) await setSetting("ytClientSecret", clientSecret);
-    if (["public", "unlisted", "private"].includes(privacyStatus))
-      await setSetting("ytPrivacyStatus", privacyStatus);
-    if (categoryId) await setSetting("ytCategoryId", categoryId);
+    // Stage 2: the OAuth client is server-wide (env) with the user's stored
+    // credentials as the legacy fallback — save them per-user. The youtube
+    // lib reads exactly these keys when the env vars are absent.
+    if (clientId) await setUserSetting("yt.clientId", clientId);
+    if (clientSecret) await setUserSetting("yt.clientSecret", clientSecret);
+
+    // Upload defaults are per-user too (privacy + category ride together in
+    // savePublishDefaults, so only override the provided half).
+    const validPrivacy = ["public", "unlisted", "private"].includes(privacyStatus);
+    if (validPrivacy || categoryId) {
+      const current = await getPublishDefaults();
+      await savePublishDefaults(
+        validPrivacy ? privacyStatus : current.privacyStatus,
+        categoryId || current.categoryId
+      );
+    }
 
     // Changing the OAuth app invalidates any existing channel connection.
     if ((clientId || clientSecret) && !clientSecret) {

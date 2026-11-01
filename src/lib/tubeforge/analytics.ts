@@ -9,14 +9,16 @@
 // strategist prompt also receives a performance brief so fresh scans are
 // steered by what the real audience rewarded.
 
-import { db } from "@/lib/db";
+import { db } from "./tenant-db";
 import type { VideoStat } from "@prisma/client";
+import { currentCtx } from "./tenant";
+import { getUserSetting, setUserSetting } from "./settings";
 import type {
   AnalyticsOverviewDTO,
   AnalyticsRowDTO,
   ResearchIdea,
 } from "./types";
-import { fetchVideoStats, youtubeIdFromUrl, setSetting } from "./youtube";
+import { fetchVideoStats, youtubeIdFromUrl } from "./youtube";
 
 // ---------- sync ----------
 
@@ -58,8 +60,11 @@ export async function syncYouTubeStats(): Promise<{
     const stats = remote.get(ytId);
     if (!stats) continue; // private / deleted / different account — count as skipped
 
+    const statCtx = currentCtx();
+    if (!statCtx) break; // no acting user — cannot attribute the snapshot
     await db.videoStat.create({
       data: {
+        organizationId: statCtx.organizationId,
         videoId,
         views: stats.views,
         likes: stats.likes,
@@ -88,14 +93,20 @@ export async function syncYouTubeStats(): Promise<{
   }
 
   const syncedAt = now.toISOString();
-  await setSetting("ytStatsSyncedAt", syncedAt);
+  // Stage 2 — the sync watermark is per user (was a global Setting row).
+  const ctx = currentCtx();
+  if (ctx) await setUserSetting("ytStatsSyncedAt", syncedAt);
 
-  await db.activity.create({
-    data: {
-      stage: "analytics",
-      message: `Synced YouTube performance for ${synced} video${synced === 1 ? "" : "s"} — ${views.toLocaleString()} total views`,
-    },
-  });
+  if (ctx) {
+    await db.activity.create({
+      data: {
+        organizationId: ctx.organizationId,
+        userId: ctx.userId,
+        stage: "analytics",
+        message: `Synced YouTube performance for ${synced} video${synced === 1 ? "" : "s"} — ${views.toLocaleString()} total views`,
+      },
+    });
+  }
 
   return { synced, skipped: youtubeIds.length - synced, totals: { views, likes, comments }, syncedAt };
 }
@@ -216,7 +227,7 @@ export async function getAnalyticsOverview(): Promise<AnalyticsOverviewDTO> {
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([day, views]) => ({ day, views }));
 
-  const settingsRow = await db.setting.findUnique({ where: { key: "ytStatsSyncedAt" } });
+  const lastSyncAt = await getUserSetting("ytStatsSyncedAt");
 
   return {
     publishedCount: published,
@@ -224,7 +235,7 @@ export async function getAnalyticsOverview(): Promise<AnalyticsOverviewDTO> {
     totals,
     viewDelta,
     avgEngagement,
-    lastSyncAt: settingsRow?.value ?? null,
+    lastSyncAt: lastSyncAt ?? null,
     rows,
     series,
     feedback: feedbackState(rows),

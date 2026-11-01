@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { exchangeCode, fetchChannelInfo } from "@/lib/tubeforge/youtube";
-import { setSetting } from "@/lib/tubeforge/youtube";
+import { rawDatabase as rawDb } from "@/lib/tubeforge/tenant-db";
+import { withCtx, type TenantCtx } from "@/lib/tubeforge/tenant";
+import { exchangeCode, fetchChannelInfo, verifyOAuthState } from "@/lib/tubeforge/youtube";
 import { errorText } from "@/lib/tubeforge/redact";
 
 /**
  * GET — OAuth consent callback. Google redirects here with ?code & state.
  * Exchanges the code, fetches the channel identity, then bounces the user
  * back into the app (a plain redirect page — no auth JS needed).
+ *
+ * Stage 2: this endpoint is hit BY GOOGLE (no session cookie), so it does
+ * NOT run requireUser — the signed state token carries the uid that started
+ * the flow, and the exchange runs inside a withCtx scope built from that
+ * user's first membership. The middleware allow-lists the path (PUBLIC_API).
  */
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
@@ -38,28 +44,41 @@ export async function GET(req: NextRequest) {
     return done(false, `Google returned "${googleError}" — consent was not granted. Close this tab and try again.`);
   if (!code) return done(false, "Google did not send an authorization code back.");
 
-  // Verify state (CSRF guard).
-  const { db } = await import("@/lib/db");
-  const row = await db.setting.findUnique({ where: { key: "ytOAuthState" } });
-  if (!row || !state || row.value !== state)
+  // Verify state (CSRF guard) — a signed short-lived token carrying the uid
+  // of the user who started the flow (no session cookie on this request).
+  const verified = await verifyOAuthState(state);
+  if (!verified)
     return done(false, "Security check failed (stale state) — start the connection again from Settings.");
-  await db.setting.deleteMany({ where: { key: "ytOAuthState" } });
+
+  // Rebuild the acting user's tenant context: the youtube lib resolves the
+  // acting user via currentCtx() (exchangeCode / fetchChannelInfo), so the
+  // whole exchange runs inside an explicit withCtx scope.
+  const membership = await rawDb.membership.findFirst({
+    where: { userId: verified.uid },
+    orderBy: { createdAt: "asc" },
+  });
+  if (!membership)
+    return done(false, "Your account has no workspace — sign in and start the connection again from Settings.");
+  const ctx: TenantCtx = {
+    userId: verified.uid,
+    organizationId: membership.organizationId,
+    role: membership.role,
+  };
 
   try {
-    await exchangeCode(code, origin);
-
-    // Prove the token + remember who we are (title/avatar for the UI).
     let title = "Connected channel";
-    let thumb: string | null = null;
-    try {
-      const info = await fetchChannelInfo();
-      title = info.title;
-      thumb = info.thumbUrl;
-    } catch (err) {
-      console.warn("[youtube] channel lookup after connect failed (non-fatal):", err);
-    }
-    await setSetting("ytChannelTitle", title);
-    await setSetting("ytChannelThumb", thumb);
+    await withCtx(ctx, async () => {
+      await exchangeCode(code, origin);
+
+      // Prove the token + remember who we are (title/avatar live on the
+      // per-user YouTubeAccount row that exchangeCode just persisted).
+      try {
+        const info = await fetchChannelInfo();
+        title = info.title;
+      } catch (err) {
+        console.warn("[youtube] channel lookup after connect failed (non-fatal):", err);
+      }
+    });
 
     return done(true, `${title} is now connected — uploads go straight to this channel.`);
   } catch (err) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { startJob, isJobRunning, lastJobError } from "@/lib/tubeforge/jobs";
 import { generateEngagementKit, parseCommentsKit } from "@/lib/tubeforge/comments";
 import { errorText } from "@/lib/tubeforge/redact";
@@ -10,7 +11,11 @@ type Ctx = { params: Promise<{ id: string }> };
  * POST — generate the launch-day engagement kit as a background job (202):
  * a pinned comment, 4 reply templates, heart targets and a playbook.
  */
-export async function POST(_req: NextRequest, ctx: Ctx) {
+export async function POST(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({
     where: { id },
@@ -51,6 +56,8 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       await db.video.update({ where: { id }, data: { error: message } });
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: id,
           stage: "comments",
           level: "error",
@@ -69,7 +76,11 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
 }
 
 /** GET — kit status + the stored kit (drives the UI panel + polling). */
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video)

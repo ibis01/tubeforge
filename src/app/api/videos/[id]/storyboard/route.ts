@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { generateStoryboard, generateSceneImage, editSceneImage, serializeScenes, storyboardComplete, parseScenes } from "@/lib/tubeforge/story";
 import { startJob, isJobRunning, isJobCancelled, lastJobError, setJobProgress, JobCancelledError } from "@/lib/tubeforge/jobs";
 import { errorText } from "@/lib/tubeforge/redact";
@@ -8,7 +9,11 @@ import { invalidateRenderedArtifacts } from "@/lib/tubeforge/render";
 type Ctx = { params: Promise<{ id: string }> };
 
 /** GET — the storyboard (scene list with image availability + per-scene job flags). */
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video)
@@ -32,6 +37,10 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
  * AI-edit the EXISTING scene image in place ("make it night", "warmer light").
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video)
@@ -112,6 +121,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         });
         await db.activity.create({
           data: {
+            organizationId: auth.ctx.organizationId,
+            userId: auth.ctx.userId,
             videoId: id,
             stage: "storyboard",
             message:
@@ -125,6 +136,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         await db.video.update({ where: { id }, data: { error: message } });
         await db.activity.create({
           data: {
+            organizationId: auth.ctx.organizationId,
+            userId: auth.ctx.userId,
             videoId: id,
             stage: "storyboard",
             level: "error",
@@ -166,6 +179,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       });
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: id,
           stage: "storyboard",
           message: `Storyboard painted — ${scenes.length} scenes${character ? ` (host: ${character.name})` : ""}`,
@@ -182,6 +197,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         });
         await db.activity.create({
           data: {
+            organizationId: auth.ctx.organizationId,
+            userId: auth.ctx.userId,
             videoId: id,
             stage: "storyboard",
             message: `Storyboard cancelled — finished scenes were kept`,
@@ -199,6 +216,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       });
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: id,
           stage: "storyboard",
           level: "error",

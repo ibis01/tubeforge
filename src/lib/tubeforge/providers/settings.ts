@@ -1,18 +1,28 @@
-// Per-capability AI provider settings.
+// Per-capability AI provider settings — Stage 2 per-user edition.
 //
-// Storage model (Prisma Setting table, JSON string values):
-//   ai.chat  = { provider, model, visionModel?, baseUrl?, apiKey? }
-//   ai.tts   = { provider, model, baseUrl?, apiKey? }
-//   ai.image = { provider, model, baseUrl?, apiKey? }
-//   ai.video = { provider, model, baseUrl?, apiKey? }
+// Storage model (per acting user):
+//   UserSetting  ai.chat  = { provider, model, visionModel?, baseUrl? }   (non-secret)
+//   UserSetting  ai.tts   = { provider, model, baseUrl? }
+//   UserSetting  ai.image = { provider, model, baseUrl? }
+//   UserSetting  ai.video = { provider, model, baseUrl? }
+//   ProviderCredential (userId, capability, provider) = { baseUrl, apiKey } —
+//   the secret half, AES-256-GCM encrypted at rest. Never inside the JSON
+//   blob, never sent to the browser (publicCapability masks it).
 //
-// Z.ai credentials stay GLOBAL in the legacy keys (zai.baseUrl / zai.apiKey)
-// because the Z.ai SDK is a shared singleton reading one .z-ai-config file.
-// Non-Z.ai providers carry their credentials per capability right here.
+// The bundled Z.ai SDK stays a platform-level credential (single .z-ai-config
+// gateway) — per-user Z.ai keys arrive with the Stage 3 provider abstraction.
+// Legacy zai.* rows still migrate per-user so the claiming owner's pick of
+// chat/vision model keeps working (readLegacyZai below).
 
-import { db } from "@/lib/db";
 import { DEFAULT_CHAT_MODEL } from "../types";
 import type { CapabilityId, ProviderId } from "./registry";
+import { currentCtx } from "../tenant";
+import {
+  getProviderCredential,
+  getUserSettings,
+  setUserSetting,
+  upsertProviderCredential,
+} from "../settings";
 
 export interface CapabilityConfig {
   provider: ProviderId;
@@ -22,6 +32,7 @@ export interface CapabilityConfig {
   visionModel?: string;
   /** Non-zai providers only. */
   baseUrl?: string;
+  /** Non-zai providers only — lives in ProviderCredential, injected here for callers. */
   apiKey?: string;
 }
 
@@ -58,21 +69,21 @@ function defaultFor(capability: CapabilityId): CapabilityConfig {
   }
 }
 
-/** Read the legacy global Z.ai settings (shared with the SDK config sync). */
+/** Legacy model picks kept as plain per-user preferences (no secrets involved). */
 export async function readLegacyZai(): Promise<{
   baseUrl: string;
   apiKey: string;
   chatModel: string;
   visionModel: string;
 }> {
-  const rows = await db.setting.findMany({
-    where: {
-      key: {
-        in: ["zai.baseUrl", "zai.apiKey", "zai.chatModel", "zai.visionModel"],
-      },
-    },
-  });
-  const map = new Map(rows.map((r) => [r.key, r.value]));
+  const ctx = currentCtx();
+  if (!ctx) return { baseUrl: "", apiKey: "", chatModel: "", visionModel: "" };
+  const map = await getUserSettings([
+    "zai.baseUrl",
+    "zai.apiKey",
+    "zai.chatModel",
+    "zai.visionModel",
+  ]);
   return {
     baseUrl: map.get("zai.baseUrl")?.trim() || "",
     apiKey: map.get("zai.apiKey")?.trim() || "",
@@ -81,31 +92,38 @@ export async function readLegacyZai(): Promise<{
   };
 }
 
-/** Effective config for a capability, with legacy migration baked in. */
+interface StoredCapability {
+  provider?: string;
+  model?: string;
+  visionModel?: string;
+  baseUrl?: string;
+}
+
+/** Effective config for a capability, with the credential injected server-side. */
 export async function getCapability(
   capability: CapabilityId,
-  overrides?: Partial<CapabilityConfig>,
+  overrides?: Partial<CapabilityConfig>
 ): Promise<CapabilityConfig> {
-  let config = defaultFor(capability);
+  const config = defaultFor(capability);
   try {
-    const row = await db.setting.findUnique({
-      where: { key: CAPABILITY_KEYS[capability] },
-    });
-    if (row) {
-      const parsed = JSON.parse(row.value) as Partial<CapabilityConfig>;
-      if (parsed && typeof parsed.provider === "string") {
-        config = {
-          ...config,
-          ...parsed,
-          model: parsed.model ?? config.model,
-        };
-      }
+    const map = await getUserSettings([CAPABILITY_KEYS[capability]]);
+    const row = map.get(CAPABILITY_KEYS[capability]);
+    const parsed = row ? (JSON.parse(row) as StoredCapability) : null;
+    if (parsed && typeof parsed.provider === "string") {
+      config.provider = parsed.provider as ProviderId;
+      config.model = parsed.model ?? config.model;
+      config.visionModel = parsed.visionModel ?? config.visionModel;
+      config.baseUrl = parsed.baseUrl ?? config.baseUrl;
     } else if (capability === "chat") {
       // Migrate: first read after the upgrade picks up the legacy model pick.
       const legacy = await readLegacyZai();
       if (legacy.chatModel) config.model = legacy.chatModel;
       if (legacy.visionModel) config.visionModel = legacy.visionModel;
     }
+    // Secret half — ProviderCredential (encrypted at rest, decrypted here).
+    const cred = await getProviderCredential(capability, config.provider);
+    config.apiKey = cred?.apiKey ?? "";
+    config.baseUrl = config.baseUrl || cred?.baseUrl || "";
   } catch {
     /* corrupt row — fall back to defaults */
   }
@@ -114,10 +132,10 @@ export async function getCapability(
   return merged;
 }
 
-/** Persist a capability config (partial updates merge with what's stored). */
+/** Persist a capability config: preferences to UserSetting, the key to ProviderCredential. */
 export async function saveCapability(
   capability: CapabilityId,
-  patch: Partial<CapabilityConfig>,
+  patch: Partial<CapabilityConfig>
 ): Promise<CapabilityConfig> {
   const current = await getCapability(capability);
   const next: CapabilityConfig = {
@@ -136,17 +154,31 @@ export async function saveCapability(
     next.apiKey = current.apiKey;
   }
 
+  const ctx = currentCtx();
+  if (!ctx) throw new Error("saveCapability requires an authenticated context");
+
   if (next.provider === "zai") {
-    // zai credentials are global — never store them per capability.
+    // zai credentials are platform-level — never store them per capability.
     delete next.baseUrl;
     delete next.apiKey;
   }
 
-  await db.setting.upsert({
-    where: { key: CAPABILITY_KEYS[capability] },
-    update: { value: JSON.stringify(next) },
-    create: { key: CAPABILITY_KEYS[capability], value: JSON.stringify(next) },
-  });
+  // 1) Non-secret config blob (NO apiKey inside — ever).
+  const blob: StoredCapability = {
+    provider: next.provider,
+    model: next.model,
+    baseUrl: next.provider === "zai" ? undefined : next.baseUrl?.trim(),
+  };
+  if (capability === "chat") blob.visionModel = next.visionModel ?? "";
+  await setUserSetting(CAPABILITY_KEYS[capability], JSON.stringify(blob));
+
+  // 2) Secret half — only for non-zai providers with a key.
+  if (next.provider !== "zai" && next.apiKey) {
+    await upsertProviderCredential(ctx.userId, capability, next.provider, {
+      baseUrl: next.baseUrl?.trim() || "",
+      apiKey: next.apiKey,
+    });
+  }
 
   return next;
 }
@@ -155,7 +187,7 @@ export async function saveCapability(
 export function effectiveModel(
   capability: CapabilityId,
   config: CapabilityConfig,
-  providerDefault: string,
+  providerDefault: string
 ): string {
   return config.model?.trim() || providerDefault;
 }

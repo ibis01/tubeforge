@@ -6,7 +6,8 @@
 // right early comments compounds reach. GLM writes a per-video kit so the
 // creator can paste-and-go right after upload.
 
-import { db } from "@/lib/db";
+import { db } from "./tenant-db";
+import { currentCtx } from "./tenant";
 import { parseJsonLoose } from "./ai";
 import { aiCall } from "./budget";
 import { chatComplete } from "./providers/chat";
@@ -102,13 +103,18 @@ Return JSON with exactly these keys:
     data: { commentsKit: JSON.stringify(kit) },
   });
 
-  await db.activity.create({
-    data: {
-      videoId: opts.videoId,
-      stage: "comments",
-      message: `Engagement kit ready — pinned comment + ${kit.replies.length} reply templates for "${opts.title}"`,
-    },
-  });
+  const ctx = currentCtx();
+  if (ctx) {
+    await db.activity.create({
+      data: {
+        organizationId: ctx.organizationId,
+        userId: ctx.userId,
+        videoId: opts.videoId,
+        stage: "comments",
+        message: `Engagement kit ready — pinned comment + ${kit.replies.length} reply templates for "${opts.title}"`,
+      },
+    });
+  }
 
   return kit;
 }

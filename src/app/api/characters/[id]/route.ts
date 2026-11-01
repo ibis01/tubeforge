@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import {
   serializeCharacter,
   buildAnchorFallback,
@@ -25,8 +26,14 @@ const PatchCharacterSchema = z
   })
   .strict();
 
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
+  // tenant-db injects organizationId — a foreign tenant's id resolves to
+  // null here, exactly the 404 cross-tenant access must produce.
   const character = await db.character.findUnique({
     where: { id },
     include: { _count: { select: { videos: true } } },
@@ -39,6 +46,10 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
 }
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const parsed = PatchCharacterSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success)
@@ -84,8 +95,14 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   });
 }
 
-export async function DELETE(_req: NextRequest, ctx: Ctx) {
+export async function DELETE(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
+  // Scoped lookup FIRST — the uploads/characters/<id>/ tree is only removed
+  // after the row is proven to belong to the caller's organization.
   const character = await db.character.findUnique({ where: { id } });
   if (!character)
     return NextResponse.json({ error: "Character not found" }, { status: 404 });

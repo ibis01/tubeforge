@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { startJob } from "@/lib/tubeforge/jobs";
 import {
   generateCharacterPoses,
@@ -11,7 +12,11 @@ import { POSES } from "@/lib/tubeforge/types";
 type Ctx = { params: Promise<{ id: string }> };
 
 /** GET — which poses exist so far. */
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const character = await db.character.findUnique({ where: { id } });
   if (!character)
@@ -29,7 +34,11 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
 }
 
 /** POST — generate the full consistency sheet (3 poses) as a 202 background job. */
-export async function POST(_req: NextRequest, ctx: Ctx) {
+export async function POST(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const character = await db.character.findUnique({ where: { id } });
   if (!character)
@@ -48,6 +57,8 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     });
     await db.activity.create({
       data: {
+        organizationId: auth.ctx.organizationId,
+        userId: auth.ctx.userId,
         stage: "character",
         message: `Consistency sheet complete for ${character.name} — ${result.generated.length} identity-locked poses`,
       },

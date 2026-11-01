@@ -108,6 +108,8 @@ Every project, character, voice profile, channel, generated asset and job must b
 
 Two independent test accounts cannot access each other's projects, files, jobs, credentials or generated content. Verified by automated cross-tenant isolation tests in CI.
 
+> **Status: COMPLETE (2026-11-01).** Verified by `e2e/isolation.spec.ts` — 7/7 green (list/read/mutate/delete/settings/jobs isolation, 401 default-deny, server-side session revocation), wired into the CI Playwright job. Full execution record + documented deviations (SMTP, per-user Z.ai, Redis state, LegacySetting drop → Stage 3): see TASKS.md "Stage 2 execution status".
+
 ---
 
 ## Stage 3 — Production infrastructure

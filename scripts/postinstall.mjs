@@ -10,6 +10,7 @@
 // clone / sandbox relaunch boots straight into a working app.
 
 import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,8 +34,34 @@ if (!url) {
   // Relative file: paths are resolved by Prisma against the schema directory
   // (prisma/), so ../db/custom.db lands in <project>/db/custom.db.
   url = 'file:../db/custom.db';
-  writeFileSync(envPath, `DATABASE_URL=${url}\n`, { flag: 'wx' });
-  console.log(`[postinstall] created .env with DATABASE_URL=${url}`);
+  try {
+    writeFileSync(envPath, `DATABASE_URL=${url}\n`, { flag: 'wx' });
+    console.log(`[postinstall] created .env with DATABASE_URL=${url}`);
+  } catch {
+    /* read-only fs (e.g. Vercel) — platform env vars are used instead */
+  }
+}
+
+// 1b. Stage 2 — provision the signing + encryption secrets when missing so a
+// fresh clone / CI checkout boots usable (the middleware fails CLOSED without
+// them). Best-effort: on read-only filesystems the platform provides them.
+if (existsSync(envPath)) {
+  try {
+    let env = readFileSync(envPath, 'utf8');
+    const rand = () => randomBytes(24).toString('base64url');
+    for (const [key, note] of [
+      ['TUBEFORGE_AUTH_SECRET', 'signs session/api tokens'],
+      ['TUBEFORGE_ENCRYPTION_KEY', 'encrypts secrets at rest'],
+    ]) {
+      if (!new RegExp(`^${key}=.*`, 'm').test(env)) {
+        env += (env.endsWith('\n') || env === '' ? '' : '\n') + `${key}=${rand()}\n`;
+        console.log(`[postinstall] provisioned ${key} (${note}) — replace it in production`);
+      }
+    }
+    writeFileSync(envPath, env);
+  } catch {
+    /* best-effort only */
+  }
 }
 
 // 2. Pick the matching schema and (re)generate the client.
@@ -49,6 +76,10 @@ run(['generate', '--schema', schema]);
 if (isSqlite) {
   console.log('[postinstall] prisma db push (sqlite) — creates db file if missing');
   run(['db', 'push', '--schema', 'prisma/schema.sqlite.prisma', '--skip-generate']);
+  // Stage 2+ transition guards (idempotent): organizationId backfill, the
+  // Setting -> LegacySetting rename and the one-owner-per-org partial index.
+  console.log('[postinstall] running scripts/migrate-stage2.mjs (idempotent)');
+  execFileSync('node', ['scripts/migrate-stage2.mjs'], { stdio: 'inherit', cwd: root });
 }
 
 console.log('[postinstall] done');

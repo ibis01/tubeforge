@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { requestJobCancel, type JobKind } from "@/lib/tubeforge/jobs";
 
 /**
@@ -30,6 +31,10 @@ const KINDS: JobKind[] = [
 ];
 
 export async function POST(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   let body: { entityId?: string; kind?: string };
   try {
     body = await req.json();

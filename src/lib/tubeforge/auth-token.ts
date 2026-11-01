@@ -2,6 +2,8 @@
 // Tokens are HMAC-SHA256-signed JSON payloads:
 //   <b64url(payload)>.<b64url(signature)>
 // Two scopes: "session" (browser cookie, 7 days) and "api" (Bearer token, 90 days).
+// Stage 2: payloads carry uid (the user id); session tokens use jti = the
+// server-side Session row id so revocation is instant (see tenant.ts).
 // Rotating TUBEFORGE_AUTH_SECRET in .env invalidates every issued token.
 
 export const SESSION_COOKIE = "tf_session";
@@ -9,9 +11,10 @@ export const SESSION_MAX_AGE_SEC = 7 * 24 * 60 * 60; // 7 days
 export const API_TOKEN_MAX_AGE_SEC = 90 * 24 * 60 * 60; // 90 days
 
 export interface TokenPayload {
-  s: "session" | "api";
+  s: "session" | "api" | "state"; // "state" = one-shot OAuth markers (youtube.ts), never a credential
   exp: number; // epoch seconds
-  jti: string; // unique id (random)
+  jti: string; // unique id (random, or the Session row id for session tokens)
+  uid?: string; // Stage 2 — the acting user
 }
 
 const te = new TextEncoder();
@@ -77,7 +80,7 @@ export async function verifyToken(
   const now = Math.floor(Date.now() / 1000);
   const exp = payload?.exp;
   if (typeof exp !== "number" || !Number.isSafeInteger(exp) || exp <= now) return null;
-  if (payload?.s !== "session" && payload?.s !== "api") return null;
+  if (payload?.s !== "session" && payload?.s !== "api" && payload?.s !== "state") return null;
   if (typeof payload.jti !== "string" || payload.jti.length < 6) return null;
   const key = await hmacKey(secret);
   const ok = await crypto.subtle.verify(
@@ -89,15 +92,16 @@ export async function verifyToken(
   return ok ? payload : null;
 }
 
-/** Create a signed session/api token. */
+/** Create a signed session/api/state token. extra.uid rides along; extra.jti overrides the random id. */
 export async function createSignedToken(
-  scope: "session" | "api",
+  scope: "session" | "api" | "state",
   maxAgeSec: number,
-  secret: string | undefined
+  secret: string | undefined,
+  extra?: { uid?: string; jti?: string }
 ): Promise<string | null> {
-  const jti = toB64url(crypto.getRandomValues(new Uint8Array(9)));
+  const jti = extra?.jti ?? toB64url(crypto.getRandomValues(new Uint8Array(9)));
   return signToken(
-    { s: scope, exp: Math.floor(Date.now() / 1000) + maxAgeSec, jti },
+    { s: scope, exp: Math.floor(Date.now() / 1000) + maxAgeSec, jti, uid: extra?.uid },
     secret
   );
 }

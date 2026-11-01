@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { startJob, isJobRunning, lastJobError, setJobProgress } from "@/lib/tubeforge/jobs";
 import { parseScenes } from "@/lib/tubeforge/story";
 import { renderShort } from "@/lib/tubeforge/shorts";
@@ -17,6 +18,10 @@ const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
  * background job (202). Body: { sceneIndex?: number } — omit for auto-pick.
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video)
@@ -79,6 +84,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: id,
           stage: "short",
           message: `Vertical Short cut from scene ${result.sceneIndex}${result.autoPicked ? " (auto-picked)" : ""} — ${result.durationSec.toFixed(1)}s 9:16`,
@@ -89,6 +96,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       await db.video.update({ where: { id }, data: { error: message } });
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: id,
           stage: "short",
           level: "error",
@@ -106,7 +115,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 }
 
 /** GET — short state for the detail dialog (drives button + preview). */
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video)

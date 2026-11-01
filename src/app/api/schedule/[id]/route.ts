@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { serializeSlot, parseDay, type SlotWithRelations } from "@/lib/tubeforge/schedule";
 
 const VIDEO_INCLUDE = {
@@ -35,6 +36,10 @@ const PatchSlotSchema = z
 
 /** PATCH — move/reschedule a slot, toggle done, or rename it. */
 export async function PATCH(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const parsed = PatchSlotSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success)
@@ -70,6 +75,8 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       });
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: existing.videoId,
           stage: "schedule",
           message: `"${video.title ?? video.topic}" marked as published via the calendar`,
@@ -92,7 +99,11 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 }
 
 /** DELETE — remove a slot (keeps the video). */
-export async function DELETE(_req: NextRequest, ctx: Ctx) {
+export async function DELETE(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const existing = await db.scheduleSlot.findUnique({ where: { id } });
   if (!existing)

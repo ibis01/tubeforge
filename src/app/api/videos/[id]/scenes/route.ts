@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseScenes, serializeScenes } from "@/lib/tubeforge/story";
 import { CAMERAS, sanitizeSceneStyle } from "@/lib/tubeforge/types";
 
@@ -14,6 +15,10 @@ type Ctx = { params: Promise<{ id: string }> };
  * takes effect on the next Regenerate (POST storyboard { scene }).
  */
 export async function PATCH(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video)

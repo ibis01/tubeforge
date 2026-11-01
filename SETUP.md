@@ -92,31 +92,34 @@ To let other devices on your Wi-Fi reach it: `npm run dev:lan`.
 
 ---
 
-## 3. Studio access modes (local dev vs production)
+## 3. Accounts & access (Stage 2 — multi-user)
 
-| | Local dev (default) | Production (recommended) |
+TubeForge is now a multi-user application: every visitor **registers** an
+account (email + password, min 8 chars) and gets their own isolated studio —
+own videos, channels, characters, settings, API keys and YouTube connection.
+No data is shared between accounts; this is verified by the automated
+cross-tenant isolation suite (`e2e/isolation.spec.ts`, runs in CI).
+
+| | Local dev (default) | Production |
 |---|---|---|
-| `TUBEFORGE_AUTH_SECRET` in `.env` | absent → studio OPEN, no login | set (32+ hex chars) → sessions signed |
-| `TUBEFORGE_REQUIRE_LOCK` | not needed | leave unset — a production server with the lock OFF refuses to serve studio APIs (503) until you enable Studio access |
-| Lock toggle | Settings → Studio access (opt-in) | Settings → Studio access, then restart the server |
-| First-run claim | whoever opens the app first sets the password | set `TUBEFORGE_OWNER_TOKEN` in the environment — the first `POST /api/auth/setup` must present it in the `x-owner-token` header (Stage 1, task T-1.8) |
+| `TUBEFORGE_AUTH_SECRET` in `.env` | set (`npm run setup` provisions one) | set (32+ hex chars) — without it a production server refuses to serve any API (503) |
+| `TUBEFORGE_ENCRYPTION_KEY` in `.env` | set — encrypts provider keys + YouTube tokens at rest | set |
+| First visit | registration form (the FIRST account claims any pre-Stage-2 data — see below) | same |
+| Email verification / password reset | `TUBEFORGE_EMAIL_MODE=console` (default): links are logged + returned in the response | Stage 3 ships the SMTP adapter |
+| Locked out? | `npm run auth:reset -- --email you@example.com` (prints a reset link; `--set NewPass123` sets it directly) | same |
 
-Suitable protections before exposing the studio to your network (`dev:lan`)
-or the internet:
+**Upgrading an existing single-user install** — the migration
+(`npm run migrate:stage2`, also run by `setup:local`/`postinstall`) parks the
+old studio's rows under a bootstrap organization; the first person who
+registers **and proves the old access password** (when one was configured)
+claims everything: the legacy content moves into their new studio and the old
+global settings become their per-user settings (YouTube connection, provider
+keys, preferences). A stranger registering first cannot steal the data — the
+password proof blocks them.
 
-- **Settings → Studio access** → flip **Password protection** on and create a
-  password (min 8 chars). Every visit then needs it; APIs reject anyone without
-  a signed session. The browser you enable it from stays signed in.
-- Change your mind anytime — flip it off (needs a signed-in browser).
-- **Locked out?** From the project folder run:
-
-  ```bash
-  npm run auth:reset           # studio open again, password kept
-  npm run auth:reset -- --purge   # also forget the password entirely
-  ```
-
-- Rotating `TUBEFORGE_AUTH_SECRET` in `.env` signs everyone out instantly
-  (sessions and API tokens are HMAC-signed with it).
+Rotating `TUBEFORGE_AUTH_SECRET` signs every session/token out instantly.
+Rotating `TUBEFORGE_ENCRYPTION_KEY` invalidates stored secrets (they must be
+re-entered) — rotate one at a time, not both together.
 
 ---
 

@@ -14,6 +14,7 @@ import { execFile } from "child_process";
 import fs from "fs";
 import path from "path";
 import { promisify } from "util";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { resolveBedPreview, MUSIC_DIR } from "@/lib/tubeforge/music";
 
 const execFileAsync = promisify(execFile);
@@ -76,6 +77,10 @@ async function getPreviewBuffer(bedId: string): Promise<Buffer | null> {
 }
 
 export async function GET(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const bedId = req.nextUrl.searchParams.get("id")?.trim() || "";
   if (!bedId || bedId === "none")
     return NextResponse.json({ error: "No preview for this bed" }, { status: 400 });

@@ -1,21 +1,24 @@
 // Settings → AI Providers: per-capability provider configuration.
 //
 //   GET  → current config (keys masked) + the provider registry
-//   PUT  → save the global Z.ai credentials OR one capability's provider
+//   PUT  → save the acting user's Z.ai credentials OR one capability's provider
 //   POST → test a capability end-to-end with optional unsaved overrides
 //
-// The API key is never returned in full — only masked. Z.ai credentials are
-// global (shared SDK); other providers carry per-capability credentials.
+// The API key is never returned in full — only masked. Capability keys are
+// per-user secrets (ProviderCredential, encrypted at rest); the Z.ai SDK
+// gateway stays a platform-level credential materialized from the acting
+// user's legacy zai.* preference rows (see providers/config.ts).
 
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
 import { resetZAIClient } from "@/lib/tubeforge/ai";
+import { createZaiForTest } from "@/lib/tubeforge/zai-config";
 import {
-  createZaiForTest,
   readZaiCredentials,
   syncZaiConfigFile,
   ZAI_SETTING_KEYS,
-} from "@/lib/tubeforge/zai-config";
+} from "@/lib/tubeforge/providers/config";
+import { setUserSettings } from "@/lib/tubeforge/settings";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import {
   getCapability,
   saveCapability,
@@ -45,7 +48,11 @@ const CAPABILITIES: CapabilityId[] = ["chat", "tts", "image", "video"];
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const caps: Record<string, ReturnType<typeof publicCapability>> = {};
   for (const cap of CAPABILITIES) {
     caps[cap] = publicCapability(await getCapability(cap));
@@ -69,27 +76,24 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   try {
     const body = await req.json();
 
-    // ---- Scope 1: global Z.ai credentials ----
+    // ---- Scope 1: legacy Z.ai credentials (per-user zai.* preference rows) ----
     if (body.scope === "zai" || (!body.scope && !body.capability)) {
-      const updates: { key: string; value: string }[] = [];
+      const updates: Record<string, string> = {};
       const baseUrl = String(body.baseUrl ?? "").trim();
-      if (baseUrl)
-        updates.push({ key: ZAI_SETTING_KEYS.baseUrl, value: baseUrl });
+      if (baseUrl) updates[ZAI_SETTING_KEYS.baseUrl] = baseUrl;
       const apiKey = String(body.apiKey ?? "").trim();
-      if (apiKey) updates.push({ key: ZAI_SETTING_KEYS.apiKey, value: apiKey });
-      if (updates.length === 0) {
+      if (apiKey) updates[ZAI_SETTING_KEYS.apiKey] = apiKey;
+      if (Object.keys(updates).length === 0) {
         return NextResponse.json({ error: "Nothing to save" }, { status: 400 });
       }
-      for (const u of updates) {
-        await db.setting.upsert({
-          where: { key: u.key },
-          update: { value: u.value },
-          create: { key: u.key, value: u.value },
-        });
-      }
+      await setUserSettings(updates);
       await syncZaiConfigFile();
       resetZAIClient();
       const zai = await readZaiCredentials();
@@ -160,6 +164,10 @@ export async function PUT(req: NextRequest) {
 
 /** Test a capability end-to-end. Overrides are never saved. */
 export async function POST(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   let body: Record<string, string | boolean | undefined> = {};
   try {
     body = await req.json();

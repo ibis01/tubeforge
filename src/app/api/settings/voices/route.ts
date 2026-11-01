@@ -2,14 +2,20 @@
 // so a video saved with a Z.ai voice keeps working after switching providers.
 // Cloned voices (VoiceProfile rows) are appended when the active provider can
 // actually speak them (Zhipu GLM-TTS) — otherwise they'd render dead options.
+// Stage 2: the active provider config is per-user (UserSetting + credential).
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { getCapability } from "@/lib/tubeforge/providers/settings";
 import { voiceCatalog } from "@/lib/tubeforge/providers/tts";
 import { providerMeta } from "@/lib/tubeforge/providers/registry";
 import { isCloneProvider, listVoiceProfiles } from "@/lib/tubeforge/voice-clone";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const config = await getCapability("tts");
   const model =
     config.provider === "openai"

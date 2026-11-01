@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import type { Video } from "@prisma/client";
 import { parseJsonLoose, generateScriptPackage } from "@/lib/tubeforge/ai";
 import { aiCall } from "@/lib/tubeforge/budget";
@@ -80,6 +81,10 @@ Return JSON: { "angles": [ { "title": "click-worthy title under 70 chars", "topi
  * Body mirrors POST /api/videos plus `count` (2-6).
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   try {
     const body = await req.json();
     const topic = String(body.topic ?? "").trim();
@@ -119,6 +124,7 @@ export async function POST(req: NextRequest) {
     for (const angle of angles) {
       const video = await db.video.create({
         data: {
+          organizationId: auth.ctx.organizationId,
           topic: angle.topic,
           niche,
           tone,
@@ -142,6 +148,8 @@ export async function POST(req: NextRequest) {
 
     await db.activity.create({
       data: {
+        organizationId: auth.ctx.organizationId,
+        userId: auth.ctx.userId,
         videoId: videos[0].id,
         stage: "create",
         message: `Series batch queued — ${videos.length} videos from "${topic}" (${format === "story" ? "scene-based" : "narration"} format)`,
@@ -184,6 +192,8 @@ export async function POST(req: NextRequest) {
             });
             await db.activity.create({
               data: {
+                organizationId: auth.ctx.organizationId,
+                userId: auth.ctx.userId,
                 videoId: video.id,
                 stage: "script",
                 message: `Scene script written — "${pkg.title}" (${pkg.scenes.length} scenes, ${wordCount(pkg.script)} words)`,
@@ -210,6 +220,8 @@ export async function POST(req: NextRequest) {
             });
             await db.activity.create({
               data: {
+                organizationId: auth.ctx.organizationId,
+                userId: auth.ctx.userId,
                 videoId: video.id,
                 stage: "script",
                 message: `Script written — "${pkg.title}" (${wordCount(pkg.script)} words)`,
@@ -224,6 +236,8 @@ export async function POST(req: NextRequest) {
           await db.activity
             .create({
               data: {
+                organizationId: auth.ctx.organizationId,
+                userId: auth.ctx.userId,
                 videoId: video.id,
                 stage: "script",
                 level: "error",

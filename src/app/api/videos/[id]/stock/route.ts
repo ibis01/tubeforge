@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseScenes } from "@/lib/tubeforge/story";
 import {
   fetchStockForScenes,
@@ -32,7 +33,11 @@ function invalidateRenders(videoId: string) {
 }
 
 /** GET — stock status for the video (per-scene refs live on the scenes). */
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video)
@@ -69,6 +74,10 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
  * Body: { force?: boolean } — force re-searches every scene, replacing clips.
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video)
@@ -118,6 +127,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       });
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: id,
           stage: "stock",
           message: `Stock b-roll — ${result.fetched} clip${result.fetched === 1 ? "" : "s"} downloaded, ${result.matched}/${scenes.length} scenes covered`,
@@ -128,6 +139,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         await db.video.update({ where: { id }, data: { error: null } });
         await db.activity.create({
           data: {
+            organizationId: auth.ctx.organizationId,
+            userId: auth.ctx.userId,
             videoId: id,
             stage: "stock",
             message: "Stock fetch cancelled — matched clips were kept",
@@ -139,6 +152,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       await db.video.update({ where: { id }, data: { error: message } });
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: id,
           stage: "stock",
           level: "error",
@@ -156,7 +171,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 }
 
 /** DELETE — remove every stock clip + ref (storyboard art is untouched). */
-export async function DELETE(_req: NextRequest, ctx: Ctx) {
+export async function DELETE(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video)
@@ -173,6 +192,8 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
   });
   await db.activity.create({
     data: {
+      organizationId: auth.ctx.organizationId,
+      userId: auth.ctx.userId,
       videoId: id,
       stage: "stock",
       message: `Stock b-roll cleared — ${cleared} clip${cleared === 1 ? "" : "s"} removed`,

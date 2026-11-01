@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { generateTopicResearch } from "@/lib/tubeforge/ai";
 import { applyPerformanceBoost } from "@/lib/tubeforge/analytics";
 import { serializeSession } from "@/lib/tubeforge/research";
@@ -8,6 +9,10 @@ import { errorText } from "@/lib/tubeforge/redact";
 
 /** GET — recent research sessions (newest first). */
 export async function GET(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const limit = Math.min(
     20,
     Math.max(1, Number(req.nextUrl.searchParams.get("limit") ?? 10) || 10)
@@ -30,6 +35,10 @@ export async function GET(req: NextRequest) {
  * GET /api/research/[id] until `generating` clears.
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   let body: { niche?: string; query?: string };
   try {
     body = await req.json();
@@ -45,6 +54,7 @@ export async function POST(req: NextRequest) {
   // Create the shell row up-front so the job has a stable id to update.
   const row = await db.researchSession.create({
     data: {
+      organizationId: auth.ctx.organizationId,
       niche,
       query: query || "—",
       ideas: JSON.stringify({ ideas: [], nicheSummary: "" }),
@@ -66,6 +76,8 @@ export async function POST(req: NextRequest) {
 
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           stage: "research",
           message: `Topic Radar scanned "${niche}"${query ? ` for "${query}"` : ""} — ${finalResult.ideas.length} ideas found${boosted.boosted > 0 ? ` (${boosted.boosted} performance-boosted)` : ""}`,
         },
@@ -81,7 +93,13 @@ export async function POST(req: NextRequest) {
         })
         .catch(() => {});
       await db.activity.create({
-        data: { stage: "research", level: "error", message: `Topic Radar failed: ${message}` },
+        data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
+          stage: "research",
+          level: "error",
+          message: `Topic Radar failed: ${message}`,
+        },
       });
       throw err;
     }

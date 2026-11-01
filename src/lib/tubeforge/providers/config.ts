@@ -1,9 +1,11 @@
 // Universal AI provider configuration.
 // Handles the Z.ai SDK file requirement safely on Vercel's read-only filesystem.
 
-import { db } from "@/lib/db";
 import fs from "fs";
 import path from "path";
+import { readLegacyZai } from "./settings";
+// NOTE: readLegacyZai is per-user in Stage 2 (UserSetting zai.* rows). The
+// platform SDK gateway itself stays global — see providers/settings.ts.
 
 export const ZAI_SETTING_KEYS = {
   baseUrl: "zai.baseUrl",
@@ -11,13 +13,10 @@ export const ZAI_SETTING_KEYS = {
 };
 
 export async function readZaiCredentials() {
-  const rows = await db.setting.findMany({
-    where: { key: { in: [ZAI_SETTING_KEYS.baseUrl, ZAI_SETTING_KEYS.apiKey] } },
-  });
-  const map = new Map(rows.map((r) => [r.key, r.value]));
+  const legacy = await readLegacyZai();
   return {
-    baseUrl: map.get(ZAI_SETTING_KEYS.baseUrl) || "",
-    apiKey: map.get(ZAI_SETTING_KEYS.apiKey) || "",
+    baseUrl: legacy.baseUrl,
+    apiKey: legacy.apiKey,
   };
 }
 

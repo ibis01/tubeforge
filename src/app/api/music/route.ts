@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import {
   serializeTrack,
   seedMusicLibrary,
@@ -17,7 +18,11 @@ import { errorText } from "@/lib/tubeforge/redact";
  * now explicit: the client checks `needsSeed` and calls POST /api/music with
  * {action:"seed"} (Settings → Background Music also has a manual re-seed).
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const [rows, settings] = await Promise.all([
     db.musicTrack.findMany({ orderBy: [{ isOriginal: "desc" }, { name: "asc" }] }),
     getMusicSettings(),
@@ -35,6 +40,10 @@ export async function GET() {
  *   JSON {action:"seed"}       → re-synthesize the original library
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const contentType = req.headers.get("content-type") ?? "";
 
   if (contentType.includes("multipart/form-data")) {

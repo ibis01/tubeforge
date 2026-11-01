@@ -21,15 +21,17 @@ import { execFile } from "child_process";
 import fs from "fs";
 import path from "path";
 import { promisify } from "util";
-import { db } from "@/lib/db";
+import { db } from "./tenant-db";
+import { currentCtx } from "./tenant";
 import type { MusicTrack } from "@prisma/client";
 import { sanitizeDuckIntensity, type DuckIntensity } from "./audiomix";
+import { getUserSetting } from "./settings";
 
 const execFileAsync = promisify(execFile);
 
 async function getSetting(key: string): Promise<string | null> {
-  const row = await db.setting.findUnique({ where: { key } });
-  return row?.value ?? null;
+  // Stage 2 — per-user preferences (was the global Setting row).
+  return getUserSetting(key);
 }
 
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
@@ -514,8 +516,11 @@ export function seedMusicLibrary(
         continue;
       }
       const made = await synthesizeOriginal(def);
+      const seedCtx = currentCtx();
+      if (!seedCtx) throw new Error("Music seeding requires a signed-in user");
       await db.musicTrack.create({
         data: {
+          organizationId: seedCtx.organizationId,
           name: def.name,
           moods: def.moods.join(","),
           genre: def.genre,
@@ -601,8 +606,11 @@ export async function ingestUploadedTrack(buffer: Buffer, meta: UploadTrackMeta)
     const durationSec = await probeDuration(outPath);
     if (durationSec <= 0) throw new Error("Could not read the track's duration — file may be corrupt");
 
+    const ingestCtx = currentCtx();
+    if (!ingestCtx) throw new Error("Uploading a track requires a signed-in user");
     return await db.musicTrack.create({
       data: {
+        organizationId: ingestCtx.organizationId,
         name: meta.name.slice(0, 80),
         moods: meta.moods.slice(0, 200),
         genre: meta.genre?.slice(0, 60) || null,

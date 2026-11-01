@@ -1,56 +1,103 @@
-// TubeForge auth reset — restored in Stage 1 (task T-1.1; was referenced by
-// package.json "auth:reset" and SETUP.md/SECURITY.md but missing from the
-// shipped tree).
+// TubeForge auth reset — Stage 2 edition (ARCHITECTURE.md §6.3).
 //
-// Unlocks the studio: force-disables the opt-in lock (Setting "auth.enabled"
-// = "false" + removes the db/auth.lock flag mirror) so you can sign back in
-// to a studio you are locked out of. With --purge it also forgets the owner
-// password hash (Setting "auth.password"), so the next / visit offers the
-// first-run setup screen again.
+// The old global lock toggle is gone with multi-user auth. This is now a
+// server-side CLI that resets ONE USER's password by email: it prints a
+// one-time reset link (same flow as POST /api/auth/reset-password) or, with
+// --set <newpassword>, sets the password directly and revokes every live
+// session of that user.
 //
 // Usage:
-//   npm run auth:reset           # keep the password, turn the lock off
-//   npm run auth:reset -- --purge  # also forget the password entirely
+//   npm run auth:reset -- --email someone@example.com
+//        -> prints a one-time reset link (valid 24h)
+//   npm run auth:reset -- --email someone@example.com --set NewPassword123
+//        -> sets the password immediately + revokes all sessions
 //
 // Uses the generated Prisma client, so it works for BOTH database modes
 // (SQLite local dev and Postgres) without duplicating schema knowledge here.
 
-import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
+import { createHash, webcrypto } from "node:crypto";
 
-const root = path.resolve(new URL("..", import.meta.url).pathname);
-const purge = process.argv.includes("--purge");
+const argv = process.argv.slice(2);
+const emailIdx = argv.indexOf("--email");
+const setIdx = argv.indexOf("--set");
+const email = emailIdx >= 0 ? argv[emailIdx + 1]?.trim().toLowerCase() : "";
+const newPassword = setIdx >= 0 ? argv[setIdx + 1] : undefined;
+
+// Mirror of tenant.ts PBKDF2 hashing (scripts cannot import TS modules) —
+// identical format: pbkdf2$<iters>$<saltB64>$<hashB64>.
+const PBKDF2_ITERS = 120_000;
+
+async function hashPassword(password) {
+  const salt = webcrypto.getRandomValues(new Uint8Array(16));
+  const keyMaterial = await webcrypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"]
+  );
+  const hash = await webcrypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: PBKDF2_ITERS, hash: "SHA-256" },
+    keyMaterial,
+    256
+  );
+  const b64 = (bytes) => Buffer.from(bytes).toString("base64");
+  return `pbkdf2$${PBKDF2_ITERS}$${b64(salt)}$${b64(new Uint8Array(hash))}`;
+}
+
+function randomToken() {
+  return webcrypto.getRandomValues(new Uint8Array(24)).toString("base64url");
+}
+
+const hashHex = (text) => createHash("sha256").update(text, "utf8").digest("hex");
+
+const RESET_TTL_H = 24;
 
 async function main() {
-  // The client is generated for whichever schema postinstall picked.
+  if (!email) {
+    console.error("[auth:reset] usage: npm run auth:reset -- --email <email> [--set <newpassword>]");
+    process.exit(1);
+  }
+
   const { PrismaClient } = await import("@prisma/client");
   const db = new PrismaClient();
 
   try {
-    // 1. Remove the flag-file mirror the middleware hot-checks.
-    const flag = path.join(root, "db", "auth.lock");
-    if (existsSync(flag)) {
-      rmSync(flag, { force: true });
-      console.log("[auth:reset] removed db/auth.lock");
+    const user = await db.user.findUnique({ where: { email } });
+    if (!user) {
+      console.error(`[auth:reset] no account with email ${email}`);
+      process.exit(1);
     }
 
-    // 2. Turn the lock off in the Setting table (source of truth for the UI).
-    await db.setting.upsert({
-      where: { key: "auth.enabled" },
-      update: { value: "false" },
-      create: { key: "auth.enabled", value: "false" },
+    if (newPassword) {
+      if (newPassword.length < 8) {
+        console.error("[auth:reset] password must be at least 8 characters");
+        process.exit(1);
+      }
+      await db.user.update({
+        where: { id: user.id },
+        data: { passwordHash: await hashPassword(newPassword) },
+      });
+      await db.session.updateMany({
+        where: { userId: user.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      console.log(`[auth:reset] password set for ${email}; all sessions revoked`);
+      return;
+    }
+
+    const token = randomToken();
+    await db.user.update({
+      where: { id: user.id },
+      data: {
+        passwordResetTokenHash: hashHex(token),
+        passwordResetExpiresAt: new Date(Date.now() + RESET_TTL_H * 3600_000),
+      },
     });
-    console.log("[auth:reset] Setting auth.enabled = false — the studio is OPEN");
-
-    // 3. Optional: forget the password so first-run setup is offered again.
-    if (purge) {
-      await db.setting.deleteMany({ where: { key: "auth.password" } });
-      console.log("[auth:reset] purged auth.password — next visit shows the setup screen");
-    } else {
-      console.log("[auth:reset] password kept (add --purge to forget it too)");
-    }
-
-    console.log("[auth:reset] done. Restart the dev server if it was running.");
+    console.log(`[auth:reset] reset link for ${email} (valid ${RESET_TTL_H}h):`);
+    console.log(`  /api/auth/reset-password -> POST { "token": "${token}", "password": "..." }`);
+    console.log("  (feed the token + a new password to the endpoint, or rerun with --set)");
   } finally {
     await db.$disconnect();
   }

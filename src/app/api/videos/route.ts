@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { latestStatsMap } from "@/lib/tubeforge/analytics";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
 import { startJob } from "@/lib/tubeforge/jobs";
@@ -13,11 +14,17 @@ import { errorText } from "@/lib/tubeforge/redact";
 const TRANSITION_IDS = new Set<string>(TRANSITIONS.map((t) => t.id));
 
 export async function GET(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { searchParams } = new URL(req.url);
   const status = searchParams.get("status");
   const limit = Math.min(Number(searchParams.get("limit") ?? 100), 200);
 
   const where = status && status !== "all" ? { status } : {};
+  // tenant-db injects organizationId into every query below — the caller only
+  // ever sees their own organization's videos.
   const videos = await db.video.findMany({
     where,
     orderBy: { createdAt: "desc" },
@@ -39,6 +46,10 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   try {
     const body = await req.json();
     const topic = String(body.topic ?? "").trim();
@@ -162,6 +173,7 @@ export async function POST(req: NextRequest) {
     // Create the video record first (draft)
     const video = await db.video.create({
       data: {
+        organizationId: auth.ctx.organizationId,
         topic,
         niche,
         tone,
@@ -197,6 +209,8 @@ export async function POST(req: NextRequest) {
 
     await db.activity.create({
       data: {
+        organizationId: auth.ctx.organizationId,
+        userId: auth.ctx.userId,
         videoId: video.id,
         stage: "create",
         message: `New video queued: "${topic}" (${niche})${format === "story" ? " · scene-based story" : ""}`,
@@ -233,6 +247,8 @@ export async function POST(req: NextRequest) {
 
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: video.id,
           stage: "script",
           message: `Custom script pasted — "${title}" (${wordCount(customScript)} words, no AI generation)`,

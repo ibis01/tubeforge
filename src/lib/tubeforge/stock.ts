@@ -14,11 +14,17 @@ import { execFile } from "child_process";
 import fs from "fs";
 import path from "path";
 import { promisify } from "util";
-import { db } from "@/lib/db";
+import { db } from "./tenant-db";
 import { videoDir } from "./ai";
 import { relevanceCheck } from "./quality";
 import { sceneQueries } from "./stock-query";
 import type { Scene, StockRef } from "./types";
+import { currentCtx } from "./tenant";
+import {
+  deleteProviderCredential,
+  getProviderCredential,
+  upsertProviderCredential,
+} from "./settings";
 
 const execFileAsync = promisify(execFile);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -31,17 +37,22 @@ export const KEY_URLS = {
 };
 
 // ---------- Keys ----------
+// Stage 2 — per-user, encrypted at rest (ProviderCredential, capability "stock").
+// Was: global Setting rows stock.pexelsKey / stock.pixabayKey in plaintext.
 
-async function readKey(name: "stock.pexelsKey" | "stock.pixabayKey"): Promise<string> {
-  const row = await db.setting.findUnique({ where: { key: name } });
-  return row?.value?.trim() ?? "";
+type StockProvider = "pexels" | "pixabay";
+
+function providerForName(name: "stock.pexelsKey" | "stock.pixabayKey"): StockProvider {
+  return name === "stock.pexelsKey" ? "pexels" : "pixabay";
+}
+
+async function readKey(provider: StockProvider): Promise<string> {
+  const cred = await getProviderCredential("stock", provider);
+  return cred?.apiKey?.trim() ?? "";
 }
 
 export async function readStockKeys(): Promise<{ pexels: string; pixabay: string }> {
-  const [pexels, pixabay] = await Promise.all([
-    readKey("stock.pexelsKey"),
-    readKey("stock.pixabayKey"),
-  ]);
+  const [pexels, pixabay] = await Promise.all([readKey("pexels"), readKey("pixabay")]);
   return { pexels, pixabay };
 }
 
@@ -49,15 +60,16 @@ export async function saveStockKey(
   name: "stock.pexelsKey" | "stock.pixabayKey",
   value: string
 ): Promise<void> {
+  const provider = providerForName(name);
   const trimmed = value.trim();
+  const ctx = currentCtx();
+  if (!ctx) throw new Error("saveStockKey requires an authenticated context");
   if (!trimmed) {
-    await db.setting.deleteMany({ where: { key: name } });
+    await deleteProviderCredential(ctx.userId, "stock", provider);
     return;
   }
-  await db.setting.upsert({
-    where: { key: name },
-    update: { value: trimmed },
-    create: { key: name, value: trimmed },
+  await upsertProviderCredential(ctx.userId, "stock", provider, {
+    apiKey: trimmed,
   });
 }
 

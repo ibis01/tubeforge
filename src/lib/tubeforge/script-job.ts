@@ -16,11 +16,16 @@
 // of riding out sustained quota storms, while the video stays on
 // "Writing script…" in the UI (no user action needed).
 
-import { db } from "@/lib/db";
+import { db } from "./tenant-db";
 import { generateScriptPackage, type ResearchBrief } from "./ai";
 import { generateSceneScriptPackage } from "./story";
 import { JobCancelledError, cancellableSleep, throwIfCancelled } from "./cancel";
 import { errorText } from "@/lib/tubeforge/redact";
+
+// Stage 2: every db access below flows through the tenant-scoped client —
+// the job body inherits the launching request's context (userId/organizationId)
+// via AsyncLocalStorage, so the script writes stay inside the owner's org and
+// AI calls resolve the owner's provider settings.
 
 const STORM_ROUNDS = 6;
 /** Escalating cool-down between storm rounds, in minutes (index = round-1). */
@@ -109,6 +114,7 @@ export async function runScriptJob(
 
         await db.activity.create({
           data: {
+            organizationId: video.organizationId,
             videoId,
             stage: "script",
             message: `Scene script written — "${pkg.title}" (${pkg.scenes.length} scenes, ${wordCount(pkg.script)} words)`,
@@ -146,6 +152,7 @@ export async function runScriptJob(
 
         await db.activity.create({
           data: {
+            organizationId: video.organizationId,
             videoId,
             stage: "script",
             message: `Script written by GLM — "${pkg.title}" (${wordCount(pkg.script)} words)`,
@@ -161,6 +168,7 @@ export async function runScriptJob(
         await db.activity
           .create({
             data: {
+              organizationId: video.organizationId,
               videoId,
               stage: "script",
               message: "Script generation stopped by user",
@@ -190,6 +198,7 @@ export async function runScriptJob(
       // Final round (or a non-rate-limit error) — surface the failure.
       await db.activity.create({
         data: {
+          organizationId: video.organizationId,
           videoId,
           stage: "script",
           level: "error",

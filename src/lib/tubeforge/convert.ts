@@ -17,7 +17,8 @@
 
 import fs from "fs";
 import path from "path";
-import { db } from "@/lib/db";
+import { db } from "./tenant-db";
+import { currentCtx } from "./tenant";
 import { parseJsonLoose, videoDir } from "./ai";
 import { aiCall } from "./budget";
 import { chatComplete } from "./providers/chat";
@@ -362,13 +363,18 @@ export async function convertClassicToScenes(opts: {
     },
   });
 
-  await db.activity.create({
-    data: {
-      videoId: opts.videoId,
-      stage: "convert",
-      message: `Upgraded to scene video — ${scenes.length} scenes (${method === "llm" ? "AI" : "auto"} split)${audioCut ? ", existing voiceover preserved" : ""}. Paint the storyboard, then render.`,
-    },
-  });
+  const ctx = currentCtx();
+  if (ctx) {
+    await db.activity.create({
+      data: {
+        organizationId: ctx.organizationId,
+        userId: ctx.userId,
+        videoId: opts.videoId,
+        stage: "convert",
+        message: `Upgraded to scene video — ${scenes.length} scenes (${method === "llm" ? "AI" : "auto"} split)${audioCut ? ", existing voiceover preserved" : ""}. Paint the storyboard, then render.`,
+      },
+    });
+  }
 
   return { sceneCount: scenes.length, audioCut, method };
 }

@@ -9,12 +9,17 @@
 // (the approval is the user's signal they accept the analysis verdict).
 
 import { NextRequest, NextResponse } from "next/server";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { analyzeScript } from "@/lib/tubeforge/script-analysis";
 
 const MAX_SCRIPT = 50000;
 const MAX_TOPIC = 300;
 
 export async function POST(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   try {
     const body = await req.json();
 

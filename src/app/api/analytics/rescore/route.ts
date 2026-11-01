@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { applyPerformanceBoost, getAnalyticsOverview } from "@/lib/tubeforge/analytics";
 import { serializeSession } from "@/lib/tubeforge/research";
 import type { ResearchIdea } from "@/lib/tubeforge/types";
@@ -10,6 +11,10 @@ import type { ResearchIdea } from "@/lib/tubeforge/types";
  * most recent session). Persists the updated ideas back into the session.
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   let body: { sessionId?: string } = {};
   try {
     body = await req.json();
@@ -66,6 +71,8 @@ export async function POST(req: NextRequest) {
 
   await db.activity.create({
     data: {
+      organizationId: auth.ctx.organizationId,
+      userId: auth.ctx.userId,
       stage: "analytics",
       message: `Performance boost re-applied to "${session.niche}" radar — ${result.boosted} idea${result.boosted === 1 ? "" : "s"} adjusted by real channel stats`,
     },

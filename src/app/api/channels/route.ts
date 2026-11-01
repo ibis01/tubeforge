@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import type { ChannelDTO } from "@/lib/tubeforge/types";
 import { errorText } from "@/lib/tubeforge/redact";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const channels = await db.channel.findMany({
     orderBy: { createdAt: "desc" },
     include: { _count: { select: { videos: true } } },
@@ -23,6 +28,10 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   try {
     const body = await req.json();
     const name = String(body.name ?? "").trim();
@@ -35,12 +44,14 @@ export async function POST(req: NextRequest) {
     const description = body.description ? String(body.description).slice(0, 500) : null;
 
     const channel = await db.channel.create({
-      data: { name, niche, description },
+      data: { organizationId: auth.ctx.organizationId, name, niche, description },
       include: { _count: { select: { videos: true } } },
     });
 
     await db.activity.create({
       data: {
+        organizationId: auth.ctx.organizationId,
+        userId: auth.ctx.userId,
         stage: "channel",
         message: `Channel created — "${name}" (${niche})`,
       },

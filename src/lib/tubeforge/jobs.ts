@@ -8,7 +8,8 @@
 // see "server restarted mid-stage, run it again" instead of a spinner that
 // never resolves.
 
-import { db } from "@/lib/db";
+import { db, rawDatabase } from "./tenant-db";
+import { currentCtx, withCtxNull } from "./tenant";
 import { errorText } from "@/lib/tubeforge/redact";
 
 export type JobKind =
@@ -101,53 +102,58 @@ const stageLabel = (kind: string) => STAGE_LABEL[kind] ?? kind;
  * waiting and the UI explains what happened.
  */
 async function runRecovery(): Promise<void> {
-  const stale = await db.job.findMany({ where: { status: "running" } });
+  // Boot recovery must see EVERY organization's stale rows — never the
+  // per-request scope (it can be triggered from inside a scoped request).
+  return withCtxNull(async () => {
+    const rawDb = rawDatabase;
+    const stale = await rawDb.job.findMany({ where: { status: "running" } });
 
-  for (const row of stale) {
-    if (row.startedAt.getTime() >= state.bootTs) continue; // started in this process — alive or HMR orphan
+    for (const row of stale) {
+      if (row.startedAt.getTime() >= state.bootTs) continue; // started in this process — alive or HMR orphan
 
-    const message = `Server restarted while this ${stageLabel(row.kind)} was running — run the stage again.`;
+      const message = `Server restarted while this ${stageLabel(row.kind)} was running — run the stage again.`;
 
-    try {
-      await db.job.update({
-        where: { id: row.id },
-        data: { status: "interrupted", error: message, endedAt: new Date() },
-      });
+      try {
+        await rawDb.job.update({
+          where: { id: row.id },
+          data: { status: "interrupted", error: message, endedAt: new Date() },
+        });
 
-      // Surface the interruption where the UI already looks for errors.
-      if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "slide", "verify", "comments", "upload", "short", "convert", "script", "stock"].includes(row.kind)) {
-        const videoId = baseEntityId(row.entityId);
-        const video = await db.video.findUnique({ where: { id: videoId } });
-        // Only set the error if the artifact never landed (completed after the row went stale).
-        if (video) {
-          const artifactLanded =
-            (row.kind === "voiceover" && video.hasVoiceover) ||
-            (row.kind === "thumbnail" && video.hasThumbnail) ||
-            (row.kind === "variants" && video.hasThumbnail) ||
-            (row.kind === "storyboard" && video.hasStoryboard) ||
-            (row.kind === "scene" && video.hasStoryboard) ||
-            (row.kind === "slide" && video.hasVideo) ||
-            (row.kind === "render" && video.hasVideo) ||
-            (row.kind === "comments" && Boolean(video.commentsKit)) ||
-            (row.kind === "upload" && Boolean(video.youtubeUrl)) ||
-            (row.kind === "short" && video.hasShort) ||
-            (row.kind === "convert" && video.format === "story") ||
-            (row.kind === "script" && Boolean(video.script)) ||
-            (row.kind === "stock" && Boolean(video.scenes && video.scenes.includes('"stock"')));
-          if (!artifactLanded && !video.error)
-            await db.video.update({ where: { id: videoId }, data: { error: message } });
+        // Surface the interruption where the UI already looks for errors.
+        if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "slide", "verify", "comments", "upload", "short", "convert", "script", "stock"].includes(row.kind)) {
+          const videoId = baseEntityId(row.entityId);
+          const video = await rawDb.video.findUnique({ where: { id: videoId } });
+          // Only set the error if the artifact never landed (completed after the row went stale).
+          if (video) {
+            const artifactLanded =
+              (row.kind === "voiceover" && video.hasVoiceover) ||
+              (row.kind === "thumbnail" && video.hasThumbnail) ||
+              (row.kind === "variants" && video.hasThumbnail) ||
+              (row.kind === "storyboard" && video.hasStoryboard) ||
+              (row.kind === "scene" && video.hasStoryboard) ||
+              (row.kind === "slide" && video.hasVideo) ||
+              (row.kind === "render" && video.hasVideo) ||
+              (row.kind === "comments" && Boolean(video.commentsKit)) ||
+              (row.kind === "upload" && Boolean(video.youtubeUrl)) ||
+              (row.kind === "short" && video.hasShort) ||
+              (row.kind === "convert" && video.format === "story") ||
+              (row.kind === "script" && Boolean(video.script)) ||
+              (row.kind === "stock" && Boolean(video.scenes && video.scenes.includes('"stock"')));
+            if (!artifactLanded && !video.error)
+              await rawDb.video.update({ where: { id: videoId }, data: { error: message } });
+          }
+        } else if (row.kind === "portrait" || row.kind === "poses") {
+          // Characters have no error column — mirror into the in-memory map
+          // that serializeCharacter() reads (this process's map is fresh/empty).
+          state.lastErrors.set(key(row.entityId, row.kind), message);
         }
-      } else if (row.kind === "portrait" || row.kind === "poses") {
-        // Characters have no error column — mirror into the in-memory map
-        // that serializeCharacter() reads (this process's map is fresh/empty).
-        state.lastErrors.set(key(row.entityId, row.kind), message);
-      }
 
-      console.warn(`[jobs] recovered stale ${row.kind} job ${row.id} (entity ${row.entityId}) -> interrupted`);
-    } catch (err) {
-      console.error("[jobs] recovery failed for job", row.id, err);
+        console.warn(`[jobs] recovered stale ${row.kind} job ${row.id} (entity ${row.entityId}) -> interrupted`);
+      } catch (err) {
+        console.error("[jobs] recovery failed for job", row.id, err);
+      }
     }
-  }
+  });
 }
 
 /**
@@ -253,10 +259,26 @@ export async function startJob(
 
   let jobId: string | null = null;
   try {
-    const row = await db.job.create({
-      data: { kind, entityId, status: "running", startedAt: new Date() },
-    });
-    jobId = row.id;
+    // The tenant-db extension stamps organizationId + userId from the
+    // request context that launched this job; the type-level stamp is
+    // explicit here so a missing context can never silently create an
+    // unattributed row — jobs started outside a tenant run untracked.
+    const jobCtx = currentCtx();
+    if (jobCtx) {
+      const row = await db.job.create({
+        data: {
+          organizationId: jobCtx.organizationId,
+          userId: jobCtx.userId,
+          kind,
+          entityId,
+          status: "running",
+          startedAt: new Date(),
+        },
+      });
+      jobId = row.id;
+    } else {
+      console.warn("[jobs] job started outside a tenant context — running untracked");
+    }
   } catch (err) {
     // DB hiccup must not block the stage itself — run untracked.
     console.error("[jobs] failed to persist job row:", err);

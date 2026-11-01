@@ -10,11 +10,13 @@
 // image passes untouched (gates must never break the pipeline).
 
 import fs from "fs";
-import { db } from "@/lib/db";
+import { db } from "./tenant-db";
 import { parseJsonLoose } from "./ai";
 import { aiCall } from "./budget";
 import { visionComplete } from "./providers/vision";
 import { errorText } from "@/lib/tubeforge/redact";
+import { getUserSettings } from "./settings";
+import { currentCtx } from "./tenant";
 
 export type GateKind = "thumbnail" | "scene";
 
@@ -30,10 +32,7 @@ export interface QualityReport {
 /** Read gate settings (mode + threshold) with a short cache. */
 async function getGateConfig(): Promise<{ mode: string; threshold: number }> {
   try {
-    const rows = await db.setting.findMany({
-      where: { key: { in: ["qualityGate", "qualityThreshold"] } },
-    });
-    const map = new Map(rows.map((r) => [r.key, r.value]));
+    const map = await getUserSettings(["qualityGate", "qualityThreshold"]);
     const mode = (map.get("qualityGate") ?? "all") || "off";
     const raw = Number(map.get("qualityThreshold") ?? 6);
     return { mode, threshold: Number.isFinite(raw) ? Math.min(9, Math.max(1, raw)) : 6 };
@@ -94,8 +93,10 @@ async function logActivity(
   level: "info" | "error" = "info"
 ) {
   try {
+    const ctx = currentCtx();
+    if (!ctx) return; // best-effort logging — no context, no row
     await db.activity.create({
-      data: { videoId, stage: "quality", level, message },
+      data: { organizationId: ctx.organizationId, userId: ctx.userId, videoId, stage: "quality", level, message },
     });
   } catch {
     /* activity logging must never break the gate */

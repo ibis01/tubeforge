@@ -21,8 +21,8 @@
 
 | ID | Risk | File:line | Stage to fix | Mitigation |
 | --- | --- | --- | --- | --- |
-| R-CRIT-1 | **Multi-tenant data isolation does not exist.** Every Prisma model lacks `userId`/`tenantId`. Two users on the same install share the same `Video`, `Channel`, `Character`, `Setting` rows. | `prisma/schema.prisma` (entire file) | Stage 2 | Add `User`, `Organization`, `Membership`, `UserSetting`, `YouTubeAccount`, `ProviderCredential` models. Add `organizationId` to every existing model. Add `requireUser()` to every endpoint. Add automated cross-tenant isolation tests in CI. |
-| R-CRIT-2 | **`Setting` table is a singleton per key.** One owner password, one YouTube OAuth grant, one set of provider keys per install. Multi-user SaaS is impossible without surgery. | `prisma/schema.prisma:184-188` | Stage 2 | Migrate `Setting` rows to per-user scoping. `auth.password` → `User.passwordHash`. `ytRefreshToken` → `YouTubeAccount`. `tts.*` / `zai.*` → `ProviderCredential` + `UserSetting`. Remove the global `Setting` table. |
+| R-CRIT-1 | ✅ **CLOSED (Stage 2, 2026-11-01).** Multi-tenant isolation now enforced end to end: `User`/`Organization`/`Membership` + `organizationId` on every content model; the `tenant-db` Prisma extension injects the org filter into every query from the request context; `requireUser()` on all 66 route files (ESLint blocks raw `@/lib/db` in `src/app`); verified by 7/7 cross-tenant isolation e2e tests (`e2e/isolation.spec.ts`) + CI. | `prisma/schema.prisma`, `src/lib/tubeforge/tenant-db.ts`, `src/lib/tubeforge/tenant.ts` | closed | — |
+| R-CRIT-2 | ✅ **CLOSED (Stage 2, 2026-11-01).** `Setting` replaced by per-user storage: `UserSetting` (preferences), `ProviderCredential` (encrypted at rest, AES-256-GCM), `YouTubeAccount` (per-user connection, encrypted tokens), `User.passwordHash`. Legacy rows survive in `LegacySetting` until the first owner claims them (prove-the-old-password flow in register); consumed rows are migrated + deleted. | `prisma/schema.prisma`, `src/lib/tubeforge/claim.ts`, `src/lib/tubeforge/crypto.ts`, `src/lib/tubeforge/settings.ts` | closed | — |
 | R-CRIT-3 | **First-come race on `POST /api/auth/setup`.** A fresh install can be claimed by the first caller. Mitigations exist (403s after configured; requires `TUBEFORGE_AUTH_SECRET`) but the race is not eliminated. | `src/app/api/auth/setup/route.ts:15` | Stage 1 | Add `TUBEFORGE_OWNER_TOKEN` env bootstrap so the first call must present it. Stage 2 replaces the whole flow with `POST /api/auth/register` + email verification. |
 
 ---
@@ -223,7 +223,7 @@
 
 **At end of Stage 1:** 25 of 53 risks closed. All CRITICAL risks except R-CRIT-1 and R-CRIT-2 are closed (those require Stage 2 schema changes).
 
-**At end of Stage 2:** 33 of 53 risks closed. All CRITICAL risks closed. The multi-tenant blocker is gone.
+**At end of Stage 2 (2026-11-01):** 33 of 53 risks closed — R-CRIT-1 + R-CRIT-2 verified closed by the automated cross-tenant isolation suite (two independent accounts: no cross access to projects, files, jobs, credentials or generated content; 401 default-deny; session revocation). Remaining Stage-2 scope carried to Stage 3 with rationale: SMTP email delivery, per-user Z.ai SDK isolation, Redis-backed session/lockout/pacing state, `LegacySetting` table drop — see TASKS.md "Stage 2 execution status" deviations.
 
 **At end of Stage 3:** 54 of 55 risks closed. Only R-X-4 (timeline risk) and R-X-5 (multi-tenant risk) remain — both mitigated by Stage 7 launch tests.
 

@@ -717,6 +717,50 @@ await test("imageHash: real ffmpeg roundtrip + directory scan", async () => {
   }
 });
 
+// ---------- stage 2: at-rest encryption (crypto.ts) ----------
+
+process.env.TUBEFORGE_ENCRYPTION_KEY ||= "unit-test-key-0123456789abcdef";
+
+await test("crypto: AES-256-GCM roundtrip + distinct IVs", async () => {
+  const { encryptSecret, decryptSecret, isEncryptedSecret } = await import(
+    "../src/lib/tubeforge/crypto.ts"
+  );
+  const plain = "sk-live-abcdef-0123456789-SECRET";
+  const a = encryptSecret(plain);
+  const b = encryptSecret(plain);
+  ok(a.startsWith("v1."), "ciphertext carries the v1. prefix");
+  ok(a !== b, "identical plaintexts produce different ciphertexts (per-record IV)");
+  eq(decryptSecret(a), plain, "roundtrip returns the plaintext");
+  ok(isEncryptedSecret(a), "isEncryptedSecret recognizes the format");
+  ok(!isEncryptedSecret(plain), "plaintext is not misdetected as encrypted");
+});
+
+await test("crypto: tampering is detected (GCM tag)", async () => {
+  const { encryptSecret, decryptSecret } = await import("../src/lib/tubeforge/crypto.ts");
+  const stored = encryptSecret("another-secret");
+  const parts = stored.split(".");
+  const flipped = parts[2].startsWith("A") ? "B" + parts[2].slice(1) : "A" + parts[2].slice(1);
+  const tampered = [parts[0], parts[1], flipped, parts[3]].join(".");
+  let threw = false;
+  try {
+    decryptSecret(tampered);
+  } catch {
+    threw = true;
+  }
+  ok(threw, "a flipped ciphertext byte must fail the auth tag, not return garbage");
+});
+
+await test("crypto: sha256Hex is deterministic and format-stable", async () => {
+  const { sha256Hex } = await import("../src/lib/tubeforge/crypto.ts");
+  eq(
+    sha256Hex("token"),
+    sha256Hex("token"),
+    "same token hashes identically"
+  );
+  eq(sha256Hex("token").length, 64, "SHA-256 hex digest length");
+  ok(sha256Hex("a") !== sha256Hex("b"), "different tokens hash differently");
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -16,6 +17,10 @@ const PatchChannelSchema = z
   .strict();
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const parsed = PatchChannelSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success)
@@ -54,7 +59,11 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   });
 }
 
-export async function DELETE(_req: NextRequest, ctx: Ctx) {
+export async function DELETE(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const channel = await db.channel.findUnique({ where: { id } });
   if (!channel)

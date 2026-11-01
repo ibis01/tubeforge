@@ -1,30 +1,18 @@
-// API gatekeeper — OPT-IN. The studio is open by default; protection only
-// activates after the owner enables it (Settings → Studio access), which
-// writes Setting "auth.enabled" and mirrors it to the db/auth.lock flag file
-// that this middleware hot-checks (no DB access per request).
+// API gatekeeper — Stage 2 DEFAULT-DENY (ARCHITECTURE.md §6.3).
 //
-// While active, every /api/* request must carry a valid signed session
-// cookie (tf_session) or Bearer token — except the auth endpoints themselves.
-// Pages are not redirected: the single / page renders a lock screen until
-// authenticated, and all data flows through these protected APIs.
-// If TUBEFORGE_AUTH_SECRET is unset, the gate stays open (documented dev mode).
+// The opt-in lock is gone: every /api/* request now requires a valid signed
+// token (session cookie or Bearer), except a small public allow-list of the
+// auth bootstrap endpoints. Pages are not redirected — the single / page
+// renders the register/sign-in gate until a session exists.
 //
-// PRODUCTION FAIL-SAFE: an intentionally-open studio is fine for localhost
-// development, but a production server (NODE_ENV=production) must never serve
-// studio data with the gate disabled — a stray 0.0.0.0 bind would expose
-// every API to the network. In production without an active gate only the
-// auth bootstrap endpoints stay reachable (status / setup / login / logout /
-// lock — enabling the lock is password-checked on a configured studio), and
-// every other API answers 503 until the lock is enabled or the deployment
-// explicitly opts out with TUBEFORGE_REQUIRE_LOCK=0. Recovery paths:
-//   bun run auth:reset               (unlock from the server)
-//   bun run auth:enable <password>   (lock from the server, headless)
-// Serverless (Vercel): set TUBEFORGE_AUTH_SECRET + TUBEFORGE_LOCK=1 to turn
-// the gate on (the flag file is unwritable there), then complete the one-time
-// setup screen in the browser to claim the owner password.
+// The middleware only verifies the token's SIGNATURE + expiry (edge-safe, no
+// DB). Session revocation is enforced by requireUser() at the route level,
+// which resolves the Session row the cookie's jti points at.
+//
+// Production fail-safe: without TUBEFORGE_AUTH_SECRET a production server
+// refuses to serve any non-auth endpoint (503). Local development without a
+// secret warns once and stays open (npm run setup provisions one).
 
-import fs from "node:fs";
-import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import {
   SESSION_COOKIE,
@@ -38,73 +26,45 @@ import {
   hitBucket,
 } from "@/lib/tubeforge/rate-limit";
 
-// Endpoints reachable without a session. /api/auth/token is deliberately NOT
-// here — creating an API token requires an authenticated session.
+// Reachable without a token. /api/auth/token is deliberately NOT here —
+// minting an API token requires an authenticated session. /api/auth/status
+// answers for signed-out browsers (it resolves nothing sensitive).
 const PUBLIC_API = new Set<string>([
   "/api/auth/status",
-  "/api/auth/setup",
   "/api/auth/login",
   "/api/auth/logout",
+  "/api/auth/register",
+  "/api/auth/verify-email",
+  "/api/auth/reset-password",
+  // OAuth redirect target — Google hits it with ?code&state and NO session
+  // cookie; the route authenticates via the signed state token instead.
+  "/api/youtube/callback",
 ]);
-
-// Superset reachable during a production fail-safe window (gate disabled).
-// /api/auth/lock enable is password-protected on a configured studio and its
-// disable is a no-op while the gate is already off, so this never widens the
-// attack surface beyond the first-come setup race that /api/auth/setup has
-// always had on a fresh install.
-const PROD_BOOTSTRAP_API = new Set<string>([...PUBLIC_API, "/api/auth/lock"]);
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-const LOCK_FLAG = path.join(process.cwd(), "db", "auth.lock");
-
-// existsSync is a microsecond-scale syscall — check it live on every API
-// request so toggling the lock in Settings takes effect on the very next call.
-function lockFlagActive(): boolean {
-  // Serverless (Vercel & co.): the runtime filesystem is read-only/ephemeral,
-  // so a flag file can never be written there at runtime — and even a
-  // committed file would be un-toggleable without a redeploy. TUBEFORGE_LOCK=1
-  // marks the deployment as locked explicitly (pair it with
-  // TUBEFORGE_AUTH_SECRET); unlike a runtime-written file it also survives
-  // cold starts. Local development stays file-driven and unaffected.
-  if (process.env.TUBEFORGE_LOCK === "1") return true;
-  try {
-    return fs.existsSync(LOCK_FLAG);
-  } catch {
-    return false;
-  }
-}
-
 // Warn once per process, not once per request.
 let warnedOpenGate = false;
-function warnProductionOpenGate(): void {
+function warnNoSecret(): void {
   if (warnedOpenGate) return;
   warnedOpenGate = true;
   console.warn(
-    "[TubeForge] SECURITY: production server with the studio lock DISABLED — " +
-      "all data APIs return 503 until the lock is enabled " +
-      "(Settings → Studio access, or `bun run auth:enable <password>`). " +
-      "Deployments that intentionally run open can set TUBEFORGE_REQUIRE_LOCK=0."
+    "[TubeForge] SECURITY: TUBEFORGE_AUTH_SECRET is not set — every API answers 503 " +
+      "(add it to .env — see .env.example; npm run setup provisions one)."
   );
 }
 
 export async function middleware(req: NextRequest) {
   const secret = getAuthSecret();
   const { pathname } = req.nextUrl;
-  const gateActive = Boolean(secret) && lockFlagActive();
   const isProd = process.env.NODE_ENV === "production";
 
-  if (!pathname.startsWith("/api/")) {
-    if (isProd && !gateActive && process.env.TUBEFORGE_REQUIRE_LOCK !== "0")
-      warnProductionOpenGate();
-    return NextResponse.next();
-  }
+  if (!pathname.startsWith("/api/")) return NextResponse.next();
 
   // Coarse per-IP rate limit — runs BEFORE auth so unauthenticated floods
-  // are shed at the door (auth adds its own login lockout; budget.ts caps
-  // provider spend). Reads 600/min, writes 90/min per IP — generous for a
-  // human-driven studio, hostile to runaway loops and scripted abuse.
-  // TUBEFORGE_RATE_READ / TUBEFORGE_RATE_WRITE = 0 disables a tier.
+  // are shed at the door (login adds its own lockout; budget.ts caps provider
+  // spend). Reads 600/min, writes 90/min per IP — generous for a human-driven
+  // studio, hostile to runaway loops and scripted abuse.
   if (req.method !== "OPTIONS") {
     const write = req.method !== "GET" && req.method !== "HEAD";
     const hit = hitBucket(
@@ -118,36 +78,25 @@ export async function middleware(req: NextRequest) {
       );
   }
 
-  // PRODUCTION FAIL-SAFE — opt-out explicitly with TUBEFORGE_REQUIRE_LOCK=0.
-  if (
-    isProd &&
-    !gateActive &&
-    process.env.TUBEFORGE_REQUIRE_LOCK !== "0"
-  ) {
-    warnProductionOpenGate();
-    if (!PROD_BOOTSTRAP_API.has(pathname))
+  if (PUBLIC_API.has(pathname)) return NextResponse.next();
+
+  // PRODUCTION FAIL-SAFE — no secret, no data.
+  if (!secret) {
+    if (isProd || process.env.TUBEFORGE_REQUIRE_AUTH !== "0") {
+      warnNoSecret();
       return NextResponse.json(
-        {
-          error:
-            "Studio lock is disabled — enable Studio access (Settings → Studio access) to use TubeForge in production",
-        },
+        { error: "TUBEFORGE_AUTH_SECRET is not configured — sign-in is unavailable" },
         { status: 503 }
       );
-    return NextResponse.next();
+    }
   }
-
-  // Opt-in model: gate closed (open app) unless the owner enabled the lock
-  // AND a signing secret exists. Removing the secret or the flag file
-  // instantly re-opens the studio (documented recovery path).
-  if (!gateActive) return NextResponse.next();
-  if (PUBLIC_API.has(pathname)) return NextResponse.next();
 
   const bearer = req.headers.get("authorization");
   const token =
     bearer?.startsWith("Bearer ") ? bearer.slice(7).trim() : req.cookies.get(SESSION_COOKIE)?.value;
 
   const payload = await verifyToken(token, secret);
-  if (!payload) {
+  if (!payload || payload.s === "state") {
     return NextResponse.json(
       { error: "Authentication required — sign in to use TubeForge" },
       { status: 401 }
@@ -172,6 +121,6 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  runtime: "nodejs", // needs fs for the opt-in flag check (stable in Next 16)
+  runtime: "nodejs",
   matcher: ["/api/:path*"],
 };

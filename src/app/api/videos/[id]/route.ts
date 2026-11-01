@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { latestStatsFor } from "@/lib/tubeforge/analytics";
 import { jobSnapshot } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
@@ -15,8 +16,14 @@ const TRANSITION_IDS = new Set(TRANSITIONS.map((t) => t.id));
 // Next.js 16: params is a Promise
 type Ctx = { params: Promise<{ id: string }> };
 
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
+  // tenant-db injects organizationId — a guessed id from ANOTHER tenant
+  // resolves to null here, exactly the 404 cross-tenant access must produce.
   const video = await db.video.findUnique({
     where: { id },
     include: {
@@ -36,6 +43,10 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
 }
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const body = await req.json();
 
@@ -175,6 +186,8 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     if (body.status === "published") {
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: id,
           stage: "publish",
           message: `Published to YouTube queue — "${video.title ?? video.topic}"`,
@@ -184,6 +197,8 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     if (body.status === "ready") {
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: id,
           stage: "ready",
           message: `Package complete — "${video.title ?? video.topic}" is ready to upload`,
@@ -205,8 +220,15 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   });
 }
 
-export async function DELETE(_req: NextRequest, ctx: Ctx) {
+export async function DELETE(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
+  // Scoped lookup FIRST — the uploads/<id>/ tree is only touched after the
+  // row is proven to belong to the caller's organization (no path-traversal
+  // style cross-tenant deletes).
   const video = await db.video.findUnique({ where: { id } });
   if (!video)
     return NextResponse.json({ error: "Video not found" }, { status: 404 });

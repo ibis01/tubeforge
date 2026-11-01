@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseScenes } from "@/lib/tubeforge/story";
 import { renderVideo } from "@/lib/tubeforge/render";
 import { resolveMusicForVideo, resolveDuckingForVideo, getSfxEnabled, trackAbsolutePath } from "@/lib/tubeforge/music";
@@ -20,7 +21,11 @@ import { sanitizeTransition, transitionSummary } from "@/lib/tubeforge/transitio
 type Ctx = { params: Promise<{ id: string }> };
 
 /** GET — render job status (drives the client progress bar). */
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video)
@@ -49,6 +54,10 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
  * (qc.ts) recorded on the video row.
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video)
@@ -188,6 +197,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         });
         await db.activity.create({
           data: {
+            organizationId: auth.ctx.organizationId,
+            userId: auth.ctx.userId,
             videoId: id,
             stage: "render",
             level: report.passed ? "info" : "warn",
@@ -205,6 +216,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         await db.video.update({ where: { id }, data: { error: null } });
         await db.activity.create({
           data: {
+            organizationId: auth.ctx.organizationId,
+            userId: auth.ctx.userId,
             videoId: id,
             stage: "render",
             message: `Preview rendered (scene 1, ${mode === "animated" ? "animated" : "Ken Burns"})`,
@@ -217,6 +230,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         await db.video.update({ where: { id }, data: { error: null } });
         await db.activity.create({
           data: {
+            organizationId: auth.ctx.organizationId,
+            userId: auth.ctx.userId,
             videoId: id,
             stage: "render",
             message: "Render cancelled — completed scenes kept, run render again to restart",
@@ -228,6 +243,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       await db.video.update({ where: { id }, data: { error: message } });
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: id,
           stage: "render",
           level: "error",

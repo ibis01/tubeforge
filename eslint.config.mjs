@@ -56,6 +56,24 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "no-useless-escape": "warn",
   },
 }, {
+  // Stage 2 multi-tenant guard: route handlers must go through the tenant-
+  // scoped client (src/lib/tubeforge/tenant-db.ts). A raw @/lib/db import in
+  // src/app would silently BYPASS the organizationId filter — this rule makes
+  // that a lint error instead of a cross-tenant hole. Allow-listed exceptions:
+  // the auth/account bootstrap routes (no tenant exists yet there by design).
+  files: ["src/app/**/*.{ts,tsx}"],
+  rules: {
+    "no-restricted-imports": ["error", {
+      patterns: [{
+        group: ["@/lib/db", "@/lib/db*"],
+        message: "Routes must use the tenant-scoped client: import { db } from \"@/lib/tubeforge/tenant-db\" (raw @/lib/db bypasses the organizationId guard).",
+      }],
+    }],
+  },
+  ignores: [
+    "src/app/api/auth/**",
+  ],
+}, {
   // pack/ is a packaging artifact mirror; scripts/*.cjs are standalone ops
   // scripts executed directly with node (CommonJS by design, not app code).
   ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills", "pack/**", "scripts/**/*.cjs"]

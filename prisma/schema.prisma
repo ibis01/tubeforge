@@ -7,19 +7,180 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ---------------------------------------------------------------------------
+// Stage 2 — multi-tenant identity. Every content model below carries
+// organizationId and cascades from its Organization. The tenant guard lives in
+// src/lib/tubeforge/tenant-db.ts (a Prisma client extension that injects
+// organizationId into every query for these models from the request's tenant
+// context) — raw db access in routes is forbidden by the ESLint rule
+// tf/no-raw-db-in-api (deep libs may use it only outside request scopes).
+// ---------------------------------------------------------------------------
+
+model User {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  // pbkdf2$<iters>$<saltB64>$<hashB64> — same format the single-user lock used
+  // (src/lib/tubeforge/auth.ts), so a legacy auth.password row migrates as-is.
+  passwordHash String
+  name      String?
+  avatarUrl String?
+
+  // Email verification / password recovery. Only the SHA-256 hash of the
+  // token is stored; the raw token lives in the emailed link.
+  emailVerifiedAt        DateTime?
+  emailVerifyTokenHash   String?   @unique
+  emailVerifyExpiresAt   DateTime?
+  passwordResetTokenHash String?   @unique
+  passwordResetExpiresAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  memberships         Membership[]
+  settings            UserSetting[]
+  youtubeAccounts     YouTubeAccount[]
+  providerCredentials ProviderCredential[]
+  sessions            Session[]
+  activities          Activity[]
+  jobs                Job[]
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships     Membership[]
+  channels        Channel[]
+  characters      Character[]
+  videos          Video[]
+  activities      Activity[]
+  researchSessions ResearchSession[]
+  slots           ScheduleSlot[]
+  stats           VideoStat[]
+  voiceProfiles   VoiceProfile[]
+  musicTracks     MusicTrack[]
+  jobs            Job[]
+}
+
+// One user per organization row. Exactly one member holds role "owner" —
+// enforced by a partial unique index (see prisma/migrations/…_stage2), which
+// Prisma cannot express in the schema DSL.
+model Membership {
+  id             String       @id @default(cuid())
+  userId         String
+  organizationId String
+  role           String       // owner | admin | editor | viewer
+  createdAt      DateTime     @default(now())
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+// Server-side sessions (7-day expiry, revocable). The cookie carries an HMAC
+// token whose payload includes sid; requireUser() resolves the Session row to
+// honor revocation — a stolen cookie dies the moment the row is revoked.
+model Session {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  userAgent      String?
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// Per-user key/value store. Replaces the global Setting table (R-CRIT-2).
+// Non-secret preferences only — secrets go to ProviderCredential /
+// YouTubeAccount (encrypted at rest).
+model UserSetting {
+  id             String   @id @default(cuid())
+  userId         String
+  key            String
+  value          String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+}
+
+// Per-user YouTube connection. Secrets (refresh/access tokens) are stored
+// AES-256-GCM encrypted with TUBEFORGE_ENCRYPTION_KEY (src/lib/tubeforge/crypto.ts).
+model YouTubeAccount {
+  id             String    @id @default(cuid())
+  userId         String
+  channelId      String // the YouTube channel id (learned after consent)
+  channelTitle   String?
+  channelThumb   String?
+  refreshToken   String // encrypted at rest
+  accessToken    String? // encrypted at rest; ~50-min cache
+  tokenExpiresAt DateTime?
+  privacyStatus  String    @default("unlisted")
+  categoryId     String    @default("27")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channelId])
+}
+
+// Per-user provider keys. Non-zai providers only — the bundled Z.ai SDK is a
+// platform-level credential (see ARCHITECTURE.md §Stage 2 deviations).
+model ProviderCredential {
+  id             String   @id @default(cuid())
+  userId         String
+  capability     String // chat | tts | image | video | asr | vision
+  provider       String // openai | anthropic | gemini | zhipu | elevenlabs | stability | fal | replicate | ideogram | recraft | pollinations | selfhost
+  baseUrl        String?
+  apiKey         String // encrypted at rest
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, capability, provider])
+}
+
+// Legacy rows from the removed single-user Setting table, kept ONLY until the
+// first owner claims them (POST /api/auth/register prove-the-old-password
+// flow) — the claim migrates them into the owner's UserSetting /
+// YouTubeAccount / ProviderCredential / User.passwordHash and deletes them.
+// Dropped entirely in Stage 3.
+model LegacySetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Content models (tenant-scoped)
+// ---------------------------------------------------------------------------
+
 model Channel {
-  id          String   @id @default(cuid())
-  name        String
-  niche       String
-  description String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  videos      Video[]
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  niche          String
+  description    String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  videos         Video[]
+
+  @@index([organizationId])
 }
 
 model Character {
   id             String   @id @default(cuid())
+  organizationId String
   name           String
   role           String?
   personality    String?
@@ -31,11 +192,15 @@ model Character {
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   videos         Video[]
+
+  @@index([organizationId])
 }
 
 model Video {
   id            String    @id @default(cuid())
+  organizationId String
   title         String?
   topic         String
   niche         String
@@ -77,9 +242,9 @@ model Video {
   publishedAt  DateTime? // real publish date reported by YouTube (Phase 5 analytics)
 
   // Auto-Short (Phase 5) — 9:16 vertical cut rendered from the final video
-  hasShort     Boolean  @default(false)
+  hasShort     Boolean   @default(false)
   shortScene   Int? // scene index the short was cut from (null = auto-picked)
-  shortDuration Float? @default(0)
+  shortDuration Float?   @default(0)
 
   // Background music (per-video overrides; null = fall back to Settings defaults)
   musicEnabled Boolean? // null = use the global default (Settings -> Background Music)
@@ -118,50 +283,63 @@ model Video {
 
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   activities    Activity[]
   slots         ScheduleSlot[]
   stats         VideoStat[]
 
+  @@index([organizationId])
   @@index([status])
   @@index([createdAt])
 }
 
 model Activity {
-  id        String   @id @default(cuid())
-  videoId   String?
-  video     Video?   @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  stage     String
-  message   String
-  level     String   @default("info")
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String? // null = legacy row created before Stage 2
+  videoId        String?
+  video          Video?   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  stage          String
+  message        String
+  level          String   @default("info")
+  createdAt      DateTime @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
+  @@index([organizationId])
   @@index([createdAt])
 }
 
 model ResearchSession {
-  id        String   @id @default(cuid())
-  niche     String
-  query     String
-  ideas     String // JSON-serialized array of ResearchIdeaDTO
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(cuid())
+  organizationId String
+  niche          String
+  query          String
+  ideas          String // JSON-serialized array of ResearchIdeaDTO
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId])
   @@index([createdAt])
 }
 
 model ScheduleSlot {
-  id        String   @id @default(cuid())
-  videoId   String?
-  video     Video?   @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  channelId String?
-  title     String
-  slotDate  DateTime // publish day (midnight, local calendar day)
-  timeOfDay String   @default("18:00")
-  note      String?
-  done      Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(cuid())
+  organizationId String
+  videoId        String?
+  video          Video?   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  channelId      String?
+  title          String
+  slotDate       DateTime // publish day (midnight, local calendar day)
+  timeOfDay      String   @default("18:00")
+  note           String?
+  done           Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId])
   @@index([slotDate])
 }
 
@@ -169,22 +347,19 @@ model ScheduleSlot {
 // published videos. One row per (video, sync) so the analytics view can chart
 // growth deltas between syncs and the Topic Radar can learn from winners.
 model VideoStat {
-  id        String   @id @default(cuid())
-  videoId   String
-  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  views     Int      @default(0)
-  likes     Int      @default(0)
-  comments  Int      @default(0)
-  favorites Int      @default(0)
-  snapshotAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String
+  videoId        String
+  video          Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  views          Int      @default(0)
+  likes          Int      @default(0)
+  comments       Int      @default(0)
+  favorites      Int      @default(0)
+  snapshotAt     DateTime @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId])
   @@index([videoId, snapshotAt])
-}
-
-model Setting {
-  key       String   @id
-  value     String
-  updatedAt DateTime @updatedAt
 }
 
 // Voice cloning — a speaker's voice recreated from a short (3-30s) sample.
@@ -198,6 +373,7 @@ model Setting {
 // replay "how the clone sounds" without a fresh TTS call.
 model VoiceProfile {
   id              String   @id @default(cuid())
+  organizationId  String
   name            String
   provider        String   @default("zhipu") // platform that holds the cloned voice
   providerVoiceId String // voice_clone_20240315_143052_001
@@ -208,7 +384,9 @@ model VoiceProfile {
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId])
   @@index([isActive])
   @@index([provider])
 }
@@ -218,31 +396,34 @@ model VoiceProfile {
 // TubeForge-original beds are synthesized in-app (zero third-party samples);
 // users can upload their OWN licensed tracks with full attribution metadata.
 model MusicTrack {
-  id            String   @id @default(cuid())
-  name          String
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
   // Comma-separated mood/niche tags used by the auto-selection engine, e.g.
   // "motivation,uplifting" — niches map onto these tags (see music.ts).
-  moods         String   @default("")
-  genre         String?
-  durationSec   Float    @default(0)
-  filePath      String // relative path under uploads/, e.g. "_music/uplifting-aurora.wav"
-  fileSizeBytes Int      @default(0)
-  isOriginal    Boolean  @default(false) // synthesized by TubeForge — no third-party audio
+  moods          String   @default("")
+  genre          String?
+  durationSec    Float    @default(0)
+  filePath       String // relative path under uploads/, e.g. "_music/uplifting-aurora.wav"
+  fileSizeBytes  Int      @default(0)
+  isOriginal     Boolean  @default(false) // synthesized by TubeForge — no third-party audio
 
   // --- Copyright / license record (kept for every track, shown in UI) ---
-  licenseType   String   @default("TubeForge Original") // e.g. "YouTube Audio Library", "CC BY 4.0", "Commercial license"
-  sourceUrl     String? // where it came from
-  commercialUse Boolean  @default(true)
+  licenseType    String   @default("TubeForge Original") // e.g. "YouTube Audio Library", "CC BY 4.0", "Commercial license"
+  sourceUrl      String?
+  commercialUse  Boolean  @default(true)
   attributionRequired Boolean @default(false)
   attributionText String? // exact credit line to paste into the description
   licenseEvidence String? // URL or note proving the license (screenshot, license page)
-  downloadedAt  DateTime @default(now())
+  downloadedAt    DateTime @default(now())
   contentIdNotes String? // known Content ID claims / restrictions, if any
 
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId])
   @@index([isActive])
 }
 
@@ -250,18 +431,23 @@ model MusicTrack {
 // stages can be detected ("running" rows from a dead process) and surfaced
 // to users instead of silently vanishing like the old in-memory maps.
 model Job {
-  id        String    @id @default(cuid())
-  kind      String // voiceover | thumbnail | variants | portrait | poses | storyboard | render | scene | verify
-  entityId  String // video id, character id, or "<videoId>#scene<N>"
-  status    String    @default("running") // running | done | failed | interrupted
-  progress  Float? // 0..1
-  label     String? // human progress label ("Rendering scene 3 of 6")
-  error     String?
-  startedAt DateTime  @default(now())
-  endedAt   DateTime?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  organizationId String
+  userId         String? // who kicked the job (null = legacy row)
+  kind           String // voiceover | thumbnail | variants | portrait | poses | storyboard | render | scene | verify | …
+  entityId       String // video id, character id, or "<videoId>#scene<N>"
+  status         String    @default("running") // running | done | failed | interrupted | cancelled
+  progress       Float? // 0..1
+  label          String? // human progress label ("Rendering scene 3 of 6")
+  error          String?
+  startedAt      DateTime  @default(now())
+  endedAt        DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
 
+  @@index([organizationId])
   @@index([entityId, kind])
   @@index([status])
   @@index([startedAt])

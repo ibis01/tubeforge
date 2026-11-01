@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { generateVoiceover, readMedia } from "@/lib/tubeforge/ai";
 import { generateSceneVoiceovers, parseScenes } from "@/lib/tubeforge/story";
 import { ingestCustomAudio, MAX_AUDIO_BYTES, isValidAudioUrl } from "@/lib/tubeforge/voice";
@@ -24,6 +25,10 @@ const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
  *   JSON {mode:"url", url}                 → bring-your-own-voice: download audio from an internet link
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
 
@@ -205,7 +210,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       });
 
       await db.activity.create({
-        data: { videoId: id, stage: "voiceover", message: activityMsg },
+        data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
+          videoId: id,
+          stage: "voiceover",
+          message: activityMsg,
+        },
       });
     } catch (err) {
       const message =
@@ -216,6 +227,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       });
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: id,
           stage: "voiceover",
           level: "error",
@@ -241,8 +254,18 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 }
 
 /** GET — stream the voiceover WAV file. */
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
+  // Scoped lookup FIRST — uploads/<id>/voiceover.wav is only streamed after
+  // the row is proven to belong to the caller's organization.
+  const video = await db.video.findUnique({ where: { id } });
+  if (!video)
+    return NextResponse.json({ error: "Video not found" }, { status: 404 });
+
   const media = readMedia(id, "voiceover.wav");
   if (!media)
     return NextResponse.json({ error: "No voiceover yet" }, { status: 404 });

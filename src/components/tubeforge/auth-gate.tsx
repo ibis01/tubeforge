@@ -1,51 +1,69 @@
 "use client";
 
-// AuthGate — the lock screen. The page shell stays public (it is just the
-// client bundle); every piece of data flows through /api/* which the edge
-// middleware locks with a signed session. Until the browser holds a valid
-// session, this component replaces the entire app with the TubeForge lock.
+// AuthGate — the Stage 2 account gate (register / sign-in).
+//
+// The page shell stays public (it is just the client bundle); every piece of
+// data flows through /api/* which the middleware locks behind a signed
+// session. Until the browser holds a valid session, this component replaces
+// the entire app with the TubeForge account screen:
+//   * no account exists yet -> registration (the FIRST account on a legacy
+//     install must also prove the old studio password — the server enforces
+//     this and tells us via status.legacyClaim.required)
+//   * otherwise -> email + password sign-in
+//   * a live session -> straight into the studio.
 
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TubeForgeLogo } from "@/components/tubeforge/logo";
-import { Lock, LogOut, ShieldCheck, Loader2, Eye, EyeOff } from "lucide-react";
+import { Loader2, LogOut, ShieldCheck, Eye, EyeOff, UserPlus, KeyRound } from "lucide-react";
 
-type AuthState = "checking" | "locked" | "setup" | "open" | "disabled";
+type GateState = "checking" | "signedOut" | "register" | "open" | "error";
 
-/** Sidebar & friends listen for this to know whether the lock is active. */
+interface StatusResponse {
+  configured: boolean;
+  authenticated: boolean;
+  user: { email: string; name: string | null } | null;
+  organization: { name: string } | null;
+  legacyClaim: { required: boolean } | null;
+}
+
+/** Sidebar & friends listen for this to know whether the gate is active. */
 export function broadcastGateState(enabled: boolean) {
   window.dispatchEvent(new CustomEvent("tf-gate", { detail: { enabled } }));
 }
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<AuthState>("checking");
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
+  const [state, setState] = useState<GateState>("checking");
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [needsLegacy, setNeedsLegacy] = useState(false);
   const [reveal, setReveal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async (): Promise<AuthState> => {
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [legacy, setLegacy] = useState("");
+
+  const refresh = useCallback(async (): Promise<GateState> => {
     try {
       const res = await fetch("/api/auth/status", { cache: "no-store" });
-      const d = (await res.json()) as {
-        configured: boolean;
-        authenticated: boolean;
-        gateEnabled: boolean;
-      };
-      if (!d.gateEnabled) return "disabled";
+      const d = (await res.json()) as StatusResponse;
+      setNeedsLegacy(Boolean(d.legacyClaim?.required));
       if (d.authenticated) return "open";
-      return d.configured ? "locked" : "setup";
+      setMode(d.configured ? "login" : "register");
+      return "signedOut";
     } catch {
-      return "disabled"; // can't reach the status endpoint — don't brick the UI
+      return "error"; // can't reach the status endpoint — don't brick the UI
     }
   }, []);
 
   useEffect(() => {
     void refresh().then((s) => {
       setState(s);
-      broadcastGateState(s !== "disabled");
+      broadcastGateState(s !== "error");
     });
   }, [refresh]);
 
@@ -53,28 +71,51 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     e.preventDefault();
     setError(null);
 
-    if (state === "setup") {
+    if (mode === "register") {
       if (password.length < 8)
-        return setError("Use at least 8 characters — this gates your API keys and uploads.");
+        return setError("Use at least 8 characters — this protects your pipeline and API keys.");
       if (password !== confirm) return setError("The two passwords do not match.");
     }
 
     setBusy(true);
     try {
-      const res = await fetch(state === "setup" ? "/api/auth/setup" : "/api/auth/login", {
+      const endpoint = mode === "register" ? "/api/auth/register" : "/api/auth/login";
+      const body =
+        mode === "register"
+          ? {
+              name: name.trim() || undefined,
+              email: email.trim(),
+              password,
+              ...(needsLegacy && legacy ? { legacyPassword: legacy } : {}),
+            }
+          : { email: email.trim(), password };
+
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify(body),
       });
-      const d = (await res.json().catch(() => ({}))) as { error?: string };
+      const d = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        legacyClaimRequired?: boolean;
+        verification?: { url?: string };
+      };
       if (!res.ok) {
+        if (d.legacyClaimRequired) setNeedsLegacy(true);
         setError(d.error ?? "Something went wrong — try again.");
         return;
       }
+      if (d.verification?.url) {
+        // Console email mode: verify in the background so the account is
+        // fully activated (no SMTP until Stage 3).
+        void fetch(d.verification.url, { cache: "no-store" }).catch(() => {});
+      }
       setPassword("");
       setConfirm("");
+      setLegacy("");
       setState("open");
       broadcastGateState(true);
+      window.location.reload(); // drop any stale client caches
     } catch {
       setError("Network error — check your connection and retry.");
     } finally {
@@ -84,13 +125,13 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   const logout = async () => {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
-    setState((await refresh()) === "open" ? "open" : "locked");
+    setState((await refresh()) === "open" ? "open" : "signedOut");
     // Hard reload so every client cache drops its (now-401) data.
     window.location.reload();
   };
 
   if (state === "checking") {
-    // Brief splash while the lock state resolves.
+    // Brief splash while the session state resolves.
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4 animate-pulse">
@@ -99,11 +140,6 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     );
-  }
-
-  if (state === "disabled") {
-    // Protection is OFF (the owner hasn't enabled it) — straight into the app.
-    return <>{children}</>;
   }
 
   if (state === "open") {
@@ -118,7 +154,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // ---- Locked / first-run setup ----
+  // ---- signed out / register / error ----
   return (
     <div className="min-h-screen flex items-center justify-center bg-background bg-grid px-4">
       <div className="w-full max-w-sm">
@@ -128,9 +164,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
             Tube<span className="text-gradient">Forge</span>
           </h1>
           <p className="text-sm text-muted-foreground max-w-xs">
-            {state === "setup"
-              ? "First run — create the access password that protects this studio, your API keys and your channel."
-              : "This studio is locked. Sign in to reach your pipeline, library and settings."}
+            {mode === "register"
+              ? "Create your account — your own studio, pipeline and settings, isolated from every other user."
+              : "Sign in to reach your pipeline, library and settings."}
           </p>
         </div>
 
@@ -138,23 +174,37 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
           onSubmit={submit}
           className="glass rounded-2xl border border-white/10 p-6 space-y-4"
         >
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Lock className="h-3.5 w-3.5 text-primary" />
-            <span>
-              {state === "setup" ? "Create access password" : "Enter access password"}
-            </span>
-          </div>
+          {mode === "register" && (
+            <Input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Your name (optional)"
+              autoComplete="name"
+              aria-label="Your name"
+            />
+          )}
+
+          <Input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@studio.com"
+            autoComplete="email"
+            required
+            aria-label="Email"
+          />
 
           <div className="relative">
             <Input
               type={reveal ? "text" : "password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Access password"
-              autoFocus
-              autoComplete={state === "setup" ? "new-password" : "current-password"}
+              placeholder={mode === "register" ? "Password (8+ characters)" : "Password"}
+              autoComplete={mode === "register" ? "new-password" : "current-password"}
+              required
               className="pr-10"
-              aria-label="Access password"
+              aria-label="Password"
             />
             <button
               type="button"
@@ -166,15 +216,36 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
             </button>
           </div>
 
-          {state === "setup" && (
+          {mode === "register" && (
             <Input
               type={reveal ? "text" : "password"}
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
               placeholder="Repeat the password"
               autoComplete="new-password"
+              required
               aria-label="Repeat the password"
             />
+          )}
+
+          {mode === "register" && needsLegacy && (
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-xs text-amber-300/90">
+                <KeyRound className="h-3.5 w-3.5" />
+                <span>
+                  This studio is upgrading from a locked single-user install — the first
+                  account must also prove the CURRENT access password.
+                </span>
+              </div>
+              <Input
+                type={reveal ? "text" : "password"}
+                value={legacy}
+                onChange={(e) => setLegacy(e.target.value)}
+                placeholder="Current studio access password"
+                autoComplete="current-password"
+                aria-label="Current studio access password"
+              />
+            </div>
           )}
 
           {error && (
@@ -185,15 +256,36 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
           <Button
             type="submit"
-            disabled={busy || !password}
+            disabled={busy || !email || !password}
             className="w-full bg-brand-gradient hover:opacity-90 text-white font-semibold"
           >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : state === "setup" ? "Create password & enter" : "Unlock the studio"}
+            {busy ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : mode === "register" ? (
+              <>
+                <UserPlus className="h-4 w-4 mr-1.5" /> Create account
+              </>
+            ) : (
+              "Sign in"
+            )}
           </Button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              setMode(mode === "login" ? "register" : "login");
+            }}
+            className="w-full text-center text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {mode === "login"
+              ? "No account yet? Create one"
+              : "Already registered? Sign in instead"}
+          </button>
 
           <p className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground pt-1">
             <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-            Sessions are HttpOnly + signed; API routes reject anyone without one.
+            Sessions are HttpOnly + signed; every API route is tenant-scoped.
           </p>
         </form>
       </div>

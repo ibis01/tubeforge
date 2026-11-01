@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { convertClassicToScenes } from "@/lib/tubeforge/convert";
 import { startJob, isJobRunning, lastJobError } from "@/lib/tubeforge/jobs";
 import { errorText } from "@/lib/tubeforge/redact";
@@ -7,7 +8,11 @@ import { errorText } from "@/lib/tubeforge/redact";
 type Ctx = { params: Promise<{ id: string }> };
 
 /** GET — conversion status (drives the client spinner). */
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video)
@@ -26,7 +31,11 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
  * the existing voiceover.wav into per-scene WAVs (silence-snapped, no TTS).
  * Afterwards the storyboard + render stages become available.
  */
-export async function POST(_req: NextRequest, ctx: Ctx) {
+export async function POST(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video)
@@ -52,6 +61,8 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       await db.video.update({ where: { id }, data: { error: message } });
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: id,
           stage: "convert",
           level: "error",

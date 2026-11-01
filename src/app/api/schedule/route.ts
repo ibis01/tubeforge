@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import type { VideoStatus } from "@/lib/tubeforge/types";
 import {
   serializeSlot,
@@ -26,6 +27,10 @@ const asSlot = (s: unknown) => s as SlotWithRelations;
 
 /** GET — slots in a range (from/to = YYYY-MM-DD), or upcoming compact mode (?limit=N). */
 export async function GET(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const fromRaw = req.nextUrl.searchParams.get("from");
   const toRaw = req.nextUrl.searchParams.get("to");
   const limitRaw = req.nextUrl.searchParams.get("limit");
@@ -93,6 +98,10 @@ export async function GET(req: NextRequest) {
 
 /** POST — create a schedule slot (from an existing video or a free-text placeholder). */
 export async function POST(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   let body: {
     videoId?: string;
     title?: string;
@@ -142,6 +151,7 @@ export async function POST(req: NextRequest) {
 
   const slot = await db.scheduleSlot.create({
     data: {
+      organizationId: auth.ctx.organizationId,
       videoId,
       title,
       slotDate: day,
@@ -161,6 +171,8 @@ export async function POST(req: NextRequest) {
 
   await db.activity.create({
     data: {
+      organizationId: auth.ctx.organizationId,
+      userId: auth.ctx.userId,
       videoId,
       stage: "schedule",
       message: `Scheduled "${title}" for ${day.toISOString().slice(0, 10)} at ${timeOfDay}`,

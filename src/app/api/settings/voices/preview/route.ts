@@ -9,9 +9,14 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getVoicePreview, resolvePreviewVoice } from "@/lib/tubeforge/voice-preview";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { errorText } from "@/lib/tubeforge/redact";
 
 export async function POST(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   let body: { voice?: unknown } = {};
   try {
     body = await req.json();

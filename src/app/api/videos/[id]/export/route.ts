@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { buildZip, safeZipName } from "@/lib/tubeforge/zip";
 import { readMedia, listVariants } from "@/lib/tubeforge/ai";
 import { parseScenes, sceneImageFile } from "@/lib/tubeforge/story";
@@ -13,7 +14,11 @@ type Ctx = { params: Promise<{ id: string }> };
 const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
 /** GET — download the full upload-ready package as a ZIP. */
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({
     where: { id },

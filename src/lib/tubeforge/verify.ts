@@ -13,7 +13,8 @@ import fs from "fs";
 import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { db } from "@/lib/db";
+import { db } from "./tenant-db";
+import { currentCtx } from "./tenant";
 import { aiCall } from "./budget";
 import { parseScenes } from "./story";
 
@@ -210,16 +211,21 @@ export async function verifyNarration(videoId: string): Promise<VerifyReport> {
   });
 
   const pct = Math.round(report.similarity * 100);
-  await db.activity.create({
-    data: {
-      videoId,
-      stage: "verify",
-      level: report.verdict === "needs-review" ? "error" : "info",
-      message: report.verdict === "needs-review"
-        ? `Narration check: ${pct}% word match — needs review (missing: ${report.missingWords.slice(0, 5).join(", ") || "?"})`
-        : `Narration check passed: ${pct}% word match between script and spoken audio`,
-    },
-  });
+  const ctx = currentCtx();
+  if (ctx) {
+    await db.activity.create({
+      data: {
+        organizationId: ctx.organizationId,
+        userId: ctx.userId,
+        videoId,
+        stage: "verify",
+        level: report.verdict === "needs-review" ? "error" : "info",
+        message: report.verdict === "needs-review"
+          ? `Narration check: ${pct}% word match — needs review (missing: ${report.missingWords.slice(0, 5).join(", ") || "?"})`
+          : `Narration check passed: ${pct}% word match between script and spoken audio`,
+      },
+    });
+  }
 
   return report;
 }

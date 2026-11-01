@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { generateScriptPackage } from "@/lib/tubeforge/ai";
 import { generateSceneScriptPackage } from "@/lib/tubeforge/story";
 import { deriveStatus } from "@/lib/tubeforge/status";
@@ -41,7 +42,11 @@ async function invalidateThumbnail(videoId: string): Promise<void> {
  *      Scene videos reset their scene-bound media (voiceover, storyboard,
  *      renders) because the new scene boundaries invalidate the old cuts.
  */
-export async function POST(_req: NextRequest, ctx: Ctx) {
+export async function POST(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({
     where: { id },
@@ -153,6 +158,8 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
 
         await db.activity.create({
           data: {
+            organizationId: auth.ctx.organizationId,
+            userId: auth.ctx.userId,
             videoId: id,
             stage: "script",
             message: `Scene script ${hadScript ? "re-written" : "written"} — "${pkg.title}" (${pkg.scenes.length} scenes, ${wordCount(pkg.script)} words)${
@@ -193,6 +200,8 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
 
         await db.activity.create({
           data: {
+            organizationId: auth.ctx.organizationId,
+            userId: auth.ctx.userId,
             videoId: id,
             stage: "script",
             message: `Script ${hadScript ? "re-written" : "written"} — "${pkg.title}" (${wordCount(pkg.script)} words)`,
@@ -216,6 +225,8 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       await db.activity
         .create({
           data: {
+            organizationId: auth.ctx.organizationId,
+            userId: auth.ctx.userId,
             videoId: id,
             stage: "script",
             level: "error",

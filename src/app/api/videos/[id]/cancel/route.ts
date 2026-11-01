@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { requestJobCancel } from "@/lib/tubeforge/jobs";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -9,7 +10,11 @@ type Ctx = { params: Promise<{ id: string }> };
  * flag between units and stop with "cancelled" (recorded on the Job row);
  * a job already inside a single ffmpeg call finishes that step first.
  */
-export async function POST(_req: NextRequest, ctx: Ctx) {
+export async function POST(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const cancelled = requestJobCancel(id);
   if (cancelled.length === 0)

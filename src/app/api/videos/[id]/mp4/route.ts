@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { readVideoFile } from "@/lib/tubeforge/render";
 import { readShortFile } from "@/lib/tubeforge/shorts";
 
@@ -10,7 +12,17 @@ type Ctx = { params: Promise<{ id: string }> };
  * ?variant=short streams the 9:16 vertical Short (Phase 5).
  */
 export async function GET(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
+  // Scoped lookup FIRST — uploads/<id>/*.mp4 is only streamed after the row
+  // is proven to belong to the caller's organization.
+  const video = await db.video.findUnique({ where: { id } });
+  if (!video)
+    return NextResponse.json({ error: "Video not found" }, { status: 404 });
+
   const variantParam = new URL(req.url).searchParams.get("variant");
   const variant =
     variantParam === "preview"

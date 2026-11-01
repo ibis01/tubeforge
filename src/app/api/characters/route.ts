@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { serializeCharacter, buildAnchorFallback } from "@/lib/tubeforge/characters";
 import { errorText } from "@/lib/tubeforge/redact";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const characters = await db.character.findMany({
     orderBy: { createdAt: "desc" },
     include: { _count: { select: { videos: true } } },
@@ -14,6 +19,10 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   try {
     const body = await req.json();
     const name = String(body.name ?? "").trim();
@@ -37,7 +46,16 @@ export async function POST(req: NextRequest) {
         : buildAnchorFallback(appearance, artStyle);
 
     const character = await db.character.create({
-      data: { name, role, personality, appearance, voice, artStyle, identityAnchor },
+      data: {
+        organizationId: auth.ctx.organizationId,
+        name,
+        role,
+        personality,
+        appearance,
+        voice,
+        artStyle,
+        identityAnchor,
+      },
       include: { _count: { select: { videos: true } } },
     });
 

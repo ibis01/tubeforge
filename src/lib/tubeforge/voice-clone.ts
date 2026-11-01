@@ -23,7 +23,8 @@ import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { randomUUID } from "crypto";
-import { db } from "@/lib/db";
+import { db } from "./tenant-db";
+import { currentCtx } from "./tenant";
 import { getCapability } from "./providers/settings";
 import { providerMeta } from "./providers/registry";
 import { joinUrl, providerFetch, providerFetchJson } from "./providers/http";
@@ -383,8 +384,11 @@ export async function cloneVoice(opts: {
   }
 
   // 5) Persist the profile.
+  const cloneCtx = currentCtx();
+  if (!cloneCtx) throw new Error("Voice cloning requires a signed-in user");
   const row = await db.voiceProfile.create({
     data: {
+      organizationId: cloneCtx.organizationId,
       name,
       provider: "zhipu",
       providerVoiceId: voiceId,
@@ -425,8 +429,11 @@ async function cloneVoiceSelfhost(opts: {
   const { wav, durationSec } = await prepareSample(raw, extMatch?.[0] ?? ".bin");
   const name = cleanCloneName(opts.name ?? "", sourceLabel);
 
+  const cloneCtx = currentCtx();
+  if (!cloneCtx) throw new Error("Voice cloning requires a signed-in user");
   const row = await db.voiceProfile.create({
     data: {
+      organizationId: cloneCtx.organizationId,
       name,
       provider: "selfhost",
       providerVoiceId: `voice_clone_sh_${Date.now().toString(36)}${randomUUID().slice(0, 6)}`,

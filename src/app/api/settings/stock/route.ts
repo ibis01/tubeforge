@@ -6,10 +6,15 @@ import {
   searchAll,
   KEY_URLS,
 } from "@/lib/tubeforge/stock";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { errorText } from "@/lib/tubeforge/redact";
 
 /** GET — masked key state (the raw keys never leave the server). */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const keys = await readStockKeys();
   return NextResponse.json({
     pexels: { hasKey: Boolean(keys.pexels), maskedKey: maskStockKey(keys.pexels) },
@@ -20,6 +25,10 @@ export async function GET() {
 
 /** PUT — save one or both keys. Empty string clears. */
 export async function PUT(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   try {
     const body = (await req.json()) as { pexels?: string; pixabay?: string };
     if (typeof body.pexels === "string") await saveStockKey("stock.pexelsKey", body.pexels);
@@ -41,6 +50,10 @@ export async function PUT(req: NextRequest) {
  * Free API call — no cost, no confirmation gate needed.
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   try {
     const body = (await req.json()) as { provider?: string };
     const keys = await readStockKeys();

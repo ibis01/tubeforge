@@ -6,8 +6,9 @@
 //   provider "elevenlabs" → ElevenLabs v1 text-to-speech (raw pcm_24000, wrapped
 //                           into a canonical WAV header here)
 //
-// Config lives in the Setting table (ttsProvider/ttsBaseUrl/ttsApiKey/ttsModel/
-// ttsVoice), cached briefly like the LLM settings. Half-configured custom
+// Stage 2: config lives in the ACTING USER's UserSetting rows (ttsProvider/
+// ttsBaseUrl/ttsModel/ttsVoice) with the API key in ProviderCredential
+// (encrypted at rest), cached ~8s per user. Half-configured custom
 // providers fail safe to the Z.ai gateway. Every provider returns the same
 // artifact the pipeline expects: a 24kHz 16-bit mono WAV buffer per chunk, so
 // mergeWavs + the whole render line stay untouched.
@@ -19,8 +20,9 @@
 // a Voice ID from your dashboard).
 
 import ZAI from "z-ai-web-dev-sdk";
-import { db } from "@/lib/db";
 import { pcmToWav } from "./wav";
+import { currentCtx } from "./tenant";
+import { getProviderCredential, getUserSettings } from "./settings";
 
 export type TtsProvider = "zai" | "openai" | "elevenlabs";
 
@@ -37,38 +39,41 @@ export const TTS_DEFAULTS = {
   elevenlabs: { baseUrl: "https://api.elevenlabs.io", model: "eleven_multilingual_v2", voice: "" },
 } as const;
 
-const SETTING_KEYS = ["ttsProvider", "ttsBaseUrl", "ttsApiKey", "ttsModel", "ttsVoice"];
-
 const g = globalThis as typeof globalThis & {
-  __tfTTS?: { cache: { at: number; cfg: TtsSettings } | null };
+  __tfTTS?: { cache: Map<string, { at: number; cfg: TtsSettings }> };
 };
-const ttsGlobal = (g.__tfTTS ??= { cache: null });
+const ttsGlobal = (g.__tfTTS ??= { cache: new Map() });
 
 /** Call after saving TTS settings so new chunks pick them up instantly. */
 export function invalidateTtsSettings() {
-  ttsGlobal.cache = null;
+  ttsGlobal.cache.clear();
 }
 
-/** Raw saved settings (may be an incomplete custom config). Cached ~8s. */
+/** Raw saved settings for the ACTING USER (may be an incomplete custom config). Cached ~8s. */
 async function readTtsSettings(): Promise<TtsSettings> {
   const now = Date.now();
-  if (ttsGlobal.cache && now - ttsGlobal.cache.at < 8_000) return ttsGlobal.cache.cfg;
+  const ctx = currentCtx();
+  if (!ctx) return { provider: "zai", baseUrl: "", apiKey: "", model: "", voice: "" }; // no acting user — Z.ai gateway
+  const cached = ttsGlobal.cache.get(ctx.userId);
+  if (cached && now - cached.at < 8_000) return cached.cfg;
 
   const cfg: TtsSettings = { provider: "zai", baseUrl: "", apiKey: "", model: "", voice: "" };
   try {
-    const rows = await db.setting.findMany({ where: { key: { in: SETTING_KEYS } } });
-    const map = new Map(rows.map((r) => [r.key, r.value]));
+    const map = await getUserSettings(["ttsProvider", "ttsBaseUrl", "ttsModel", "ttsVoice"]);
     const p = map.get("ttsProvider");
     cfg.provider = p === "openai" || p === "elevenlabs" ? p : "zai";
     cfg.baseUrl = (map.get("ttsBaseUrl") ?? "").trim().replace(/\/+$/, "");
-    cfg.apiKey = (map.get("ttsApiKey") ?? "").trim();
     cfg.model = (map.get("ttsModel") ?? "").trim();
     cfg.voice = (map.get("ttsVoice") ?? "").trim();
+    if (cfg.provider !== "zai") {
+      const cred = await getProviderCredential("tts", cfg.provider);
+      cfg.apiKey = cred?.apiKey?.trim() ?? "";
+    }
   } catch (err) {
     console.warn("[tts] settings read failed, defaulting to Z.ai:", err);
   }
 
-  ttsGlobal.cache = { at: now, cfg };
+  ttsGlobal.cache.set(ctx.userId, { at: now, cfg });
   return cfg;
 }
 

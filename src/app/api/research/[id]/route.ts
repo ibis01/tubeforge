@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import { serializeSession } from "@/lib/tubeforge/research";
 import { isJobRunning, lastJobError } from "@/lib/tubeforge/jobs";
 
@@ -13,7 +14,11 @@ type Ctx = { params: Promise<{ id: string }> };
  * session's ideas (or the persisted `session.error` when the scan failed —
  * the job registry's in-memory error is lost on restart, the row is not).
  */
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const row = await db.researchSession.findUnique({ where: { id } });
   if (!row)
@@ -27,7 +32,11 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
 }
 
 /** DELETE — remove a research session. */
-export async function DELETE(_req: NextRequest, ctx: Ctx) {
+export async function DELETE(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const existing = await db.researchSession.findUnique({ where: { id } });
   if (!existing)

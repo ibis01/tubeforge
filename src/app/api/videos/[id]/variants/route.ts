@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import {
   generateThumbnail,
   deriveThumbnailConcept,
@@ -28,7 +29,11 @@ function variantDTOs(videoId: string, primaryStyle: string): VariantDTO[] {
 }
 
 /** GET — list A/B thumbnail variants (+ job state for polling). */
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id }, select: { thumbStyle: true } });
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
@@ -41,7 +46,11 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
 }
 
 /** POST — kick off A/B variant set generation as a background job (returns 202 immediately). */
-export async function POST(_req: NextRequest, ctx: Ctx) {
+export async function POST(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
@@ -86,6 +95,8 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
 
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: id,
           stage: "thumbnail",
           message: `A/B thumbnail set generated for "${video.title}" (${styles.length} styles)`,
@@ -95,6 +106,8 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       const message = errorText(err, "Variant generation failed");
       await db.activity.create({
         data: {
+          organizationId: auth.ctx.organizationId,
+          userId: auth.ctx.userId,
           videoId: id,
           stage: "thumbnail",
           level: "error",
@@ -111,6 +124,10 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
 
 /** PATCH — promote a variant to be the primary thumbnail. */
 export async function PATCH(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const { id } = await ctx.params;
   let body: { style?: string };
   try {
@@ -142,6 +159,8 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 
   await db.activity.create({
     data: {
+      organizationId: auth.ctx.organizationId,
+      userId: auth.ctx.userId,
       videoId: id,
       stage: "thumbnail",
       message: `"${video.title ?? video.topic}" thumbnail switched to the ${style} variant`,

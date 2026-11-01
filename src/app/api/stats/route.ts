@@ -1,8 +1,13 @@
-import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { NextRequest, NextResponse } from "next/server";
+import { db } from "@/lib/tubeforge/tenant-db";
+import { requireUser } from "@/lib/tubeforge/tenant";
 import type { ActivityDTO, StatsDTO } from "@/lib/tubeforge/types";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter(); // tenant scope: handler + spawned job closures
+
   const [videos, channels, activities] = await Promise.all([
     db.video.findMany({
       select: { status: true, audioDuration: true, createdAt: true },
