@@ -32,6 +32,7 @@ import { TransitionControlsCard, type TransitionPickerValue } from "@/components
 import { BrandKitCard } from "@/components/tubeforge/brand-kit";
 import { SceneEditorDialog } from "@/components/tubeforge/scene-editor";
 import { DirectorCard } from "@/components/tubeforge/director-card";
+import { EditingStudio } from "@/components/tubeforge/editing-studio";
 import { CircleCheck, CircleX, CircleHelp, Ban, Brush } from "lucide-react";
 import {
   pollVoiceover,
@@ -1545,6 +1546,18 @@ export function VideoDetailDialog({
 
   const videoTab = (
     <div className="space-y-5">
+      {/* Stage 6 T-6.9 — Editing Studio. Mounted first so the user can trim
+          the timeline BEFORE the render commits the trims to disk. The
+          Studio is hidden when the video isn't scene-format or has no
+          scenes — the same gate the /assemble endpoint enforces. */}
+      {isStory && scenes.length > 0 && (
+        <EditingStudio
+          videoId={video.id}
+          canAssemble={Boolean(video.hasVoiceover)}
+          renderInFlight={busy === "render" || busy === "preview"}
+          onSaved={() => void refreshVideo(video.id)}
+        />
+      )}
       {/* Render controls */}
       <div className="rounded-xl border border-white/10 bg-white/3 p-4 space-y-4">
         <div className="grid grid-cols-2 gap-2">
