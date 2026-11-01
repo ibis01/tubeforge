@@ -18,8 +18,8 @@ import { errorText } from "@/lib/tubeforge/redact";
 type Ctx = { params: Promise<{ id: string }> };
 
 /** Build the variant list DTO for a video. */
-function variantDTOs(videoId: string, primaryStyle: string): VariantDTO[] {
-  return listVariants(videoId).map((v) => ({
+async function variantDTOs(videoId: string, primaryStyle: string): Promise<VariantDTO[]> {
+  return (await listVariants(videoId)).map((v) => ({
     style: v.style,
     label:
       THUMB_STYLES.find((s) => s.id === v.style)?.label ?? v.style,
@@ -39,7 +39,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
   const generating = isJobRunning(id, "variants");
   return NextResponse.json({
-    variants: variantDTOs(id, video.thumbStyle),
+    variants: await variantDTOs(id, video.thumbStyle),
     generating,
     error: generating ? null : lastJobError(id, "variants"),
   });
@@ -82,8 +82,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           concept,
         });
         // Ensure a primary thumbnail exists — promote the first variant
-        if (!readMedia(video.id, "thumbnail.png")) {
-          promoteVariant(video.id, style);
+        if (!(await readMedia(video.id, "thumbnail.png"))) {
+          await promoteVariant(video.id, style);
         }
       }
 
@@ -144,7 +144,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
   try {
-    promoteVariant(id, style);
+    await promoteVariant(id, style);
   } catch {
     return NextResponse.json(
       { error: `No variant named "${style}" — generate the A/B set first` },
@@ -168,7 +168,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   });
 
   return NextResponse.json({
-    variants: variantDTOs(id, style),
+    variants: await variantDTOs(id, style),
     thumbStyle: updated.thumbStyle,
   });
 }

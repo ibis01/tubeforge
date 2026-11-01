@@ -31,7 +31,7 @@ const execFileAsync = promisify(execFile);
 // Must mirror render.ts so caption times land on the composited timeline.
 export const LEAD_SEC = 0.35;
 
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+import { scratchDir } from "./storage";
 
 export interface SmartCaptionResult {
   srt: string;
@@ -281,7 +281,7 @@ export interface SmartCaptionOpts {
 export async function buildSmartSrt(
   opts: SmartCaptionOpts
 ): Promise<SmartCaptionResult> {
-  const dir = path.join(UPLOAD_ROOT, opts.videoId);
+  const dir = scratchDir(opts.videoId); // storage seam (T-3.7)
   const cues: { start: number; end: number; text: string }[] = [];
   let method: SmartCaptionResult["method"] = "silence";
 

@@ -105,7 +105,7 @@ cross-tenant isolation suite (`e2e/isolation.spec.ts`, runs in CI).
 | `TUBEFORGE_AUTH_SECRET` in `.env` | set (`npm run setup` provisions one) | set (32+ hex chars) — without it a production server refuses to serve any API (503) |
 | `TUBEFORGE_ENCRYPTION_KEY` in `.env` | set — encrypts provider keys + YouTube tokens at rest | set |
 | First visit | registration form (the FIRST account claims any pre-Stage-2 data — see below) | same |
-| Email verification / password reset | `TUBEFORGE_EMAIL_MODE=console` (default): links are logged + returned in the response | Stage 3 ships the SMTP adapter |
+| Email verification / password reset | `TUBEFORGE_EMAIL_MODE=console` (default): links are logged + returned in the response | `TUBEFORGE_EMAIL_MODE=smtp` + `TUBEFORGE_SMTP_*` (see §7) — the response then omits the link |
 | Locked out? | `npm run auth:reset -- --email you@example.com` (prints a reset link; `--set NewPass123` sets it directly) | same |
 
 **Upgrading an existing single-user install** — the migration
@@ -148,11 +148,15 @@ on scripting videos / library cards.
 ```
 tubeforge/
 ├── src/               # full app source (Next.js 16 + React 19 + Tailwind 4)
-├── prisma/            # database schemas (schema.prisma = PostgreSQL deploy default,
-│                      #  schema.sqlite.prisma = local-dev mirror)
+├── prisma/            # database schemas + migration chain (schema.prisma =
+│                      #  PostgreSQL deploy default, schema.sqlite.prisma =
+│                      #  GENERATED mirror — never edit it by hand)
 ├── db/                # empty — `npm run setup:local` creates custom.db here
 ├── public/            # icons, PWA manifest
-├── scripts/           # backup.sh + auth-reset.mjs (recovery helpers)
+├── scripts/           # backup.sh, auth-reset.mjs, worker.mts, test suite
+├── Dockerfile         # production image (web + worker roles, ffmpeg inside)
+├── docker-compose.yml # postgres + web + worker topology
+├── fly.toml           # Fly.io process-group deployment
 ├── package.json       # npm scripts (dev / setup / build / db / auth:reset)
 ├── .env               # DATABASE_URL (relative, works anywhere) + fresh auth secret
 ├── .env.example       # same, for reference
@@ -197,3 +201,84 @@ an uploads manifest into `backups/` (needs the `sqlite3` CLI installed).
 no extra services). `npm run check` runs typecheck + lint + tests together.
 `npm run test:e2e` runs the Playwright browser smoke suite (downloads Chromium
 on first run).
+
+---
+
+## 7. Production deployment matrix (Stage 3)
+
+The application ships as ONE container image with TWO roles — the compose file
+and `fly.toml` pick the command per service:
+
+| Role | Command | What runs there |
+|---|---|---|
+| **web** | `node .next/standalone/server.js` | Next.js server (port 3000) + the in-process queue loop for route-closure jobs (voiceover, render, thumbnails…) |
+| **worker** | `node --import tsx scripts/worker.mts` | Dedicated durable-queue worker for the DB-derivable heavy stages (script, research, stock). Scale horizontally — claims are atomic |
+
+### Option A — Docker Compose (one box)
+
+```bash
+cp .env.example .env      # set POSTGRES_PASSWORD, TUBEFORGE_AUTH_SECRET,
+                           # TUBEFORGE_ENCRYPTION_KEY (required!)
+docker compose up -d --build
+docker compose up -d --scale worker=2   # more render capacity
+```
+
+Postgres runs as a compose service; migrations (`prisma migrate deploy`)
+run automatically on the web container's start. Media defaults to a named
+Docker volume (`uploads`) — see storage below to move it off-box.
+
+### Option B — Fly.io (multi-machine)
+
+```bash
+fly launch --no-deploy --copy-config
+fly secrets set TUBEFORGE_AUTH_SECRET=... TUBEFORGE_ENCRYPTION_KEY=... \
+  DATABASE_URL=postgres://... \
+  TUBEFORGE_STORAGE_DRIVER=s3 TUBEFORGE_S3_BUCKET=... TUBEFORGE_S3_ACCESS_KEY_ID=...
+fly deploy
+fly scale count worker=2
+```
+
+Fly machines have ephemeral disks — **use the S3 driver** (below) or attach a
+volume and mount it at `/app/uploads` (see the commented `[[mounts]]` in
+`fly.toml`).
+
+### Option C — Vercel + Neon (web only)
+
+`npm run build && npm start` works, but Vercel's serverless functions cannot
+run ffmpeg renders or the queue loop — pair it with at least one worker
+container elsewhere (any VPS running the same image with
+`node --import tsx scripts/worker.mts`), pointing at the same Neon/Supabase
+Postgres. Set `TUBEFORGE_NO_CLAIM=1` on the web role so only the workers claim
+jobs.
+
+### Storage — local volume vs. S3/R2
+
+| | `TUBEFORGE_STORAGE_DRIVER=local` (default) | `TUBEFORGE_STORAGE_DRIVER=s3` |
+|---|---|---|
+| Media lives in | a shared volume at `/app/uploads` | any S3-compatible bucket (AWS S3, Cloudflare R2, MinIO) |
+| Video delivery | streamed by the app (Range requests, constant memory) | **302 → presigned URL** — bytes flow CDN → client, never through the app |
+| Quota | per-organization byte counter (`TUBEFORGE_STORAGE_QUOTA_GB`, default 10) | same |
+| Render scratch | same volume | local tmp on the worker (`TUBEFORGE_SCRATCH_ROOT`), artifacts upload on completion |
+| Env | — | `TUBEFORGE_S3_BUCKET`, `TUBEFORGE_S3_REGION` (`auto` for R2), `TUBEFORGE_S3_ENDPOINT`, `TUBEFORGE_S3_ACCESS_KEY_ID`, `TUBEFORGE_S3_SECRET_ACCESS_KEY` |
+
+### Email — console vs. real SMTP
+
+`TUBEFORGE_EMAIL_MODE=smtp` activates the built-in zero-dependency SMTP client
+(STARTTLS on 25/587, implicit TLS on 465) with `TUBEFORGE_SMTP_HOST`,
+`TUBEFORGE_SMTP_PORT`, `TUBEFORGE_SMTP_USER`, `TUBEFORGE_SMTP_PASS`,
+`TUBEFORGE_SMTP_FROM`. Console mode (default) is fine for single-owner boxes
+ONLY — in production the verification/reset links must reach inboxes.
+
+### Operations quick reference
+
+```bash
+docker compose logs -f worker          # queue activity (JSON lines)
+curl -s localhost:3000/api/auth/status # liveness
+npx prisma migrate deploy              # manual schema sync (compose does it)
+npm run backup                         # SQLite only; on Postgres: pg_dump
+docker compose exec web node scripts/auth-reset.mjs --email you@example.com  # lockout recovery
+```
+
+Usage metering: every AI call lands in `UsageRecord` (per user, per
+capability, latency + success); `GET /api/account/usage?days=30` returns the
+aggregates that power the account dashboard.

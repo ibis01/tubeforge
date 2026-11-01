@@ -28,14 +28,18 @@ import { fetchStockForScenes } from "./stock";
 import { isJobCancelled, setJobProgress, JobCancelledError, type JobKind } from "./jobs";
 import { errorText } from "./redact";
 
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+import { videoDir } from "./ai";
+import { remove, removePrefix } from "./storage";
 
-/** Renders become stale when the visual track changes (mirrors the stock route). */
-function invalidateRenders(videoId: string) {
-  const dir = path.join(UPLOAD_ROOT, videoId);
-  for (const f of ["final.mp4", "preview.mp4"]) {
-    fs.rmSync(path.join(dir, f), { force: true });
-  }
+/** Renders become stale when the visual track changes (mirrors the stock route).
+ *  Storage seam (T-3.7): final/preview die through the driver (s3-safe) —
+ *  scene art and voiceover stay. Local scratch copies are removed too. */
+async function invalidateRenders(videoId: string) {
+  await remove(`${videoId}/final.mp4`).catch(() => {});
+  await remove(`${videoId}/preview.mp4`).catch(() => {});
+  const dir = videoDir(videoId);
+  fs.rmSync(path.join(dir, "final.mp4"), { force: true });
+  fs.rmSync(path.join(dir, "preview.mp4"), { force: true });
 }
 
 /**

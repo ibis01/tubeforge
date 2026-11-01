@@ -19,10 +19,10 @@ import { isJobRunning } from "./jobs";
 import { chatComplete } from "./providers/chat";
 import { ttsSynthesize } from "./providers/tts";
 import { imageEdit, imageGenerate, imageEditSupported } from "./providers/image";
+import * as storage from "./storage";
 
 const execFileAsync = promisify(execFile);
 
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- Scene storage ----------
@@ -90,14 +90,20 @@ export function parseScenes(json: string | null | undefined): Scene[] {
   }
 }
 
-export function serializeScenes(
+export async function serializeScenes(
   videoId: string,
   scenes: Scene[]
-): import("./types").SceneDTO[] {
+): Promise<import("./types").SceneDTO[]> {
+  // Storage seam (T-3.7): existence checks go through the driver — a local
+  // existsSync probe would lie under s3.
+  const hasImageByIdx = new Map<number, boolean>();
+  await Promise.all(
+    scenes.map(async (s) => {
+      hasImageByIdx.set(s.index, await storage.exists(`${videoId}/${sceneImageFile(s.index)}`));
+    })
+  );
   return scenes.map((s) => {
-    const hasImage = fs.existsSync(
-      path.join(UPLOAD_ROOT, videoId, sceneImageFile(s.index))
-    );
+    const hasImage = hasImageByIdx.get(s.index) ?? false;
     return {
       index: s.index,
       title: s.title,
@@ -124,21 +130,20 @@ export function serializeScenes(
   });
 }
 
-/** True when every scene has its storyboard image on disk. */
-export function storyboardComplete(videoId: string, scenes: Scene[]): boolean {
-  return (
-    scenes.length > 0 &&
-    scenes.every((s) =>
-      fs.existsSync(path.join(UPLOAD_ROOT, videoId, sceneImageFile(s.index)))
-    )
+/** True when every scene has its storyboard image (driver-aware, T-3.7). */
+export async function storyboardComplete(videoId: string, scenes: Scene[]): Promise<boolean> {
+  if (!scenes.length) return false;
+  const results = await Promise.all(
+    scenes.map((s) => storage.exists(`${videoId}/${sceneImageFile(s.index)}`))
   );
+  return results.every(Boolean);
 }
 
-export function readSceneImage(videoId: string, index: number): Buffer | null {
+export async function readSceneImage(videoId: string, index: number): Promise<Buffer | null> {
   if (!Number.isInteger(index) || index < 1 || index > 99) return null;
-  const p = path.join(UPLOAD_ROOT, videoId, sceneImageFile(index));
-  if (!fs.existsSync(p)) return null;
-  return fs.readFileSync(p);
+  const key = `${videoId}/${sceneImageFile(index)}`;
+  if (!(await storage.exists(key))) return null;
+  return storage.get(key);
 }
 
 // ---------- Scene normalization ----------
@@ -620,7 +625,9 @@ export async function generateSceneImage(opts: {
     }
 
     if (buffer.length < 1000) throw new Error(`Scene ${scene.index} image is empty`);
-    fs.writeFileSync(imagePath, buffer);
+    // Storage seam (T-3.7): scene art persists through the driver (quota +
+    // s3 upload) while staying readable for the render pipeline.
+    await storage.put(`${opts.videoId}/${sceneImageFile(scene.index)}`, buffer);
   };
 
   // Phase 3: VLM quality gate — now DEFAULT for scenes too (qualityGate
@@ -746,7 +753,8 @@ export async function editSceneImage(opts: {
   );
 
   if (buffer.length < 1000) throw new Error(`Edited image for scene ${scene.index} is empty`);
-  fs.writeFileSync(imagePath, buffer);
+  // Storage seam (T-3.7)
+  await storage.put(`${opts.videoId}/${sceneImageFile(scene.index)}`, buffer);
   return { fileBytes: buffer.length };
 }
 
@@ -810,6 +818,8 @@ export async function replaceSceneImage(
 
   const bytes = fs.existsSync(outPath) ? fs.statSync(outPath).size : 0;
   if (bytes < 1000) throw new Error("Could not process that image — the file may be corrupt");
+  // Storage seam (T-3.7): register the replaced art with the driver.
+  await storage.putFromPath(`${videoId}/${sceneImageFile(index)}`, outPath);
   return bytes;
 }
 
@@ -905,7 +915,10 @@ export async function generateSceneVoiceovers(opts: {
   }
 
   const full = mergeWavs(allBuffers);
-  fs.writeFileSync(path.join(dir, "voiceover.wav"), full.buffer);
+  // Storage seam (T-3.7): the merged voiceover is a durable artifact (export
+  // + download routes read it) — publish through the driver. Per-scene wavs
+  // stay scratch-local (the renderer consumes them).
+  await storage.put(`${opts.videoId}/voiceover.wav`, full.buffer);
 
   return { durationSec: full.durationSec, sceneDurations };
 }

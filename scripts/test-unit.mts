@@ -17,6 +17,7 @@
 import { execFile } from "child_process";
 import crypto from "node:crypto";
 import fs from "fs";
+import fsp from "fs/promises";
 import os from "os";
 import path from "path";
 import { promisify } from "util";
@@ -961,6 +962,155 @@ await test("log: pino-format JSON lines, level filtering, child bindings, redact
     if (origLevel === undefined) delete process.env.TUBEFORGE_LOG_LEVEL;
     else process.env.TUBEFORGE_LOG_LEVEL = origLevel;
   }
+});
+
+// ---------------------------------------------------------------------------
+// Stage 3 — storage abstraction (T-3.7)
+// ---------------------------------------------------------------------------
+
+await test("storage: normalizeKey rejects traversal and absolute paths, passes clean keys", async () => {
+  const mod = await import("../src/lib/tubeforge/storage.ts");
+  eq(mod.normalizeKey("abc/def.png"), "abc/def.png", "clean key");
+  eq(mod.normalizeKey("a//b/./c"), "a/b/c", "separators collapsed");
+  let threw = false;
+  try { mod.normalizeKey("../etc/passwd"); } catch { threw = true; }
+  ok(threw, ".. traversal rejected");
+  threw = false;
+  try { mod.normalizeKey(""); } catch { threw = true; }
+  ok(threw, "empty key rejected");
+});
+
+await test("storage: local driver roundtrip — put / get / stat / exists / remove", async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "tf-storage-"));
+  process.env.TUBEFORGE_UPLOAD_ROOT = dir;
+  delete process.env.TUBEFORGE_STORAGE_DRIVER;
+  const mod = await import("../src/lib/tubeforge/storage.ts");
+  const key = "v1/artifact.bin";
+  const payload = crypto.randomBytes(2048);
+  await mod.put(key, payload);
+  ok(await mod.exists(key), "exists after put");
+  const st = await mod.stat(key);
+  ok(st && st.size === payload.length, "stat reports size");
+  const back = await mod.get(key);
+  ok(back.equals(payload), "get returns exact bytes");
+  await mod.remove(key);
+  ok(!(await mod.exists(key)), "gone after remove");
+  const missing = await mod.stat("v1/never-was.bin");
+  eq(missing, null, "missing stat is null");
+  delete process.env.TUBEFORGE_UPLOAD_ROOT;
+  await fsp.rm(dir, { recursive: true, force: true });
+});
+
+await test("storage: putFromPath same-path no-op + cross-dir move works", async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "tf-storage2-"));
+  process.env.TUBEFORGE_UPLOAD_ROOT = path.join(dir, "root");
+  delete process.env.TUBEFORGE_STORAGE_DRIVER;
+  const mod = await import("../src/lib/tubeforge/storage.ts");
+  // direct write into the uploads layout, then register it (the render.ts pattern)
+  const file = path.join(dir, "root", "vid", "final.mp4");
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  await fsp.writeFile(file, Buffer.from("FAKE_MP4_BYTES"));
+  await mod.putFromPath("vid/final.mp4", file); // same path — must not throw
+  ok(await mod.exists("vid/final.mp4"), "same-path registration keeps the file");
+  // scratch file elsewhere moves into place
+  const scratch = path.join(dir, "scratch", "thumb.png");
+  await fsp.mkdir(path.dirname(scratch), { recursive: true });
+  await fsp.writeFile(scratch, Buffer.from("PNG"));
+  await mod.putFromPath("vid/thumb.png", scratch);
+  ok(await mod.exists("vid/thumb.png"), "cross-dir move landed");
+  ok(!fs.existsSync(scratch), "scratch source consumed");
+  delete process.env.TUBEFORGE_UPLOAD_ROOT;
+  await fsp.rm(dir, { recursive: true, force: true });
+});
+
+await test("storage: removePrefix wipes a whole video folder", async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "tf-storage3-"));
+  process.env.TUBEFORGE_UPLOAD_ROOT = dir;
+  delete process.env.TUBEFORGE_STORAGE_DRIVER;
+  const mod = await import("../src/lib/tubeforge/storage.ts");
+  for (const f of ["scene-01.png", "scene-02.png", "voiceover.wav", "final.mp4"]) {
+    await mod.put(`vid9/${f}`, Buffer.from(`data-${f}`));
+  }
+  await mod.removePrefix("vid9");
+  for (const f of ["scene-01.png", "voiceover.wav", "final.mp4"]) {
+    ok(!(await mod.exists(`vid9/${f}`)), `vid9/${f} wiped`);
+  }
+  ok(!fs.existsSync(path.join(dir, "vid9")), "directory itself removed");
+  delete process.env.TUBEFORGE_UPLOAD_ROOT;
+  await fsp.rm(dir, { recursive: true, force: true });
+});
+
+await test("storage: driver kind + info respond to env without restarts", async () => {
+  const mod = await import("../src/lib/tubeforge/storage.ts");
+  eq(mod.storageDriverKind(), "local", "default driver is local");
+  process.env.TUBEFORGE_STORAGE_DRIVER = "s3";
+  eq(mod.storageDriverKind(), "s3", "env flips the driver");
+  const info = mod.storageInfo();
+  ok(typeof info.quotaBytes === "number" && info.quotaBytes > 0, "quota default is positive");
+  delete process.env.TUBEFORGE_STORAGE_DRIVER;
+});
+
+await test("storage: scratchDir tracks the driver (uploads locally, tmp under s3)", async () => {
+  const mod = await import("../src/lib/tubeforge/storage.ts");
+  delete process.env.TUBEFORGE_STORAGE_DRIVER;
+  const localDir = mod.scratchDir("vidA");
+  ok(localDir.startsWith(process.cwd()), "local scratch lives under the app (uploads layout)");
+  process.env.TUBEFORGE_STORAGE_DRIVER = "s3";
+  process.env.TUBEFORGE_SCRATCH_ROOT = path.join(os.tmpdir(), "tf-scratch-probe");
+  const s3Dir = mod.scratchDir("vidA");
+  ok(!s3Dir.startsWith(process.cwd()), "s3 scratch redirects away from the app tree");
+  ok(fs.existsSync(s3Dir), "scratch dir created on demand");
+  delete process.env.TUBEFORGE_STORAGE_DRIVER;
+  delete process.env.TUBEFORGE_SCRATCH_ROOT;
+});
+
+// ---------------------------------------------------------------------------
+// Stage 3 — email adapter (T-3.9)
+// ---------------------------------------------------------------------------
+
+await test("email: console mode logs and reports delivered=console, link stays in responses", async () => {
+  const orig = process.env.TUBEFORGE_EMAIL_MODE;
+  delete process.env.TUBEFORGE_EMAIL_MODE;
+  const mod = await import("../src/lib/tubeforge/email.ts");
+  const lines: string[] = [];
+  const origLog = console.log;
+  console.log = (...a: unknown[]) => lines.push(a.join(" "));
+  try {
+    const res = await mod.sendMail({
+      to: "user@example.com",
+      subject: "Confirm your email",
+      text: "Hi\n\nhttps://app.example.com/verify?token=abc\n\nbye",
+    });
+    eq(res.delivered, "console", "console mode reported");
+    eq(mod.linkInResponse(), true, "link allowed in response");
+    const logged = lines.find((l) => l.includes("email:console"));
+    ok(logged && logged.includes("user@example.com"), "recipient logged");
+    ok(logged && logged.includes("https://app.example.com/verify?token=abc"), "action link logged for dev");
+  } finally {
+    console.log = origLog;
+    if (orig === undefined) delete process.env.TUBEFORGE_EMAIL_MODE;
+    else process.env.TUBEFORGE_EMAIL_MODE = orig;
+  }
+});
+
+await test("email: smtp mode hides the link from responses and refuses empty config", async () => {
+  const orig = { mode: process.env.TUBEFORGE_EMAIL_MODE, host: process.env.TUBEFORGE_SMTP_HOST };
+  process.env.TUBEFORGE_EMAIL_MODE = "smtp";
+  delete process.env.TUBEFORGE_SMTP_HOST;
+  const mod = await import("../src/lib/tubeforge/email.ts");
+  eq(mod.emailMode(), "smtp", "mode picked up");
+  eq(mod.linkInResponse(), false, "smtp responses never echo the link");
+  let threw = false;
+  try {
+    await mod.sendMail({ to: "x@example.com", subject: "s", text: "https://a.b/c" });
+  } catch (err) {
+    threw = true;
+    ok(/TUBEFORGE_SMTP_HOST/.test(err instanceof Error ? err.message : ""), "actionable config error");
+  }
+  ok(threw, "smtp without host fails loudly");
+  process.env.TUBEFORGE_EMAIL_MODE = orig.mode;
+  if (orig.host) process.env.TUBEFORGE_SMTP_HOST = orig.host;
+  else delete process.env.TUBEFORGE_SMTP_HOST;
 });
 
 // ---------- summary ----------

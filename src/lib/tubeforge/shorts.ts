@@ -14,6 +14,7 @@ import { promisify } from "util";
 import type { Scene } from "./types";
 import { sceneImageFile } from "./story";
 import { videoDir } from "./ai";
+import * as storage from "./storage";
 import { focalForScene, sanitizeMotion, type MotionSettings } from "./motion";
 import { sanitizeTransition } from "./transitions";
 
@@ -303,36 +304,42 @@ export async function renderShort(opts: ShortRenderOptions): Promise<ShortRender
   fs.rmSync(tmpDir, { recursive: true, force: true });
 
   const shortDur = await probeDuration(outPath);
+  const fileBytes = fs.statSync(outPath).size;
+
+  // Storage seam (T-3.7): publish artifacts (s3: upload from scratch; local:
+  // in-place no-op + quota accounting). Sizes snapshotted first — the s3
+  // branch consumes the scratch files.
+  await storage.putFromPath(`${opts.videoId}/short.mp4`, outPath);
+  if (fs.existsSync(thumbPath)) {
+    await storage.putFromPath(`${opts.videoId}/short-thumb.png`, thumbPath);
+  }
+
   return {
     durationSec: shortDur,
-    fileBytes: fs.statSync(outPath).size,
+    fileBytes,
     sceneIndex: chosen.index,
     autoPicked,
   };
 }
 
-/** Read short.mp4 for the streaming route (null when none rendered). */
-export function readShortFile(videoId: string): { buffer: Buffer; fileName: string } | null {
-  const p = path.join(process.cwd(), "uploads", videoId, "short.mp4");
-  if (!fs.existsSync(p)) return null;
-  return { buffer: fs.readFileSync(p), fileName: "short.mp4" };
+/** Read short.mp4 (Storage seam, T-3.7 — driver-aware). */
+export async function readShortFile(videoId: string): Promise<{ buffer: Buffer; fileName: string } | null> {
+  const s = await storage.stat(`${videoId}/short.mp4`);
+  if (!s) return null;
+  return { buffer: await storage.get(`${videoId}/short.mp4`), fileName: "short.mp4" };
 }
 
 /** Stat short.mp4 without reading it (Stage 3, T-3.6 — streaming route). */
-export function statShortFile(videoId: string): { path: string; size: number; fileName: string } | null {
-  const p = path.join(process.cwd(), "uploads", videoId, "short.mp4");
-  try {
-    const s = fs.statSync(p);
-    if (!s.isFile()) return null;
-    return { path: p, size: s.size, fileName: "short.mp4" };
-  } catch {
-    return null;
-  }
+export async function statShortFile(videoId: string): Promise<{ key: string; size: number; fileName: string } | null> {
+  const key = `${videoId}/short.mp4`;
+  const s = await storage.stat(key);
+  if (!s) return null;
+  return { key, size: s.size, fileName: "short.mp4" };
 }
 
 /** Read short-thumb.png (null when absent). */
-export function readShortThumb(videoId: string): Buffer | null {
-  const p = path.join(process.cwd(), "uploads", videoId, "short-thumb.png");
-  if (!fs.existsSync(p)) return null;
-  return fs.readFileSync(p);
+export async function readShortThumb(videoId: string): Promise<Buffer | null> {
+  const s = await storage.stat(`${videoId}/short-thumb.png`);
+  if (!s) return null;
+  return storage.get(`${videoId}/short-thumb.png`);
 }

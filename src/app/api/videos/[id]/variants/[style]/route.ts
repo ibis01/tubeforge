@@ -4,7 +4,7 @@ import path from "path";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+import * as storage from "@/lib/tubeforge/storage";
 
 /** GET — stream a single A/B variant PNG. */
 export async function GET(
@@ -25,7 +25,7 @@ export async function GET(
   if (!/^[\w-]+$/.test(style))
     return NextResponse.json({ error: "Bad style name" }, { status: 400 });
 
-  const filePath = path.join(UPLOAD_ROOT, id, `variant-${style}.png`);
+  const filePath = `variant-${style}.png`; // storage key fragment (T-3.7)
   if (!fs.existsSync(filePath))
     return NextResponse.json({ error: "Variant not found" }, { status: 404 });
 

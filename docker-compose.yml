@@ -1,0 +1,102 @@
+# TubeForge — full production topology (Stage 3, T-3.12).
+#
+#   docker compose up -d --build
+#
+# Roles:
+#   postgres — the source of truth (migrations run on the web container's
+#              start via `prisma migrate deploy`)
+#   web      — Next.js standalone server (port 3000) + the in-process queue
+#              loop for route-closure jobs (voiceover, render, …)
+#   worker   — dedicated durable-queue worker for the DB-derivable heavy
+#              stages (script / research / stock). Scale it: `docker compose
+#              up -d --scale worker=2`
+#
+# Storage: default is local disk (volume below). Flip to S3/R2 by setting
+# TUBEFORGE_STORAGE_DRIVER=s3 + the TUBEFORGE_S3_* block — then the volume is
+# only the render scratch and can stay ephemeral.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tubeforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: tubeforge
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tubeforge -d tubeforge"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  web:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Schema first, then serve.
+    command: sh -c "npx prisma migrate deploy --schema prisma/schema.prisma && node .next/standalone/server.js"
+    environment:
+      DATABASE_URL: postgresql://tubeforge:${POSTGRES_PASSWORD}@postgres:5432/tubeforge
+      # REQUIRED — generate your own:  openssl rand -base64 32
+      TUBEFORGE_AUTH_SECRET: ${TUBEFORGE_AUTH_SECRET:?set TUBEFORGE_AUTH_SECRET in .env}
+      TUBEFORGE_ENCRYPTION_KEY: ${TUBEFORGE_ENCRYPTION_KEY:?set TUBEFORGE_ENCRYPTION_KEY in .env}
+      # Registration gate for legacy installs (see SECURITY.md); optional.
+      TUBEFORGE_OWNER_TOKEN: ${TUBEFORGE_OWNER_TOKEN:-}
+      # Email (console default — set smtp + SMTP_* env for real delivery)
+      TUBEFORGE_EMAIL_MODE: ${TUBEFORGE_EMAIL_MODE:-console}
+      TUBEFORGE_SMTP_HOST: ${TUBEFORGE_SMTP_HOST:-}
+      TUBEFORGE_SMTP_PORT: ${TUBEFORGE_SMTP_PORT:-587}
+      TUBEFORGE_SMTP_USER: ${TUBEFORGE_SMTP_USER:-}
+      TUBEFORGE_SMTP_PASS: ${TUBEFORGE_SMTP_PASS:-}
+      TUBEFORGE_SMTP_FROM: ${TUBEFORGE_SMTP_FROM:-}
+      # Object storage (optional — local volume when unset)
+      TUBEFORGE_STORAGE_DRIVER: ${TUBEFORGE_STORAGE_DRIVER:-local}
+      TUBEFORGE_STORAGE_QUOTA_GB: ${TUBEFORGE_STORAGE_QUOTA_GB:-10}
+      TUBEFORGE_S3_BUCKET: ${TUBEFORGE_S3_BUCKET:-}
+      TUBEFORGE_S3_REGION: ${TUBEFORGE_S3_REGION:-auto}
+      TUBEFORGE_S3_ENDPOINT: ${TUBEFORGE_S3_ENDPOINT:-}
+      TUBEFORGE_S3_ACCESS_KEY_ID: ${TUBEFORGE_S3_ACCESS_KEY_ID:-}
+      TUBEFORGE_S3_SECRET_ACCESS_KEY: ${TUBEFORGE_S3_SECRET_ACCESS_KEY:-}
+      # YouTube OAuth (optional at boot; per-user connect works without)
+      TUBEFORGE_YT_CLIENT_ID: ${TUBEFORGE_YT_CLIENT_ID:-}
+      TUBEFORGE_YT_CLIENT_SECRET: ${TUBEFORGE_YT_CLIENT_SECRET:-}
+    ports:
+      - "3000:3000"
+    volumes:
+      - uploads:/app/uploads
+    extra_hosts:
+      # Claim liveness probes compare PIDs across processes — same-host
+      # semantics matter more than network isolation between the roles.
+      - "host.docker.internal:host-gateway"
+
+  worker:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: node --import tsx scripts/worker.mts
+    environment:
+      DATABASE_URL: postgresql://tubeforge:${POSTGRES_PASSWORD}@postgres:5432/tubeforge
+      TUBEFORGE_AUTH_SECRET: ${TUBEFORGE_AUTH_SECRET:?set TUBEFORGE_AUTH_SECRET in .env}
+      TUBEFORGE_ENCRYPTION_KEY: ${TUBEFORGE_ENCRYPTION_KEY:?set TUBEFORGE_ENCRYPTION_KEY in .env}
+      TUBEFORGE_STORAGE_DRIVER: ${TUBEFORGE_STORAGE_DRIVER:-local}
+      TUBEFORGE_S3_BUCKET: ${TUBEFORGE_S3_BUCKET:-}
+      TUBEFORGE_S3_REGION: ${TUBEFORGE_S3_REGION:-auto}
+      TUBEFORGE_S3_ENDPOINT: ${TUBEFORGE_S3_ENDPOINT:-}
+      TUBEFORGE_S3_ACCESS_KEY_ID: ${TUBEFORGE_S3_ACCESS_KEY_ID:-}
+      TUBEFORGE_S3_SECRET_ACCESS_KEY: ${TUBEFORGE_S3_SECRET_ACCESS_KEY:-}
+      # Local storage: share the web container's volume so artifacts written
+      # by either role land in the same uploads/ tree.
+    volumes:
+      - uploads:/app/uploads
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  pgdata:
+  uploads:

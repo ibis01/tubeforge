@@ -41,7 +41,6 @@ import {
 } from "./audiomix";
 
 const execFileAsync = promisify(execFile);
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
 export type QcStatus = "pass" | "fail" | "unmeasured";
 
@@ -452,18 +451,21 @@ export async function runQcReport(opts: {
 }
 
 /** Standard QC for a rendered video (paths under uploads/<videoId>/). */
-export function qcForVideo(
+export async function qcForVideo(
   videoId: string,
   videoDuration: number,
   narrationSec: number | null,
   expectedBlack?: [number, number][],
   expectedAspect?: QcAspect
 ): Promise<QcReport> {
+  // Storage seam (T-3.7): ffprobe/readFile need real paths — materialize
+  // returns the uploads path locally, a cached download under s3.
+  const { materialize } = await import("./storage");
   return runQcReport({
-    mp4Path: path.join(UPLOAD_ROOT, videoId, "final.mp4"),
+    mp4Path: await materialize(`${videoId}/final.mp4`),
     videoDuration,
     narrationSec,
-    srtPath: path.join(UPLOAD_ROOT, videoId, "subtitles.srt"),
+    srtPath: await materialize(`${videoId}/subtitles.srt`),
     expectedBlack,
     expectedAspect,
   });

@@ -15,13 +15,14 @@ import {
 
 type Ctx = { params: Promise<{ id: string }> };
 
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+import { scratchDir, remove } from "@/lib/tubeforge/storage";
 
-/** Renders become stale when the visual track changes. */
-function invalidateRenders(videoId: string) {
-  const dir = path.join(UPLOAD_ROOT, videoId);
+/** Renders become stale when the visual track changes.
+ *  Storage seam (T-3.7): outputs die through the driver (s3-safe). */
+async function invalidateRenders(videoId: string) {
   for (const f of ["final.mp4", "preview.mp4"]) {
-    fs.rmSync(path.join(dir, f), { force: true });
+    await remove(`${videoId}/${f}`).catch(() => {});
+    fs.rmSync(path.join(scratchDir(videoId), f), { force: true });
   }
 }
 
@@ -126,7 +127,7 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
 
   const scenes = parseScenes(video.scenes);
   const cleared = await clearStock(id, scenes);
-  invalidateRenders(id);
+  await invalidateRenders(id);
   await db.video.update({
     where: { id },
     data: { hasVideo: false, videoDuration: null },

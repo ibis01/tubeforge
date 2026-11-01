@@ -34,7 +34,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!video)
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
   return NextResponse.json({
-    video: serializeVideo(video, video.channel?.name, {
+    video: await serializeVideo(video, video.channel?.name, {
       includeScenes: true,
       stats: await latestStatsFor(id),
     }),
@@ -216,7 +216,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     },
   });
   return NextResponse.json({
-    video: serializeVideo(updated, updated.channel?.name, { includeScenes: true }),
+    video: await serializeVideo(updated, updated.channel?.name, { includeScenes: true }),
   });
 }
 

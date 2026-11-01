@@ -5,7 +5,7 @@
 //   runway      → POST {baseUrl}/image_to_video
 //   luma        → POST {baseUrl}/generations
 
-import { getZAI } from "../ai";
+import { zaiClientFor } from "../zai-client";
 import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta } from "./registry";
 import { joinUrl, providerFetch, providerFetchJson } from "./http";
@@ -45,7 +45,7 @@ async function zaiVideo(
   req: ImageToVideoRequest,
   config: CapabilityConfig,
 ): Promise<Buffer> {
-  const zai = await getZAI();
+  const zai = await zaiClientFor("video");
   const model = config.model?.trim() || "cogvideox-3";
 
   // Note: Z.ai SDK method for video may vary. Using a placeholder here.

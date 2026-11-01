@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
+import { Readable } from "stream";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { safeZipName, streamZip, zipMethodFor, type StreamZipEntry } from "@/lib/tubeforge/zip";
@@ -8,11 +9,9 @@ import { listVariants } from "@/lib/tubeforge/ai";
 import { parseScenes, sceneImageFile } from "@/lib/tubeforge/story";
 import { LENGTHS, TONES, VOICES } from "@/lib/tubeforge/types";
 import { resolveMusicForVideo, isMusicEnabledForVideo } from "@/lib/tubeforge/music";
-import { Readable } from "stream";
+import * as storage from "@/lib/tubeforge/storage";
 
-type Ctx = { params: Promise<{ id: string }> };
-
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+ type Ctx = { params: Promise<{ id: string }> };
 
 /** GET — download the full upload-ready package as a ZIP. */
 export async function GET(req: NextRequest, ctx: Ctx) {
@@ -34,6 +33,10 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   // data-descriptor ZIP builder — the whole package flows through a few MB of
   // memory instead of buffering every asset plus the archive. Text metadata
   // stays in memory (KBs) and uses the same stream with a one-shot source.
+  //
+  // Stage 3 (T-3.7): files resolve through the STORAGE DRIVER — the export
+  // works unchanged under local disk and s3 (where each asset is fetched
+  // whole from the bucket; still per-file, never the whole folder at once).
   const entries: StreamZipEntry[] = [];
   const addText = (name: string, data: Buffer | string | null) => {
     if (data !== null && data !== undefined) {
@@ -45,19 +48,21 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       });
     }
   };
-  const hasFile = (rel: string): boolean => {
-    try {
-      return fs.statSync(path.join(UPLOAD_ROOT, video.id, rel)).isFile();
-    } catch {
-      return false;
-    }
-  };
-  const addFile = (name: string, rel: string) => {
-    const p = path.join(UPLOAD_ROOT, video.id, rel);
-    if (hasFile(rel)) {
+  const addFile = async (name: string, rel: string) => {
+    const key = `${video.id}/${rel}`;
+    if (!(await storage.exists(key))) return;
+    if (storage.storageDriverKind() === "local") {
+      const p = await storage.materialize(key);
       entries.push({
         name: safeZipName(name),
         stream: () => fs.createReadStream(p),
+        method: zipMethodFor(name),
+      });
+    } else {
+      const buf = await storage.get(key);
+      entries.push({
+        name: safeZipName(name),
+        stream: () => Readable.from([buf]),
         method: zipMethodFor(name),
       });
     }
@@ -246,20 +251,20 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     // (e.g. deleted pinned track) just omits the file.
   }
 
-  // Media assets — streamed from disk (no whole-file buffers)
-  addFile(`${base}/voiceover.wav`, "voiceover.wav");
-  addFile(`${base}/thumbnail.png`, "thumbnail.png");
+  // Media assets — resolved through the storage driver (T-3.7)
+  await addFile(`${base}/voiceover.wav`, "voiceover.wav");
+  await addFile(`${base}/thumbnail.png`, "thumbnail.png");
 
-  for (const v of listVariants(video.id)) {
-    addFile(`${base}/thumbnail-variants/${v.style}.png`, v.fileName);
+  for (const v of await listVariants(video.id)) {
+    await addFile(`${base}/thumbnail-variants/${v.style}.png`, v.fileName);
   }
 
   // Story engine artifacts — storyboard art, captions, rendered video
   for (const scene of scenes) {
-    addFile(`${base}/storyboard/scene-${String(scene.index).padStart(2, "0")}.png`, sceneImageFile(scene.index));
+    await addFile(`${base}/storyboard/scene-${String(scene.index).padStart(2, "0")}.png`, sceneImageFile(scene.index));
   }
-  addFile(`${base}/subtitles.srt`, "subtitles.srt");
-  addFile(`${base}/final.mp4`, "final.mp4");
+  await addFile(`${base}/subtitles.srt`, "subtitles.srt");
+  await addFile(`${base}/final.mp4`, "final.mp4");
 
   if (entries.length === 0)
     return NextResponse.json(

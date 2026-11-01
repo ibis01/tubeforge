@@ -59,12 +59,15 @@ interface ClaimResult {
   contentTransferred: number;
 }
 
-/** Does this install have legacy rows waiting to be claimed? */
+/** Does this install have legacy rows waiting to be claimed?
+ *  Stage 3 (T-3.11): reads via raw SQL — the table is unmanaged since the
+ *  schema dropped the model, and it simply does not exist on fresh installs
+ *  or after a completed claim (which DROPs it). */
 export async function pendingLegacyRows(): Promise<
   { hasPassword: boolean; total: number }
 > {
   return withCtxNull(async () => {
-    const rows = await rawDb.legacySetting.findMany();
+    const rows = await readLegacyRows();
     return {
       hasPassword: rows.some((r) => r.key === "auth.password"),
       total: rows.length,
@@ -72,10 +75,22 @@ export async function pendingLegacyRows(): Promise<
   });
 }
 
+/** Raw read — tolerates the table being absent (fresh install / claimed). */
+async function readLegacyRows(): Promise<{ key: string; value: string }[]> {
+  try {
+    return (await rawDb.$queryRaw<
+      { key: string; value: string }[]
+    >`SELECT key, value FROM LegacySetting`) as { key: string; value: string }[];
+  } catch {
+    return []; // no such table — nothing to claim
+  }
+}
+
 /** Prove the legacy studio password (only needed when one was configured). */
 export async function checkLegacyPassword(password: string | undefined): Promise<boolean> {
   return withCtxNull(async () => {
-    const row = await rawDb.legacySetting.findUnique({ where: { key: "auth.password" } });
+    const rows = await readLegacyRows();
+    const row = rows.find((r) => r.key === "auth.password");
     if (!row?.value) return true; // no password was ever configured — nothing to prove
     if (!password) return false;
     return verifyPassword(password, row.value);
@@ -88,7 +103,7 @@ export async function checkLegacyPassword(password: string | undefined): Promise
  */
 export async function claimLegacyForOwner(userId: string): Promise<ClaimResult> {
   return withCtxNull(async () => {
-    const rows = await rawDb.legacySetting.findMany();
+    const rows = await readLegacyRows();
     if (rows.length === 0) return { claimed: false, rowsMigrated: 0, contentTransferred: 0 };
 
     const map = new Map(rows.map((r) => [r.key, r.value]));
@@ -242,8 +257,13 @@ export async function claimLegacyForOwner(userId: string): Promise<ClaimResult> 
       await rawDb.youTubeAccount.create({ data: youtubeAccount });
     }
 
-    // ---- consume every legacy row ----
-    await rawDb.legacySetting.deleteMany({});
+    // ---- close the LegacySetting lifecycle (Stage 3, T-3.11) ----
+    // Every row is migrated; the table itself is dropped. Unclaimed installs
+    // keep their table (unmanaged by Prisma since the model left the schema);
+    // the moment ownership is proven, nothing legacy survives.
+    await rawDb.$executeRawUnsafe(`DROP TABLE IF EXISTS "LegacySetting"`).catch((err) => {
+      console.warn("[claim] LegacySetting drop failed (rows already consumed):", err);
+    });
 
     // ---- drop the bootstrap org when it is now empty ----
     if (membership) {

@@ -5,7 +5,7 @@ import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { serializeTrack, trackAbsolutePath } from "@/lib/tubeforge/music";
 
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+import { remove } from "@/lib/tubeforge/storage";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -52,6 +52,8 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   if (!track) return NextResponse.json({ error: "Track not found" }, { status: 404 });
 
   await db.musicTrack.delete({ where: { id } });
+  // Storage seam (T-3.7): system asset — delete through the driver.
+  await remove(track.filePath).catch(() => {});
   const abs = trackAbsolutePath(track);
   if (fs.existsSync(abs)) fs.rmSync(abs, { force: true });
 

@@ -141,9 +141,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
     return NextResponse.json(
       {
-        video: serializeVideo(video, video.channel?.name, {
+        video: (await serializeVideo(video, video.channel?.name, {
           includeScenes: true,
-        }) as VideoDTO,
+        })) as VideoDTO,
         queued: true,
       },
       { status: 202 }

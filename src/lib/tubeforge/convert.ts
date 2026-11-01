@@ -25,7 +25,8 @@ import { chatComplete } from "./providers/chat";
 import { sceneWavFile, normalizeScene, applyRetentionRules, isRehookPosition } from "./story";
 import { SCENE_COUNTS, type Scene } from "./types";
 
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+import { scratchDir, materialize } from "./storage";
+import * as storage from "./storage";
 
 // ---------- 1) Script splitting ----------
 
@@ -192,7 +193,8 @@ export async function cutVoiceoverIntoScenes(opts: {
   const execFileAsync = promisify(execFile);
 
   const dir = videoDir(opts.videoId);
-  const wavPath = path.join(UPLOAD_ROOT, opts.videoId, "voiceover.wav");
+  // Storage seam (T-3.7): ffmpeg needs a real path — materialize under s3.
+  const wavPath = await materialize(`${opts.videoId}/voiceover.wav`);
   if (!fs.existsSync(wavPath)) throw new Error("voiceover.wav not found");
 
   const run = async (args: string[], timeoutMs = 120_000) => {
@@ -333,7 +335,7 @@ export async function convertClassicToScenes(opts: {
   // 2) Cut the existing voiceover into scene WAVs (skips when none exists —
   //    the user can then run the normal story voiceover stage).
   let audioCut = false;
-  const hasVoice = fs.existsSync(path.join(UPLOAD_ROOT, opts.videoId, "voiceover.wav"));
+  const hasVoice = await storage.exists(`${opts.videoId}/voiceover.wav`);
   if (hasVoice) {
     opts.onProgress?.(`Cutting narration audio into ${scenes.length} scenes`);
     await cutVoiceoverIntoScenes({ videoId: opts.videoId, scenes });

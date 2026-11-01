@@ -204,6 +204,10 @@ export async function withRetry<T>(
  * Budget-aware AI call: acquire a service slot (pacing + concurrency + shared
  * 429 penalties), run `fn` with retries, always release the slot.
  * Every AI call site in the pipeline goes through here.
+ *
+ * Stage 3 (T-3.8): every call is also metered — one UsageRecord row per
+ * aiCall (attempts collapsed into one row: ok=false means the whole retry
+ * chain failed). Recording is fire-and-forget and NEVER breaks the call.
  */
 export async function aiCall<T>(
   service: AiService,
@@ -212,13 +216,84 @@ export async function aiCall<T>(
   retryOpts: { attempts?: number; baseDelayMs?: number } = {}
 ): Promise<T> {
   const release = await acquire(service);
+  const startedAt = Date.now();
   try {
-    return await withRetry(label, fn, retryOpts.attempts ?? 3, retryOpts.baseDelayMs ?? 2000, {
+    const result = await withRetry(label, fn, retryOpts.attempts ?? 3, retryOpts.baseDelayMs ?? 2000, {
       onRetry: (msg) => {
         if (/429|too many requests/i.test(msg)) noteRateLimit(service);
       },
     });
+    void recordAiUsage(service, label, Date.now() - startedAt, true, retryOpts.attempts ?? 3);
+    return result;
+  } catch (err) {
+    void recordAiUsage(service, label, Date.now() - startedAt, false, retryOpts.attempts ?? 3);
+    throw err;
   } finally {
     release();
+  }
+}
+
+// ---------- usage metering (T-3.8) ----------
+
+/** service → provider-capability id (UsageRecord.capability vocabulary) */
+const CAPABILITY_OF: Record<AiService, "chat" | "tts" | "image" | "video"> = {
+  llm: "chat",
+  tts: "tts",
+  image: "image",
+  video: "video",
+};
+
+/**
+ * Persist one UsageRecord for the acting user. Fire-and-forget: metering
+ * problems must never surface inside a creative pipeline. Resolves the
+ * provider/model from the user's capability settings (cached read) so the
+ * row can answer "what did this user spend on, where".
+ */
+async function recordAiUsage(
+  service: AiService,
+  label: string,
+  latencyMs: number,
+  ok: boolean,
+  attempts: number
+): Promise<void> {
+  const ctx = currentCtx();
+  if (!ctx) return; // platform path (boot recovery) — no user to attribute
+  try {
+    const [{ rawDatabase }, settingsMod] = await Promise.all([
+      import("./tenant-db"),
+      import("./providers/settings"),
+    ]);
+    const capability = CAPABILITY_OF[service];
+    let provider = "zai";
+    let model: string | null = null;
+    try {
+      const cfg = await settingsMod.getCapability(capability);
+      provider = cfg.provider;
+      model = cfg.model || null;
+    } catch {
+      /* defaults are fine — the row still counts the call */
+    }
+    await rawDatabase.usageRecord.create({
+      data: {
+        organizationId: ctx.organizationId,
+        userId: ctx.userId,
+        capability,
+        provider,
+        model,
+        latencyMs: Math.min(latencyMs, 2 ** 31 - 1),
+        ok,
+        // Cost arrives with provider-level token reporting (Stage 3 part 2);
+        // the call-count + latency baseline is what billing pivots on today.
+        inputTokens: 0,
+        outputTokens: 0,
+        costMicroUsd: 0,
+      },
+    });
+    if (!ok) {
+      console.warn(`[usage] ${service} call failed after ${attempts} attempt(s): ${label.slice(0, 80)}`);
+    }
+  } catch (err) {
+    // Never let metering break the pipeline.
+    console.warn("[usage] record failed (non-fatal):", err instanceof Error ? err.message : err);
   }
 }

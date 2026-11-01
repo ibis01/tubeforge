@@ -127,7 +127,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   // 202 Accepted — job already running (dedupe) or just started.
   return NextResponse.json(
-    { video: serializeVideo(video, null, { includeScenes: true }), accepted: true, generating: true },
+    { video: await serializeVideo(video, null, { includeScenes: true }), accepted: true, generating: true },
     { status: 202 }
   );
 }
@@ -145,7 +145,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!video)
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-  const media = readMedia(id, "thumbnail.png");
+  const media = await readMedia(id, "thumbnail.png");
   if (!media)
     return NextResponse.json({ error: "No thumbnail yet" }, { status: 404 });
 

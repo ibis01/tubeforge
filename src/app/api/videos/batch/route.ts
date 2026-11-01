@@ -254,7 +254,7 @@ export async function POST(req: NextRequest) {
       {
         queued: videos.length,
         angles: angles.map((a) => a.title),
-        videos: videos.map((v) => serializeVideo(v, v.channel?.name)),
+        videos: await Promise.all(videos.map((v) => serializeVideo(v, v.channel?.name))),
       },
       { status: 202 }
     );

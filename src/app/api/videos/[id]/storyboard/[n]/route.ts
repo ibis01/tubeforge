@@ -30,7 +30,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!video)
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-  const image = readSceneImage(id, n);
+  const image = await readSceneImage(id, n);
   if (!image)
     return NextResponse.json({ error: "Scene image not found" }, { status: 404 });
 

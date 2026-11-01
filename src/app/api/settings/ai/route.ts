@@ -11,6 +11,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { resetZAIClient } from "@/lib/tubeforge/ai";
+import { invalidateZaiClients } from "@/lib/tubeforge/zai-client";
 import { createZaiForTest } from "@/lib/tubeforge/zai-config";
 import {
   readZaiCredentials,
@@ -96,6 +97,8 @@ export async function PUT(req: NextRequest) {
       await setUserSettings(updates);
       await syncZaiConfigFile();
       resetZAIClient();
+    invalidateZaiClients();
+      invalidateZaiClients();
       const zai = await readZaiCredentials();
       return NextResponse.json({
         zai: {
@@ -155,6 +158,7 @@ export async function PUT(req: NextRequest) {
     const saved = await saveCapability(capability, patch);
     await syncZaiConfigFile();
     resetZAIClient();
+    invalidateZaiClients();
     return NextResponse.json({ capability, config: publicCapability(saved) });
   } catch (err) {
     const message = errorText(err, "Invalid request");
@@ -365,6 +369,7 @@ export async function POST(req: NextRequest) {
     // A test must never poison the live client: reset so the next real call
     // re-syncs the config file from SAVED settings.
     resetZAIClient();
+    invalidateZaiClients();
     await syncZaiConfigFile();
   }
 }

@@ -9,7 +9,7 @@
 // Voices are sanitized to the provider's catalog so a video saved with a Z.ai
 // voice keeps working after switching to OpenAI (falls back to "alloy").
 
-import { getZAI } from "../ai";
+import { zaiClientFor } from "../zai-client";
 import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta, OPENAI_VOICES, type ProviderId } from "./registry";
 import { VOICES } from "../types";
@@ -90,7 +90,7 @@ async function zaiTts(
   req: TtsRequest,
   config: CapabilityConfig,
 ): Promise<Buffer> {
-  const zai = await getZAI();
+  const zai = await zaiClientFor("tts");
   const voice = sanitizeVoice("zai", req.voice);
   const response = await zai.audio.tts.create({
     input: req.input,

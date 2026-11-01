@@ -39,8 +39,10 @@ export async function GET(req: NextRequest) {
   const stats = await latestStatsMap(videos.map((v) => v.id));
 
   return NextResponse.json({
-    videos: videos.map((v) =>
-      serializeVideo(v, v.channel?.name, { stats: stats.get(v.id) ?? null })
+    videos: await Promise.all(
+      videos.map((v) =>
+        serializeVideo(v, v.channel?.name, { stats: stats.get(v.id) ?? null })
+      )
     ),
   });
 }
@@ -256,9 +258,9 @@ export async function POST(req: NextRequest) {
       });
 
       return NextResponse.json({
-        video: serializeVideo(updated, updated.channel?.name, {
+        video: (await serializeVideo(updated, updated.channel?.name, {
           includeScenes: true,
-        }) as VideoDTO,
+        })) as VideoDTO,
       });
     }
 
@@ -276,9 +278,9 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(
       {
-        video: serializeVideo(video, video.channel?.name, {
+        video: (await serializeVideo(video, video.channel?.name, {
           includeScenes: true,
-        }) as VideoDTO,
+        })) as VideoDTO,
         queued: true,
       },
       { status: 202 }

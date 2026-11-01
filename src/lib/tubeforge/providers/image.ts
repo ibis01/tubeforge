@@ -21,7 +21,7 @@
 // as a 429-flavored message so the budget.ts retry layer treats it as a
 // rate-limit storm and backs off (instead of failing the storyboard).
 
-import { getZAI } from "../ai";
+import { zaiClientFor } from "../zai-client";
 import { redactText } from "../redact";
 import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta } from "./registry";
@@ -144,7 +144,7 @@ export async function imageEdit(
 // ---------- Z.ai (SDK — unchanged legacy shape) ----------
 
 async function zaiImage(req: ImageRequest): Promise<Buffer> {
-  const zai = await getZAI();
+  const zai = await zaiClientFor("image");
   const response = await callZaiImage("Z.ai image", () =>
     zai.images.generations.create({
       prompt: req.prompt,
@@ -160,7 +160,7 @@ async function zaiImage(req: ImageRequest): Promise<Buffer> {
 }
 
 async function zaiImageEdit(req: ImageEditRequest): Promise<Buffer> {
-  const zai = await getZAI();
+  const zai = await zaiClientFor("image");
   // NOTE: the SDK's .d.ts wrongly declares `image`, but the live Z.ai edit
   // endpoint takes `images: [{url}]` (proven by working pose generation) —
   // the SDK posts the body verbatim, hence the cast.

@@ -3,20 +3,21 @@
 // fields (format, scenes, storyboard, rendered video) and Phase 5 fields
 // (auto-short state + latest synced YouTube performance).
 
-import fs from "fs";
-import path from "path";
 import type { Video } from "@prisma/client";
 import type { VideoDTO, VideoStatus } from "./types";
 import { parseScenes, serializeScenes } from "./story";
 import { hasBrandLogo } from "./slides";
 
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+// Storage seam (T-3.7): asset presence now comes from DB flags
+// (hasVideo/hasPreview/hasShort) — correct on BOTH storage drivers. The old
+// fs.existsSync probes silently lied under the s3 driver and cost one stat
+// per video row on every list request.
 
 type VideoWithJoins = Video & {
   character?: { name: string; hasPortrait: boolean } | null;
 };
 
-export function serializeVideo(
+export async function serializeVideo(
   v: VideoWithJoins,
   channelName?: string | null,
   opts: {
@@ -24,14 +25,14 @@ export function serializeVideo(
     /** Latest synced performance for this video (Phase 5) — avoids N+1s. */
     stats?: { views: number; likes: number; comments: number } | null;
   } = {}
-): VideoDTO {
+): Promise<VideoDTO> {
   const isStory = v.format === "story";
   const scenes = isStory ? parseScenes(v.scenes) : [];
   // Serialized scene DTOs when included — image/stock URLs + live job flags.
-  const sceneDTOs = isStory && opts.includeScenes ? serializeScenes(v.id, scenes) : undefined;
-  const hasFinal = isStory && fs.existsSync(path.join(UPLOAD_ROOT, v.id, "final.mp4"));
-  const hasPreview = isStory && fs.existsSync(path.join(UPLOAD_ROOT, v.id, "preview.mp4"));
-  const hasShortFile = isStory && v.hasShort && fs.existsSync(path.join(UPLOAD_ROOT, v.id, "short.mp4"));
+  const sceneDTOs = isStory && opts.includeScenes ? await serializeScenes(v.id, scenes) : undefined;
+  const hasFinal = isStory && v.hasVideo;
+  const hasPreview = isStory && v.hasPreview;
+  const hasShortFile = isStory && v.hasShort;
 
   return {
     id: v.id,

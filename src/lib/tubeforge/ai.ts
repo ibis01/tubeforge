@@ -16,12 +16,14 @@ import {
   imageEditSupported,
 } from "./providers/image";
 
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+import { scratchDir, storageDriverKind } from "./storage";
+import * as storage from "./storage";
 
 export function videoDir(videoId: string) {
-  const dir = path.join(UPLOAD_ROOT, videoId);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  return dir;
+  // Storage seam (T-3.7): local driver keeps the historical uploads/<id>/
+  // layout (ffmpeg writes there directly); the s3 driver redirects renders
+  // to a local scratch dir while durable artifacts live in object storage.
+  return scratchDir(videoId);
 }
 
 let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null;
@@ -229,8 +231,9 @@ export async function generateVoiceover(opts: {
   }
 
   const { buffer: merged, durationSec } = mergeWavs(buffers);
-  const outPath = path.join(videoDir(opts.videoId), "voiceover.wav");
-  fs.writeFileSync(outPath, merged);
+  // Storage seam (T-3.7): write via the driver so the artifact lands in
+  // object storage (s3) and the org quota counter ticks on both drivers.
+  await storage.put(`${opts.videoId}/voiceover.wav`, merged);
 
   return { durationSec, fileBytes: merged.length };
 }
@@ -350,7 +353,8 @@ export async function generateThumbnail(opts: {
   if (buffer.length < 1000) throw new Error("Generated image is empty");
 
   const fileName = opts.variant ? `variant-${opts.style}.png` : "thumbnail.png";
-  fs.writeFileSync(path.join(videoDir(opts.videoId), fileName), buffer);
+  // Storage seam (T-3.7): driver-aware write + quota accounting.
+  await storage.put(`${opts.videoId}/${fileName}`, buffer);
 
   return { fileBytes: buffer.length, fileName };
 }
@@ -366,40 +370,60 @@ export function pickVariantStyles(primaryStyle: string, count = 3): string[] {
   return styles;
 }
 
-export function readMedia(
+export async function readMedia(
   videoId: string,
   kind: "voiceover.wav" | "thumbnail.png" | `variant-${string}.png`,
 ) {
-  const filePath = path.join(UPLOAD_ROOT, videoId, kind);
-  if (!fs.existsSync(filePath)) return null;
-  return fs.readFileSync(filePath);
+  // Storage seam (T-3.7): driver-aware read — s3 delivers from the bucket,
+  // local reads the uploads layout. Both 404 as null.
+  const s = await storage.stat(`${videoId}/${kind}`);
+  if (!s) return null;
+  return storage.get(`${videoId}/${kind}`);
 }
 
 /** List existing A/B thumbnail variants for a video. */
-export function listVariants(
+export async function listVariants(
   videoId: string,
-): { style: string; fileName: string }[] {
-  const dir = path.join(UPLOAD_ROOT, videoId);
-  if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir)
-    .filter((f) => /^variant-[\w-]+\.png$/.test(f))
-    .map((f) => ({
-      style: f.replace("variant-", "").replace(".png", ""),
-      fileName: f,
-    }))
-    .sort((a, b) => a.style.localeCompare(b.style));
+): Promise<{ style: string; fileName: string }[]> {
+  if (storageDriverKind() === "local") {
+    const dir = path.join(scratchDir(videoId));
+    if (!fs.existsSync(dir)) return [];
+    return fs
+      .readdirSync(dir)
+      .filter((f) => /^variant-[\w-]+\.png$/.test(f))
+      .map((f) => ({
+        style: f.replace("variant-", "").replace(".png", ""),
+        fileName: f,
+      }))
+      .sort((a, b) => a.style.localeCompare(b.style));
+  }
+  // s3 — probe the known variant styles instead of listing.
+  const out: { style: string; fileName: string }[] = [];
+  for (const style of VARIANT_PROBE_STYLES) {
+    if (await storage.exists(`${videoId}/variant-${style}.png`)) {
+      out.push({ style, fileName: `variant-${style}.png` });
+    }
+  }
+  return out.sort((a, b) => a.style.localeCompare(b.style));
 }
 
+/** Variant styles probed on the s3 driver (no cheap readdir there). */
+const VARIANT_PROBE_STYLES = [
+  "cinematic",
+  "bold",
+  "minimal",
+  "retro",
+  "playful",
+  "documentary",
+];
+
 /** Promote a variant file to be the primary thumbnail.png. */
-export function promoteVariant(videoId: string, style: string) {
-  const variantPath = path.join(UPLOAD_ROOT, videoId, `variant-${style}.png`);
-  if (!fs.existsSync(variantPath))
+export async function promoteVariant(videoId: string, style: string) {
+  const key = `${videoId}/variant-${style}.png`;
+  if (!(await storage.exists(key)))
     throw new Error(`No variant for style "${style}"`);
-  fs.copyFileSync(
-    variantPath,
-    path.join(UPLOAD_ROOT, videoId, "thumbnail.png"),
-  );
+  const buf = await storage.get(key);
+  await storage.put(`${videoId}/thumbnail.png`, buf);
 }
 
 export interface ResearchResult {

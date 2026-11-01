@@ -19,7 +19,7 @@ import { aiCall } from "./budget";
 import { parseScenes } from "./story";
 
 const execFileAsync = promisify(execFile);
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+import { scratchDir } from "./storage";
 
 export interface VerifyReport {
   ranAt: string;
@@ -160,7 +160,7 @@ export async function verifyNarration(videoId: string): Promise<VerifyReport> {
   if (!video.hasVoiceover) throw new Error("No voiceover yet — generate it first");
 
   const scenes = video.format === "story" ? parseScenes(video.scenes) : [];
-  const dir = path.join(UPLOAD_ROOT, videoId);
+  const dir = scratchDir(videoId); // storage seam (T-3.7): scratch workspace on both drivers
 
   const sceneResults: VerifyReport["scenes"] = [];
   const transcripts: string[] = [];

@@ -12,7 +12,7 @@ import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+import { scratchDir } from "@/lib/tubeforge/storage";
 const wordCount = (text: string) => text.split(/\s+/).filter(Boolean).length;
 
 /**
@@ -21,7 +21,7 @@ const wordCount = (text: string) => text.split(/\s+/).filter(Boolean).length;
  * the UI offer a fresh, script-matched one.
  */
 async function invalidateThumbnail(videoId: string): Promise<void> {
-  const dir = path.join(UPLOAD_ROOT, videoId);
+  const dir = scratchDir(videoId); // storage seam (T-3.7)
   try {
     for (const f of fs.readdirSync(dir)) {
       if (f === "thumbnail.png" || /^variant-[\w-]+\.png$/.test(f))
@@ -106,7 +106,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         });
 
         // New scene boundaries invalidate per-scene audio/art and old renders.
-        const dir = path.join(UPLOAD_ROOT, id);
+        const dir = scratchDir(id); // storage seam (T-3.7)
         try {
           for (const f of fs.readdirSync(dir)) {
             if (
@@ -249,7 +249,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // and watch the `generating.script` flag.
   return NextResponse.json(
     {
-      video: serializeVideo(
+      video: await serializeVideo(
         { ...video, error: null },
         video.channel?.name,
         { includeScenes: true }

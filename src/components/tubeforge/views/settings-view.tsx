@@ -918,13 +918,35 @@ export function SettingsView() {
                     </div>
                   ) : (
                     <p className="text-[11px] text-muted-foreground">
-                      Uses the shared Z.ai key above
+                      Uses the shared Z.ai key below unless you save your own
                       {cap === "tts"
                         ? " · 7 studio voices"
                         : " · CogView art with identity-locked edits"}
                     </p>
                   )
-                ) : (
+                ) : null}
+                {row.provider === "zai" && (
+                  <div className="space-y-1.5">
+                    <Label>Z.ai API key (optional — per-account)</Label>
+                    <SecretInput
+                      value={row.apiKey}
+                      onChange={(e) =>
+                        setProv((f) => ({ ...f, [cap]: { ...f[cap], apiKey: e.target.value } }))
+                      }
+                      placeholder={
+                        row.hasKey
+                          ? `saved (${row.maskedKey}) — type to replace`
+                          : "blank = use the shared platform key"
+                      }
+                      className="bg-white/5 border-white/10 text-xs font-mono h-9 max-w-md"
+                    />
+                    <p className="text-[10px] text-muted-foreground">
+                      Your key stays encrypted per account (Stage 3). Leave blank to
+                      keep using the shared platform key.
+                    </p>
+                  </div>
+                )}
+                {row.provider !== "zai" && (
                   <div className="space-y-3">
                     <div className="grid sm:grid-cols-2 gap-3 [&>*]:min-w-0">
                       <div className="space-y-1.5">

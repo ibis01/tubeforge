@@ -1,4 +1,4 @@
-import { getZAI } from "../ai";
+import { zaiClientFor } from "../zai-client";
 import { DEFAULT_CHAT_MODEL } from "../types";
 import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta } from "./registry";
@@ -65,7 +65,7 @@ async function zaiChat(
   req: ChatRequest,
   config: CapabilityConfig,
 ): Promise<string> {
-  const zai = await getZAI();
+  const zai = await zaiClientFor("chat");
   const model = config.model?.trim() || DEFAULT_CHAT_MODEL;
   const completion = await zai.chat.completions.create({
     model,

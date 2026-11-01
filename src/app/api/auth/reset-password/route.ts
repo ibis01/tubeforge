@@ -14,6 +14,7 @@ import { z } from "zod";
 import { rawDatabase as rawDb } from "@/lib/tubeforge/tenant-db";
 import { MIN_PASSWORD_LEN, hashPassword } from "@/lib/tubeforge/tenant";
 import { randomToken, sha256Hex } from "@/lib/tubeforge/crypto";
+import { sendMail, linkInResponse } from "@/lib/tubeforge/email";
 
 const RESET_TTL_H = 24;
 
@@ -45,13 +46,28 @@ export async function POST(req: NextRequest) {
 
       const url = new URL("/api/auth/reset-password", req.nextUrl.origin);
       url.searchParams.set("token", token);
-      if (process.env.TUBEFORGE_EMAIL_MODE !== "smtp") {
-        console.log(`[auth] password reset link for ${user.email}: ${url.toString()}`);
+      // Stage 3 (T-3.9): smtp mode delivers the link for real; console logs
+      // it and returns it (single-owner installs need no relay).
+      try {
+        await sendMail({
+          to: user.email,
+          subject: "Reset your TubeForge password",
+          text: [
+            "A password reset was requested for your TubeForge account.",
+            "",
+            "Set a new password:",
+            url.toString(),
+            "",
+            `This link expires in ${RESET_TTL_H} hours. If this wasn't you, ignore this message — your password stays unchanged.`,
+          ].join("\n"),
+        });
+      } catch (err) {
+        console.warn("[auth] reset mail delivery failed (non-fatal):", err instanceof Error ? err.message : err);
       }
       return NextResponse.json({
         ok: true,
         reset: {
-          url: process.env.TUBEFORGE_EMAIL_MODE === "smtp" ? undefined : url.toString(),
+          url: linkInResponse() ? url.toString() : undefined,
           expiresHours: RESET_TTL_H,
         },
       });

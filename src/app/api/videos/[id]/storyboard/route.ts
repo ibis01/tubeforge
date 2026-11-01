@@ -23,8 +23,8 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 
   const scenes = parseScenes(video.scenes);
   return NextResponse.json({
-    scenes: serializeScenes(id, scenes),
-    complete: storyboardComplete(id, scenes),
+    scenes: await serializeScenes(id, scenes),
+    complete: await storyboardComplete(id, scenes),
     generating: isJobRunning(id, "storyboard"),
     error: lastJobError(id, "storyboard"),
   });
@@ -113,7 +113,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         await db.video.update({
           where: { id },
           data: {
-            hasStoryboard: storyboardComplete(id, scenes),
+            hasStoryboard: await storyboardComplete(id, scenes),
             hasVideo: false,
             videoDuration: null,
             error: null,
@@ -191,7 +191,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         await db.video.update({
           where: { id },
           data: {
-            hasStoryboard: storyboardComplete(id, scenes),
+            hasStoryboard: await storyboardComplete(id, scenes),
             error: null,
           },
         });
@@ -210,7 +210,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       await db.video.update({
         where: { id },
         data: {
-          hasStoryboard: storyboardComplete(id, scenes),
+          hasStoryboard: await storyboardComplete(id, scenes),
           error: message,
         },
       });

@@ -212,8 +212,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           },
         });
       } else {
-        // Preview renders never mark the video as produced (no QC battery).
-        await db.video.update({ where: { id }, data: { error: null } });
+        // Preview renders never mark the video as produced (no QC battery) —
+        // but the preview artifact flag ticks so the DTO can offer previewUrl
+        // on both storage drivers (T-3.7).
+        await db.video.update({ where: { id }, data: { hasPreview: true, error: null } });
         await db.activity.create({
           data: {
             organizationId: auth.ctx.organizationId,

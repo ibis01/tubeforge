@@ -79,6 +79,6 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   await db.video.update({ where: { id }, data: { scenes: JSON.stringify(updated) } });
 
   return NextResponse.json({
-    scene: serializeScenes(id, updated).find((s) => s.index === index) ?? null,
+    scene: (await serializeScenes(id, updated)).find((s) => s.index === index) ?? null,
   });
 }

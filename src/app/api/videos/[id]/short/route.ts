@@ -11,7 +11,7 @@ import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+import { materialize } from "@/lib/tubeforge/storage";
 
 /**
  * POST — cut a 9:16 vertical Short out of the rendered final video as a
@@ -33,7 +33,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
-  const finalPath = path.join(UPLOAD_ROOT, id, "final.mp4");
+  // Storage seam (T-3.7): ffmpeg needs the master on local disk — materialize
+  // returns the uploads path locally, a cached download under s3.
+  const finalPath = await materialize(`${id}/final.mp4`);
   if (!fs.existsSync(finalPath))
     return NextResponse.json(
       { error: "Render the final video first — Shorts are cut from the rendered master" },
@@ -125,7 +127,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!video)
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-  const hasFile = video.hasShort && fs.existsSync(path.join(UPLOAD_ROOT, id, "short.mp4"));
+  const hasFile = video.hasShort; // DB flag — correct on both drivers (T-3.7)
 
   return NextResponse.json({
     generating: isJobRunning(id, "short"),
@@ -134,6 +136,6 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     shortUrl: hasFile ? `/api/videos/${id}/mp4?variant=short` : null,
     durationSec: hasFile ? video.shortDuration : null,
     sceneIndex: hasFile ? video.shortScene : null,
-    video: serializeVideo(video),
+    video: await serializeVideo(video),
   });
 }

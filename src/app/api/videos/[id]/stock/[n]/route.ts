@@ -30,7 +30,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const video = await db.video.findUnique({ where: { id } });
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-  const buf = readSceneStock(id, index);
+  const buf = await readSceneStock(id, index);
   if (!buf) return NextResponse.json({ error: "No stock clip for this scene" }, { status: 404 });
 
   return new NextResponse(new Uint8Array(buf), {

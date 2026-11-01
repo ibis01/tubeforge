@@ -13,7 +13,7 @@ import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+import { scratchDir } from "@/lib/tubeforge/storage";
 
 /** POST — (re)generate the voiceover as a background job (returns 202 immediately).
  * Long synchronous requests were killed by the gateway with 502; the job runs
@@ -183,7 +183,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           "short.mp4",
           "short-thumb.png",
         ]) {
-          fs.rmSync(path.join(UPLOAD_ROOT, id, f), { force: true });
+          fs.rmSync(path.join(scratchDir(id), f), { force: true }); // storage seam (T-3.7)
         }
       }
 
@@ -245,7 +245,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const cleared = { ...video, hasVoiceover: false, audioDuration: null };
   return NextResponse.json(
     {
-      video: serializeVideo(cleared, null, { includeScenes: true }),
+      video: await serializeVideo(cleared, null, { includeScenes: true }),
       accepted: true,
       generating: true,
     },
@@ -266,7 +266,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!video)
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-  const media = readMedia(id, "voiceover.wav");
+  const media = await readMedia(id, "voiceover.wav");
   if (!media)
     return NextResponse.json({ error: "No voiceover yet" }, { status: 404 });
 

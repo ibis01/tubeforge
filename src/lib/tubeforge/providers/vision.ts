@@ -3,7 +3,7 @@
 // images. If the provider/model can't do vision the call throws, and the
 // quality gate catches it and passes the image through (existing behavior).
 
-import { getZAI } from "../ai";
+import { zaiClientFor } from "../zai-client";
 import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta } from "./registry";
 import { joinUrl, providerFetchJson, withTimeout } from "./http";
@@ -37,7 +37,7 @@ export async function visionComplete(
 // ---------- Z.ai (SDK — unchanged legacy shape) ----------
 
 async function zaiVision(req: VisionRequest, config: CapabilityConfig): Promise<string> {
-  const zai = await getZAI();
+  const zai = await zaiClientFor("chat");
   const model = config.visionModel?.trim() ?? "";
   // No stored vision model → send none; the gateway injects its default
   // (preserves pre-existing sandbox behavior), hence the cast.

@@ -23,8 +23,11 @@ export const VOICE_PREVIEW_TEXT =
  *  the WAV lands in the server cache. A short line keeps the first click
  *  inside the timeout; every click after that plays from cache anyway. */
 export const SELFHOST_PREVIEW_TEXT = "Hi! This is how I'll narrate your video.";
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
-const PREVIEW_DIR = path.join(UPLOAD_ROOT, "_voicepreviews");
+import { scratchDir } from "./storage";
+
+// Storage seam (T-3.7): previews are short-lived system assets — scratch
+// workspace on both drivers, exempt from org quotas.
+const PREVIEW_DIR = scratchDir("_voicepreviews");
 const MEMORY_MAX = 32;
 
 const memoryCache = new Map<string, Buffer>();

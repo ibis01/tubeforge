@@ -24,7 +24,8 @@ import { cutVoiceoverIntoScenes } from "./convert";
 import { parseScenes } from "./story";
 import { isPrivateHostname, safeFetch } from "./net-guard";
 
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+import { scratchDir } from "./storage";
+import * as storage from "./storage";
 
 export const MAX_AUDIO_BYTES = 100 * 1024 * 1024; // 100 MB source cap
 export const MAX_AUDIO_SEC = 30 * 60; // 30 minutes
@@ -214,7 +215,7 @@ export async function ingestCustomAudio(opts: {
 
   // 3) Normalize to the studio format every consumer expects (24 kHz mono PCM-16).
   opts.onProgress?.("Converting to studio audio");
-  const outPath = path.join(UPLOAD_ROOT, opts.videoId, "voiceover.wav");
+  const outPath = path.join(scratchDir(opts.videoId), "voiceover.wav"); // storage seam (T-3.7)
   const prevBytes = fs.existsSync(outPath) ? fs.statSync(outPath).size : -1;
   try {
     await run([

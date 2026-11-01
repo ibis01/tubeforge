@@ -27,6 +27,7 @@ import {
   pendingLegacyRows,
 } from "@/lib/tubeforge/claim";
 import { getAuthSecret } from "@/lib/tubeforge/auth-token";
+import { sendMail, linkInResponse } from "@/lib/tubeforge/email";
 
 const bodySchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
@@ -144,8 +145,23 @@ export async function POST(req: NextRequest) {
     const verifyUrl = new URL("/api/auth/verify-email", req.nextUrl.origin);
     verifyUrl.searchParams.set("token", verifyToken);
 
-    if (process.env.TUBEFORGE_EMAIL_MODE !== "smtp") {
-      console.log(`[auth] email verification link for ${email}: ${verifyUrl.toString()}`);
+    // Stage 3 (T-3.9): real delivery under smtp mode; console keeps logging
+    // the link AND returning it so single-owner installs need no relay.
+    try {
+      await sendMail({
+        to: email,
+        subject: "Confirm your TubeForge email",
+        text: [
+          `Welcome to TubeForge${name ? `, ${name}` : ""}!`,
+          "",
+          "Confirm your email address:",
+          verifyUrl.toString(),
+          "",
+          `This link expires in ${VERIFY_TTL_H} hours. If you did not create this account, ignore this message.`,
+        ].join("\n"),
+      });
+    } catch (err) {
+      console.warn("[auth] verification mail delivery failed (non-fatal):", err instanceof Error ? err.message : err);
     }
 
     const res = NextResponse.json(
@@ -155,8 +171,8 @@ export async function POST(req: NextRequest) {
         claim: claimSummary,
         verification: {
           required: true,
-          // Console mode hands the link straight back (no SMTP until Stage 3).
-          url: process.env.TUBEFORGE_EMAIL_MODE === "smtp" ? undefined : verifyUrl.toString(),
+          // Console mode hands the link straight back; smtp sent it for real.
+          url: linkInResponse() ? verifyUrl.toString() : undefined,
           expiresHours: VERIFY_TTL_H,
         },
       },

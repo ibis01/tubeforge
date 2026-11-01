@@ -48,6 +48,7 @@ model User {
   sessions            Session[]
   activities          Activity[]
   jobs                Job[]
+  usageRecords        UsageRecord[]
 }
 
 model Organization {
@@ -68,6 +69,8 @@ model Organization {
   voiceProfiles   VoiceProfile[]
   musicTracks     MusicTrack[]
   jobs            Job[]
+  storageUsage    StorageUsage?
+  usageRecords    UsageRecord[]
 }
 
 // One user per organization row. Exactly one member holds role "owner" —
@@ -158,11 +161,13 @@ model ProviderCredential {
 // flow) — the claim migrates them into the owner's UserSetting /
 // YouTubeAccount / ProviderCredential / User.passwordHash and deletes them.
 // Dropped entirely in Stage 3.
-model LegacySetting {
-  key       String   @id
-  value     String
-  updatedAt DateTime @updatedAt
-}
+// LegacySetting — REMOVED from the schema (Stage 3, T-3.11). The table is
+// now UNMANAGED: Prisma neither creates nor drops it. Lifecycle:
+//   * unclaimed legacy install: migrate-stage2.mjs RENAMEd Setting →
+//     LegacySetting (raw SQL); the rows wait there for the owner's claim.
+//   * claim (src/lib/tubeforge/claim.ts): every row migrates per-user, then
+//     the table is DROPped — nothing legacy survives the transition.
+//   * fresh installs: the table never exists; claim's raw reads tolerate that.
 
 // ---------------------------------------------------------------------------
 // Content models (tenant-scoped)
@@ -230,6 +235,10 @@ model Video {
   scenes        String?   // JSON array of Scene {title, narration, visual, camera, mood, caption, hostInScene}
   hasStoryboard Boolean   @default(false)
   hasVideo      Boolean   @default(false)
+  // Stage 3 (T-3.7): preview renders mark their own artifact — the DTO can
+  // then report assets from DB flags on BOTH storage drivers (an fs
+  // existsSync probe would silently lie under s3).
+  hasPreview    Boolean   @default(false)
   videoDuration Float?
 
   hasVoiceover  Boolean   @default(false)
@@ -463,4 +472,40 @@ model Job {
   @@index([status])
   @@index([startedAt])
   @@index([status, nextRunAt]) // Stage 3 queue claim scan
+}
+
+// Stage 3 (T-3.7) — per-organization storage byte counter backing storage.ts
+// quotas. A counter, not a listing: O(1) quota checks on every put. Rebuild
+// from the driver with `npm run storage:recompute` if it ever drifts.
+model StorageUsage {
+  organizationId String   @id
+  bytes          BigInt   @default(0)
+  updatedAt      DateTime @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+// Stage 3 (T-3.8) — per-user, per-capability AI cost tracking. Written by the
+// provider layer on every metered call; surfaced via GET /api/account/usage.
+// costMicroUsd keeps exact integers (no float drift); tokens follow provider
+// reports where available, else 0.
+model UsageRecord {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String
+  capability     String // chat | tts | image | video | asr | youtube | generic
+  provider       String // zai | openai | elevenlabs | ... ("internal" = local work)
+  model          String?
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  costMicroUsd   Int      @default(0) // micro-dollars (1e-6 USD)
+  latencyMs      Int?
+  ok             Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([userId, createdAt])
+  @@index([organizationId, capability, createdAt])
 }

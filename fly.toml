@@ -1,0 +1,76 @@
+# TubeForge on Fly.io (Stage 3, T-3.12) — process-group deployment.
+#
+#   fly launch --no-deploy --copy-config   (first time)
+#   fly secrets set TUBEFORGE_AUTH_SECRET=... TUBEFORGE_ENCRYPTION_KEY=... \
+#                  DATABASE_URL=...  POSTGRES_PASSWORD not needed (Fly Postgres URL)
+#   fly deploy
+#
+# Two process groups from ONE image (the Dockerfile default command is web):
+#   web    — 2 machines behind the Fly proxy (ports 443/80 → 3000)
+#   worker — 1 machine running the durable-queue worker; scale with
+#            `fly scale count worker=2 --app <app>`
+#
+# Storage: Fly machines have EPHEMERAL disks — set the S3 driver
+# (TUBEFORGE_STORAGE_DRIVER=s3 + the TUBEFORGE_S3_* secrets) or attach a
+# persistent volume and mount it at /app/uploads for local storage.
+
+app = "tubeforge"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3000"
+  NODE_ENV = "production"
+
+# web process group -----------------------------------------------------
+[processes]
+  web = "node .next/standalone/server.js"
+  worker = "node --import tsx scripts/worker.mts"
+
+[[services]]
+  processes = ["web"]
+  internal_port = 3000
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "30s"
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "45s"
+    method = "get"
+    path = "/api/auth/status"
+
+# machine sizing --------------------------------------------------------
+# web: renders happen on the worker, web just serves + runs short closures.
+[[vm]]
+  processes = ["web"]
+  size = "shared-cpu-2x"
+  memory = "1gb"
+
+# worker: ffmpeg + AI stage coordination wants headroom.
+[[vm]]
+  processes = ["worker"]
+  size = "shared-cpu-4x"
+  memory = "2gb"
+
+# Persistent uploads volume for LOCAL storage mode (optional; S3 mode does
+# not need it). Uncomment and `fly volumes create tubeforge_uploads --size 10`.
+#
+# [[mounts]]
+#   processes = ["web", "worker"]
+#   source = "tubeforge_uploads"
+#   destination = "/app/uploads"

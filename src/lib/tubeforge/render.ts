@@ -19,7 +19,9 @@ import { promisify } from "util";
 import type { Scene } from "./types";
 import { sceneImageFile, sceneWavFile, buildSrtFromSegments } from "./story";
 import { buildSmartSrt } from "./captions";
-import { getZAI, videoDir } from "./ai";
+import { videoDir } from "./ai";
+import { zaiClientFor } from "./zai-client";
+import * as storage from "./storage";
 import { aiCall } from "./budget";
 import { ensureSfx } from "./sfx";
 import {
@@ -64,7 +66,6 @@ import {
 } from "./transitions";
 
 const execFileAsync = promisify(execFile);
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
 const FPS = 30;
 export const LEAD_SEC = 0.35; // silence before narration starts in each scene
@@ -142,7 +143,10 @@ export function invalidateRenderedArtifacts(
   videoId: string,
   opts: { slidePngs?: boolean } = {}
 ): void {
-  const dir = path.join(UPLOAD_ROOT, videoId);
+  // Storage seam (T-3.7): local driver — delete through the uploads layout;
+  // s3 driver — best-effort async wipe happens via removePrefix at the route
+  // layer; here we only clear local scratch remains.
+  const dir = videoDir(videoId);
   for (const f of ["final.mp4", "preview.mp4", "subtitles.srt"]) {
     fs.rmSync(path.join(dir, f), { force: true });
   }
@@ -210,7 +214,7 @@ async function ensureSceneClip(videoId: string, scene: Scene): Promise<string> {
   const clipPath = path.join(videoDir(videoId), `scene-${String(scene.index).padStart(2, "0")}.mp4`);
   if (fs.existsSync(clipPath) && fs.statSync(clipPath).size > 10_000) return clipPath;
 
-  const imagePath = path.join(UPLOAD_ROOT, videoId, sceneImageFile(scene.index));
+  const imagePath = path.join(videoDir(videoId), sceneImageFile(scene.index));
   const imageB64 = fs.readFileSync(imagePath).toString("base64");
 
   // Video generation is Z.ai CogVideoX — validate the provider up front so
@@ -224,7 +228,7 @@ async function ensureSceneClip(videoId: string, scene: Scene): Promise<string> {
   }
   const videoModel = videoConfig.model?.trim() || VIDEO_DEFAULT_MODEL;
 
-  const zai = await getZAI();
+  const zai = await zaiClientFor("video");
   const clip = await aiCall(
     "video",
     `scene ${scene.index} i2v`,
@@ -719,14 +723,15 @@ async function finalize(opts: {
 }
 
 /** Read the final or preview MP4 (or a byte range of it). */
-export function readVideoFile(
+export async function readVideoFile(
   videoId: string,
   variant: "final" | "preview"
-): { buffer: Buffer; fileName: string } | null {
+): Promise<{ buffer: Buffer; fileName: string } | null> {
   const fileName = variant === "final" ? "final.mp4" : "preview.mp4";
-  const p = path.join(UPLOAD_ROOT, videoId, fileName);
-  if (!fs.existsSync(p)) return null;
-  return { buffer: fs.readFileSync(p), fileName };
+  // Storage seam (T-3.7): driver-aware read.
+  const s = await storage.stat(`${videoId}/${fileName}`);
+  if (!s) return null;
+  return { buffer: await storage.get(`${videoId}/${fileName}`), fileName };
 }
 
 /**
@@ -734,19 +739,15 @@ export function readVideoFile(
  * The streaming route opens the file lazily per Range request; memory stays
  * constant instead of one full copy per concurrent viewer.
  */
-export function statVideoFile(
+export async function statVideoFile(
   videoId: string,
   variant: "final" | "preview"
-): { path: string; size: number; fileName: string } | null {
+): Promise<{ key: string; size: number; fileName: string } | null> {
   const fileName = variant === "final" ? "final.mp4" : "preview.mp4";
-  const p = path.join(UPLOAD_ROOT, videoId, fileName);
-  try {
-    const s = fs.statSync(p);
-    if (!s.isFile()) return null;
-    return { path: p, size: s.size, fileName };
-  } catch {
-    return null;
-  }
+  const key = `${videoId}/${fileName}`;
+  const s = await storage.stat(key);
+  if (!s) return null;
+  return { key, size: s.size, fileName };
 }
 
 // ---------- Orchestrator ----------
@@ -937,10 +938,22 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     }
 
     const durationSec = await probeDuration(outPath);
+    const fileBytes = fs.statSync(outPath).size;
+
+    // Storage seam (T-3.7): publish the finished artifact through the driver
+    // (s3: upload from scratch; local: no-op move + quota accounting) and
+    // persist the caption track the same way. Snapshot sizes first — the s3
+    // branch consumes the scratch file.
+    await storage.putFromPath(`${opts.videoId}/${outName}`, outPath);
+    if (!isPreview) {
+      const exportSrt = path.join(dir, "subtitles.srt");
+      await storage.putFromPath(`${opts.videoId}/subtitles.srt`, exportSrt);
+    }
+
     return {
       fileName: outName,
       durationSec,
-      fileBytes: fs.statSync(outPath).size,
+      fileBytes,
       aspect: opts.mode === "slides" ? "9:16" : "16:9",
       blackWindows:
         trans.style === "fadeblack" && scenes.length > 1

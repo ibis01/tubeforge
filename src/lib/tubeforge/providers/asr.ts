@@ -6,7 +6,7 @@
 // Used by the optional "verify narration" feature. Input is always a WAV
 // buffer (the caller pre-chunks to ≤25 s).
 
-import { getZAI } from "../ai";
+import { zaiClientFor } from "../zai-client";
 import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta } from "./registry";
 import { joinUrl, providerFetchJson } from "./http";
@@ -24,7 +24,7 @@ export async function asrTranscribe(
 }
 
 async function zaiAsr(wavBuffer: Buffer): Promise<string> {
-  const zai = await getZAI();
+  const zai = await zaiClientFor("asr");
   const response = await zai.audio.asr.create({
     file_base64: wavBuffer.toString("base64"),
   });

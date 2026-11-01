@@ -17,6 +17,7 @@
 import { DEFAULT_CHAT_MODEL } from "../types";
 import type { CapabilityId, ProviderId } from "./registry";
 import { currentCtx } from "../tenant";
+import { invalidateZaiClients } from "../zai-client";
 import {
   getProviderCredential,
   getUserSettings,
@@ -157,28 +158,30 @@ export async function saveCapability(
   const ctx = currentCtx();
   if (!ctx) throw new Error("saveCapability requires an authenticated context");
 
-  if (next.provider === "zai") {
-    // zai credentials are platform-level — never store them per capability.
-    delete next.baseUrl;
-    delete next.apiKey;
-  }
+  // Stage 3 (T-3.10): zai keys are PER-USER now (ProviderCredential, encrypted
+  // at rest) — the same path as every other provider. A user without a
+  // stored key falls back to the platform client (zai-client.ts), so the
+  // out-of-the-box sandbox experience is unchanged.
 
   // 1) Non-secret config blob (NO apiKey inside — ever).
   const blob: StoredCapability = {
     provider: next.provider,
     model: next.model,
-    baseUrl: next.provider === "zai" ? undefined : next.baseUrl?.trim(),
+    baseUrl: next.baseUrl?.trim() || undefined,
   };
   if (capability === "chat") blob.visionModel = next.visionModel ?? "";
   await setUserSetting(CAPABILITY_KEYS[capability], JSON.stringify(blob));
 
-  // 2) Secret half — only for non-zai providers with a key.
-  if (next.provider !== "zai" && next.apiKey) {
+  // 2) Secret half — any provider with a key (zai included since T-3.10).
+  if (next.apiKey) {
     await upsertProviderCredential(ctx.userId, capability, next.provider, {
       baseUrl: next.baseUrl?.trim() || "",
       apiKey: next.apiKey,
     });
   }
+
+  // Fresh key → fresh SDK client on the next call.
+  invalidateZaiClients();
 
   return next;
 }

@@ -34,8 +34,12 @@ async function getSetting(key: string): Promise<string | null> {
   return getUserSetting(key);
 }
 
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
-export const MUSIC_DIR = path.join(UPLOAD_ROOT, "_music");
+import * as storage from "./storage";
+import { scratchDir, UPLOAD_ROOT } from "./storage";
+
+// Storage seam (T-3.7): the library ships as SYSTEM assets — local scratch
+// (_music layout unchanged), s3 driver uploads with system:true (no quota).
+export const MUSIC_DIR = scratchDir("_music");
 export const MAX_TRACK_BYTES = 60 * 1024 * 1024; // 60 MB upload cap
 const TRACK_DURATION_SEC = 60; // original beds — loops seamlessly via 1/60-quantized cycles
 
@@ -156,6 +160,8 @@ export function serializeTrack(t: MusicTrack): MusicTrackDTO {
 }
 
 export function trackAbsolutePath(t: MusicTrack): string {
+  // Storage seam (T-3.7): historical uploads root under local; the s3 cache
+  // mirrors the same key. ffmpeg/probe consumers get a real path either way.
   return path.join(UPLOAD_ROOT, t.filePath);
 }
 
@@ -397,7 +403,7 @@ async function synthesizeOriginal(def: OriginalTrackDef): Promise<{ filePath: st
     { timeout: 120_000, maxBuffer: 8 * 1024 * 1024 }
   );
   const durationSec = await probeDuration(outPath);
-  return { filePath: path.relative(UPLOAD_ROOT, outPath), durationSec, bytes: fs.statSync(outPath).size };
+  return { filePath: path.relative(MUSIC_DIR, outPath).replace(/^(\.\.[/\\])+/, "_music/"), durationSec, bytes: fs.statSync(outPath).size };
 }
 
 // ---------------------------------------------------------------------------
@@ -615,7 +621,7 @@ export async function ingestUploadedTrack(buffer: Buffer, meta: UploadTrackMeta)
         moods: meta.moods.slice(0, 200),
         genre: meta.genre?.slice(0, 60) || null,
         durationSec,
-        filePath: path.relative(UPLOAD_ROOT, outPath),
+        filePath: path.relative(MUSIC_DIR, outPath).replace(/^(\.\.[/\\])+/, "_music/"),
         fileSizeBytes: fs.statSync(outPath).size,
         isOriginal: false,
         licenseType: meta.licenseType.slice(0, 80),

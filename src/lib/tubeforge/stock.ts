@@ -16,6 +16,7 @@ import path from "path";
 import { promisify } from "util";
 import { db } from "./tenant-db";
 import { videoDir } from "./ai";
+import * as storage from "./storage";
 import { relevanceCheck } from "./quality";
 import { sceneQueries } from "./stock-query";
 import type { Scene, StockRef } from "./types";
@@ -28,7 +29,6 @@ import {
 
 const execFileAsync = promisify(execFile);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
 
 /** Where users get a free key. */
 export const KEY_URLS = {
@@ -295,7 +295,7 @@ async function fetchForScene(
         // fall through to the next candidate (fail-open on verdict: null).
         const verdict = await clipFrameVerdict(videoId, scene);
         if (verdict.pass === false) {
-          fs.rmSync(path.join(videoDir(videoId), stockFile(scene.index)), { force: true });
+          await storage.remove(`${videoId}/${stockFile(scene.index)}`);
           console.warn(
             `[stock] scene ${scene.index}: clip rejected — relevance ${verdict.score}/10 (${verdict.summary ?? "unrelated content"})`
           );
@@ -327,7 +327,8 @@ async function downloadClip(videoId: string, sceneIndex: number, url: string): P
     const buf = Buffer.from(await res.arrayBuffer());
     // A real HD mp4 clip is megabytes; an error page or thumbnail is not.
     if (buf.length < 200_000) return false;
-    fs.writeFileSync(path.join(videoDir(videoId), stockFile(sceneIndex)), buf);
+    // Storage seam (T-3.7): clip persists through the driver (quota + s3).
+    await storage.put(`${videoId}/${stockFile(sceneIndex)}`, buf);
     return true;
   } finally {
     clearTimeout(timer);
@@ -338,11 +339,11 @@ export function stockFile(index: number): string {
   return `stock-${String(index).padStart(2, "0")}.mp4`;
 }
 
-export function readSceneStock(videoId: string, index: number): Buffer | null {
+export async function readSceneStock(videoId: string, index: number): Promise<Buffer | null> {
   if (!Number.isInteger(index) || index < 1 || index > 99) return null;
-  const p = path.join(UPLOAD_ROOT, videoId, stockFile(index));
-  if (!fs.existsSync(p)) return null;
-  return fs.readFileSync(p);
+  const key = `${videoId}/${stockFile(index)}`;
+  if (!(await storage.exists(key))) return null;
+  return storage.get(key);
 }
 
 // ---------- Video-level orchestration ----------
