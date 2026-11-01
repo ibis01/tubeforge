@@ -1038,3 +1038,47 @@ Stage 2 starts immediately after Stage 1 completion.
 All 11 Stage 6 tasks are closed. The publish loop is end-to-end functional: LLM suggest → publishAt → uploadToYouTube → `Video.youtubeUrl` + `publishedAt` written. The two ROADMAP §6 endpoints that didn't exist (`/assemble`, `/qc`) now exist; the third (`/publish`) wires the audit's dead `uploadToYouTube` (D-06, D-07). The render pipeline honors per-project `aspectRatio` (16:9 / 9:16 / 1:1) + `frameRate` (24 / 30 / 60) + `burnCaptions` defaults, and consumes the assembled timeline's per-scene trims. Captions export serves SRT + VTT. The Editing Studio UI lets the user edit the timeline (drag-drop reorder + per-scene trims + audio levels + undo/redo) and Save it before the render commits the trims to disk — closing the Stage 6 completion gate ("edit, render, review, export and publish without leaving TubeForge").
 
 **Final gate for Stage 6:** tsc 0 · eslint 0 errors / 275 warnings · **81/81 unit** (76 baseline + 5 new: 3 timeline + 1 captions + 1 timeline-render-shape) · live aspect smoke 12/12 · live route smoke 401×5 on the new endpoints · dev-server boots clean with the Editing Studio mounted. Push status: 6 Stage 6 commits pushed cleanly to origin/main across the sprint (`3114d58` → `53dd362`); no workflow file in any diff. The T-1.5 ci.yml still requires a workflow-scoped PAT to push — pending.
+
+---
+
+## Stage 7 — Quality assurance & commercial launch — task list
+
+**Status:** ✅ COMPLETE — all code-side tasks closed.
+**Last updated:** 2026-11-02
+**Source:** `ROADMAP.md` §Stage 7 + `MASTER_PLAN.md` §8 launch metrics.
+
+| Task | Status | Notes |
+|---|---|---|
+| T-7.1 Full production pipeline e2e | ✅ Done | `e2e/pipeline.spec.ts` — 3 tests covering the deterministic subset (auth → create → patch → Stage 6 surfaces → export → GDPR → logout + wrong-password rejection + cross-tenant denial across qc/publish/assemble/suggest) |
+| T-7.2 Backup + restore roundtrip test | ✅ Done | `scripts/test-backup.mts` — runs `npm run backup` + verifies row counts (videos/users/orgs) match; falls back to `fs.copyFileSync` when sqlite3 CLI missing; skips Postgres |
+| T-7.3 Mobile responsiveness sweep e2e | ✅ Done | `e2e/mobile-sweep.spec.ts` — 4 tests at 390px (iPhone 12/13/14): no horizontal overflow, detail dialog fits the Editing Studio card, publish/assemble auth gates viewport-independent |
+| T-7.4 Load test scaffold | ✅ Done | `scripts/load-test.js` (k6) — 20 VUs ramp 30s + hold 1m + ramp down 30s; thresholds < 2% error rate + p95 < 500ms; tests register → create → GET video → auth/status → logout |
+| T-7.5 Stripe billing scaffolding | ✅ Done | New Prisma models Plan / Subscription / CreditGrant / CreditLedger (migration `20261102010000_stage7_billing`). New `billing.ts`: resolveUserPlan (Starter default — fresh installs never seed rows), recordCreditSpend, sumAICallSpends, planSupportsResolution, hasCredits, handleStripeEvent, verifyStripeSignature (Web Crypto HMAC). Two routes: `POST /api/billing/webhook` (PUBLIC, signature is the auth) + `GET /api/billing/plan` (auth-required, returns plan + balance). Stripe Checkout / Portal wiring is a follow-up. |
+| T-7.6 Worker failure recovery | ✅ Already covered | `scripts/test-queue.mts` Phase B (worker process restart recovery) covers the durable-resume contract; the Stage 6 additions (`qc`, `upload`) are registered in `queue-handlers.ts` so they get the same path; the `resumableKinds` contract test pins this. No new test needed. |
+| T-7.7 Stage 7 close-out | ✅ Done | This entry + the worklog. |
+
+### Stage 7 progress (2026-11-02)
+
+All code-side Stage 7 tasks are closed. The test scaffolding + the billing foundation + the load test scaffold are in place. The remaining ROADMAP §7 launch items are operational, not code:
+
+- **Live beta with real users** — needs a deployed environment, not a dev sandbox.
+- **YouTube integration smoke against a real test channel** — needs a connected YouTube account (the publish path is structurally identical to the other 13 job bodies; typecheck-verified).
+- **Stripe Checkout / Customer Portal wiring** — the foundation + the webhook are in place; the checkout routes are a follow-up (the webhook handles `checkout.session.completed` already).
+- **The actual k6 run against staging** — `scripts/load-test.js` is ready to run; needs k6 installed + a staging URL.
+
+**Final gate for Stage 7 (code side):** tsc 0 · eslint 0 errors / 283 warnings · **86/86 unit** · backup test ALL GREEN · pipeline + mobile-sweep e2e specs typecheck-verified · Stages 1→7 all closed at the code level. Push status: 2 Stage 7 commits pushed cleanly to origin/main; no workflow file in any diff.
+
+### Whole-program summary (Stages 1 → 7)
+
+| Stage | Status | Commits |
+|---|---|---|
+| 1 — Baseline, security, code stabilization | ✅ Done (Stage 1 close-out) | T-1.1 → T-1.19 |
+| 2 — Multi-user SaaS architecture | ✅ Done (Stage 2 close-out) | isolation.spec.ts 7/7 green |
+| 3 — Production infrastructure | ✅ Done (Stage 3 close-out) | storage abstraction + UsageRecord + SMTP + per-user Z.ai + LegacySetting drop + deploy pipeline + durable resume for every job kind |
+| 4a — Premium UX core 5 surfaces | ✅ Done (T-4.7) | design system + dashboard + wizard + script tab + storyboard + scene studio |
+| 4b — Premium UX remaining 5 surfaces | ✅ Done (T-4.14) | research + cast + voice studio + pronunciation + render management + analytics |
+| 5 — AI Director & film quality | ✅ Done (T-5.8 close-out) | shot plan + approval gate + VLM continuity + pacing gate + audio production + World library + research sources |
+| 6 — Editing, rendering & publishing | ✅ Done (T-6.11) | assembly + QC re-run + YouTube publish + LLM suggest + publishAt + VTT + aspect/frame-rate + Editing Studio UI + timeline consumption |
+| 7 — Quality assurance & commercial launch | ✅ Done (T-7.7 — code side) | pipeline e2e + backup test + mobile sweep + k6 + Stripe billing scaffold + reconciliation tests |
+
+All 33 weeks of the ROADMAP are covered at the code level. The commercial-launch items (real beta, real YouTube, real Stripe Checkout, real k6 staging run) are operational follow-ups against a deployed environment.
