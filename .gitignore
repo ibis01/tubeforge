@@ -90,3 +90,8 @@ test-results/
 
 # Single package manager of record: npm (T-1.2) — bun.lock must never come back
 bun.lock
+
+# python virtualenvs (never commit)
+venv/
+.venv/
+preview/venv/
