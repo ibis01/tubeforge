@@ -121,6 +121,13 @@ export interface RenderOptions {
   topic?: string;
   /** Brand kit overrides for keynote slides (accent recolor + logo badge). */
   brand?: SlideBrand | null;
+  /** Stage 6 (T-6.8) — per-render aspect ratio override (default "16:9";
+   *  slides mode is always "9:16"; "1:1" is honored for the other modes). */
+  aspectRatio?: "16:9" | "9:16" | "1:1";
+  /** Stage 6 (T-6.8) — per-render frame-rate override (24 | 30 | 60). The
+   *  render pipeline's FPS constant becomes a runtime value; downstream
+   *  ffmpeg `-r` and `-framerate` flags read this instead. Default 30. */
+  frameRate?: 24 | 30 | 60;
   onProgress?: (current: number, total: number, label: string) => void;
 }
 
@@ -128,8 +135,9 @@ export interface RenderResult {
   fileName: "final.mp4" | "preview.mp4";
   durationSec: number;
   fileBytes: number;
-  /** Frame geometry — "9:16" for keynote-slide renders, "16:9" otherwise. */
-  aspect: "16:9" | "9:16";
+  /** Frame geometry — "9:16" for keynote-slide renders, "1:1" for square
+   *  renders, "16:9" otherwise. */
+  aspect: "16:9" | "9:16" | "1:1";
   /** Designed black-dip windows (fadeblack blends) for the transition-aware QC gate. */
   blackWindows?: [number, number][];
 }
@@ -362,11 +370,17 @@ async function buildSegment(opts: {
   /** Module E: materialized ambience bed path for this scene (null = none). */
   ambiencePath?: string | null;
   outPath: string;
+  /** Stage 6 (T-6.8) — per-render aspect ratio (default "16:9"). */
+  aspect?: "16:9" | "9:16" | "1:1";
+  /** Stage 6 (T-6.8) — per-render frame rate (default 30). */
+  fps?: number;
 }): Promise<void> {
   const { scene, dur, mode, motion, plan, outPath } = opts;
   const dir = videoDir(opts.videoId);
   const wav = path.join(dir, sceneWavFile(scene.index));
   const leadMs = Math.round(LEAD_SEC * 1000);
+  const aspect = opts.aspect ?? "16:9";
+  const fps = opts.fps ?? FPS;
   // One helper owns BOTH the extra audio inputs and the graph, so input
   // order and stream labels can never drift apart.
   const audio = await sceneAudio(opts.sfx, opts.sfxKind ?? scene.sfx, opts.ambiencePath ?? null, leadMs, dur);
@@ -374,7 +388,7 @@ async function buildSegment(opts: {
   const common = [
     "-map", "[v]", "-map", "[a]",
     "-t", dur.toFixed(3),
-    "-r", String(FPS),
+    "-r", String(fps),
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
     "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
@@ -399,7 +413,7 @@ async function buildSegment(opts: {
           staticImage: true,
         },
       settings: motion,
-      fps: FPS,
+      fps,
     });
     const aChain = audio.graph;
     await run("ffmpeg", [
@@ -437,12 +451,12 @@ async function buildSegment(opts: {
       dur,
       plan: plan ?? { sceneType: "standard", move: "Static hold", shots: [{ kind: "hold", zStart: 1, zEnd: 1, focal: { x: 0.5, y: 0.5 }, travel: 0, sec: 99 }], staticImage: true },
       settings: motion,
-      fps: FPS,
-      aspect: "16:9",
+      fps,
+      aspect,
       grade: GRADE,
     });
     await run("ffmpeg", [
-      "-loop", "1", "-framerate", String(FPS), "-t", dur.toFixed(3), "-i", img,
+      "-loop", "1", "-framerate", String(fps), "-t", dur.toFixed(3), "-i", img,
       "-i", wav,
       ...audio.inputs,
       "-filter_complex", `${vChain};${audio.graph}`,
@@ -827,6 +841,12 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     // Stock mode: only the fallback scenes (no footage) need a camera plan.
     // Slides mode: deterministic gentle push plans (no LLM camera pass).
     const motion = sanitizeMotion(opts.motion ?? null);
+    // Stage 6 (T-6.8) — the motion planner needs to know the frame geometry
+    // (16:9 / 9:16 / 1:1) so it can size the camera plan to match. Slides
+    // mode is always 9:16; otherwise honor opts.aspectRatio (default 16:9).
+    const motionAspect: "16:9" | "9:16" | "1:1" =
+      opts.mode === "slides" ? "9:16" : (opts.aspectRatio ?? "16:9");
+    const motionFps = opts.frameRate ?? FPS;
     const needsPlan =
       opts.mode === "kenburns" ||
       (opts.mode === "stock" &&
@@ -838,7 +858,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
           ? scenes.map((s) => slideMotionPlan(s, motion))
           : needsPlan
             ? planSceneMovements(scenes, motion, {
-                aspect: "16:9",
+                aspect: motionAspect,
                 ctx: opts.motionContext,
                 durationsSec: durations,
               })
@@ -859,7 +879,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
             [scenes[i]],
             { ...motion, mode },
             {
-              aspect: "16:9",
+              aspect: motionAspect,
               ctx: opts.motionContext,
               durationsSec: [durations[i]],
             }
@@ -933,6 +953,8 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         sfxKind: planAudio.sfx.get(scene.index),
         ambiencePath: ambiencePaths.get(scene.index) ?? null,
         outPath: segPath,
+        aspect: motionAspect,
+        fps: motionFps,
       });
       segPaths.push(segPath);
     }
@@ -1023,7 +1045,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       fileName: outName,
       durationSec,
       fileBytes,
-      aspect: opts.mode === "slides" ? "9:16" : "16:9",
+      aspect: motionAspect,
       blackWindows:
         trans.style === "fadeblack" && scenes.length > 1
           ? fadeblackWindows(durations, trans.durationSec)

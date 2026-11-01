@@ -245,6 +245,12 @@ function parseRenderPayload(payload: unknown): RenderJobOptions {
   if (typeof p.music === "boolean") out.music = p.music;
   if (typeof p.sceneLimit === "number" && Number.isInteger(p.sceneLimit) && p.sceneLimit >= 1)
     out.sceneLimit = p.sceneLimit;
+  // Stage 6 (T-6.8) — per-render aspect + frame-rate overrides survive a
+  // crash so the resumed render keeps the SAME geometry the user picked.
+  if (p.aspectRatio === "16:9" || p.aspectRatio === "9:16" || p.aspectRatio === "1:1")
+    out.aspectRatio = p.aspectRatio;
+  if (p.frameRate === 24 || p.frameRate === 30 || p.frameRate === 60)
+    out.frameRate = p.frameRate;
   return out;
 }
 

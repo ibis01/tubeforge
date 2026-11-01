@@ -27,7 +27,7 @@ import type { Scene } from "./types";
 
 export type MotionMode = "smart" | "zoom" | "pan" | "off";
 export type MotionCurve = "smooth" | "linear";
-export type Aspect = "16:9" | "9:16";
+export type Aspect = "16:9" | "9:16" | "1:1";
 
 export interface MotionSettings {
   mode: MotionMode; // smart = scene-aware | zoom only | pan only | off
@@ -643,6 +643,10 @@ export function planSummaryLine(settings: MotionSettings): string {
 export const OUTPUT_SIZES: Record<Aspect, { work: [number, number]; out: [number, number] }> = {
   "16:9": { work: [3840, 2160], out: [1920, 1080] },
   "9:16": { work: [2160, 3840], out: [1080, 1920] },
+  // Square — 1080x1080 output (Instagram feed + the "1:1" ROADMAP §6
+  // aspect option). The work canvas matches the output aspect so the cover
+  // scale + crop don't distort.
+  "1:1": { work: [2160, 2160], out: [1080, 1080] },
 };
 
 const fmt = (n: number, dp = 3): string => {

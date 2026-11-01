@@ -435,6 +435,12 @@ export interface RenderJobOptions {
   smartCaptions?: boolean;
   music?: boolean;
   sceneLimit?: number;
+  /** Stage 6 (T-6.8) — per-render aspect override ("16:9"|"9:16"|"1:1").
+   *  When unset, the job falls back to the video row's `aspectRatio`. */
+  aspectRatio?: "16:9" | "9:16" | "1:1";
+  /** Stage 6 (T-6.8) — per-render frame-rate override (24|30|60).
+   *  When unset, the job falls back to the video row's `frameRate`, then 30. */
+  frameRate?: 24 | 30 | 60;
 }
 
 /** Render the final/preview MP4 (+ QC battery on full renders). */
@@ -456,13 +462,29 @@ export async function runRenderJob(
   const mode = ["animated", "stock", "slides"].includes(opts.mode ?? "")
     ? (opts.mode as "animated" | "stock" | "slides")
     : "kenburns";
-  const subtitles = opts.subtitles ?? mode !== "slides"; // slides default: no burned captions
+  // Stage 6 (T-6.8): per-RENDER override wins; else the per-PROJECT default
+  // (Video.burnCaptions — null/undefined = follow the mode's natural default:
+  // slides mode burns no captions; everything else burns).
+  const projectBurn = video.burnCaptions === true || video.burnCaptions === false ? video.burnCaptions : null;
+  const subtitles =
+    opts.subtitles ?? (projectBurn !== null ? projectBurn : mode !== "slides"); // slides default: no burned captions
   const smartCaptions = opts.smartCaptions !== false; // default: ASR-synced cues
   const music = opts.music !== false; // default: ambient bed
   const sceneLimit =
     Number.isInteger(opts.sceneLimit) && (opts.sceneLimit as number) >= 1
       ? Math.min(opts.sceneLimit as number, scenes.length)
       : undefined;
+  // Stage 6 (T-6.8) — per-render override > per-project default > 30.
+  // Slides mode always renders 9:16 (keynote deck geometry); an explicit
+  // 1:1 is honored only for non-slides modes.
+  const aspect: "16:9" | "9:16" | "1:1" =
+    mode === "slides"
+      ? "9:16"
+      : opts.aspectRatio ??
+        (video.aspectRatio === "9:16" || video.aspectRatio === "1:1" || video.aspectRatio === "16:9"
+          ? video.aspectRatio
+          : "16:9");
+  const frameRate = opts.frameRate ?? (video.frameRate === 24 || video.frameRate === 60 ? video.frameRate : 30);
 
   if (!video.hasStoryboard && mode !== "slides")
     throw new Error("Generate the storyboard first — there is no scene art yet");
@@ -510,6 +532,8 @@ export async function runRenderJob(
       musicDuck: duckFallback,
       sfx,
       sceneLimit,
+      aspectRatio: aspect,
+      frameRate,
       motion: {
         mode: (video.motionMode ?? "smart") as "smart" | "zoom" | "pan" | "off",
         intensity: video.motionIntensity ?? 12,
@@ -538,7 +562,7 @@ export async function runRenderJob(
         result.durationSec,
         video.audioDuration,
         result.blackWindows,
-        result.aspect,
+        aspect,
         approvedPlan,
         {
           i2vEverywhere: mode === "animated",

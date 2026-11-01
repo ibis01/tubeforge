@@ -175,12 +175,13 @@ export function parseSrt(text: string): SrtCue[] {
   return cues;
 }
 
-/** Frame geometry expectations — vertical is a first-class format now. */
-export type QcAspect = "16:9" | "9:16";
+/** Frame geometry expectations — vertical and square are first-class formats. */
+export type QcAspect = "16:9" | "9:16" | "1:1";
 
 const ASPECT_TARGET: Record<QcAspect, { w: number; h: number; label: string }> = {
   "16:9": { w: 1920, h: 1080, label: "16:9 frame" },
   "9:16": { w: 1080, h: 1920, label: "9:16 vertical frame" },
+  "1:1": { w: 1080, h: 1080, label: "1:1 square frame" },
 };
 
 /**
@@ -208,7 +209,8 @@ export async function runQcReport(opts: {
   shotPlanI2VEverywhere?: boolean;
   shotPlanStockEverywhere?: boolean;
 }): Promise<QcReport> {
-  const aspect: QcAspect = opts.expectedAspect === "9:16" ? "9:16" : "16:9";
+  const aspect: QcAspect =
+    opts.expectedAspect === "9:16" ? "9:16" : opts.expectedAspect === "1:1" ? "1:1" : "16:9";
   const aspectSpec = ASPECT_TARGET[aspect];
   const checks: QcCheck[] = [];
   const exists = fs.existsSync(opts.mp4Path);

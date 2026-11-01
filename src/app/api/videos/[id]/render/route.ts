@@ -104,6 +104,20 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       ? Math.min(sceneLimitRaw, scenes.length)
       : undefined;
 
+  // Stage 6 (T-6.8) — per-render aspect + frame-rate overrides (optional).
+  // When absent, the job falls back to the per-PROJECT defaults on the video
+  // row (video.aspectRatio / video.frameRate); 30 fps + 16:9 otherwise.
+  // Slides mode is always 9:16; an explicit 1:1 is honored only for the
+  // other modes (the slide deck's PNG is 1080x1920).
+  const aspectRatio: "16:9" | "9:16" | "1:1" | undefined =
+    body?.aspectRatio === "16:9" || body?.aspectRatio === "9:16" || body?.aspectRatio === "1:1"
+      ? body.aspectRatio
+      : undefined;
+  const frameRate: 24 | 30 | 60 | undefined =
+    body?.frameRate === 24 || body?.frameRate === 30 || body?.frameRate === 60
+      ? body.frameRate
+      : undefined;
+
   // Durable render options — the job re-derives scenes/motion/transition/
   // brand/music from the video row; the payload preserves the user's picks.
   const renderOpts: RenderJobOptions = {
@@ -112,6 +126,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     smartCaptions,
     music,
     sceneLimit,
+    aspectRatio,
+    frameRate,
   };
 
   // Response-time music resolution (the job re-resolves for itself).
