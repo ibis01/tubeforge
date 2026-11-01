@@ -3,16 +3,37 @@ import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseScenes, serializeScenes } from "@/lib/tubeforge/story";
 import { CAMERAS, sanitizeSceneStyle } from "@/lib/tubeforge/types";
+import * as storage from "@/lib/tubeforge/storage";
 
 type Ctx = { params: Promise<{ id: string }> };
 
+/** Artifacts keyed off the OLD narration (Stage 4a, T-4.4 — same semantics as
+ *  the script-edit PATCH): the spoken audio no longer matches the text, so
+ *  the voiceover, renders, short and per-scene voice clips die. Scene art
+ *  PNGs, stock clips and thumbnails survive (they track the visuals). */
+const NARRATION_STALE =
+  /\/(voiceover\.wav|voice-source\.\w+|final\.mp4|preview\.mp4|subtitles\.srt|short\.mp4|short-thumb\.png|scene-\d{2}\.(wav|mp4))$/;
+
+async function invalidateNarrationArtifacts(videoId: string): Promise<boolean> {
+  try {
+    const keys = await storage.list(videoId);
+    const stale = keys.filter((k) => NARRATION_STALE.test(k));
+    await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));
+    return stale.length > 0;
+  } catch {
+    return false; // prefix absent — nothing to invalidate
+  }
+}
+
 /**
  * PATCH — Scene Studio text edits for ONE scene (index-keyed).
- * Body: { index, visual?, mood?, caption?, camera?, style? }
+ * Body: { index, visual?, mood?, caption?, camera?, style?, narration? }
  *
- * Only the scene JSON is touched — the storyboard image and any rendered MP4
- * stay valid, so this is safe to call while a video exists. The new prompt
- * takes effect on the next Regenerate (POST storyboard { scene }).
+ * Text-only edits keep the storyboard image and any rendered MP4 valid —
+ * EXCEPT narration: the spoken audio is keyed off the old narration text, so
+ * a narration edit drops the voiceover + renders (Stage 4a, T-4.4), exactly
+ * like a classic script edit does. The response reports `invalidated` so the
+ * client can refresh the video DTO's stage flags.
  */
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
@@ -41,7 +62,20 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 
   // Field-by-field validation — every present field must earn its way in.
   let changed = false;
+  let narrationChanged = false;
 
+  if (body?.narration !== undefined) {
+    const narration = String(body.narration).trim();
+    if (narration.length < 3)
+      return NextResponse.json({ error: "The narration needs at least 3 characters" }, { status: 400 });
+    if (narration.length > 3000)
+      return NextResponse.json({ error: "Narration too long — keep it under 3000 characters" }, { status: 400 });
+    if (narration !== scene.narration) {
+      scene.narration = narration;
+      changed = true;
+      narrationChanged = true;
+    }
+  }
   if (body?.visual !== undefined) {
     const visual = String(body.visual).trim();
     if (visual.length < 3)
@@ -76,9 +110,31 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "Nothing to update — send at least one scene field" }, { status: 400 });
 
   const updated = scenes.map((s) => (s.index === index ? scene : s));
+
+  // A narration change makes the spoken audio stale — drop voiceover +
+  // renders the same way the classic script edit does (T-4.4).
+  let invalidated = false;
+  if (narrationChanged && video.hasVoiceover) {
+    invalidated = await invalidateNarrationArtifacts(id);
+    await db.video.update({
+      where: { id },
+      data: {
+        hasVoiceover: false,
+        audioDuration: null,
+        voiceSource: "tts",
+        voiceLabel: null,
+        hasVideo: false,
+        hasShort: false,
+        shortDuration: null,
+        shortScene: null,
+      },
+    });
+  }
+
   await db.video.update({ where: { id }, data: { scenes: JSON.stringify(updated) } });
 
   return NextResponse.json({
     scene: (await serializeScenes(id, updated)).find((s) => s.index === index) ?? null,
+    invalidated,
   });
 }

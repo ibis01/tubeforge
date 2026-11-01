@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -24,7 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { StatusBadge, formatDuration, timeAgo, useVoices, VoiceSelectWithPreview, VOICES_CHANGED_EVENT } from "@/components/tubeforge/shared";
+import { StatusBadge, formatDuration, timeAgo, useVoices, VoiceSelectWithPreview, VOICES_CHANGED_EVENT, Kbd } from "@/components/tubeforge/shared";
 import { MusicPickerCard, type MusicPickerValue } from "@/components/tubeforge/music-controls";
 import { MotionControlsCard, type MotionPickerValue } from "@/components/tubeforge/motion-controls";
 import { TransitionControlsCard, type TransitionPickerValue } from "@/components/tubeforge/transition-controls";
@@ -420,6 +421,137 @@ export function VideoDetailDialog({
       }
     },
     [auditionPlaying, stopAudition]
+  );
+
+  // ---------- Script editing (Stage 4a, T-4.4) — classic format ----------
+  // Autosaved (debounced) PATCH with the same invalidation contract as the
+  // Create-view editor: a meaningfully-changed script drops the stale
+  // voiceover/renders unless "typo fix" is checked. ⌘Z undoes autosave chunks.
+  // (Hooks — must stay above the `if (!video) return null;` early return.)
+  const [scriptDraft, setScriptDraft] = useState("");
+  const [scriptSaveState, setScriptSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [typoFixOnly, setTypoFixOnly] = useState(false);
+  const scriptSyncedRef = useRef<string | null>(null);
+  const scriptHistoryRef = useRef<string[]>([]);
+  const [scriptHistoryLen, setScriptHistoryLen] = useState(0);
+
+  // Re-sync the draft when the SERVER's script changes (first load,
+  // regeneration) — never while the user is mid-edit.
+  useEffect(() => {
+    const server = video?.script ?? null;
+    if (server !== scriptSyncedRef.current) {
+      scriptSyncedRef.current = server;
+      setScriptDraft(server ?? "");
+      scriptHistoryRef.current = [];
+      setScriptHistoryLen(0);
+      setScriptSaveState("idle");
+    }
+  }, [video?.script]);
+
+  const saveScript = useCallback(
+    async (text: string) => {
+      const v = video;
+      if (!v) return;
+      setScriptSaveState("saving");
+      try {
+        const res = await fetch(`/api/videos/${v.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ script: text, preserveArtifacts: typoFixOnly }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error ?? "Could not save the script");
+        const hadVoiceover = v.hasVoiceover;
+        onChanged(body.video);
+        scriptSyncedRef.current = text;
+        setScriptSaveState("saved");
+        if (hadVoiceover && body.video?.hasVoiceover === false) {
+          toast({
+            title: "Voiceover cleared",
+            description:
+              "The script changed enough that the old narration no longer matches — re-render the voiceover when you're happy with the text.",
+          });
+        }
+      } catch (e) {
+        setScriptSaveState("error");
+        toast({
+          title: "Could not save the script",
+          description: e instanceof Error ? e.message : "Unknown error",
+          variant: "destructive",
+        });
+      }
+    },
+    [video, typoFixOnly, onChanged, toast],
+  );
+
+  // Debounced autosave — fires 1s after typing stops.
+  useEffect(() => {
+    const serverScript = video?.script ?? "";
+    if (isStory || !video?.id) return;
+    if (scriptDraft === serverScript) return;
+    const t = setTimeout(() => {
+      // Snapshot the last-saved text so ⌘Z can step back through chunks.
+      scriptHistoryRef.current.push(serverScript);
+      if (scriptHistoryRef.current.length > 25)
+        scriptHistoryRef.current.shift();
+      setScriptHistoryLen(scriptHistoryRef.current.length);
+      void saveScript(scriptDraft);
+    }, 1000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scriptDraft, isStory, video?.id]);
+
+  const undoScript = useCallback(
+    (redo = false) => {
+      const hist = scriptHistoryRef.current;
+      if (redo || hist.length === 0) return;
+      const prev = hist.pop()!;
+      setScriptHistoryLen(hist.length);
+      setScriptDraft(prev);
+      void saveScript(prev);
+    },
+    [saveScript],
+  );
+
+  // ---------- Scene text saves (Stage 4a, T-4.4) — per-scene narration +
+  // caption edits from the Script tab's scene cards. (Hook — above the early
+  // return.) ----------
+  const saveSceneText = useCallback(
+    async (index: number, patch: { narration?: string; caption?: string }) => {
+      const v = video;
+      if (!v) return false;
+      try {
+        const res = await fetch(`/api/videos/${v.id}/scenes`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ index, ...patch }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error ?? "Could not save the scene");
+        if (body.scene) {
+          const updated = body.scene as SceneDTO;
+          setScenes((prev) => prev.map((s) => (s.index === index ? updated : s)));
+        }
+        if (body.invalidated) {
+          toast({
+            title: "Voiceover cleared",
+            description:
+              "Scene narration changed — the spoken audio no longer matches. Re-render the voiceover from the Package tab when the script reads right.",
+          });
+          await refreshVideo(v.id);
+          bumpRefresh();
+        }
+        return true;
+      } catch (e) {
+        toast({
+          title: `Could not save scene ${index}`,
+          description: e instanceof Error ? e.message : "Unknown error",
+          variant: "destructive",
+        });
+        return false;
+      }
+    },
+    [video, refreshVideo, toast, bumpRefresh],
   );
 
   if (!video) return null;
@@ -1953,107 +2085,8 @@ export function VideoDetailDialog({
         </div>
       </div>
 
-      {/* Narration check (Phase 3 — ASR proofreading) */}
-      <div className="mt-5">
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
-            <ScanText className="h-3 w-3" /> Narration check
-          </p>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!video.hasVoiceover || verifyRunning || Boolean(busy)}
-            onClick={runVerify}
-            className="border-white/15 bg-white/4 h-7 text-xs px-2.5"
-            title={
-              !video.hasVoiceover
-                ? "Generate the voiceover first"
-                : "Transcribe the voiceover with ASR and match it against the script"
-            }
-          >
-            {verifyRunning ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <ScanText className="h-3 w-3" />
-            )}
-            {verifyReport ? "Re-check" : "Run check"}
-          </Button>
-        </div>
-
-        {!video.hasVoiceover ? (
-          <p className="text-sm text-muted-foreground">
-            Generate the voiceover first — the check transcribes it back and
-            compares it with the script to catch TTS glitches.
-          </p>
-        ) : verifyReport ? (
-          <div className="rounded-xl border border-white/10 bg-white/3 p-3 space-y-2.5">
-            <div className="flex items-center gap-2 flex-wrap">
-              <Badge
-                className={clsx(
-                  "border-none text-[10px]",
-                  verifyReport.verdict === "excellent"
-                    ? "bg-emerald-500/20 text-emerald-300"
-                    : verifyReport.verdict === "good"
-                      ? "bg-sky-500/20 text-sky-300"
-                      : "bg-red-500/20 text-red-300"
-                )}
-              >
-                {verifyReport.verdict === "excellent"
-                  ? "Excellent"
-                  : verifyReport.verdict === "good"
-                    ? "Good"
-                    : "Needs review"}
-              </Badge>
-              <span className="text-sm font-semibold tabular-nums">
-                {Math.round(verifyReport.similarity * 100)}% word match
-              </span>
-              <span className="text-[11px] text-muted-foreground">
-                {verifyReport.scriptWords} script words → {verifyReport.transcriptWords} spoken
-              </span>
-              <span className="text-[10px] text-muted-foreground ml-auto">
-                ran {timeAgo(verifyReport.ranAt)}
-              </span>
-            </div>
-
-            {verifyReport.scenes && verifyReport.scenes.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {verifyReport.scenes.map((s) => (
-                  <Badge
-                    key={s.index}
-                    variant="outline"
-                    className={clsx(
-                      "text-[9px] font-normal",
-                      s.similarity >= 0.95
-                        ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
-                        : s.similarity >= 0.85
-                          ? "border-sky-500/25 bg-sky-500/10 text-sky-300"
-                          : "border-red-500/25 bg-red-500/10 text-red-300"
-                    )}
-                  >
-                    Scene {s.index}: {Math.round(s.similarity * 100)}%
-                  </Badge>
-                ))}
-              </div>
-            )}
-
-            {verifyReport.missingWords.length > 0 && (
-              <p className="text-[11px] text-muted-foreground">
-                <span className="text-foreground/70">Missing:</span>{" "}
-                {verifyReport.missingWords.join(", ")}
-              </p>
-            )}
-
-            <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-3 border-t border-white/8 pt-2 italic">
-              “{verifyReport.transcriptPreview}…”
-            </p>
-          </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            Run an ASR check to prove the spoken audio matches the script —
-            {isStory ? " verified scene by scene" : " verified word by word"}.
-          </p>
-        )}
-      </div>
+      {/* Narration check moved to the Script tab (Stage 4a, T-4.4) — the ASR
+          accuracy report lives with the script it verifies. */}
 
       {/* Engagement kit (Phase 4 — retention comments) */}
       <div className="mt-5">
@@ -2286,56 +2319,91 @@ export function VideoDetailDialog({
 
       <Separator className="my-5 bg-white/8" />
 
-      {/* Script — (re)generation lives here so a failed create is recoverable
-          without re-entering the topic in the Create view */}
-      <div>
-        <div className="flex items-center justify-between gap-2 mb-2">
+      {/* Script editing moved to the Script tab (Stage 4a, T-4.4) — editable
+          per-scene narration for story videos, a full editor for classic. */}
+    </>
+  );
+
+  // ---------- The Script tab (Stage 4a, T-4.4) ----------
+  // One editing home for both formats: story = per-scene cards with structure
+  // + emotion maps and timing; classic = a full autosaving editor. The ASR
+  // accuracy check lives here too — it verifies exactly this text.
+  const wordsPerSecond = 2.6 * (video?.ttsSpeed ?? 1);
+  const scriptWords = isStory
+    ? scenes.reduce((acc, s) => acc + s.narration.split(/\s+/).filter(Boolean).length, 0)
+    : (scriptDraft || "").split(/\s+/).filter(Boolean).length;
+  const estSeconds = scriptWords / wordsPerSecond;
+
+  const structureOf = (i: number, total: number): { label: string; cls: string } => {
+    if (i === 1) return { label: "Hook", cls: "bg-red-400" };
+    if (i === total) return { label: "Payoff", cls: "bg-emerald-400" };
+    return i <= Math.ceil(total / 2)
+      ? { label: "Context", cls: "bg-sky-400" }
+      : { label: "Escalation", cls: "bg-amber-400" };
+  };
+  const moodHue = (mood: string): number => {
+    let h = 0;
+    for (let i = 0; i < mood.length; i++) h = (h * 31 + mood.charCodeAt(i)) % 360;
+    return h;
+  };
+
+  const scriptTab = (
+    <>
+      {/* Header: counts + regeneration */}
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+        <div>
           <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
-            <FileText className="h-3 w-3" /> {isStory ? "Scene narration" : "Script"}
+            <FileText className="h-3 w-3" /> {isStory ? "Scene script" : "Script"}
           </p>
-          <Button
-            variant={video.script ? "outline" : "default"}
-            size="sm"
-            disabled={Boolean(busy)}
-            onClick={regenScript}
-            className={
-              video.script
-                ? "border-white/15 bg-white/4 h-7 text-xs px-2.5"
-                : "bg-brand-gradient hover:opacity-90 font-medium h-7 text-xs px-2.5"
-            }
-            title={
-              video.script
-                ? "Discard this script and write a fresh take from the same topic"
-                : `Write the ${isStory ? "scene script" : "script"} from the topic “${video.topic}”`
-            }
-          >
-            {busy === "script" ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Wand2 className="h-3 w-3" />
-            )}
-            {busy === "script"
-              ? "Writing…"
-              : video.script
-                ? "Re-generate script"
-                : "Generate script"}
-          </Button>
+          <p className="text-xs text-muted-foreground mt-1">
+            <span className="tf-num">{scriptWords}</span> words ·{" "}
+            <span className="tf-num">≈ {formatDuration(estSeconds)}</span> at{" "}
+            {(video?.ttsSpeed ?? 1).toFixed(1)}x
+            {isStory && scenes.length > 0 ? ` · ${scenes.length} scenes` : ""}
+          </p>
         </div>
-        {video.error && !video.script && (
-          <p className="mb-2 text-xs text-red-300 bg-red-500/8 border border-red-500/20 rounded-lg px-3 py-2 leading-relaxed">
-            {video.error}
-          </p>
-        )}
-        {video.script ? (
-          <div className="max-h-56 overflow-y-auto scroll-area-bar pr-3 text-sm leading-relaxed whitespace-pre-wrap text-foreground/85">
-            {video.script}
-          </div>
-        ) : (
-          <div className="rounded-xl border border-dashed border-white/12 bg-white/3 px-4 py-5 text-center">
-            <p className="text-sm text-muted-foreground">No script yet.</p>
+        <Button
+          variant={video?.script ? "outline" : "default"}
+          size="sm"
+          disabled={Boolean(busy)}
+          onClick={regenScript}
+          className={
+            video?.script
+              ? "border-white/15 bg-white/4 h-8 text-xs px-3"
+              : "bg-brand-gradient hover:opacity-90 font-medium h-8 text-xs px-3"
+          }
+          title={
+            video?.script
+              ? "Discard this script and write a fresh take from the same topic"
+              : `Write the ${isStory ? "scene script" : "script"} from the topic`
+          }
+        >
+          {busy === "script" ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Wand2 className="h-3.5 w-3.5" />
+          )}
+          {busy === "script"
+            ? "Writing…"
+            : video?.script
+              ? "Re-generate"
+              : "Generate script"}
+        </Button>
+      </div>
+
+      {video?.error && !video?.script && (
+        <p className="mb-3 text-xs text-red-300 bg-red-500/8 border border-red-500/20 rounded-lg px-3 py-2 leading-relaxed">
+          {video.error}
+        </p>
+      )}
+
+      {/* Story: structure + emotional progression maps, then per-scene cards */}
+      {isStory ? (
+        scenes.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-white/12 bg-white/3 px-4 py-6 text-center">
+            <p className="text-sm text-muted-foreground">No scene script yet.</p>
             <p className="text-[11px] text-muted-foreground/70 mt-1 mb-3">
-              One click writes a fresh {isStory ? "scene script" : "script"} from
-              your topic: “{video.topic}”.
+              One click writes a scene-by-scene script from your topic.
             </p>
             <Button
               size="sm"
@@ -2351,6 +2419,242 @@ export function VideoDetailDialog({
               {busy === "script" ? "Writing the script…" : "Generate script"}
             </Button>
           </div>
+        ) : (
+          <>
+            {/* Narrative structure strip — hook → context → escalation → payoff,
+                with rehook pivots marked. Click a beat to jump to its card. */}
+            <div className="mb-3">
+              <p className="tf-kicker mb-1.5">Narrative structure</p>
+              <div className="flex gap-0.5 h-6">
+                {scenes.map((s) => {
+                  const st = structureOf(s.index, scenes.length);
+                  return (
+                    <a
+                      key={s.index}
+                      href={`#scene-card-${s.index}`}
+                      title={`Scene ${s.index} — ${st.label}${s.rehook ? " · rehook pivot" : ""}`}
+                      className={`relative flex-1 rounded-sm ${st.cls} opacity-70 hover:opacity-100 transition-opacity min-w-0`}
+                    >
+                      {s.rehook && (
+                        <span className="absolute -top-1 left-1/2 -translate-x-1/2 h-2 w-2 rotate-45 bg-white/80" />
+                      )}
+                    </a>
+                  );
+                })}
+              </div>
+              <div className="flex gap-2 mt-1.5 text-[10px] text-muted-foreground">
+                {["Hook", "Context", "Escalation", "Payoff"].map((l) => (
+                  <span key={l} className="flex items-center gap-1">
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${
+                        l === "Hook"
+                          ? "bg-red-400"
+                          : l === "Context"
+                            ? "bg-sky-400"
+                            : l === "Escalation"
+                              ? "bg-amber-400"
+                              : "bg-emerald-400"
+                      }`}
+                    />
+                    {l}
+                  </span>
+                ))}
+                <span className="ml-auto">◆ = rehook pivot</span>
+              </div>
+            </div>
+
+            {/* Emotional progression — one hued segment per scene's mood */}
+            <div className="mb-4">
+              <p className="tf-kicker mb-1.5">Emotional progression</p>
+              <div className="flex gap-0.5 h-3">
+                {scenes.map((s) => (
+                  <span
+                    key={s.index}
+                    title={`Scene ${s.index}: ${s.mood || "unspecified mood"}`}
+                    className="flex-1 rounded-full min-w-0"
+                    style={{
+                      background: `hsl(${moodHue(s.mood || "neutral")} 55% 55%)`,
+                      opacity: 0.85,
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Per-scene editor cards */}
+            <div className="space-y-3">
+              {scenes.map((s) => (
+                <SceneScriptCard
+                  key={`${s.index}-${s.narration.length}-${s.caption}`}
+                  scene={s}
+                  wordsPerSecond={wordsPerSecond}
+                  structure={structureOf(s.index, scenes.length)}
+                  moodHue={moodHue(s.mood || "neutral")}
+                  disabled={Boolean(busy)}
+                  onSave={saveSceneText}
+                />
+              ))}
+            </div>
+          </>
+        )
+      ) : (
+        <>
+          {/* Classic: full-script editor with autosave + undo */}
+          <Textarea
+            value={scriptDraft}
+            onChange={(e) => setScriptDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+                e.preventDefault();
+                undoScript(e.shiftKey);
+              }
+            }}
+            disabled={Boolean(busy)}
+            placeholder="The script generates here — or paste your own narration."
+            className="min-h-[280px] bg-white/5 text-sm leading-relaxed resize-y"
+            maxLength={50000}
+            aria-label="Script editor"
+          />
+          <div className="flex items-center justify-between gap-3 flex-wrap mt-2">
+            <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+              <span
+                className={
+                  scriptSaveState === "saving"
+                    ? "text-amber-300"
+                    : scriptSaveState === "saved"
+                      ? "text-emerald-300"
+                      : scriptSaveState === "error"
+                        ? "text-red-300"
+                        : ""
+                }
+              >
+                {scriptSaveState === "saving"
+                  ? "Saving…"
+                  : scriptSaveState === "saved"
+                    ? "Saved ✓"
+                    : scriptSaveState === "error"
+                      ? "Save failed — will retry on next edit"
+                      : "Autosaves as you type"}
+              </span>
+              {scriptHistoryLen > 0 && (
+                <span className="flex items-center gap-1">
+                  <Kbd>⌘</Kbd>
+                  <Kbd>Z</Kbd> undo ({scriptHistoryLen})
+                </span>
+              )}
+            </div>
+            <label className="flex items-center gap-2 text-[11px] text-muted-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                checked={typoFixOnly}
+                onChange={(e) => setTypoFixOnly(e.target.checked)}
+                className="h-3.5 w-3.5 accent-[rgb(255_92_60)]"
+              />
+              Typo fix only — keep voiceover &amp; renders
+            </label>
+          </div>
+        </>
+      )}
+
+      {/* ASR accuracy check (moved from the Package tab, T-4.4) */}
+      <div className="mt-6">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
+            <ScanText className="h-3 w-3" /> Accuracy check
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!video?.hasVoiceover || verifyRunning || Boolean(busy)}
+            onClick={runVerify}
+            className="border-white/15 bg-white/4 h-7 text-xs px-2.5"
+            title={
+              !video?.hasVoiceover
+                ? "Generate the voiceover first"
+                : "Transcribe the voiceover with ASR and match it against the script"
+            }
+          >
+            {verifyRunning ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <ScanText className="h-3 w-3" />
+            )}
+            {verifyReport ? "Re-check" : "Run check"}
+          </Button>
+        </div>
+
+        {!video?.hasVoiceover ? (
+          <p className="text-sm text-muted-foreground">
+            Generate the voiceover first — the check transcribes it back and
+            compares it with the script to catch TTS glitches.
+          </p>
+        ) : verifyReport ? (
+          <div className="rounded-xl border border-white/10 bg-white/3 p-3 space-y-2.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge
+                className={clsx(
+                  "border-none text-[10px]",
+                  verifyReport.verdict === "excellent"
+                    ? "bg-emerald-500/20 text-emerald-300"
+                    : verifyReport.verdict === "good"
+                      ? "bg-sky-500/20 text-sky-300"
+                      : "bg-red-500/20 text-red-300"
+                )}
+              >
+                {verifyReport.verdict === "excellent"
+                  ? "Excellent"
+                  : verifyReport.verdict === "good"
+                    ? "Good"
+                    : "Needs review"}
+              </Badge>
+              <span className="text-sm font-semibold tabular-nums">
+                {Math.round(verifyReport.similarity * 100)}% word match
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                {verifyReport.scriptWords} script words → {verifyReport.transcriptWords} spoken
+              </span>
+              <span className="text-[10px] text-muted-foreground ml-auto">
+                ran {timeAgo(verifyReport.ranAt)}
+              </span>
+            </div>
+
+            {verifyReport.scenes && verifyReport.scenes.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {verifyReport.scenes.map((s) => (
+                  <Badge
+                    key={s.index}
+                    variant="outline"
+                    className={clsx(
+                      "text-[9px] font-normal",
+                      s.similarity >= 0.95
+                        ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+                        : s.similarity >= 0.85
+                          ? "border-sky-500/25 bg-sky-500/10 text-sky-300"
+                          : "border-red-500/25 bg-red-500/10 text-red-300"
+                    )}
+                  >
+                    Scene {s.index}: {Math.round(s.similarity * 100)}%
+                  </Badge>
+                ))}
+              </div>
+            )}
+
+            {verifyReport.missingWords.length > 0 && (
+              <p className="text-[11px] text-muted-foreground">
+                <span className="text-foreground/70">Missing:</span>{" "}
+                {verifyReport.missingWords.join(", ")}
+              </p>
+            )}
+
+            <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-3 border-t border-white/8 pt-2 italic">
+              “{verifyReport.transcriptPreview}…”
+            </p>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Run an ASR check to prove the spoken audio matches the script —
+            {isStory ? " verified scene by scene" : " verified word by word"}.
+          </p>
         )}
       </div>
     </>
@@ -2587,10 +2891,16 @@ export function VideoDetailDialog({
           )}
 
           {isStory ? (
-            <Tabs defaultValue="video" className="mt-4">
-              <TabsList className="grid grid-cols-3 bg-white/5">
+            <Tabs
+              defaultValue={video.hasVideo || video.hasVoiceover ? "video" : "script"}
+              className="mt-4"
+            >
+              <TabsList className="grid grid-cols-4 bg-white/5">
                 <TabsTrigger value="package" className="data-[state=active]:bg-white/10 text-xs">
                   Package
+                </TabsTrigger>
+                <TabsTrigger value="script" className="data-[state=active]:bg-white/10 text-xs">
+                  Script
                 </TabsTrigger>
                 <TabsTrigger value="storyboard" className="data-[state=active]:bg-white/10 text-xs">
                   Storyboard
@@ -2602,6 +2912,9 @@ export function VideoDetailDialog({
               <TabsContent value="package" className="mt-4">
                 {packageTab}
               </TabsContent>
+              <TabsContent value="script" className="mt-4">
+                {scriptTab}
+              </TabsContent>
               <TabsContent value="storyboard" className="mt-4">
                 {storyboardTab}
               </TabsContent>
@@ -2610,7 +2923,22 @@ export function VideoDetailDialog({
               </TabsContent>
             </Tabs>
           ) : (
-            <div className="mt-2">{packageTab}</div>
+            <Tabs defaultValue="package" className="mt-4">
+              <TabsList className="grid grid-cols-2 bg-white/5">
+                <TabsTrigger value="package" className="data-[state=active]:bg-white/10 text-xs">
+                  Package
+                </TabsTrigger>
+                <TabsTrigger value="script" className="data-[state=active]:bg-white/10 text-xs">
+                  Script
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="package" className="mt-4">
+                {packageTab}
+              </TabsContent>
+              <TabsContent value="script" className="mt-4">
+                {scriptTab}
+              </TabsContent>
+            </Tabs>
           )}
 
           {footer}
@@ -2639,5 +2967,157 @@ export function VideoDetailDialog({
         }}
       />
     </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SceneScriptCard (Stage 4a, T-4.4) — one scene's editable script beat.
+//
+// Narration autosaves (debounced 800ms) through PATCH /scenes; a narration
+// change invalidates the stale voiceover server-side and the dialog refreshes
+// the video DTO when that happens. Caption edits are text-only (never
+// invalidate). The card also shows the beat's structure role, mood hue and
+// spoken-length estimate so the script reads as a timeline, not a wall of text.
+// ---------------------------------------------------------------------------
+
+/** Standard narration pace ≈ 156 wpm at 1.0x — the estimate the Script tab
+ *  shows per scene (actual timing comes from the TTS render itself). */
+function sceneEstSeconds(narration: string, wordsPerSecond: number): number {
+  const words = narration.split(/\s+/).filter(Boolean).length;
+  return words / wordsPerSecond;
+}
+
+function SceneScriptCard({
+  scene,
+  wordsPerSecond,
+  structure,
+  moodHue,
+  disabled,
+  onSave,
+}: {
+  scene: SceneDTO;
+  wordsPerSecond: number;
+  structure: { label: string; cls: string };
+  moodHue: number;
+  disabled: boolean;
+  onSave: (index: number, patch: { narration?: string; caption?: string }) => Promise<boolean>;
+}) {
+  const [narration, setNarration] = useState(scene.narration);
+  const [caption, setCaption] = useState(scene.caption);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const syncedRef = useRef({ narration: scene.narration, caption: scene.caption });
+
+  // Re-sync when the scene changes on the server (regeneration / re-audit).
+  useEffect(() => {
+    if (scene.narration !== syncedRef.current.narration || scene.caption !== syncedRef.current.caption) {
+      syncedRef.current = { narration: scene.narration, caption: scene.caption };
+      setNarration(scene.narration);
+      setCaption(scene.caption);
+      setSaveState("idle");
+    }
+  }, [scene.narration, scene.caption]);
+
+  // Debounced autosave — one PATCH per field that actually changed.
+  useEffect(() => {
+    const nDirty = narration !== syncedRef.current.narration;
+    const cDirty = caption !== syncedRef.current.caption;
+    if (!nDirty && !cDirty) return;
+    setSaveState("saving");
+    const t = setTimeout(async () => {
+      const patch: { narration?: string; caption?: string } = {};
+      if (nDirty) patch.narration = narration;
+      if (cDirty) patch.caption = caption;
+      const ok = await onSave(scene.index, patch);
+      if (ok) {
+        syncedRef.current = { narration, caption };
+        setSaveState("saved");
+      } else {
+        setSaveState("error");
+      }
+    }, 800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [narration, caption]);
+
+  const words = narration.split(/\s+/).filter(Boolean).length;
+
+  return (
+    <div id={`scene-card-${scene.index}`} className="tf-card p-3.5 scroll-mt-4">
+      <div className="flex items-center gap-2 flex-wrap mb-2">
+        <span className="text-xs font-semibold text-white/85">Scene {scene.index}</span>
+        <span className="text-[10px] text-white/50 truncate flex-1 min-w-0">{scene.title}</span>
+        <Badge
+          variant="outline"
+          className={`text-[9px] font-normal border-none ${
+            structure.label === "Hook"
+              ? "bg-red-500/15 text-red-300"
+              : structure.label === "Context"
+                ? "bg-sky-500/15 text-sky-300"
+                : structure.label === "Escalation"
+                  ? "bg-amber-500/15 text-amber-300"
+                  : "bg-emerald-500/15 text-emerald-300"
+          }`}
+        >
+          {structure.label}
+        </Badge>
+        {scene.hostInScene && (
+          <Badge variant="outline" className="text-[9px] font-normal border-white/15 bg-white/5 text-white/70">
+            Host
+          </Badge>
+        )}
+        {scene.rehook && (
+          <Badge variant="outline" className="text-[9px] font-normal border-amber-400/30 bg-amber-400/10 text-amber-300">
+            Rehook
+          </Badge>
+        )}
+        <span
+          className="h-2 w-2 rounded-full shrink-0"
+          title={scene.mood || "unspecified mood"}
+          style={{ background: `hsl(${moodHue} 55% 55%)` }}
+        />
+        <span className="tf-num text-[10px] text-muted-foreground ml-auto">
+          {words}w · ≈ {Math.round(sceneEstSeconds(narration, wordsPerSecond))}s
+        </span>
+        <span
+          className={
+            saveState === "saving"
+              ? "text-[10px] text-amber-300"
+              : saveState === "saved"
+                ? "text-[10px] text-emerald-300"
+                : saveState === "error"
+                  ? "text-[10px] text-red-300"
+                  : "text-[10px] text-transparent"
+          }
+          aria-live="polite"
+        >
+          {saveState === "saving" ? "saving…" : saveState === "saved" ? "saved ✓" : saveState === "error" ? "save failed" : "·"}
+        </span>
+      </div>
+      <Textarea
+        value={narration}
+        onChange={(e) => setNarration(e.target.value)}
+        disabled={disabled}
+        maxLength={3000}
+        rows={Math.max(2, Math.min(6, Math.ceil(narration.length / 90)))}
+        aria-label={`Narration for scene ${scene.index}`}
+        className="bg-white/5 text-[13px] leading-relaxed resize-y"
+      />
+      <div className="flex items-center gap-2 mt-2">
+        <span className="text-[10px] text-muted-foreground shrink-0">Caption</span>
+        <Input
+          value={caption}
+          onChange={(e) => setCaption(e.target.value)}
+          disabled={disabled}
+          maxLength={60}
+          aria-label={`Caption for scene ${scene.index}`}
+          className="h-7 bg-white/5 text-xs"
+        />
+      </div>
+      {narration !== syncedRef.current.narration && (
+        <p className="text-[10px] text-amber-300/80 mt-1.5 leading-snug">
+          Saving this narration clears the stale voiceover — re-render it from the Package tab.
+        </p>
+      )}
+    </div>
   );
 }
