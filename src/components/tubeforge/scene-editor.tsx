@@ -108,10 +108,19 @@ export function SceneEditorDialog({
   const [visual, setVisual] = useState("");
   const [mood, setMood] = useState("");
   const [style, setStyle] = useState("default");
+  const [narration, setNarration] = useState("");
+  const [caption, setCaption] = useState("");
   const [instruction, setInstruction] = useState("");
   const [busy, setBusy] = useState<Busy>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+
+  // Stage 4a (T-4.6) — in-dialog regeneration: stay open, poll until the
+  // repaint lands, then offer a Before/After compare of the image.
+  const [repainting, setRepainting] = useState(false);
+  const [prevImage, setPrevImage] = useState<string | null>(null);
+  const [compare, setCompare] = useState<"after" | "before">("after");
+  const lastImageRef = useRef<string | null>(null);
 
   // Re-seed local state whenever a different scene opens.
   useEffect(() => {
@@ -119,38 +128,89 @@ export function SceneEditorDialog({
       setVisual(scene.visual);
       setMood(scene.mood);
       setStyle(scene.style || "default");
+      setNarration(scene.narration);
+      setCaption(scene.caption);
       setInstruction("");
       setPendingFile(null);
     }
   }, [scene?.index, scene?.imageUrl, open]);
 
+  // Track image transitions while open — any repaint (re-roll, AI edit,
+  // upload) records the previous take for the Before/After compare.
+  useEffect(() => {
+    if (!open || !scene) return;
+    const current = scene.imageUrl;
+    if (lastImageRef.current && current && current !== lastImageRef.current) {
+      setPrevImage(lastImageRef.current);
+      setCompare("after");
+    }
+    lastImageRef.current = current;
+  }, [scene?.imageUrl, open, scene]);
+
   if (!scene) return null;
 
   const dirty =
-    visual !== scene.visual || mood !== scene.mood || style !== (scene.style || "default");
+    visual !== scene.visual ||
+    mood !== scene.mood ||
+    style !== (scene.style || "default") ||
+    narration !== scene.narration ||
+    caption !== scene.caption;
 
   const fail = (e: unknown, fallback: string) =>
     toast.error(e instanceof Error ? e.message : fallback, {
       description: e instanceof Error ? undefined : fallback,
     });
 
-  /** PATCH the scene text; returns true on success. */
+  /** PATCH the scene text; returns true on success. (Stage 4a, T-4.6:
+   *  narration + caption ride the same save; a narration change reports
+   *  `invalidated` when it cleared a stale voiceover.) */
   const saveText = async (silent = false): Promise<boolean> => {
     if (!dirty) return true;
     try {
+      const body: Record<string, unknown> = { index: scene.index };
+      if (visual !== scene.visual) body.visual = visual;
+      if (mood !== scene.mood) body.mood = mood;
+      if (style !== (scene.style || "default")) body.style = style;
+      if (narration !== scene.narration) body.narration = narration;
+      if (caption !== scene.caption) body.caption = caption;
       const res = await fetch(`/api/videos/${videoId}/scenes`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ index: scene.index, visual, mood, style }),
+        body: JSON.stringify(body),
       });
-      const d = (await res.json()) as { error?: string };
+      const d = (await res.json()) as { error?: string; invalidated?: boolean };
       if (!res.ok) throw new Error(d.error ?? "Could not save scene changes");
       if (!silent) toast.success(`Scene ${scene.index} updated`);
+      if (d.invalidated) {
+        toast.warning("Voiceover cleared", {
+          description:
+            "The narration changed — re-render the voiceover so the audio matches.",
+        });
+      }
       onUpdated();
       return true;
     } catch (e) {
       fail(e, "Could not save scene changes");
       return false;
+    }
+  };
+
+  /** Poll until this scene's repaint lands (T-4.6 — the dialog stays open
+   *  and the image swaps in place; before/after becomes available). */
+  const pollRepaint = async () => {
+    setRepainting(true);
+    try {
+      for (let i = 0; i < 50; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const res = await fetch(`/api/videos/${videoId}/storyboard`, { cache: "no-store" });
+        if (!res.ok) continue;
+        const d = await res.json();
+        const s = (d.scenes ?? []).find((x: { index: number; generating: boolean }) => x.index === scene.index);
+        if (s && !s.generating) break;
+      }
+    } finally {
+      setRepainting(false);
+      onUpdated();
     }
   };
 
@@ -176,10 +236,10 @@ export function SceneEditorDialog({
       const d = (await res.json()) as { accepted?: boolean; error?: string };
       if (!res.ok) throw new Error(d.error ?? "Scene re-roll failed");
       toast.success(`Repainting scene ${scene.index}…`, {
-        description: "The image regenerates in the background — pollination takes a moment.",
+        description: "The image regenerates right here — compare before/after when it lands.",
       });
-      onOpenChange(false);
       onUpdated();
+      void pollRepaint();
     } catch (e) {
       fail(e, "Scene re-roll failed");
     } finally {
@@ -204,8 +264,8 @@ export function SceneEditorDialog({
       toast.success(`Editing scene ${scene.index}…`, {
         description: "The composition is kept — only your requested change is applied.",
       });
-      onOpenChange(false);
       onUpdated();
+      void pollRepaint();
     } catch (e) {
       fail(e, "AI edit failed");
     } finally {
@@ -233,7 +293,6 @@ export function SceneEditorDialog({
         description: "Existing renders were removed — render again to rebuild the video.",
       });
       setPendingFile(null);
-      onOpenChange(false);
       onUpdated();
     } catch (e) {
       fail(e, "Upload failed");
@@ -346,18 +405,37 @@ export function SceneEditorDialog({
             </div>
           )}
 
-          {/* Current art */}
+          {/* Current art — with in-dialog repaint progress + Before/After (T-4.6) */}
           <div className="space-y-1.5">
-            {renderMode === "slides" && (
-              <Label className="text-xs text-muted-foreground">
-                Scene art{slide?.useImage ? " — used by this slide's photo card" : " — feeds the storyboard"}
-              </Label>
-            )}
+            <div className="flex items-center justify-between gap-2">
+              {renderMode === "slides" && (
+                <Label className="text-xs text-muted-foreground">
+                  Scene art{slide?.useImage ? " — used by this slide's photo card" : " — feeds the storyboard"}
+                </Label>
+              )}
+              {prevImage && (
+                <div className="flex rounded-lg border border-white/10 bg-white/4 p-0.5 ml-auto" role="group" aria-label="Compare takes">
+                  {(["before", "after"] as const).map((side) => (
+                    <button
+                      key={side}
+                      type="button"
+                      onClick={() => setCompare(side)}
+                      aria-pressed={compare === side}
+                      className={`tf-focusable h-6 px-2 rounded-md text-[10px] font-medium capitalize transition-colors ${
+                        compare === side ? "bg-white/10 text-foreground" : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {side}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <div className="relative rounded-xl overflow-hidden border border-white/10">
-            {scene.hasImage ? (
+            {(compare === "before" && prevImage) || (compare === "after" && scene.hasImage) ? (
               <img
-                src={scene.imageUrl ?? ""}
-                alt={`Scene ${scene.index}: ${scene.title}`}
+                src={(compare === "before" ? prevImage : scene.imageUrl) ?? ""}
+                alt={`Scene ${scene.index}: ${scene.title}${compare === "before" ? " (previous take)" : ""}`}
                 className="w-full aspect-video object-cover"
               />
             ) : (
@@ -365,7 +443,14 @@ export function SceneEditorDialog({
                 No art yet — set the look below and regenerate
               </div>
             )}
-            {scene.hasStock && (
+            {repainting && (
+              <div className="absolute inset-0 bg-black/55 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2">
+                <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                <p className="text-xs text-white/85">Repainting scene {scene.index}…</p>
+                <p className="text-[10px] text-white/55">The new take appears here — compare it with the old one after.</p>
+              </div>
+            )}
+            {scene.hasStock && !repainting && (
               <span className="absolute bottom-2 right-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[9px] text-white">
                 stock clip plays in this scene
               </span>
@@ -409,6 +494,45 @@ export function SceneEditorDialog({
               {SCENE_ART_STYLES.find((s) => s.id === style)?.prompt ||
                 "The standard TubeForge cinematic look"}
             </p>
+          </div>
+
+          {/* Narration & caption (T-4.6) — the scene's spoken text. A
+              narration change clears the stale voiceover (same contract as the
+              Script tab); captions re-render with the next render. */}
+          <div className="space-y-2.5 rounded-xl border border-white/10 bg-white/3 p-3">
+            <p className="tf-kicker">Narration &amp; caption</p>
+            <div className="space-y-1.5">
+              <Label htmlFor={`narration-${scene.index}`} className="text-xs text-muted-foreground">
+                Narration — what the voice reads in this scene
+              </Label>
+              <Textarea
+                id={`narration-${scene.index}`}
+                value={narration}
+                onChange={(e) => setNarration(e.target.value)}
+                rows={3}
+                maxLength={3000}
+                disabled={anyBusy}
+                className="text-xs"
+              />
+              {narration !== scene.narration && (
+                <p className="text-[10px] text-amber-300/90 leading-snug">
+                  Saving this clears the stale voiceover — re-render it from the Package tab.
+                </p>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`caption-${scene.index}`} className="text-xs text-muted-foreground">
+                Caption — the on-screen subtitle
+              </Label>
+              <Input
+                id={`caption-${scene.index}`}
+                value={caption}
+                onChange={(e) => setCaption(e.target.value)}
+                maxLength={60}
+                disabled={anyBusy}
+                className="h-8 text-xs"
+              />
+            </div>
           </div>
 
           {/* Prompt + mood */}
