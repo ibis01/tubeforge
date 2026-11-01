@@ -697,44 +697,61 @@ export interface ResolvedMusic {
 const sliderToGain = (slider: number) => Math.max(0, Math.min(1, slider)) * 0.3;
 
 /**
- * Resolve the effective ducking for one render: per-video override → Settings
- * default. A per-video `musicDucking: false` (or ducking off in Settings)
- * means a CONSTANT bed — the mix engine still normalizes loudness.
+ * Resolve the effective ducking for one render: per-video override →
+ * APPROVED director-plan suggestion → Settings default. A per-video
+ * `musicDucking: false` (or ducking off in Settings) means a CONSTANT bed —
+ * the mix engine still normalizes loudness, and the plan can never force
+ * ducking on against the user's explicit off switch.
  */
-export async function resolveDuckingForVideo(video: {
-  musicDucking: boolean | null;
-  musicDuckingIntensity: string | null;
-}): Promise<DuckIntensity> {
+export async function resolveDuckingForVideo(
+  video: {
+    musicDucking: boolean | null;
+    musicDuckingIntensity: string | null;
+  },
+  planDucking?: string | null
+): Promise<DuckIntensity> {
   const settings = await getMusicSettings();
   const enabled = video.musicDucking ?? settings.ducking;
   if (!enabled) return "off";
-  return sanitizeDuckIntensity(video.musicDuckingIntensity ?? settings.duckingIntensity);
+  return sanitizeDuckIntensity(
+    video.musicDuckingIntensity ?? planDucking ?? settings.duckingIntensity
+  );
 }
 
 /**
  * Resolve the music config for one render:
  *   video.musicEnabled ?? settings.enabled
  *   track = video.musicTrackId (manual per-video) ?? settings.manual track ?? auto-match
- *   gain/fades/ducking = per-video overrides ?? settings defaults
+ *   mood = per-video mood ?? APPROVED director-plan suggestion (module E —
+ *          picked from the script's emotional progression) ?? auto
+ *   gain/fades/ducking = per-video overrides ?? plan suggestion ?? settings defaults
  */
-export async function resolveMusicForVideo(video: {
-  musicEnabled: boolean | null;
-  musicTrackId: string | null;
-  musicVolume: number | null;
-  musicFadeIn: number | null;
-  musicFadeOut: number | null;
-  musicDucking: boolean | null;
-  musicDuckingIntensity: string | null;
-  musicMood: string | null;
-  niche: string;
-  audioDuration: number | null;
-}): Promise<ResolvedMusic | null> {
+export async function resolveMusicForVideo(
+  video: {
+    musicEnabled: boolean | null;
+    musicTrackId: string | null;
+    musicVolume: number | null;
+    musicFadeIn: number | null;
+    musicFadeOut: number | null;
+    musicDucking: boolean | null;
+    musicDuckingIntensity: string | null;
+    musicMood: string | null;
+    niche: string;
+    audioDuration: number | null;
+  },
+  planMood?: string | null
+): Promise<ResolvedMusic | null> {
   const settings = await getMusicSettings();
   const enabled = video.musicEnabled ?? settings.enabled;
   if (!enabled) return null;
 
   const duckIntensity = await resolveDuckingForVideo(video);
-  const mood = video.musicMood && isMusicMoodId(video.musicMood) ? video.musicMood : "auto";
+  const mood =
+    video.musicMood && isMusicMoodId(video.musicMood)
+      ? video.musicMood
+      : planMood && isMusicMoodId(planMood)
+        ? planMood
+        : "auto";
 
   let track: MusicTrack | null = null;
   let why = "";

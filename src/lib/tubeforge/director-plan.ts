@@ -47,6 +47,29 @@ export const COMPOSITIONS = [
 const TRANSITION_IDS = TRANSITIONS.map((t) => t.id);
 const MOTION_IDS = ["smart", "zoom", "pan", "off"] as const;
 
+// Module E — audio direction vocabularies. pacing modulates the narration
+// speed per scene; ambience picks a synthesized ambient bed; sfx suggests the
+// scene-boundary cue (same catalog as sfx.ts).
+export const PACINGS = ["slow", "normal", "fast"] as const;
+export const AMBIENCE_KINDS = [
+  "none",
+  "room",
+  "city",
+  "nature",
+  "rain",
+  "crowd",
+  "wind",
+  "waves",
+] as const;
+export const SFX_HINTS = ["none", "whoosh", "boom", "riser", "sting"] as const;
+
+/** Narration speed multiplier per pacing hint (module E voice timing). */
+export function pacingSpeedFactor(pacing: string): number {
+  if (pacing === "slow") return 0.88;
+  if (pacing === "fast") return 1.12;
+  return 1;
+}
+
 /** A single shot inside a scene — the unit the render pipeline cuts between. */
 export interface DirectorShot {
   shotIndex: number; // 0-based within the scene
@@ -66,6 +89,9 @@ export interface DirectorScene {
   motion: string; // motion.ts override hint: smart | zoom | pan | off
   needsI2V: boolean; // animated render mode: does THIS scene merit image-to-video
   useStock: boolean; // real-world / documentary scenes that should use stock b-roll
+  pacing: string; // module E: narration speed hint — slow | normal | fast
+  ambience: string; // module E: synthesized ambient bed kind (AMBIENCE_KINDS)
+  sfx: string; // module E: scene-boundary cue hint (SFX_HINTS)
   outfit?: string; // cast look for the scene (persisted to CharacterAppearance)
   accessory?: string;
   shots: DirectorShot[];
@@ -76,6 +102,8 @@ export interface DirectorPlan {
   version: 1;
   generatedAt: string; // ISO timestamp
   concept: string; // one-paragraph directorial concept (the "why")
+  musicMood?: string; // module E: music.ts mood preset id (consumer-sanitized)
+  ducking?: string; // module E: audiomix DuckIntensity id (consumer-sanitized)
   scenes: DirectorScene[];
 }
 
@@ -143,6 +171,9 @@ export function parsePlan(json: string | null | undefined): DirectorPlan | null 
       motion: snap(so.motion, MOTION_IDS, "smart"),
       needsI2V: so.needsI2V === true,
       useStock: so.useStock === true,
+      pacing: snap(so.pacing, PACINGS, "normal"),
+      ambience: snap(so.ambience, AMBIENCE_KINDS, "none"),
+      sfx: snap(so.sfx, SFX_HINTS, "none"),
       outfit: asString(so.outfit).slice(0, 160) || undefined,
       accessory: asString(so.accessory).slice(0, 160) || undefined,
       shots: shots.sort((a, b) => a.shotIndex - b.shotIndex),
@@ -157,6 +188,10 @@ export function parsePlan(json: string | null | undefined): DirectorPlan | null 
     version: 1,
     generatedAt: asString(obj.generatedAt) || new Date().toISOString(),
     concept: asString(obj.concept).slice(0, 600),
+    // Plan-level audio hints pass through as plain strings — the consumers
+    // (music.ts / audiomix.ts) own the vocabularies and sanitize on use.
+    musicMood: asString(obj.musicMood).slice(0, 40) || undefined,
+    ducking: asString(obj.ducking).slice(0, 16) || undefined,
     scenes,
   };
 }
@@ -279,6 +314,47 @@ export async function getApprovedAddendum(videoId: string, sceneIndex: number): 
   });
   if (!video || video.directorState !== "approved") return "";
   return directorImageAddendum(parsePlan(video.shotList), sceneIndex);
+}
+
+/**
+ * Render-side accessor (module E) — the audio direction from an APPROVED
+ * plan in one read: per-scene pacing / ambience / sfx hints (defaults
+ * omitted) + the plan-level music mood and ducking suggestions. All empty /
+ * null when there is no approved plan — the audio pipeline is untouched.
+ */
+export interface PlanAudioDirection {
+  pacing: Map<number, "slow" | "fast">; // "normal" omitted
+  ambience: Map<number, string>; // non-"none" kinds only
+  sfx: Map<number, string>; // non-"none" hints only
+  musicMood: string | null;
+  ducking: string | null;
+}
+
+export async function getApprovedAudioMap(videoId: string): Promise<PlanAudioDirection> {
+  const out: PlanAudioDirection = {
+    pacing: new Map(),
+    ambience: new Map(),
+    sfx: new Map(),
+    musicMood: null,
+    ducking: null,
+  };
+  const video = await db.video.findUnique({
+    where: { id: videoId },
+    select: { shotList: true, directorState: true },
+  });
+  if (!video || video.directorState !== "approved") return out;
+  const plan = parsePlan(video.shotList);
+  if (!plan) return out;
+  for (const scene of plan.scenes) {
+    if (scene.pacing === "slow" || scene.pacing === "fast") {
+      out.pacing.set(scene.sceneIndex, scene.pacing);
+    }
+    if (scene.ambience !== "none") out.ambience.set(scene.sceneIndex, scene.ambience);
+    if (scene.sfx !== "none") out.sfx.set(scene.sceneIndex, scene.sfx);
+  }
+  out.musicMood = plan.musicMood ?? null;
+  out.ducking = plan.ducking ?? null;
+  return out;
 }
 
 /**

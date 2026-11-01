@@ -56,7 +56,7 @@ import {
   trackAbsolutePath,
 } from "./music";
 import { qcForVideo } from "./qc";
-import { parsePlan } from "./director-plan";
+import { parsePlan, getApprovedAudioMap } from "./director-plan";
 import { sanitizeTransition, transitionSummary } from "./transitions";
 import {
   loadSlideDeck,
@@ -155,15 +155,21 @@ export async function runVoiceoverJob(
         result.scenesCut !== null ? `, cut across ${result.scenesCut} scenes` : ""
       }`;
     } else if (video.format === "story" && scenes.length > 0) {
-      // Per-scene narration → scene-XX.wav + merged voiceover.wav
+      // Per-scene narration → scene-XX.wav + merged voiceover.wav. Module E:
+      // an APPROVED director plan paces the read per scene (slow for weight,
+      // fast for urgency) — only on a fresh synthesis, existing wavs keep
+      // their original pacing.
+      const planAudio = await getApprovedAudioMap(videoId);
+      const paced = planAudio.pacing.size > 0;
       const result = await generateSceneVoiceovers({
         videoId,
         scenes,
         voice: video.voice,
         speed: video.ttsSpeed,
+        pacing: planAudio.pacing,
       });
       durationSec = result.durationSec;
-      activityMsg = `Scene-by-scene voiceover rendered (${video.voice}, ${video.ttsSpeed}x) — ${Math.round(durationSec)}s across ${scenes.length} scenes`;
+      activityMsg = `Scene-by-scene voiceover rendered (${video.voice}, ${video.ttsSpeed}x${paced ? " · director pacing" : ""}) — ${Math.round(durationSec)}s across ${scenes.length} scenes`;
     } else if (video.format === "story") {
       throw new Error("Scene video has no scenes — regenerate the scene script");
     } else {
@@ -463,8 +469,12 @@ export async function runRenderJob(
     throw new Error("Generate the voiceover first — narration drives the scene timing");
 
   // Resolve the library track (null → synthesized drone fallback in render.ts).
-  const resolved = music ? await resolveMusicForVideo(video) : null;
-  const duckFallback = music ? await resolveDuckingForVideo(video) : "standard";
+  // Module E — the APPROVED plan's audio direction: music mood + ducking
+  // feed the music resolver (manual per-video overrides still win); pacing
+  // was already applied at voiceover synthesis time.
+  const planAudio = await getApprovedAudioMap(videoId);
+  const resolved = music ? await resolveMusicForVideo(video, planAudio.musicMood) : null;
+  const duckFallback = music ? await resolveDuckingForVideo(video, planAudio.ducking) : "standard";
   const sfx = await getSfxEnabled();
   const musicTrack = resolved
     ? {

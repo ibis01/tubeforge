@@ -1423,6 +1423,68 @@ await test("director-plan: planStaticRuns flags 3+ consecutive unmotivated stati
   eq(planStaticRuns(null).length, 0, "no plan → no runs");
 });
 
+await test("director-plan: module E audio fields normalize + pacing factors", async () => {
+  const { parsePlan, pacingSpeedFactor, planStaticRuns } = await import(
+    "../src/lib/tubeforge/director-plan.ts"
+  );
+  const plan = parsePlan(
+    JSON.stringify({
+      concept: "tension to release",
+      musicMood: "cinematic",
+      ducking: "strong",
+      scenes: [
+        {
+          sceneIndex: 1,
+          mood: "",
+          pacing: "FAST", // case-insensitive snap
+          ambience: "city",
+          sfx: "whoosh",
+          shots: [{ shotIndex: 0, camera: "push-in", duration: 2.5 }],
+        },
+        {
+          sceneIndex: 2,
+          mood: "",
+          pacing: "leisurely", // junk → default normal
+          ambience: "lava", // junk → default none
+          sfx: "applause", // junk → default none
+          shots: [{ shotIndex: 0, camera: "static", duration: 2.5 }],
+        },
+      ],
+    })
+  );
+  ok(plan !== null);
+  eq(plan.musicMood, "cinematic", "plan-level music mood passes through");
+  eq(plan.ducking, "strong", "plan-level ducking passes through");
+  eq(plan.scenes[0].pacing, "fast", "pacing snaps case-insensitively");
+  eq(plan.scenes[0].ambience, "city", "ambience kind kept");
+  eq(plan.scenes[0].sfx, "whoosh", "sfx hint kept");
+  eq(plan.scenes[1].pacing, "normal", "junk pacing → normal");
+  eq(plan.scenes[1].ambience, "none", "junk ambience → none");
+  eq(plan.scenes[1].sfx, "none", "junk sfx → none");
+
+  // Old T-5.1 plans (no audio fields) stay parseable with defaults —
+  // backward compatibility is the point of versioned plans.
+  const legacy = parsePlan(
+    JSON.stringify({
+      concept: "",
+      scenes: [{ sceneIndex: 1, mood: "", shots: [{ shotIndex: 0, camera: "static", duration: 2 }] }],
+    })
+  );
+  ok(legacy !== null);
+  eq(legacy.scenes[0].pacing, "normal", "legacy plan → default pacing");
+  eq(legacy.scenes[0].ambience, "none", "legacy plan → no ambience");
+  eq(legacy.scenes[0].sfx, "none", "legacy plan → no cue");
+  eq(legacy.musicMood, undefined, "legacy plan → no music mood");
+  // A motivated legacy scene still paces clean: ambience/sfx defaults never
+  // imply motion, and camera static + motion smart is motivated.
+  eq(planStaticRuns(legacy).length, 0, "legacy plan passes the pacing gate");
+
+  eq(pacingSpeedFactor("slow"), 0.88, "slow = −12%");
+  eq(pacingSpeedFactor("fast"), 1.12, "fast = +12%");
+  eq(pacingSpeedFactor("normal"), 1, "normal = untouched");
+  eq(pacingSpeedFactor("garbage"), 1, "unknown = untouched");
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

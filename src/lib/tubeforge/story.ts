@@ -20,7 +20,7 @@ import { chatComplete } from "./providers/chat";
 import { ttsSynthesize } from "./providers/tts";
 import { imageEdit, imageGenerate, imageEditSupported } from "./providers/image";
 import * as storage from "./storage";
-import { getApprovedAddendum } from "./director-plan";
+import { getApprovedAddendum, pacingSpeedFactor } from "./director-plan";
 
 const execFileAsync = promisify(execFile);
 
@@ -888,6 +888,10 @@ export async function generateSceneVoiceovers(opts: {
   scenes: Scene[];
   voice: string;
   speed: number;
+  /** Module E voice timing: per-scene pacing hints from an APPROVED director
+   * plan (sceneIndex → slow/fast; absent = normal). Speed factors stay modest
+   * (±12%) — pacing is direction, not a chipmunk button. */
+  pacing?: Map<number, "slow" | "fast"> | null;
 }): Promise<{ durationSec: number; sceneDurations: number[] }> {
   const dir = videoDir(opts.videoId);
   const allBuffers: Buffer[] = [];
@@ -900,13 +904,18 @@ export async function generateSceneVoiceovers(opts: {
     const chunks = splitForTts(scene.narration);
     if (chunks.length === 0) throw new Error(`Scene ${scene.index} has nothing to speak`);
 
+    const speed = Math.min(
+      1.6,
+      Math.max(0.5, opts.speed * pacingSpeedFactor(opts.pacing?.get(scene.index) ?? "normal"))
+    );
+
     const buffers: Buffer[] = [];
     for (const [j, chunk] of chunks.entries()) {
       if (j > 0) await sleep(2000); // pace chunks within a scene too
       const buffer = await aiCall(
         "tts",
         `scene ${scene.index} tts (${chunk.length} chars)`,
-        () => ttsSynthesize({ input: chunk, voice: opts.voice, speed: opts.speed }),
+        () => ttsSynthesize({ input: chunk, voice: opts.voice, speed }),
         { attempts: 6, baseDelayMs: 8000 } // outlast rate-limit storms (≈16 min of patience)
       );
       if (buffer.length < 44) throw new Error(`Scene ${scene.index} TTS returned empty audio`);

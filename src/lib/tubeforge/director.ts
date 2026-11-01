@@ -37,6 +37,9 @@ import {
   FRAMINGS,
   CAMERA_MOVES,
   COMPOSITIONS,
+  PACINGS,
+  AMBIENCE_KINDS,
+  SFX_HINTS,
   parsePlan,
   serializePlan,
   type DirectorPlan,
@@ -48,12 +51,18 @@ export {
   FRAMINGS,
   CAMERA_MOVES,
   COMPOSITIONS,
+  PACINGS,
+  AMBIENCE_KINDS,
+  SFX_HINTS,
   parsePlan,
   serializePlan,
   planSceneDuration,
   directorImageAddendum,
   planTransitionIn,
   getApprovedAddendum,
+  getApprovedAudioMap,
+  getApprovedMotionMap,
+  pacingSpeedFactor,
   type DirectorShot,
   type DirectorScene,
   type DirectorPlan,
@@ -78,7 +87,7 @@ export interface ContinuityReport {
 // ---------------------------------------------------------------------------
 // The director pass (LLM).
 
-const SYSTEM_PROMPT = `You are the AI Director of a faceless YouTube video studio. You turn a scene script into a deliberate shot plan: pacing, framing, camera movement, lens character, composition and scene transitions.
+const SYSTEM_PROMPT = `You are the AI Director of a faceless YouTube video studio. You turn a scene script into a deliberate shot plan: pacing, framing, camera movement, lens character, composition, scene transitions AND the audio direction (narration pacing, ambient beds, boundary cues, music mood, ducking).
 
 Rules:
 - Shot length: every shot runs 2.0-3.5 seconds. Subdivide each scene so shot durations sum to roughly the scene's estimated seconds (given per scene).
@@ -88,9 +97,14 @@ Rules:
 - motion: one of "smart" | "zoom" | "pan" | "off" — the per-scene Ken Burns override hint.
 - needsI2V: true ONLY for scenes where true motion is the point (action, weather, crowds, vehicles). Most scenes are false.
 - useStock: true ONLY for documentary/real-world scenes (news, places, animals, machines). Opinionated/abstract/emotional scenes are false.
+- pacing (audio): "slow" for emotional weight, reveals and payoffs; "fast" for action, urgency, lists; "normal" otherwise. Vary it — a monotone read is a wasted narration.
+- ambience (audio): the scene's sonic environment — one of the provided kinds. "room" for interiors/talking-head context, "none" for pure montage, "city"/"nature"/"rain"/"wind"/"waves"/"crowd" when the narration places us there. Never more than subtle.
+- sfx (audio): a scene-boundary accent — "whoosh" for momentum cuts, "boom" for reveals/chapter pivots, "riser" entering tension, "sting" for twists, "none" most of the time (a cue on every cut is a trailer, not a video).
+- musicMood (audio, plan-level): one mood id from the provided list, chosen from the script's overall emotional progression.
+- ducking (audio, plan-level): "subtle" when narration is sparse and reflective, "standard" normally, "strong" when dialogue is dense and the bed must get out of the way.
 - If cast appearance is requested for a scene, describe outfit + accessory CONCRETELY and keep it consistent across scenes unless the narration demands a change.
 - Respond with STRICT JSON only, no markdown fences, matching exactly:
-{"concept":"<one paragraph directorial concept>","scenes":[{"sceneIndex":1,"mood":"<palette + lighting + time-of-day>","transitionIn":"fade","motion":"smart","needsI2V":false,"useStock":false,"outfit":"<when cast present>","accessory":"<when cast present>","shots":[{"shotIndex":0,"framing":"wide","camera":"push-in","lens":"24mm wide","composition":"leading lines","duration":2.8,"imagePrompt":"<what THIS shot shows, one sentence>"}]}]}`;
+{"concept":"<one paragraph directorial concept>","musicMood":"cinematic","ducking":"standard","scenes":[{"sceneIndex":1,"mood":"<palette + lighting + time-of-day>","transitionIn":"fade","motion":"smart","needsI2V":false,"useStock":false,"pacing":"normal","ambience":"none","sfx":"none","outfit":"<when cast present>","accessory":"<when cast present>","shots":[{"shotIndex":0,"framing":"wide","camera":"push-in","lens":"24mm wide","composition":"leading lines","duration":2.8,"imagePrompt":"<what THIS shot shows, one sentence>"}]}]}`;
 
 function sceneBrief(scene: Scene, estSeconds: number | null): string {
   const words = scene.narration.trim().split(/\s+/).filter(Boolean).length;
@@ -148,6 +162,8 @@ export async function runDirectorPass(videoId: string): Promise<void> {
     castBlock,
     `Transition ids: ${TRANSITION_IDS.join(", ")}.`,
     `Framings: ${FRAMINGS.join(", ")}. Camera moves: ${CAMERA_MOVES.join(", ")}. Compositions: ${COMPOSITIONS.join(", ")}.`,
+    `Pacing: ${PACINGS.join(" | ")}. Ambience kinds: ${AMBIENCE_KINDS.join(" | ")}. Sfx cues: ${SFX_HINTS.join(" | ")}.`,
+    `Music mood ids: suspenseful, cinematic, emotional, uplifting, calm. Ducking: subtle | standard | strong.`,
     "Scenes:",
     ...scenes.map((s) => sceneBrief(s, null)),
   ]

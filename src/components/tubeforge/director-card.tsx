@@ -210,6 +210,14 @@ export function DirectorCard({
       {plan && (
         <div className="space-y-2">
           {plan.concept && <p className="text-xs text-muted-foreground italic">{plan.concept}</p>}
+          {(plan.musicMood || plan.ducking) && (
+            <p className="text-[11px] text-muted-foreground">
+              <span className="text-white/60">Audio direction:</span>{" "}
+              {plan.musicMood ? <>music <span className="text-emerald-300">{plan.musicMood}</span>{" · "}</> : null}
+              {plan.ducking ? <>ducking <span className="text-emerald-300">{plan.ducking}</span>{" · "}</> : null}
+              applies to the next voiceover + render (manual per-video overrides still win)
+            </p>
+          )}
           <div className="flex flex-wrap gap-1.5">
             {plan.scenes.map((s) => {
               const secs = s.shots.reduce((a, sh) => a + sh.duration, 0);
@@ -221,7 +229,9 @@ export function DirectorCard({
                     s.needsI2V ? " · director suggests animating this scene (i2v)" : ""
                   }${s.useStock ? " · director suggests real-world stock footage" : ""}${
                     s.motion !== "smart" ? ` · motion: ${s.motion}` : ""
-                  }`}
+                  }${s.pacing !== "normal" ? ` · narration: ${s.pacing}` : ""}${
+                    s.ambience !== "none" ? ` · ambience: ${s.ambience}` : ""
+                  }${s.sfx !== "none" ? ` · cue: ${s.sfx}` : ""}`}
                 >
                   <span className="tf-num text-white/90">S{s.sceneIndex}</span>
                   <span className="text-white/40">·</span>
@@ -237,6 +247,15 @@ export function DirectorCard({
                   )}
                   {s.motion !== "smart" && (
                     <span className="rounded bg-white/8 px-1 text-[10px] text-white/55">{s.motion}</span>
+                  )}
+                  {s.pacing !== "normal" && (
+                    <span className="rounded bg-amber-500/15 px-1 text-[10px] text-amber-200">↷{s.pacing}</span>
+                  )}
+                  {s.ambience !== "none" && (
+                    <span className="rounded bg-teal-500/15 px-1 text-[10px] text-teal-200">♫{s.ambience}</span>
+                  )}
+                  {s.sfx !== "none" && (
+                    <span className="rounded bg-fuchsia-500/15 px-1 text-[10px] text-fuchsia-200">{s.sfx}</span>
                   )}
                 </span>
               );

@@ -54,7 +54,8 @@ import {
   type MotionSettings,
   type SceneContext,
 } from "./motion";
-import { getApprovedMotionMap } from "./director-plan";
+import { getApprovedMotionMap, getApprovedAudioMap } from "./director-plan";
+import { ensureAmbience } from "./ambience";
 import {
   BLEND_GROUP_MAX,
   sanitizeTransition,
@@ -345,7 +346,8 @@ export function droneSource(profile: MusicProfile): string {
 
 // ---------- Segments & assembly ----------
 
-/** Build one scene segment: visual track of exactly `dur` + narration audio (+ SFX cue). */
+/** Build one scene segment: visual track of exactly `dur` + narration audio
+ * (+ SFX cue + director-planned ambience bed). */
 async function buildSegment(opts: {
   videoId: string;
   scene: Scene;
@@ -354,12 +356,20 @@ async function buildSegment(opts: {
   motion: MotionSettings;
   plan?: MotionScenePlan;
   sfx: boolean;
+  /** Module E: director-suggested cue (approved plan) — falls back to the
+   * story pass's own cue for the scene. */
+  sfxKind?: string;
+  /** Module E: materialized ambience bed path for this scene (null = none). */
+  ambiencePath?: string | null;
   outPath: string;
 }): Promise<void> {
   const { scene, dur, mode, motion, plan, outPath } = opts;
   const dir = videoDir(opts.videoId);
   const wav = path.join(dir, sceneWavFile(scene.index));
   const leadMs = Math.round(LEAD_SEC * 1000);
+  // One helper owns BOTH the extra audio inputs and the graph, so input
+  // order and stream labels can never drift apart.
+  const audio = await sceneAudio(opts.sfx, opts.sfxKind ?? scene.sfx, opts.ambiencePath ?? null, leadMs, dur);
 
   const common = [
     "-map", "[v]", "-map", "[a]",
@@ -391,11 +401,11 @@ async function buildSegment(opts: {
       settings: motion,
       fps: FPS,
     });
-    const aChain = await sceneAudioChain(opts.videoId, scene, leadMs, opts.sfx, dur);
+    const aChain = audio.graph;
     await run("ffmpeg", [
       "-i", slidePath,
       "-i", wav,
-      ...(await sfxInputs(opts.sfx, scene)),
+      ...audio.inputs,
       "-filter_complex", `${vChain};${aChain}`,
       ...common,
     ]);
@@ -409,12 +419,11 @@ async function buildSegment(opts: {
       ? path.join(dir, scene.stock.file)
       : null;
     if (clip && fs.existsSync(clip)) {
-      const aChain = await sceneAudioChain(opts.videoId, scene, leadMs, opts.sfx, dur);
       await run("ffmpeg", [
         "-stream_loop", "-1", "-t", dur.toFixed(3), "-i", clip,
         "-i", wav,
-        ...(await sfxInputs(opts.sfx, scene)),
-        "-filter_complex", `[0:v]${GRADE}[v];${aChain}`,
+        ...audio.inputs,
+        "-filter_complex", `[0:v]${GRADE}[v];${audio.graph}`,
         ...common,
       ]);
       return;
@@ -432,57 +441,79 @@ async function buildSegment(opts: {
       aspect: "16:9",
       grade: GRADE,
     });
-    const aChain = await sceneAudioChain(opts.videoId, scene, leadMs, opts.sfx, dur);
     await run("ffmpeg", [
       "-loop", "1", "-framerate", String(FPS), "-t", dur.toFixed(3), "-i", img,
       "-i", wav,
-      ...(await sfxInputs(opts.sfx, scene)),
-      "-filter_complex", `${vChain};${aChain}`,
+      ...audio.inputs,
+      "-filter_complex", `${vChain};${audio.graph}`,
       ...common,
     ]);
   } else {
     const clip = await ensureSceneClip(opts.videoId, scene);
-    const aChain = await sceneAudioChain(opts.videoId, scene, leadMs, opts.sfx, dur);
     await run("ffmpeg", [
       "-stream_loop", "-1", "-t", dur.toFixed(3), "-i", clip,
       "-i", wav,
-      ...(await sfxInputs(opts.sfx, scene)),
-      "-filter_complex", `[0:v]${GRADE}[v];${aChain}`,
+      ...audio.inputs,
+      "-filter_complex", `[0:v]${GRADE}[v];${audio.graph}`,
       ...common,
     ]);
   }
 }
 
 /**
- * Audio graph for one scene: narration delayed to its lead-in, optionally
- * mixed with the scene's synthesized SFX cue fired right at the cut.
- * `sfx` = false (Settings → Sound) silences every cue for the render.
- * The voice pad is FINITE (apad whole_dur) — every stream in the graph then
- * ends on its own, so the ffmpeg process always tears down cleanly.
+ * Audio inputs + graph for one scene, built together so input order and
+ * stream labels can never drift apart:
+ *   [1:a] narration, delayed to its lead-in and padded to the scene length;
+ *   [2:a] the scene's SFX cue fired 40 ms after the cut (when enabled);
+ *   [3:a] the director-planned ambience bed, looped for the scene and riding
+ *         well under the voice (module E).
+ * `sfx` = false (Settings → Sound) silences every synthesized extra — cues
+ * AND beds — for the render. The voice pad is FINITE (apad whole_dur) — every
+ * stream in the graph then ends on its own, so ffmpeg always tears down
+ * cleanly. normalize=0 keeps the amix weights as literal gains (default
+ * normalization would scale every source down by 1/Σw).
  */
-async function sceneAudioChain(
-  videoId: string,
-  scene: Scene,
-  leadMs: number,
+async function sceneAudio(
   sfx: boolean,
+  sfxKind: string,
+  ambiencePath: string | null,
+  leadMs: number,
   totalSec: number
-): Promise<string> {
+): Promise<{ inputs: string[]; graph: string }> {
   const voice = `[1:a]adelay=${leadMs}:all=1,apad=whole_dur=${totalSec.toFixed(3)}[voice]`;
-  const sfxPath = sfx ? await ensureSfx(scene.sfx) : null;
-  if (!sfxPath) return `${voice};[voice]anull[a]`;
   // SFX lands 40 ms after the cut so the impact sits with the first frame,
   // not in the file's leading edge; ride ~9 dB under the narration — these
   // are synthesized accents, and mixing them hot makes the edit sound like a
-  // test bench instead of a film. normalize=0 keeps the weights as literal
-  // gains (default normalization would scale BOTH sources down by 1/(1+w)).
-  return `${voice};[2:a]adelay=40:all=1[sfx];` +
-    `[voice][sfx]amix=inputs=2:duration=first:normalize=0:weights='1 0.35'[a]`;
-}
+  // test bench instead of a film. The ambience bed rides lower still (~13 dB
+  // under): felt, not heard.
+  const sfxPath = sfx ? await ensureSfx(sfxKind) : null;
+  const ambPath = sfx ? ambiencePath : null; // one switch, every synthesized extra
+  if (!sfxPath && !ambPath) return { inputs: [], graph: `${voice};[voice]anull[a]` };
 
-/** ffmpeg input args for the scene's SFX cue (empty when disabled/none). */
-async function sfxInputs(sfx: boolean, scene: Scene): Promise<string[]> {
-  const sfxPath = sfx ? await ensureSfx(scene.sfx) : null;
-  return sfxPath ? ["-i", sfxPath] : [];
+  const inputs: string[] = [];
+  const chains: string[] = [];
+  const labels: string[] = [];
+  const weights: string[] = ["1"];
+  let idx = 2;
+  if (sfxPath) {
+    inputs.push("-i", sfxPath);
+    chains.push(`[${idx}:a]adelay=40:all=1[sfx]`);
+    labels.push("[sfx]");
+    weights.push("0.35");
+    idx++;
+  }
+  if (ambPath) {
+    inputs.push("-stream_loop", "-1", "-t", totalSec.toFixed(3), "-i", ambPath);
+    chains.push(`[${idx}:a]volume=0.85[amb]`);
+    labels.push("[amb]");
+    weights.push("0.22");
+  }
+  return {
+    inputs,
+    graph:
+      `${voice};${chains.join(";")};` +
+      `${["[voice]", ...labels].join("")}amix=inputs=${labels.length + 1}:duration=first:normalize=0:weights='${weights.join(" ")}'[a]`,
+  };
 }
 
 /** Concat segment files (identical codecs) into one MP4. */
@@ -837,6 +868,21 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       }
     }
 
+    // Stage 5 (module E) — audio direction from an APPROVED plan: per-scene
+    // ambience beds (synthesized once, looped under the narration) + the
+    // director's scene-boundary cue suggestions. The plan can only ADD a
+    // cue — it never removes one the story pass already chose.
+    const planAudio = await getApprovedAudioMap(opts.videoId);
+    const ambiencePaths = new Map<number, string>();
+    for (const kind of new Set(planAudio.ambience.values())) {
+      const p = await ensureAmbience(kind).catch(() => null);
+      if (p) {
+        for (const [sceneIndex, k] of planAudio.ambience) {
+          if (k === kind) ambiencePaths.set(sceneIndex, p);
+        }
+      }
+    }
+
     // 1.5) Keynote slides — design the deck (LLM, cached) and screenshot it.
     // (Cancellation rides the same onProgress checkpoints as every stage —
     // the deck render itself is ~1 s per slide, no mid-pass checkpoint.)
@@ -884,6 +930,8 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         motion,
         plan: plans[i],
         sfx: opts.sfx !== false,
+        sfxKind: planAudio.sfx.get(scene.index),
+        ambiencePath: ambiencePaths.get(scene.index) ?? null,
         outPath: segPath,
       });
       segPaths.push(segPath);
