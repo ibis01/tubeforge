@@ -1560,7 +1560,7 @@ await test("timeline: parseTimeline degrades bad/legacy payloads to null", async
 // ---------------------------------------------------------------------------
 
 await test("captions: srtToVtt header + fractional separator + cue-number strip", async () => {
-  const { srtToVtt, looksLikeSrt } = await import("../src/lib/tubeforge/captions.ts");
+  const { srtToVtt, looksLikeSrt } = await import("../src/lib/tubeforge/subtitle-export.ts");
   const srt = [
     "1",
     "00:00:01,000 --> 00:00:04,500",

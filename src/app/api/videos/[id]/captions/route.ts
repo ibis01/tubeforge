@@ -20,7 +20,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { materialize } from "@/lib/tubeforge/storage";
-import { srtToVtt, looksLikeSrt } from "@/lib/tubeforge/captions";
+import { srtToVtt, looksLikeSrt } from "@/lib/tubeforge/subtitle-export";
 import { readFile } from "fs/promises";
 
 type Ctx = { params: Promise<{ id: string }> };
