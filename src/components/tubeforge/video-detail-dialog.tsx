@@ -1001,18 +1001,26 @@ export function VideoDetailDialog({
 
   // Stage 5 — one-click repaint of a continuity-flagged scene (AI Director
   // card): same endpoint the Scene Studio re-roll uses, fire-and-forget poll.
-  const rerollScene = async (index: number) => {
+  // An optional `instruction` turns it into the module-D constraint loop
+  // ("regenerate this scene with the character wearing a red jacket") — the
+  // storyboard route's AI-edit mode in place.
+  const rerollScene = async (index: number, instruction?: string) => {
     if (busy) return;
     setBusy(`scene-${index}`);
     try {
       const res = await fetch(`/api/videos/${video.id}/storyboard`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scene: index }),
+        body: JSON.stringify(
+          instruction ? { scene: index, instruction } : { scene: index }
+        ),
       });
       const d = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(d.error ?? "Scene re-roll failed");
-      toast({ title: `Repainting scene ${index}…` });
+      toast({
+        title: `Repainting scene ${index}…`,
+        description: instruction ? `Constraint: ${instruction.slice(0, 90)}` : undefined,
+      });
       void pollScene(video.id, index)
         .then(async () => {
           await reloadScenes(video.id);
@@ -1292,7 +1300,7 @@ export function VideoDetailDialog({
         videoId={video.id}
         hasCast={Boolean(video.characterName)}
         storyGenerating={boardGenerating || busy === "storyboard"}
-        onRepaintScene={(sceneIndex) => void rerollScene(sceneIndex)}
+        onRepaintScene={(sceneIndex, instruction) => void rerollScene(sceneIndex, instruction)}
       />
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2.5 flex-wrap">

@@ -54,6 +54,7 @@ import {
   type MotionSettings,
   type SceneContext,
 } from "./motion";
+import { getApprovedMotionMap } from "./director-plan";
 import {
   BLEND_GROUP_MAX,
   sanitizeTransition,
@@ -811,6 +812,30 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
                 durationsSec: durations,
               })
             : [];
+
+    // Stage 5 (module D) — an APPROVED director plan overrides the video-level
+    // motion mode PER SCENE (the director picks the movement channel per shot
+    // list; "off" deliberately stills a scene, zoom/pan narrow it). Only the
+    // Ken Burns / stock-fallback path is overridden: slides keep their
+    // deterministic deck plans and i2v renders move everything anyway.
+    if (needsPlan && opts.mode !== "slides" && plans.length === scenes.length) {
+      const overrides = await getApprovedMotionMap(opts.videoId);
+      if (overrides.size > 0) {
+        for (let i = 0; i < scenes.length; i++) {
+          const mode = overrides.get(scenes[i].index);
+          if (!mode) continue;
+          plans[i] = planSceneMovements(
+            [scenes[i]],
+            { ...motion, mode },
+            {
+              aspect: "16:9",
+              ctx: opts.motionContext,
+              durationsSec: [durations[i]],
+            }
+          )[0];
+        }
+      }
+    }
 
     // 1.5) Keynote slides — design the deck (LLM, cached) and screenshot it.
     // (Cancellation rides the same onProgress checkpoints as every stage —

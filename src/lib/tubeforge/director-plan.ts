@@ -280,3 +280,29 @@ export async function getApprovedAddendum(videoId: string, sceneIndex: number): 
   if (!video || video.directorState !== "approved") return "";
   return directorImageAddendum(parsePlan(video.shotList), sceneIndex);
 }
+
+/**
+ * Render-side accessor (module D) — per-scene motion overrides from an
+ * APPROVED plan: the director picks the movement channel per scene, on top of
+ * the video-level motion setting. "smart" (the default) means "defer to the
+ * video-level mode", so it never appears in the map. Empty map = no approved
+ * plan / no overrides — the render is exactly as before.
+ */
+export async function getApprovedMotionMap(
+  videoId: string
+): Promise<Map<number, "zoom" | "pan" | "off">> {
+  const video = await db.video.findUnique({
+    where: { id: videoId },
+    select: { shotList: true, directorState: true },
+  });
+  const map = new Map<number, "zoom" | "pan" | "off">();
+  if (!video || video.directorState !== "approved") return map;
+  const plan = parsePlan(video.shotList);
+  if (!plan) return map;
+  for (const scene of plan.scenes) {
+    if (scene.motion === "zoom" || scene.motion === "pan" || scene.motion === "off") {
+      map.set(scene.sceneIndex, scene.motion);
+    }
+  }
+  return map;
+}

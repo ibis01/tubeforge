@@ -9,8 +9,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Clapperboard, ShieldCheck, RefreshCw, Check, X, RotateCcw } from "lucide-react";
+import { Loader2, Clapperboard, ShieldCheck, RefreshCw, Check, X, RotateCcw, WandSparkles } from "lucide-react";
 import type { DirectorPlan } from "@/lib/tubeforge/director-plan";
 
 interface ContinuityScene {
@@ -56,13 +57,16 @@ export function DirectorCard({
 }: {
   videoId: string;
   hasCast: boolean;
-  onRepaintScene: (sceneIndex: number) => void;
+  onRepaintScene: (sceneIndex: number, instruction?: string) => void;
   storyGenerating: boolean;
 }) {
   const { toast } = useToast();
   const [data, setData] = useState<DirectorResponse | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState<"plan" | "check" | "approve" | "dismiss" | "reset" | null>(null);
+  // Module D constraint loop: which scene's "Fix…" input is open + its text.
+  const [fixScene, setFixScene] = useState<number | null>(null);
+  const [fixText, setFixText] = useState("");
   const alive = useRef(true);
 
   const load = useCallback(async () => {
@@ -213,7 +217,11 @@ export function DirectorCard({
                 <span
                   key={s.sceneIndex}
                   className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/4 px-2 py-0.5 text-[11px] text-white/70"
-                  title={`${s.shots.length} shot(s) · ${s.mood || "no mood"}${s.transitionIn ? ` · in: ${s.transitionIn}` : ""}`}
+                  title={`${s.shots.length} shot(s) · ${s.mood || "no mood"}${s.transitionIn ? ` · in: ${s.transitionIn}` : ""}${
+                    s.needsI2V ? " · director suggests animating this scene (i2v)" : ""
+                  }${s.useStock ? " · director suggests real-world stock footage" : ""}${
+                    s.motion !== "smart" ? ` · motion: ${s.motion}` : ""
+                  }`}
                 >
                   <span className="tf-num text-white/90">S{s.sceneIndex}</span>
                   <span className="text-white/40">·</span>
@@ -221,6 +229,15 @@ export function DirectorCard({
                   <span className="text-white/40">·</span>
                   <span className="tf-num">{secs.toFixed(1)}s</span>
                   {s.transitionIn && <span className="ml-0.5 text-white/40">({s.transitionIn})</span>}
+                  {s.needsI2V && (
+                    <span className="ml-0.5 rounded bg-violet-500/15 px-1 text-[10px] text-violet-200">i2v</span>
+                  )}
+                  {s.useStock && (
+                    <span className="rounded bg-sky-500/15 px-1 text-[10px] text-sky-200">stock</span>
+                  )}
+                  {s.motion !== "smart" && (
+                    <span className="rounded bg-white/8 px-1 text-[10px] text-white/55">{s.motion}</span>
+                  )}
                 </span>
               );
             })}
@@ -261,23 +278,70 @@ export function DirectorCard({
           </div>
           <div className="space-y-1.5">
             {data.consistency.scenes.map((c) => (
-              <div key={c.sceneIndex} className="flex items-center gap-2 text-[11px]">
-                <span className="tf-num w-8 text-white/70">S{c.sceneIndex}</span>
-                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/8">
-                  <div className={`h-full ${scoreColor(c.score)}`} style={{ width: `${c.score}%` }} />
+              <div key={c.sceneIndex} className="space-y-1">
+                <div className="flex items-center gap-2 text-[11px]">
+                  <span className="tf-num w-8 text-white/70">S{c.sceneIndex}</span>
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/8">
+                    <div className={`h-full ${scoreColor(c.score)}`} style={{ width: `${c.score}%` }} />
+                  </div>
+                  <span className="tf-num w-8 text-right text-white/70">{c.score}</span>
+                  {verdictBadge(c.verdict)}
+                  {c.verdict !== "consistent" && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-2 text-[11px]"
+                        disabled={storyGenerating}
+                        onClick={() => onRepaintScene(c.sceneIndex)}
+                      >
+                        <RefreshCw className="mr-1 h-3 w-3" /> Repaint
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-2 text-[11px]"
+                        disabled={storyGenerating}
+                        onClick={() => {
+                          setFixScene(fixScene === c.sceneIndex ? null : c.sceneIndex);
+                          // Pre-fill with the VLM's own diagnosis — the human
+                          // edits it into the constraint they want applied.
+                          setFixText(c.issues[0] ?? "");
+                        }}
+                      >
+                        <WandSparkles className="mr-1 h-3 w-3" /> Fix…
+                      </Button>
+                    </>
+                  )}
                 </div>
-                <span className="tf-num w-8 text-right text-white/70">{c.score}</span>
-                {verdictBadge(c.verdict)}
-                {c.verdict !== "consistent" && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-6 px-2 text-[11px]"
-                    disabled={storyGenerating}
-                    onClick={() => onRepaintScene(c.sceneIndex)}
-                  >
-                    <RefreshCw className="mr-1 h-3 w-3" /> Repaint
-                  </Button>
+                {fixScene === c.sceneIndex && (
+                  <div className="flex items-center gap-1.5 pl-10">
+                    <Input
+                      value={fixText}
+                      onChange={(e) => setFixText(e.target.value)}
+                      placeholder={`e.g. repaint scene ${c.sceneIndex} with the reference outfit and hair`}
+                      className="h-7 text-[11px]"
+                      maxLength={500}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && fixText.trim()) {
+                          onRepaintScene(c.sceneIndex, fixText.trim());
+                          setFixScene(null);
+                        }
+                        if (e.key === "Escape") setFixScene(null);
+                      }}
+                    />
+                    <Button
+                      size="sm"
+                      className="h-7 px-2 text-[11px]"
+                      disabled={!fixText.trim() || storyGenerating}
+                      onClick={() => {
+                        onRepaintScene(c.sceneIndex, fixText.trim());
+                        setFixScene(null);
+                      }}
+                    >
+                      Apply
+                    </Button>
+                  </div>
                 )}
               </div>
             ))}
