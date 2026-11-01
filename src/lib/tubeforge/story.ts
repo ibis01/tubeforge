@@ -20,7 +20,8 @@ import { chatComplete } from "./providers/chat";
 import { ttsSynthesize } from "./providers/tts";
 import { imageEdit, imageGenerate, imageEditSupported } from "./providers/image";
 import * as storage from "./storage";
-import { getApprovedAddendum, pacingSpeedFactor } from "./director-plan";
+import { db } from "./tenant-db";
+import { getApprovedAddendum, getApprovedAppearanceClause, getApprovedWorldClause, pacingSpeedFactor } from "./director-plan";
 
 const execFileAsync = promisify(execFile);
 
@@ -103,6 +104,24 @@ export async function serializeScenes(
       hasImageByIdx.set(s.index, await storage.exists(`${videoId}/${sceneImageFile(s.index)}`));
     })
   );
+  // Stage 5 (module C) — the cast's logged looks, ONE grouped query for the
+  // whole storyboard (host scenes only; null when nothing is logged).
+  const appearanceByScene = new Map<
+    number,
+    { outfit: string | null; accessory: string | null }
+  >();
+  if (scenes.some((s) => s.hostInScene)) {
+    const rows = await db.characterAppearance.findMany({
+      where: { videoId },
+      select: { sceneIndex: true, outfit: true, accessory: true },
+    });
+    for (const row of rows) {
+      appearanceByScene.set(row.sceneIndex, {
+        outfit: row.outfit,
+        accessory: row.accessory,
+      });
+    }
+  }
   return scenes.map((s) => {
     const hasImage = hasImageByIdx.get(s.index) ?? false;
     return {
@@ -127,6 +146,9 @@ export async function serializeScenes(
       stockSource: s.stock?.source ?? null,
       stockQuery: s.stock?.query ?? null,
       stockCredit: s.stock?.credit ?? null,
+      appearance: s.hostInScene
+        ? appearanceByScene.get(s.index) ?? { outfit: null, accessory: null }
+        : null,
     };
   });
 }
@@ -565,11 +587,18 @@ export async function generateSceneImage(opts: {
   // A per-scene art style (Scene Studio) is woven in right after the subject
   // so the taste override steers the whole render, not just the edges.
   // Stage 5: under an APPROVED director plan the shot's framing / lens /
-  // composition / visual mood join the prompt too ("AI suggests, human
-  // approves" — an unapproved or missing plan changes nothing).
+  // composition / visual mood join the prompt too, plus the cast's logged
+  // OUTFIT for this scene and the set pieces from the World library —
+  // "AI suggests, human approves": an unapproved or missing plan changes
+  // nothing.
   const styleClause = sceneStylePrompt(scene.style);
   const directorClause = await getApprovedAddendum(opts.videoId, scene.index);
-  const artPrompt = `${scene.visual}.${styleClause ? ` ${styleClause}.` : ""}${directorClause ? ` ${directorClause}.` : ""} ${scene.mood}. Wide 16:9 cinematic frame, ONE dominant subject filling the frame, highly detailed, professional color grading, storytelling composition. The frame must depict exactly the moment described — the named subject is the single dominant element. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
+  const appearanceClause = scene.hostInScene
+    ? await getApprovedAppearanceClause(opts.videoId, scene.index)
+    : "";
+  const worldClause = await getApprovedWorldClause(opts.videoId, scene.index);
+  const continuityClauses = [appearanceClause, worldClause].filter(Boolean).join(" ");
+  const artPrompt = `${scene.visual}.${styleClause ? ` ${styleClause}.` : ""}${directorClause ? ` ${directorClause}.` : ""}${continuityClauses ? ` ${continuityClauses}` : ""} ${scene.mood}. Wide 16:9 cinematic frame, ONE dominant subject filling the frame, highly detailed, professional color grading, storytelling composition. The frame must depict exactly the moment described — the named subject is the single dominant element. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
 
   const portrait =
     scene.hostInScene && opts.character?.id

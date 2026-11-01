@@ -231,7 +231,9 @@ export function DirectorCard({
                     s.motion !== "smart" ? ` · motion: ${s.motion}` : ""
                   }${s.pacing !== "normal" ? ` · narration: ${s.pacing}` : ""}${
                     s.ambience !== "none" ? ` · ambience: ${s.ambience}` : ""
-                  }${s.sfx !== "none" ? ` · cue: ${s.sfx}` : ""}`}
+                  }${s.sfx !== "none" ? ` · cue: ${s.sfx}` : ""}${
+                    s.locations?.length ? ` · set in: ${s.locations.join(", ")}` : ""
+                  }${s.props?.length ? ` · props: ${s.props.join(", ")}` : ""}`}
                 >
                   <span className="tf-num text-white/90">S{s.sceneIndex}</span>
                   <span className="text-white/40">·</span>
@@ -257,6 +259,12 @@ export function DirectorCard({
                   {s.sfx !== "none" && (
                     <span className="rounded bg-fuchsia-500/15 px-1 text-[10px] text-fuchsia-200">{s.sfx}</span>
                   )}
+                  {s.locations?.map((l) => (
+                    <span key={`loc-${l}`} className="rounded bg-lime-500/15 px-1 text-[10px] text-lime-200">⌖{l}</span>
+                  ))}
+                  {s.props?.map((p) => (
+                    <span key={`pr-${p}`} className="rounded bg-orange-500/15 px-1 text-[10px] text-orange-200">✦{p}</span>
+                  ))}
                 </span>
               );
             })}

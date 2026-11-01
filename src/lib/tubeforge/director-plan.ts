@@ -92,6 +92,10 @@ export interface DirectorScene {
   pacing: string; // module E: narration speed hint — slow | normal | fast
   ambience: string; // module E: synthesized ambient bed kind (AMBIENCE_KINDS)
   sfx: string; // module E: scene-boundary cue hint (SFX_HINTS)
+  /** Module C: recurring set pieces from the org's World library that this
+   * scene uses (names — resolved against the library at render time). */
+  locations?: string[];
+  props?: string[];
   outfit?: string; // cast look for the scene (persisted to CharacterAppearance)
   accessory?: string;
   shots: DirectorShot[];
@@ -125,6 +129,16 @@ function clamp(n: unknown, min: number, max: number, fallback: number): number {
   const x = typeof n === "number" && Number.isFinite(n) ? n : Number(n);
   if (!Number.isFinite(x)) return fallback;
   return Math.min(max, Math.max(min, x));
+}
+
+function asNameList(v: unknown, max: number): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const names = v
+    .filter((x): x is string => typeof x === "string")
+    .map((x) => x.trim().slice(0, 80))
+    .filter(Boolean)
+    .slice(0, max);
+  return names.length > 0 ? names : undefined;
 }
 
 /** Parse + normalize a persisted or freshly-generated plan. Returns null when
@@ -174,6 +188,8 @@ export function parsePlan(json: string | null | undefined): DirectorPlan | null 
       pacing: snap(so.pacing, PACINGS, "normal"),
       ambience: snap(so.ambience, AMBIENCE_KINDS, "none"),
       sfx: snap(so.sfx, SFX_HINTS, "none"),
+      locations: asNameList(so.locations, 3),
+      props: asNameList(so.props, 3),
       outfit: asString(so.outfit).slice(0, 160) || undefined,
       accessory: asString(so.accessory).slice(0, 160) || undefined,
       shots: shots.sort((a, b) => a.shotIndex - b.shotIndex),
@@ -355,6 +371,82 @@ export async function getApprovedAudioMap(videoId: string): Promise<PlanAudioDir
   out.musicMood = plan.musicMood ?? null;
   out.ducking = plan.ducking ?? null;
   return out;
+}
+
+/**
+ * Render-side accessor (module C) — the cast's OUTFIT for one scene under an
+ * APPROVED plan, as an image-prompt clause. The director pass proposes
+ * outfit/accessory per scene (persisted to CharacterAppearance, where the
+ * human can edit them in Scene Studio); this closes the loop so the cast
+ * actually WEARS the logged look in every painted scene. "" when there is no
+ * approved plan / no cast / no logged look — the prompt is untouched.
+ */
+export async function getApprovedAppearanceClause(
+  videoId: string,
+  sceneIndex: number
+): Promise<string> {
+  const video = await db.video.findUnique({
+    where: { id: videoId },
+    select: {
+      directorState: true,
+      characterId: true,
+      character: { select: { name: true } },
+    },
+  });
+  if (!video || video.directorState !== "approved" || !video.characterId) return "";
+  const row = await db.characterAppearance.findUnique({
+    where: {
+      videoId_sceneIndex_characterId: {
+        videoId,
+        sceneIndex,
+        characterId: video.characterId,
+      },
+    },
+    select: { outfit: true, accessory: true },
+  });
+  if (!row) return "";
+  const look = [row.outfit, row.accessory].filter(Boolean).join(", ");
+  if (!look) return "";
+  return `${video.character?.name ?? "The host"} is wearing ${look}.`;
+}
+
+/**
+ * Render-side accessor (module C) — the scene's SET PIECES under an APPROVED
+ * plan: the plan's per-scene location / prop names resolve against the org's
+ * library and their descriptions join the image prompt (recurring places and
+ * objects stay consistent, the same way the cast's identity does).
+ */
+export async function getApprovedWorldClause(
+  videoId: string,
+  sceneIndex: number
+): Promise<string> {
+  const video = await db.video.findUnique({
+    where: { id: videoId },
+    select: { shotList: true, directorState: true, organizationId: true },
+  });
+  if (!video || video.directorState !== "approved") return "";
+  const scene = parsePlan(video.shotList)?.scenes.find(
+    (s) => s.sceneIndex === sceneIndex
+  );
+  if (!scene) return "";
+  const names = new Set([...(scene.locations ?? []), ...(scene.props ?? [])]);
+  if (names.size === 0) return "";
+  const [locations, props] = await Promise.all([
+    db.location.findMany({
+      where: { organizationId: video.organizationId, isActive: true },
+      select: { name: true, description: true },
+    }),
+    db.prop.findMany({
+      where: { organizationId: video.organizationId, isActive: true },
+      select: { name: true, description: true },
+    }),
+  ]);
+  const hits = [...locations, ...props].filter((x) => names.has(x.name));
+  if (hits.length === 0) return "";
+  return hits
+    .slice(0, 4)
+    .map((h) => (h.description ? `${h.name}: ${h.description}` : h.name))
+    .join("; ");
 }
 
 /**

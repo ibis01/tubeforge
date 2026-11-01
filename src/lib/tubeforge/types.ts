@@ -247,6 +247,11 @@ export interface SceneDTO {
   stockSource: string | null; // "pexels" | "pixabay"
   stockQuery: string | null;
   stockCredit: string | null;
+  /** Stage 5 (module C) — the cast's logged look for this scene (host scenes
+   * only; null when no look is logged). The director pass proposes it; the
+   * human edits it in Scene Studio; an approved plan weaves it into the
+   * scene's image prompt. */
+  appearance: { outfit: string | null; accessory: string | null } | null;
 }
 
 export const CHAT_MODELS = [

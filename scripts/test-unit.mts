@@ -1253,7 +1253,7 @@ await test("tenant-db: every org-scoped model matches the lowercased lookup", as
   const expected = [
     "channel", "character", "video", "activity", "researchsession",
     "scheduleslot", "videostat", "voiceprofile", "musictrack", "job", "membership",
-    "characterappearance",
+    "characterappearance", "location", "prop",
   ];
   for (const m of expected) {
     ok(ORG_SCOPED_MODELS.has(m), `"${m}" is org-scoped`);

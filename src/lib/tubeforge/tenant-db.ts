@@ -46,6 +46,8 @@ export const ORG_SCOPED_MODELS = new Set(
     "job",
     "membership",
     "characterAppearance", // Stage 5 — AI Director cast log
+    "location", // Stage 5 module C — World library (set continuity)
+    "prop",
   ].map((m) => m.toLowerCase())
 );
 

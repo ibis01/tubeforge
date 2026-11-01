@@ -72,6 +72,8 @@ model Organization {
   storageUsage     StorageUsage?
   usageRecords     UsageRecord[]
   appearances      CharacterAppearance[]
+  locations        Location[]
+  props            Prop[]
 }
 
 // One user per organization row. Exactly one member holds role "owner" —
@@ -480,6 +482,40 @@ model CharacterAppearance {
   @@unique([videoId, sceneIndex, characterId])
   @@index([organizationId])
   @@index([characterId])
+}
+
+// Stage 5 (module C) — the World library: recurring LOCATIONS and PROPS.
+// Same continuity job the cast library does: the AI Director references
+// these by name in its per-scene plan, and the approved descriptions weave
+// into scene image prompts so recurring places and objects stay visually
+// consistent across scenes. referenceImages mirrors Character.referenceImages
+// (JSON array of storage keys, oldest first).
+model Location {
+  id              String       @id @default(cuid())
+  organizationId  String
+  name            String
+  description     String?
+  referenceImages String?
+  isActive        Boolean      @default(true)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model Prop {
+  id              String       @id @default(cuid())
+  organizationId  String
+  name            String
+  description     String?
+  referenceImages String?
+  isActive        Boolean      @default(true)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
 }
 
 // Phase 3 — persistent job registry: survives server restarts so interrupted

@@ -111,6 +111,11 @@ export function SceneEditorDialog({
   const [narration, setNarration] = useState("");
   const [caption, setCaption] = useState("");
   const [instruction, setInstruction] = useState("");
+  // Stage 5 (module C) — the cast's logged look for THIS scene. The director
+  // pass proposes it; the human adjusts it here; an approved plan weaves it
+  // into the image prompt on the next re-roll.
+  const [outfit, setOutfit] = useState("");
+  const [accessory, setAccessory] = useState("");
   const [busy, setBusy] = useState<Busy>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -132,6 +137,8 @@ export function SceneEditorDialog({
       setCaption(scene.caption);
       setInstruction("");
       setPendingFile(null);
+      setOutfit(scene.appearance?.outfit ?? "");
+      setAccessory(scene.appearance?.accessory ?? "");
     }
   }, [scene?.index, scene?.imageUrl, open]);
 
@@ -155,6 +162,36 @@ export function SceneEditorDialog({
     style !== (scene.style || "default") ||
     narration !== scene.narration ||
     caption !== scene.caption;
+
+  /** Stage 5 (module C) — save the cast's look for this scene. Separate from
+   *  saveText: it targets the appearance log (PUT /appearance), not the
+   *  scene row, and never invalidates anything — the look applies at the
+   *  next re-roll under an approved plan. */
+  const appearanceDirty =
+    scene.hostInScene &&
+    (outfit !== (scene.appearance?.outfit ?? "") ||
+      accessory !== (scene.appearance?.accessory ?? ""));
+
+  const saveAppearance = async (): Promise<boolean> => {
+    if (!appearanceDirty) return true;
+    try {
+      const res = await fetch(`/api/videos/${videoId}/appearance`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sceneIndex: scene.index, outfit, accessory }),
+      });
+      const d = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(d.error ?? "Could not save the look");
+      toast.success(`Look saved for scene ${scene.index}`, {
+        description: "Re-roll the scene to repaint it in this outfit (active under an approved director plan).",
+      });
+      onUpdated();
+      return true;
+    } catch (e) {
+      fail(e, "Could not save the look");
+      return false;
+    }
+  };
 
   const fail = (e: unknown, fallback: string) =>
     toast.error(e instanceof Error ? e.message : fallback, {
@@ -534,6 +571,62 @@ export function SceneEditorDialog({
               />
             </div>
           </div>
+
+          {/* Cast look (Stage 5, module C) — host scenes only. The director
+              pass proposes the outfit; the human approves by keeping it or
+              adjusts it here; an approved plan weaves it into this scene's
+              image prompt so the cast dresses consistently across scenes. */}
+          {scene.hostInScene && (
+            <div className="space-y-2.5 rounded-xl border border-white/10 bg-white/3 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="tf-kicker">Cast look in this scene</p>
+                {appearanceDirty && (
+                  <Button
+                    size="sm"
+                    className="h-7 px-2.5 text-[11px]"
+                    disabled={anyBusy}
+                    onClick={() => void saveAppearance()}
+                  >
+                    Save look
+                  </Button>
+                )}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                <div className="space-y-1">
+                  <Label htmlFor={`outfit-${scene.index}`} className="text-[10px] text-muted-foreground">
+                    Outfit
+                  </Label>
+                  <Input
+                    id={`outfit-${scene.index}`}
+                    value={outfit}
+                    onChange={(e) => setOutfit(e.target.value)}
+                    maxLength={160}
+                    disabled={anyBusy}
+                    className="h-8 text-xs"
+                    placeholder="e.g. charcoal blazer, white tee"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor={`accessory-${scene.index}`} className="text-[10px] text-muted-foreground">
+                    Accessory
+                  </Label>
+                  <Input
+                    id={`accessory-${scene.index}`}
+                    value={accessory}
+                    onChange={(e) => setAccessory(e.target.value)}
+                    maxLength={160}
+                    disabled={anyBusy}
+                    className="h-8 text-xs"
+                    placeholder="e.g. round glasses, silver watch"
+                  />
+                </div>
+              </div>
+              <p className="text-[10px] text-muted-foreground leading-snug">
+                Applies at the next re-roll, under an approved director plan. Clear both to stop
+                directing the outfit.
+              </p>
+            </div>
+          )}
 
           {/* Prompt + mood */}
           <div className="space-y-2.5">

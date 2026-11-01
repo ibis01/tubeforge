@@ -103,8 +103,9 @@ Rules:
 - musicMood (audio, plan-level): one mood id from the provided list, chosen from the script's overall emotional progression.
 - ducking (audio, plan-level): "subtle" when narration is sparse and reflective, "standard" normally, "strong" when dialogue is dense and the bed must get out of the way.
 - If cast appearance is requested for a scene, describe outfit + accessory CONCRETELY and keep it consistent across scenes unless the narration demands a change.
+- locations / props: when the library below provides recurring set pieces, tag each scene with the names it actually uses (arrays of EXACT library names, ≤3 each). Scenes that use none get empty arrays. Never invent names outside the library.
 - Respond with STRICT JSON only, no markdown fences, matching exactly:
-{"concept":"<one paragraph directorial concept>","musicMood":"cinematic","ducking":"standard","scenes":[{"sceneIndex":1,"mood":"<palette + lighting + time-of-day>","transitionIn":"fade","motion":"smart","needsI2V":false,"useStock":false,"pacing":"normal","ambience":"none","sfx":"none","outfit":"<when cast present>","accessory":"<when cast present>","shots":[{"shotIndex":0,"framing":"wide","camera":"push-in","lens":"24mm wide","composition":"leading lines","duration":2.8,"imagePrompt":"<what THIS shot shows, one sentence>"}]}]}`;
+{"concept":"<one paragraph directorial concept>","musicMood":"cinematic","ducking":"standard","scenes":[{"sceneIndex":1,"mood":"<palette + lighting + time-of-day>","transitionIn":"fade","motion":"smart","needsI2V":false,"useStock":false,"pacing":"normal","ambience":"none","sfx":"none","locations":[],"props":[],"outfit":"<when cast present>","accessory":"<when cast present>","shots":[{"shotIndex":0,"framing":"wide","camera":"push-in","lens":"24mm wide","composition":"leading lines","duration":2.8,"imagePrompt":"<what THIS shot shows, one sentence>"}]}]}`;
 
 function sceneBrief(scene: Scene, estSeconds: number | null): string {
   const words = scene.narration.trim().split(/\s+/).filter(Boolean).length;
@@ -156,6 +157,40 @@ export async function runDirectorPass(videoId: string): Promise<void> {
         .join("\n")
     : "No recurring cast — omit outfit/accessory fields.";
 
+  // Module C — the World library: recurring set pieces the director may
+  // reference per scene. Under an approved plan their descriptions weave
+  // into scene image prompts (set continuity), so the pass only ever sees
+  // ACTIVE entries and only ever suggests exact library names.
+  const [worldLocations, worldProps] = await Promise.all([
+    db.location.findMany({
+      where: { organizationId: video.organizationId, isActive: true },
+      orderBy: { createdAt: "asc" },
+      select: { name: true, description: true },
+    }),
+    db.prop.findMany({
+      where: { organizationId: video.organizationId, isActive: true },
+      orderBy: { createdAt: "asc" },
+      select: { name: true, description: true },
+    }),
+  ]);
+  const worldBlock =
+    worldLocations.length + worldProps.length > 0
+      ? [
+          worldLocations.length > 0
+            ? `Location library (tag scenes with exact names):\n${worldLocations
+                .map((l) => `- ${l.name}${l.description ? ` — ${l.description}` : ""}`)
+                .join("\n")}`
+            : "",
+          worldProps.length > 0
+            ? `Prop library (tag scenes with exact names):\n${worldProps
+                .map((p) => `- ${p.name}${p.description ? ` — ${p.description}` : ""}`)
+                .join("\n")}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      : "No location/prop library — use empty locations/props arrays.";
+
   const userPrompt = [
     `Video: "${video.title ?? video.topic}" — topic: ${video.topic} — niche: ${video.niche} — tone: ${video.tone}.`,
     `Target length: ~${estTotal}s across ${scenes.length} scenes.`,
@@ -164,6 +199,7 @@ export async function runDirectorPass(videoId: string): Promise<void> {
     `Framings: ${FRAMINGS.join(", ")}. Camera moves: ${CAMERA_MOVES.join(", ")}. Compositions: ${COMPOSITIONS.join(", ")}.`,
     `Pacing: ${PACINGS.join(" | ")}. Ambience kinds: ${AMBIENCE_KINDS.join(" | ")}. Sfx cues: ${SFX_HINTS.join(" | ")}.`,
     `Music mood ids: suspenseful, cinematic, emotional, uplifting, calm. Ducking: subtle | standard | strong.`,
+    worldBlock,
     "Scenes:",
     ...scenes.map((s) => sceneBrief(s, null)),
   ]
