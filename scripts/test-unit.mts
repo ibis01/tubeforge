@@ -1404,6 +1404,29 @@ await test("director-plan: addendum + duration + transition accessors", async ()
   eq(directorImageAddendum(null, 1), "", "no plan → empty addendum");
 });
 
+await test("motion: panEndpoints never emits a dead pan (Battle Yamuk 2.5s frozen stretch)", async () => {
+  const { panEndpoints } = await import("../src/lib/tubeforge/motion.ts");
+  const work: [number, number] = [3840, 2160];
+  // The exact failing case: pan-LEFT with a left-ish focal (0.32) at z=1.30 —
+  // the window starts pinned at the left edge, so the leftward sweep clamps
+  // straight back to its origin. It must fall back to a moving sweep.
+  const [fx, tx] = panEndpoints("x", 0.32, -1, 0.5, 1.3, work);
+  ok(
+    Math.abs(tx - fx) > 0.02 * (3840 - 3840 / 1.3),
+    `pan-left at the left edge must still move (got ${fx.toFixed(1)} → ${tx.toFixed(1)})`
+  );
+  // Same class, mirrored: pan-RIGHT with a right-ish focal.
+  const [fx2, tx2] = panEndpoints("x", 0.68, 1, 0.5, 1.3, work);
+  ok(
+    Math.abs(tx2 - fx2) > 0.02 * (3840 - 3840 / 1.3),
+    `pan-right at the right edge must still move (got ${fx2.toFixed(1)} → ${tx2.toFixed(1)})`
+  );
+  // The NON-sweep axis (travel=0) must hold exactly still — a pure pan stays
+  // pure, the fallbacks never fire.
+  const [fy, ty] = panEndpoints("y", 0.5, 1, 0, 1.16, work);
+  eq(ty, fy, "travel=0 axis is pinned by contract");
+});
+
 await test("director-plan: planStaticRuns flags 3+ consecutive unmotivated static shots", async () => {
   const { parsePlan, planStaticRuns } = await import("../src/lib/tubeforge/director-plan.ts");
   const shot = (shotIndex: number, camera = "static") => ({

@@ -341,7 +341,16 @@ function planSceneShots(
     };
   }
 
-  const amp = Math.min((intensity / 100) * AMP_SCALE[kind], AMP_CAP);
+  // Visible-motion floor: with low slider values on low-detail (dark, smooth)
+  // art, the per-frame crop shift drops below freezedetect's noise floor and
+  // the scene reads as a still (Battle Yamuk's 2.5s "frozen" stretch). Any
+  // intensity ≥ 1 therefore produces at least a 10% zoom travel per shot —
+  // "subtle", never "imperceptible". Intensity 0 (or mode off) is the
+  // explicit still-images contract and stays untouched.
+  const amp = Math.max(
+    Math.min((intensity / 100) * AMP_SCALE[kind], AMP_CAP),
+    intensity >= 1 && AMP_SCALE[kind] > 0 ? 0.1 : 0
+  );
   const shotSec = SHOT_SEC[kind];
   const shotCount = Math.max(
     1,
@@ -694,7 +703,22 @@ export function panEndpoints(
   const lo = Math.max(0, f * dim - window + pad);
   const hi = Math.min(maxTravel, f * dim - pad);
   const from = Math.min(Math.max(center, lo), hi);
-  const to = Math.min(Math.max(from + dir * travel * maxTravel, lo), hi);
+  // travel=0 is the NON-sweep axis of a pan (y on a lateral pan, x on a
+  // tilt) — it must hold still, never trigger the edge-pin fallbacks below.
+  if (travel <= 0) return [from, from];
+  let to = Math.min(Math.max(from + dir * travel * maxTravel, lo), hi);
+  // Edge-pin guard (Battle Yamuk's 2.5s "frozen" stretch): a pan-left whose
+  // window starts at the left edge (or a pan-right at the right edge) has its
+  // intended sweep clamped straight back to the start — a 99-frame DEAD pan
+  // that freezedetect rightly flags. Any movement beats a dead pan: sweep the
+  // opposite direction, and if even that pins (no room), cross the full
+  // available span.
+  if (Math.abs(to - from) < 0.02 * maxTravel) {
+    to = Math.min(Math.max(from - dir * travel * maxTravel, lo), hi);
+  }
+  if (Math.abs(to - from) < 0.02 * maxTravel && hi > lo) {
+    to = from <= (lo + hi) / 2 ? hi : lo;
+  }
   return [from, to];
 }
 

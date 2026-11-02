@@ -111,7 +111,15 @@ async function analyzePass(file: string): Promise<{ stderr: string; ok: boolean 
       [
         "-hide_banner", "-nostats",
         "-i", file,
-        "-vf", "blackdetect=d=0.25:pix_th=0.10,freezedetect=n=0.004:d=0.30",
+        // frozen runs must last a full second. Calibration history: d=0.30
+        // flagged 0.3s sub-noise dips in slow zoom starts; d=0.50 still caught
+        // the ~0.5-0.7s plateau of the smooth ease curve (cos easing has
+        // near-zero slope at each shot's start/end — by-design documentary
+        // motion, perceptually fine). The classes this check exists for —
+        // hold-last-frame artifacts (2.3s, Battle Yamuk) and dead pans
+        // (2.5s, the panEndpoints edge-pin bug) — are seconds long; d=1.0
+        // catches them with margin and ignores ease plateaus.
+        "-vf", "blackdetect=d=0.25:pix_th=0.10,freezedetect=n=0.004:d=1.00",
         "-af", "volumedetect,silencedetect=n=-40dB:d=1.5",
         "-f", "null", "-",
       ],
