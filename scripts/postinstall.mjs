@@ -107,7 +107,22 @@ if (isSqlite) {
 //    the chain — a deploy is the only moment the production schema gets
 //    synced, so without this every route fails on missing tables (P2021)
 //    the moment a new migration lands.
+//    Postgres failures are NON-FATAL by design: an unreachable database at
+//    build time (or a migration that needs human review) must not wedge the
+//    deployment pipeline — the runtime errors stay readable in the API
+//    responses, and the warning below lands in the build logs.
 console.log('[postinstall] running scripts/migrate-stage2.mjs (idempotent)');
-execFileSync('node', ['scripts/migrate-stage2.mjs'], { stdio: 'inherit', cwd: root });
+try {
+  // 150s cap — a hung database connection (unreachable host, blackholed TCP)
+  // must not wedge the install until the platform's build timeout kills it.
+  execFileSync('node', ['scripts/migrate-stage2.mjs'], { stdio: 'inherit', cwd: root, timeout: 150_000 });
+} catch (err) {
+  if (isSqlite) throw err; // local dev wants loud failures
+  console.warn(
+    '[postinstall] WARNING: Postgres migration failed — deploying WITHOUT schema sync. ' +
+      'Database-backed routes will surface the underlying error until this is fixed. ' +
+      `Reason: ${String(err?.message ?? err).slice(0, 200)}`
+  );
+}
 
 console.log('[postinstall] done');
