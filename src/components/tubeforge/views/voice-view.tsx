@@ -371,8 +371,13 @@ export function VoiceView() {
     return map;
   }, [characters]);
 
-  const cloneCount = voices.filter((v) => byProviderVoiceId.has(v.id)).length;
-  const studioCount = voices.length - cloneCount;
+  // The picker catalog (`voices`) only carries clones the ACTIVE provider can
+  // speak; the header badge and the management list below count ALL of the
+  // user's clones — they synthesize through their owning provider regardless
+  // of which voiceover provider is currently active.
+  const clonesInCatalog = voices.filter((v) => byProviderVoiceId.has(v.id)).length;
+  const studioCount = voices.length - clonesInCatalog;
+  const cloneCount = profiles.length;
 
   return (
     <div className="space-y-6">

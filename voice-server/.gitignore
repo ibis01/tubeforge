@@ -9,3 +9,7 @@ data/
 *.wav
 *.pt
 *.safetensors
+
+.venv/
+hf-cache/
+server.log

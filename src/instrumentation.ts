@@ -40,6 +40,23 @@ export async function register(): Promise<void> {
       noClaim: process.env.TUBEFORGE_NO_CLAIM === "1",
       pid: process.pid,
     });
+
+    // Operator's shared voice server (self-hosted/sandbox): make sure the
+    // Chatterbox server behind TUBEFORGE_SHARED_VOICE_URL is up. Fire-and-
+    // forget + never fatal — a missing voice server only degrades cloning.
+    if (process.env.TUBEFORGE_SPAWN_VOICE_SERVER === "1") {
+      try {
+        const { spawnSharedVoiceServer } = await import("./lib/tubeforge/spawn-voice-server");
+        const result = await spawnSharedVoiceServer();
+        log.info("shared voice server", { ...result });
+      } catch (err) {
+        console.error(
+          "[instrumentation] voice server spawn hook failed (app continues):",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+
     g.__tfInstrumentation = { ok: true, at: new Date().toISOString() };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -16,6 +16,7 @@ import { VOICES } from "../types";
 import { joinUrl, providerFetch, ProviderHttpError } from "./http";
 import { getSampleWavByVoiceId, voiceProfileProvider } from "../voice-clone";
 import { applyPronunciations, loadPronunciations } from "../pronounce";
+import { selfhostEndpoint, sharedVoiceServer } from "../shared-voice";
 
 export interface TtsRequest {
   input: string;
@@ -88,24 +89,27 @@ export async function ttsSynthesize(
   // (zai, openai). When the requested voice is a stored clone, route to the
   // owning provider using its saved credentials. This lets a user clone
   // inline from the video dialog and immediately synthesize the voiceover,
-  // without first flipping Settings → Voiceover.
+  // without first flipping Settings → Voiceover. Self-hosted clones also
+  // fall back to the OPERATOR's shared voice server (TUBEFORGE_SHARED_VOICE_*)
+  // when the user hasn't configured their own.
   if (isClonedVoiceId(request.voice)) {
     const ownerProvider = await voiceProfileProvider(request.voice);
     if (ownerProvider && ownerProvider !== config.provider) {
       const cred = await getProviderCredential("tts", ownerProvider);
-      if (cred?.apiKey?.trim() || cred?.baseUrl?.trim()) {
+      const shared = ownerProvider === "selfhost" ? sharedVoiceServer() : null;
+      if (cred?.apiKey?.trim() || cred?.baseUrl?.trim() || shared) {
         config = {
           ...config,
           provider: ownerProvider,
-          apiKey: cred.apiKey ?? "",
-          baseUrl: cred.baseUrl ?? "",
+          apiKey: cred?.apiKey ?? shared?.apiKey ?? "",
+          baseUrl: cred?.baseUrl ?? shared?.baseUrl ?? "",
           model: config.model, // selfhost ignores; zhipu uses glm-tts
         };
       }
-      // If the owning provider has no saved creds, fall through to the
-      // active provider — the synthesis call will then surface a clear
-      // "configure the self-hosted server URL+key" error from selfhostTts,
-      // or fall back to a stock voice on the active provider.
+      // If the owning provider has no saved creds AND no shared server, fall
+      // through to the active provider — the synthesis call will then surface
+      // a clear "configure the self-hosted server URL+key" error, or fall
+      // back to a stock voice on the active provider.
     }
   }
 
@@ -125,7 +129,7 @@ export async function ttsSynthesize(
 
 async function zaiTts(
   req: TtsRequest,
-  config: CapabilityConfig,
+  _config: CapabilityConfig,
 ): Promise<Buffer> {
   const zai = await zaiClientFor("tts");
   const voice = sanitizeVoice("zai", req.voice);
@@ -194,12 +198,18 @@ async function selfhostTts(
   req: TtsRequest,
   config: CapabilityConfig,
 ): Promise<Buffer> {
-  const meta = providerMeta("tts", "selfhost");
-  const baseUrl =
-    config.baseUrl?.trim() ||
-    meta?.defaultBaseUrl ||
-    "http://localhost:8931";
-  const key = config.apiKey?.trim();
+  // The user's own server wins; the platform-shared voice server
+  // (operator-configured env) is the fallback; the conventional local
+  // default applies when the user explicitly picked this provider.
+  const ep =
+    selfhostEndpoint(config.baseUrl, config.apiKey) ??
+    {
+      baseUrl: providerMeta("tts", "selfhost")?.defaultBaseUrl || "http://localhost:8931",
+      apiKey: "",
+      shared: false,
+    };
+  const baseUrl = ep.baseUrl;
+  const key = ep.apiKey;
 
   // Cloned voices ride on their stored sample; stock studio voices fall back
   // to the server's built-in default voice (empty `voice` field).
@@ -213,9 +223,8 @@ async function selfhostTts(
       );
   }
 
-  let response;
-  try {
-    response = await providerFetch(
+  const callServer = () =>
+    providerFetch(
       "Self-hosted voice server",
       joinUrl(baseUrl, "tts"),
       {
@@ -230,34 +239,32 @@ async function selfhostTts(
           speed: req.speed,
         }),
       },
+      // The tts capability timeout (180s default, TUBEFORGE_TIMEOUT_TTS
+      // override) — CPU-bound self-hosted synthesis legitimately runs long.
+      { capability: "tts" },
     );
+
+  let response;
+  try {
+    response = await callServer();
   } catch (err) {
     // providerFetch turns every non-2xx into ProviderHttpError — a 503 cold
-    // start is WORTH ONE RETRY (the Oracle VM loads the ~1.5 GB model for
-    // 2-5 minutes after a reboot; narration jobs queued behind that boot
-    // should survive it instead of failing the whole render).
+    // start is worth WAITING FOR (the model loads 10-60 s after a boot;
+    // narration jobs queued behind that boot should survive it instead of
+    // failing the whole render). Poll every 6 s for up to ~66 s.
     if (err instanceof ProviderHttpError && err.status === 503) {
-      await new Promise((r) => setTimeout(r, 4_000));
-      try {
-        response = await providerFetch(
-          "Self-hosted voice server",
-          joinUrl(baseUrl, "tts"),
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(key ? { "X-Voice-Key": key } : {}),
-            },
-            body: JSON.stringify({
-              text: req.input,
-              voice: sampleB64 ?? "",
-              speed: req.speed,
-            }),
-          },
-        );
-      } catch (retryErr) {
-        throw selfhostError(retryErr, baseUrl);
+      for (let attempt = 0; attempt < 11; attempt++) {
+        await new Promise((r) => setTimeout(r, attempt === 0 ? 4_000 : 6_000));
+        try {
+          response = await callServer();
+          break;
+        } catch (retryErr) {
+          if (!(retryErr instanceof ProviderHttpError) || retryErr.status !== 503) {
+            throw selfhostError(retryErr, baseUrl);
+          }
+        }
       }
+      if (!response) throw selfhostError(err, baseUrl);
     } else {
       throw selfhostError(err, baseUrl);
     }
@@ -302,15 +309,17 @@ export interface VoiceServerHealth {
 }
 
 /** Human line for a voice_server.py /health payload — pure, unit-pinned.
- *  "Chatterbox (English) · cpu · model loaded · 230 ms" reads at a glance;
+ *  "Chatterbox Turbo (fast) · cpu · model loaded · 230 ms" reads at a glance;
  *  a cold start says so instead of failing mysteriously. */
 export function describeVoiceHealth(h: VoiceServerHealth): string {
   const model =
     h.model === "chatterbox-multilingual"
       ? "Chatterbox Multilingual (23 languages)"
-      : h.model
-        ? "Chatterbox (English)"
-        : "Voice server";
+      : h.model === "chatterbox-turbo"
+        ? "Chatterbox Turbo (fast, low-RAM)"
+        : h.model
+          ? "Chatterbox (English)"
+          : "Voice server";
   const bits = [model];
   if (h.device) bits.push(h.device);
   bits.push(h.warm ? "model loaded" : "model still loading — retry in a few minutes");
@@ -321,18 +330,23 @@ export function describeVoiceHealth(h: VoiceServerHealth): string {
 /** GET {baseUrl}/health on the configured self-hosted server — never
  *  synthesizes, 6s timeout, network failures become `up: false` with a
  *  readable reason. Used by the Settings test button so the user can confirm
- *  the Oracle VM (or laptop) is reachable before wiring it in. */
+ *  the Oracle VM (or laptop) is reachable before wiring it in. Falls back to
+ *  the operator's shared voice server when the user hasn't configured one. */
 export async function probeSelfhostHealth(
   overrides?: Partial<CapabilityConfig>,
-): Promise<{ up: boolean; detail: string; latencyMs: number; health?: VoiceServerHealth }> {
+): Promise<{ up: boolean; detail: string; latencyMs: number; health?: VoiceServerHealth; shared: boolean }> {
   const cfg = await getCapability("tts", overrides);
   if (cfg.provider !== "selfhost")
     throw new Error("The health probe only applies to the self-hosted provider");
-  const baseUrl =
-    cfg.baseUrl?.trim() ||
-    providerMeta("tts", "selfhost")?.defaultBaseUrl ||
-    "http://localhost:8931";
-  const key = cfg.apiKey?.trim();
+  const ep =
+    selfhostEndpoint(cfg.baseUrl, cfg.apiKey) ??
+    {
+      baseUrl: providerMeta("tts", "selfhost")?.defaultBaseUrl || "http://localhost:8931",
+      apiKey: "",
+      shared: false,
+    };
+  const baseUrl = ep.baseUrl;
+  const key = ep.apiKey;
   const started = Date.now();
   try {
     const res = await providerFetch(
@@ -347,12 +361,14 @@ export async function probeSelfhostHealth(
       detail: describeVoiceHealth(health),
       latencyMs: Date.now() - started,
       health,
+      shared: ep.shared,
     };
   } catch (err) {
     return {
       up: false,
       detail: selfhostError(err, baseUrl).message,
       latencyMs: Date.now() - started,
+      shared: ep.shared,
     };
   }
 }

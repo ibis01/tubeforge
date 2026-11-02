@@ -45,6 +45,7 @@ import time
 
 MODEL_EN = "chatterbox"
 MODEL_MULTI = "chatterbox-multilingual"
+MODEL_TURBO = "chatterbox-turbo"   # distilled, ~8-10x faster on CPU, MIT
 SAMPLE_RATE = 24000          # Chatterbox output rate (S3GEN_SR)
 MAX_TEXT_CHARS = 5000
 MAX_VOICE_B64 = 4_000_000    # ~3 MB wav — way above our 30 s / 24 kHz samples
@@ -70,15 +71,102 @@ def log(msg: str) -> None:
 
 def load_model(kind: str, device: str):
     """Download (first run) + load the Chatterbox model."""
+    # BEFORE any huggingface_hub import — the hub resolves its cache dir from
+    # HF_HOME at import time, so this must be set first to take effect.
+    os.environ.setdefault("HF_HOME", os.path.join(os.path.dirname(os.path.abspath(__file__)), "hf-cache"))
     if kind == MODEL_MULTI:
         from chatterbox.mtts import ChatterboxMultilingualTTS
         log("loading Chatterbox Multilingual (23 languages) ...")
         model = ChatterboxMultilingualTTS.from_pretrained(device=device)
+    elif kind == MODEL_TURBO:
+        return load_turbo_lowmem(device)
     else:
         from chatterbox.tts import ChatterboxTTS
         log("loading Chatterbox (English) ...")
         model = ChatterboxTTS.from_pretrained(device=device)
     log("model ready")
+    return model
+
+
+def load_turbo_lowmem(device: str):
+    """Chatterbox Turbo with a LOW-MEMORY loader.
+
+    The stock from_pretrained() materializes every weight in RAM (t3 2 GB +
+    s3gen 1 GB ≈ 3 GB anonymous) which OOMs small VPSes and mini-PCs. This
+    loader constructs each module normally and then load_state_dict(...,
+    assign=True) so every parameter is SWAPPED for the memory-mapped
+    safetensors tensor — the anonymous copy is released as it goes, and the
+    weights live in the page cache where the kernel can evict them under
+    pressure. Steady-state anonymous RSS ≈ 1.3 GB instead of 3+ GB.
+
+    Turbo needs reference audio > 5 s (see write_prompt_wav, which loops
+    shorter samples for you).
+    """
+    from pathlib import Path
+
+    import torch
+    from huggingface_hub import snapshot_download
+    from safetensors.torch import load_file
+    from transformers import AutoTokenizer
+
+    from chatterbox.models.s3gen import S3Gen
+    from chatterbox.models.t3 import T3
+    from chatterbox.models.t3.modules.t3_config import T3Config
+    from chatterbox.models.voice_encoder import VoiceEncoder
+    from chatterbox.tts_turbo import ChatterboxTurboTTS, Conditionals
+
+    log("loading Chatterbox Turbo (fast, English) ...")
+    ckpt_dir = Path(snapshot_download(
+        repo_id="ResembleAI/chatterbox-turbo",
+        allow_patterns=["*.safetensors", "*.json", "*.txt", "*.pt", "*.model"],
+    ))
+
+    ve = VoiceEncoder()
+    ve.load_state_dict(load_file(ckpt_dir / "ve.safetensors"))
+    ve.to(device).eval()
+
+    hp = T3Config(text_tokens_dict_size=50276)
+    hp.llama_config_name = "GPT2_medium"
+    hp.speech_tokens_dict_size = 6563
+    hp.input_pos_emb = None
+    hp.speech_cond_prompt_len = 375
+    hp.use_perceiver_resampler = False
+    hp.emotion_adv = False
+    t3 = T3(hp)
+    t3_state = load_file(ckpt_dir / "t3_turbo_v1.safetensors")
+    if "model" in t3_state:
+        t3_state = t3_state["model"][0]
+    t3.load_state_dict(t3_state, assign=True)
+    del t3_state, t3.tfmr.wte
+    t3.to(device).eval()
+
+    s3gen = S3Gen(meanflow=True)
+    s3gen.load_state_dict(
+        load_file(ckpt_dir / "s3gen_meanflow.safetensors"), strict=True, assign=True
+    )
+    s3gen.eval()
+
+    tokenizer = AutoTokenizer.from_pretrained(ckpt_dir)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    conds = None
+    if (builtin_voice := ckpt_dir / "conds.pt").exists():
+        conds = Conditionals.load(
+            builtin_voice, map_location=torch.device("cpu") if device == "cpu" else None
+        ).to(device)
+
+    model = ChatterboxTurboTTS.__new__(ChatterboxTurboTTS)
+    model.sr = SAMPLE_RATE
+    model.t3 = t3
+    model.s3gen = s3gen
+    model.ve = ve
+    model.tokenizer = tokenizer
+    model.device = device
+    model.conds = conds
+    import perth  # noqa: WPS433 (deferred like the rest)
+    model.watermarker = perth.PerthImplicitWatermarker()
+    log("model ready (turbo, low-mem mmap loader)")
     return model
 
 
@@ -170,14 +258,42 @@ def wav_bytes(audio) -> bytes:
 
 
 def write_prompt_wav(b64: str) -> str:
-    """Decode the base64 reference sample to a temp wav for the model."""
+    """Decode the base64 reference sample to a temp wav for the model.
+
+    Turbo insists on reference audio > 5 s; shorter samples are LOOPED
+    (better for the speaker embedding than silence padding) up to 5.5 s.
+    """
     raw = base64.b64decode(b64, validate=True)
     if len(raw) < 1000:
         raise ValueError("voice sample too small")
     fd, path = tempfile.mkstemp(suffix=".wav")
     with os.fdopen(fd, "wb") as fh:
         fh.write(raw)
+    if _state["kind"] == MODEL_TURBO:
+        _ensure_turbo_min_duration(path)
     return path
+
+
+def _ensure_turbo_min_duration(path: str, min_sec: float = 5.5) -> None:
+    """Loop a too-short reference clip so turbo's >5 s assert passes.
+
+    Looping (vs silence padding) gives the speaker embedding more of the
+    actual voice. Best-effort: any failure leaves the file untouched and
+    the model's own assert produces the readable error.
+    """
+    try:
+        import numpy as np
+        import soundfile as sf
+
+        wav, sr = sf.read(path, dtype="float32")
+        need = int(min_sec * sr) - len(wav)
+        if need <= 0:
+            return
+        log(f"sample shorter than {min_sec:.0f}s — looping it for turbo")
+        out = np.concatenate([wav] * (need // max(1, len(wav)) + 1))[: len(wav) + need]
+        sf.write(path, out, sr)
+    except Exception as exc:
+        log(f"sample duration fix skipped ({exc})")
 
 
 def build_app(key, language: str):
@@ -277,8 +393,9 @@ def main() -> None:
     parser.add_argument("--key", default=os.environ.get("VOICE_KEY", ""), help="shared secret (X-Voice-Key)")
     parser.add_argument("--device", default="auto", help="auto | cpu | cuda")
     parser.add_argument("--model", default=os.environ.get("VOICE_MODEL", MODEL_EN),
-                        choices=[MODEL_EN, MODEL_MULTI],
-                        help="chatterbox (English) or chatterbox-multilingual (23 languages)")
+                        choices=[MODEL_EN, MODEL_MULTI, MODEL_TURBO],
+                        help="chatterbox (English), chatterbox-multilingual (23 languages), "
+                             "or chatterbox-turbo (fastest, English, low-RAM — recommended on small CPUs)")
     parser.add_argument("--lang", default="en", help="language_id for --model chatterbox-multilingual")
     parser.add_argument("--no-warmup", action="store_true", help="skip the boot warm-up sentence")
     args = parser.parse_args()
@@ -295,6 +412,11 @@ def main() -> None:
 
     _state["kind"] = args.model
     _state["device"] = pick_device(args.device)
+    threads = int(os.environ.get("VOICE_THREADS", "0")) or None
+    if threads:
+        import torch
+        torch.set_num_threads(threads)
+        log(f"torch threads: {threads}")
     log(f"device: {_state['device']} (use --device cpu to force CPU)")
 
     app = build_app(args.key.strip() or None, args.lang)

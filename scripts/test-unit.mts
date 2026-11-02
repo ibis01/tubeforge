@@ -61,6 +61,7 @@ import {
   sceneImageHashes,
 } from "../src/lib/tubeforge/arthash";
 import { sceneQueries } from "../src/lib/tubeforge/stock-query";
+import { selfhostEndpoint, sharedVoiceServer } from "../src/lib/tubeforge/shared-voice";
 import type { Scene } from "../src/lib/tubeforge/types";
 
 const execFileAsync = promisify(execFile);
@@ -611,6 +612,11 @@ await test("describeVoiceHealth: /health payloads render as one readable line", 
     "warm English server reads at a glance",
   );
   eq(
+    describeVoiceHealth({ model: "chatterbox-turbo", device: "cpu", warm: true, busy: false }),
+    "Chatterbox Turbo (fast, low-RAM) · cpu · model loaded",
+    "turbo model is labelled as the fast variant",
+  );
+  eq(
     describeVoiceHealth({ model: "chatterbox-multilingual", device: "cpu", warm: true, busy: true }),
     "Chatterbox Multilingual (23 languages) · cpu · model loaded · busy synthesizing",
     "multilingual + busy state included",
@@ -622,6 +628,42 @@ await test("describeVoiceHealth: /health payloads render as one readable line", 
     "Voice server · model still loading — retry in a few minutes",
     "an empty payload (older server) still degrades to a useful line",
   );
+});
+
+await test("shared-voice: endpoint precedence — user server > shared env > nothing", () => {
+  const URL_KEY = "TUBEFORGE_SHARED_VOICE_URL";
+  const KEY_KEY = "TUBEFORGE_SHARED_VOICE_KEY";
+  const savedUrl = process.env[URL_KEY];
+  const savedKey = process.env[KEY_KEY];
+  try {
+    delete process.env[URL_KEY];
+    delete process.env[KEY_KEY];
+    eq(sharedVoiceServer(), null, "no env → no shared server");
+    eq(selfhostEndpoint("", ""), null, "no user config, no env → null (caller decides)");
+
+    process.env[URL_KEY] = "http://127.0.0.1:8931";
+    process.env[KEY_KEY] = "secret";
+    const shared = selfhostEndpoint("", "");
+    ok(shared && shared.shared === true, "shared server used when the user has none");
+    eq(shared?.baseUrl, "http://127.0.0.1:8931", "shared baseUrl flows through");
+    eq(shared?.apiKey, "secret", "shared key flows through");
+
+    const own = selfhostEndpoint("http://my-laptop:8931", "my-key");
+    ok(own && own.shared === false, "the user's own server ALWAYS wins");
+    eq(own?.baseUrl, "http://my-laptop:8931", "own baseUrl preserved");
+    eq(own?.apiKey, "my-key", "own key preserved");
+
+    // A user key WITHOUT a baseUrl is not an endpoint by itself — but the
+    // shared server still applies (the key belongs to their own server they
+    // haven't fully configured yet; synthesis would 401 against it anyway).
+    const keyOnly = selfhostEndpoint("", "my-key");
+    ok(keyOnly && keyOnly.shared === true, "key-only user config falls back to shared");
+  } finally {
+    if (savedUrl === undefined) delete process.env[URL_KEY];
+    else process.env[URL_KEY] = savedUrl;
+    if (savedKey === undefined) delete process.env[KEY_KEY];
+    else process.env[KEY_KEY] = savedKey;
+  }
 });
 
 await test("cleanCloneName: trims, strips control chars, falls back to the file name", () => {

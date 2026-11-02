@@ -25,11 +25,12 @@ import { promisify } from "util";
 import { randomUUID } from "crypto";
 import { db } from "./tenant-db";
 import { currentCtx } from "./tenant";
-import { getCapability, getProviderCredential } from "./providers/settings";
+import { getProviderCredential } from "./providers/settings";
 import { providerMeta } from "./providers/registry";
 import { joinUrl, providerFetch, providerFetchJson } from "./providers/http";
 import { safeFetch } from "./net-guard";
 import { errorText } from "./redact";
+import { selfhostEndpoint, sharedVoiceServer } from "./shared-voice";
 
 const execFileAsync = promisify(execFile);
 
@@ -66,12 +67,14 @@ export function isCloneProvider(provider: string): provider is CloneProvider {
 /**
  * Pick the clone-capable provider to use for a fresh clone, regardless of
  * which TTS provider is currently "active". Order of preference:
- *   1. selfhost — free, open-source Chatterbox, NO network call at clone
- *      time (the sample is stored on the VoiceProfile row; the server URL+key
- *      are only needed when synthesizing). Lets users clone right away from
- *      the video dialog without first flipping Settings.
+ *   1. selfhost — the user's OWN server (saved URL): free Chatterbox, no
+ *      network call at clone time (the sample is stored on the row).
  *   2. zhipu   — if it has a saved bigmodel.cn key (the clone API needs it).
- *   3. selfhost unconditionally — even with no server configured the clone
+ *   3. the operator's shared voice server (TUBEFORGE_SHARED_VOICE_URL) —
+ *      self-hosted deployments and sandboxes can run ONE Chatterbox server
+ *      for all their users; cloning and synthesis work with zero per-user
+ *      setup.
+ *   4. selfhost unconditionally — even with no server configured the clone
  *      succeeds (sample stored); the server URL+key can be supplied later
  *      at voiceover generation.
  *
@@ -85,14 +88,14 @@ export async function pickCloneProvider(): Promise<{
   /** Human-readable reason for the status, surfaced in the UI. */
   hint: string;
 }> {
-  // Prefer selfhost — the clone itself needs no server, and synthesis uses
-  // saved selfhost credentials (which may be added inline later).
+  // Prefer the user's own selfhost server — the clone itself needs no
+  // server, and synthesis uses their saved credentials.
   const selfhostCred = await getProviderCredential("tts", "selfhost");
   if (selfhostCred?.baseUrl?.trim()) {
     return {
       provider: "selfhost",
       status: "ready",
-      hint: "Clones use your self-hosted Chatterbox server.",
+      hint: "Clones speak through your self-hosted Chatterbox server.",
     };
   }
   // Zhipu with a saved key can clone + synthesize immediately.
@@ -102,6 +105,15 @@ export async function pickCloneProvider(): Promise<{
       provider: "zhipu",
       status: "zhipu-ready",
       hint: "Clones use your Zhipu GLM-TTS account.",
+    };
+  }
+  // The operator's shared voice server: clone + synthesize work with zero
+  // per-user setup (sandbox / self-hosted deployments).
+  if (sharedVoiceServer()) {
+    return {
+      provider: "selfhost",
+      status: "ready",
+      hint: "Clones speak through this platform's shared voice server.",
     };
   }
   // Nothing configured yet — default to selfhost; the clone succeeds (sample
@@ -475,15 +487,45 @@ export async function cloneVoice(opts: {
 }
 
 /**
+ * Can this cloned voice actually SPEAK right now? True when its owning
+ * provider has working credentials: a selfhost row needs the user's server
+ * URL or the operator's shared voice server; a zhipu row needs the key.
+ * Drives the ▶ preview gate so a clone that can't synthesize shows a clear
+ * error instead of silently falling back to a stock voice.
+ */
+export async function cloneSynthesisAvailable(voiceId: string): Promise<boolean> {
+  try {
+    const row = await db.voiceProfile.findFirst({
+      where: { providerVoiceId: voiceId, isActive: true },
+      select: { provider: true },
+    });
+    if (!row || !isCloneProvider(row.provider)) return false;
+    if (row.provider === "selfhost") {
+      const cred = await getProviderCredential("tts", "selfhost");
+      return Boolean(cred?.baseUrl?.trim() || sharedVoiceServer());
+    }
+    const zhipu = await getProviderCredential("tts", "zhipu");
+    return Boolean(zhipu?.apiKey?.trim());
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Self-hosted "clone": there is no platform call — validate + normalize the
  * sample exactly like the Zhipu path (mono 24 kHz PCM-16 WAV, ≤30 s), store it
  * base64 on the row, and mint a voice_clone_… id. Every synthesis then POSTs
  * the sample to the user's voice_server.py (Chatterbox), which speaks in that
  * voice. Voice samples never leave the user's machine beyond their own server.
+ *
+ * When a voice server IS reachable (the user's own or the operator's shared
+ * one), the clone-time audition is synthesized immediately so the user hears
+ * the cloned voice speak the moment the clone lands.
  */
 async function cloneVoiceSelfhost(opts: {
   source: { kind: "upload"; buffer: Buffer; filename: string } | { kind: "url"; url: string };
   name?: string;
+  auditionText?: string;
 }): Promise<CloneResult> {
   let raw: Buffer;
   let sourceLabel: string;
@@ -502,6 +544,41 @@ async function cloneVoiceSelfhost(opts: {
   const { wav, durationSec } = await prepareSample(raw, extMatch?.[0] ?? ".bin");
   const name = cleanCloneName(opts.name ?? "", sourceLabel);
 
+  // Best-effort clone-time audition: if a voice server is reachable, have the
+  // clone speak a short line so the profile carries a playable preview.
+  // Failure is silent — the clone itself (the stored sample) always succeeds.
+  let auditionWav: Buffer | null = null;
+  const cred = await getProviderCredential("tts", "selfhost");
+  const ep = selfhostEndpoint(cred?.baseUrl, cred?.apiKey);
+  if (ep) {
+    const line =
+      (opts.auditionText ?? "").trim().slice(0, 180) ||
+      `Hi! This is ${name}. If you pick me, this is how I will narrate your videos.`;
+    try {
+      const res = await providerFetch(
+        "Self-hosted voice server",
+        joinUrl(ep.baseUrl, "tts"),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(ep.apiKey ? { "X-Voice-Key": ep.apiKey } : {}),
+          },
+          body: JSON.stringify({
+            text: line,
+            voice: wav.toString("base64"),
+            speed: 1,
+          }),
+        },
+        { timeoutMs: 120_000 },
+      );
+      const buf = Buffer.from(new Uint8Array(await res.arrayBuffer()));
+      if (buf.length > 44 && buf.length <= MAX_AUDITION_BYTES) auditionWav = buf;
+    } catch {
+      /* server cold/offline — the clone works, the audition is a bonus */
+    }
+  }
+
   const cloneCtx = currentCtx();
   if (!cloneCtx) throw new Error("Voice cloning requires a signed-in user");
   const row = await db.voiceProfile.create({
@@ -513,10 +590,11 @@ async function cloneVoiceSelfhost(opts: {
       sourceLabel,
       durationSec,
       sampleWav: wav.toString("base64"),
+      auditionWav: auditionWav ? auditionWav.toString("base64") : null,
     },
   });
 
-  return { profile: toVoiceProfileDTO(row), auditionWav: null };
+  return { profile: toVoiceProfileDTO(row), auditionWav };
 }
 
 /** The stored sample (base64) for a cloned voice — self-hosted synthesis

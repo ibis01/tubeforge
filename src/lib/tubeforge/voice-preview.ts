@@ -12,7 +12,7 @@ import path from "path";
 import { getCapability } from "./providers/settings";
 import { sanitizeVoice, ttsSynthesize, voiceCatalog, isClonedVoiceId } from "./providers/tts";
 import { aiCall } from "./budget";
-import { listVoiceProfiles } from "./voice-clone";
+import { listVoiceProfiles, cloneSynthesisAvailable, voiceProfileProvider } from "./voice-clone";
 
 export const VOICE_PREVIEW_TEXT =
   "Hi! Quick voice preview. If you pick me, this is exactly how I'll narrate your next video — clear, confident, and easy to follow.";
@@ -47,17 +47,20 @@ function diskPath(key: string) {
 }
 
 /** Audition-able catalog check: does the ACTIVE tts provider know this voice?
- *  Cloned ids count as known when the active provider is zhipu AND the
- *  profile still exists (DB lookup) — a deleted clone previews as unknown
- *  instead of mysteriously falling back to the default voice. */
+ *  Cloned ids count as known when the profile still exists AND its owning
+ *  provider can actually speak it (the user's self-hosted server or the
+ *  operator's shared voice server for selfhost clones; a Zhipu key for zhipu
+ *  clones) — a deleted or unspeakable clone previews as unknown instead of
+ *  mysteriously falling back to the default voice. */
 export async function resolvePreviewVoice(voice: string) {
   const config = await getCapability("tts");
   const model = config.provider === "openai" ? config.model.trim() || "tts-1" : config.model.trim();
   const catalog = voiceCatalog(config.provider, model);
   let known = catalog.some((v) => v.id === voice);
-  if (!known && (config.provider === "zhipu" || config.provider === "selfhost") && isClonedVoiceId(voice)) {
-    const clones = await listVoiceProfiles(config.provider);
-    known = clones.some((c) => c.id === voice);
+  if (!known && isClonedVoiceId(voice)) {
+    known = (await listVoiceProfiles()).some((c) => c.id === voice)
+      ? await cloneSynthesisAvailable(voice)
+      : false;
   }
   return {
     config,
@@ -95,9 +98,14 @@ export async function getVoicePreview(voice: string, text?: string): Promise<Buf
   }
 
   // Same budget/pacing/429 handling as every other TTS call in the pipeline —
-  // previews ride out rate-limit storms instead of erroring on the first click.
+  // previews ride out rate-limit storms instead of erroring on the first
+  // click. Self-hosted synthesis (active provider OR a cloned selfhost voice)
+  // runs ~5-10× slower than realtime, so it gets the short line.
+  const cloneOwner = isClonedVoiceId(safe) ? await voiceProfileProvider(safe) : null;
   const previewText =
-    config.provider === "selfhost" ? SELFHOST_PREVIEW_TEXT : VOICE_PREVIEW_TEXT;
+    config.provider === "selfhost" || cloneOwner === "selfhost"
+      ? SELFHOST_PREVIEW_TEXT
+      : VOICE_PREVIEW_TEXT;
   const buffer = await aiCall("tts", `voice-preview(${safe})`, () =>
     ttsSynthesize({ input: previewText, voice: safe, speed: 1 }, config)
   );

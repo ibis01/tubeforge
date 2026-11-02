@@ -18,6 +18,7 @@ import {
   isCloneProvider,
   listVoiceProfiles,
 } from "@/lib/tubeforge/voice-clone";
+import { sharedVoiceServer } from "@/lib/tubeforge/shared-voice";
 
 export async function GET(req: NextRequest) {
   const auth = await requireUser(req);
@@ -34,9 +35,11 @@ export async function GET(req: NextRequest) {
   // Cloned voices are speakable when their owning provider has saved creds.
   // The active provider being clone-capable is the simple case; the auto-route
   // case (active=zai, clone=selfhost with saved URL+key) lets clones appear
-  // even when the active TTS isn't clone-capable.
+  // even when the active TTS isn't clone-capable. The operator's shared voice
+  // server counts as a speakable selfhost credential for every user.
   const speakableCloneProviders = new Set<string>();
   if (isCloneProvider(config.provider)) speakableCloneProviders.add(config.provider);
+  if (sharedVoiceServer()) speakableCloneProviders.add("selfhost");
   for (const p of CLONE_PROVIDERS) {
     const cred = await getProviderCredential("tts", p);
     if (cred?.apiKey?.trim() || cred?.baseUrl?.trim()) {
