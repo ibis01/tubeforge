@@ -154,10 +154,54 @@ async function pgFingerprint(prisma) {
   };
 }
 
+/** Pre-deploy repair for unmanaged legacy databases: the chain assumes the
+ *  init schema's table set, but a legacy DB pushed from a slightly OLDER
+ *  Stage-1 snapshot can be missing tables init expects (observed live: no
+ *  VoiceProfile on the production Vercel DB — stage2's
+ *  `ALTER TABLE "VoiceProfile" ADD COLUMN …` then fails on a missing
+ *  relation, wedging the chain). Creating the missing table in init's exact
+ *  shape (CREATE TABLE IF NOT EXISTS — a no-op on healthy databases) lets
+ *  the unmodified chain apply cleanly. */
+async function pgRepairMissingInitTables(prisma) {
+  const REPAIRS = [
+    {
+      table: "VoiceProfile",
+      sql: `CREATE TABLE IF NOT EXISTS "VoiceProfile" (
+        "id" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "provider" TEXT NOT NULL DEFAULT 'zhipu',
+        "providerVoiceId" TEXT NOT NULL,
+        "sourceLabel" TEXT,
+        "durationSec" DOUBLE PRECISION,
+        "auditionWav" TEXT,
+        "sampleWav" TEXT,
+        "isActive" BOOLEAN NOT NULL DEFAULT true,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL,
+        CONSTRAINT "VoiceProfile_pkey" PRIMARY KEY ("id")
+      );
+      CREATE INDEX IF NOT EXISTS "VoiceProfile_isActive_idx" ON "VoiceProfile"("isActive");
+      CREATE INDEX IF NOT EXISTS "VoiceProfile_provider_idx" ON "VoiceProfile"("provider");`,
+    },
+  ];
+  for (const r of REPAIRS) {
+    const present = await prisma.$queryRawUnsafe(
+      `SELECT COUNT(*)::int AS n FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = '${r.table}'`
+    );
+    if (Number(present?.[0]?.n ?? 0) === 0) {
+      log(`repair: creating missing legacy table ${r.table} (init shape)`);
+      execSql("prisma/schema.prisma", r.sql);
+    }
+  }
+}
+
 /** Baseline + deploy for a Postgres database (see header). Drops nothing:
  *  `migrate resolve --applied` only RECORDS history; `migrate deploy`
  *  applies pending migrations from the chain. */
 async function postgresMigrate(prisma) {
+  await pgRepairMissingInitTables(prisma);
+
   const historyRows = await prisma.$queryRawUnsafe(
     `SELECT COUNT(*)::int AS n FROM information_schema.tables
       WHERE table_schema = 'public' AND table_name = '_prisma_migrations'`
