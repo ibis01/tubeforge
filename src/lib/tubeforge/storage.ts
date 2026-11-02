@@ -583,7 +583,16 @@ export function scratchDir(name: string): string {
         : path.join(os.tmpdir(), "tubeforge-scratch")
       : UPLOAD_ROOT;
   const dir = path.join(root, ...normalizeKey(name).split("/"));
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  try {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  } catch {
+    // Read-only filesystem (e.g. Vercel serverless /var/task): return the
+    // path anyway. This function is called at MODULE EVALUATION (music.ts's
+    // MUSIC_DIR) — a throw here killed every cold start on Vercel and took
+    // the whole deployment down with it (see instrumentation.ts). Callers
+    // that genuinely WRITE fail loudly at write time instead; on serverless
+    // the s3 driver + /tmp scratch is the supported configuration.
+  }
   return dir;
 }
 

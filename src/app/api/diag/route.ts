@@ -50,6 +50,25 @@ export async function GET() {
           publicTables: Number(tables?.[0]?.n ?? -1),
           migrationsTable: Number(migrations?.[0]?.n ?? -1) === 1,
         };
+        if (out.schema.migrationsTable) {
+          const rows = (await mod.db.$queryRawUnsafe(
+            `SELECT migration_name, finished_at, rolled_back_at, applied_steps_count, logs
+               FROM _prisma_migrations ORDER BY migration_name`
+          )) as {
+            migration_name: string;
+            finished_at: Date | null;
+            rolled_back_at: Date | null;
+            applied_steps_count: number;
+            logs: string | null;
+          }[];
+          out.migrations = rows.map((r) => ({
+            name: r.migration_name,
+            finished: r.finished_at !== null,
+            rolledBack: r.rolled_back_at !== null,
+            steps: Number(r.applied_steps_count ?? 0),
+            log: redact(String(r.logs ?? "")).slice(0, 240),
+          }));
+        }
       } catch (e) {
         out.schemaProbe = redact(e instanceof Error ? e.message : String(e));
       }
