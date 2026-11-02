@@ -46,11 +46,12 @@ export async function GET() {
         const migrations = (await mod.db.$queryRawUnsafe(
           "SELECT COUNT(*)::int AS n FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '_prisma_migrations'"
         )) as { n: number }[];
+        const migrationsTable = Number(migrations?.[0]?.n ?? -1) === 1;
         out.schema = {
           publicTables: Number(tables?.[0]?.n ?? -1),
-          migrationsTable: Number(migrations?.[0]?.n ?? -1) === 1,
+          migrationsTable,
         };
-        if (out.schema.migrationsTable) {
+        if (migrationsTable) {
           const rows = (await mod.db.$queryRawUnsafe(
             `SELECT migration_name, finished_at, rolled_back_at, applied_steps_count, logs
                FROM _prisma_migrations ORDER BY migration_name`
