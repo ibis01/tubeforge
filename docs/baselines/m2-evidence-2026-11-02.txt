@@ -1,0 +1,46 @@
+M2 DoD evidence — approved 4-shot plan → 4-shot rendered scene
+Date: 2026-11-02 (UTC)  |  runner: local sandbox (ffmpeg 6.x real render)
+Code: 7f823e5 (M2 contract) + ee98c0a (M2 render consumption)
+Script: scripts/m2-evidence.mts (rerun with: node --import tsx scripts/m2-evidence.mts)
+
+REAL production code exercised: buildSceneShots / shotPrompt / shotImageFile
+(shots.ts), multiShotSceneGraph (motion.ts), and the exact ffmpeg command
+shape render.ts buildSegment assembles for the multi-image branch.
+SIMULATED (no AI provider in sandbox): the 3 extra shot images were written as
+visually distinct synthetic fixtures at the exact contract filenames that
+ensureShotImages produces; narration audio is a sine stand-in.
+
+════════════════════════════════════════════════════════════════════════
+E1 — buildSceneShots: approved 4-shot plan → ShotExecution list
+════════════════════════════════════════════════════════════════════════
+  scene 1, measured narration 5s, planned Σ 4s → scale-to-fit ×1.25
+  shot 0: scene  zoom-in  1.50s  file=scene-01.png  [src ✓ dur ✓ move ✓]
+  shot 1: extra  pan-left 1.00s  file=shot-01-1.png  [src ✓ dur ✓ move ✓]
+          prompt leads with imagePrompt: "a vendor fanning charcoal behind stacked skewers…" ✓
+  shot 2: extra  tilt-down 1.25s  file=shot-01-2.png  [src ✓ dur ✓ move ✓]
+          prompt leads with imagePrompt: "chili oil dripping onto fresh noodles…" ✓
+  shot 3: extra  diag-tl  1.25s  file=shot-01-3.png  [src ✓ dur ✓ move ✓]
+          prompt leads with imagePrompt: "crowd silhouettes drifting between lantern glow…" ✓
+  E1 PASS — 4 executions, sources scene/extra/extra/extra, durations 1.5/1/1.25/1.25s, imagePrompt leads every extra prompt
+════════════════════════════════════════════════════════════════════════
+E2 — render duration (spec §1.4: |rendered − measured| ≤ 0.2s)
+════════════════════════════════════════════════════════════════════════
+  rendered 5.000s vs measured 5s → Δ 0.000s  PASS
+════════════════════════════════════════════════════════════════════════
+E3 — frame hashes: midpoint of each shot window vs all 4 sources
+════════════════════════════════════════════════════════════════════════
+  window [0.00s,1.50s] mid 0.75s  hash 4c80b09ea2ecf5e1…  → nearest: scene art (testsrc2) (d=32)  own-source ✓
+  window [1.50s,2.50s] mid 2.00s  hash cbc3b0b2ac898887…  → nearest: extra 1 (smptebars) (d=41)  own-source ✓
+  window [2.50s,3.75s] mid 3.13s  hash bec18b656a240a21…  → nearest: extra 2 (testsrc) (d=100)  own-source ✓
+  window [3.75s,5.00s] mid 4.38s  hash 4e4e4e4e4e4e4e4e…  → nearest: extra 3 (gradients) (d=5)  own-source ✓
+  E3 PASS — every shot window shows the image the Director assigned to it
+════════════════════════════════════════════════════════════════════════
+E4 — cuts land on the reconciled boundaries (frame before ≠ after)
+════════════════════════════════════════════════════════════════════════
+  cut 1 @ 1.50s: frame 1.38s vs 1.62s → Hamming 79 ✓ changed (pre-cut frame vs its window midpoint: 21 — same source, different zoompan phase)
+  cut 2 @ 2.50s: frame 2.38s vs 2.62s → Hamming 124 ✓ changed (pre-cut frame vs its window midpoint: 33 — same source, different zoompan phase)
+  cut 3 @ 3.75s: frame 3.63s vs 3.87s → Hamming 131 ✓ changed (pre-cut frame vs its window midpoint: 34 — same source, different zoompan phase)
+  E4 PASS — the Director's cuts land on schedule
+════════════════════════════════════════════════════════════════════════
+M2 DoD evidence: ALL CHECKS PASS — an approved 4-shot plan produced a 4-shot rendered scene
+════════════════════════════════════════════════════════════════════════
