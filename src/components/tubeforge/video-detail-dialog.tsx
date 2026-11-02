@@ -214,6 +214,10 @@ export function VideoDetailDialog({
   const [cloneName, setCloneName] = useState("");
   const [cloneSampleText, setCloneSampleText] = useState("");
   const [cloning, setCloning] = useState(false);
+  // Fresh clones whose preview is still synthesizing on the (CPU-bound) voice
+  // server — polled until GET /api/voices/{id}/audition answers 200, then the
+  // ▶ on the clone unlocks automatically.
+  const [pendingAuditions, setPendingAuditions] = useState<string[]>([]);
   const [cloneProfiles, setCloneProfiles] = useState<
     { id: string; name: string; providerVoiceId: string; durationSec: number | null; hasAudition: boolean; createdAt: string }[]
   >([]);
@@ -400,6 +404,27 @@ export function VideoDetailDialog({
   useEffect(() => {
     if (voiceMode === "clone" && voicePanelOpen) loadCloneProfiles();
   }, [voiceMode, voicePanelOpen, loadCloneProfiles]);
+
+  /** Poll a fresh clone's background audition until it lands (or ~10 min pass). */
+  function pollCloneAudition(profileId: string, attempt = 0) {
+    if (attempt > 150) {
+      setPendingAuditions((a) => a.filter((x) => x !== profileId));
+      return;
+    }
+    setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/voices/${profileId}/audition`, { cache: "no-store" });
+        if (res.ok) {
+          setPendingAuditions((a) => a.filter((x) => x !== profileId));
+          await loadCloneProfiles();
+          return;
+        }
+      } catch {
+        /* transient — keep polling */
+      }
+      pollCloneAudition(profileId, attempt + 1);
+    }, 4000);
+  }
 
   const stopAudition = useCallback(() => {
     auditionRef.current?.pause();
@@ -902,11 +927,17 @@ export function VideoDetailDialog({
       setCloneSampleText("");
       setVoiceMode("tts"); // jump straight to picking it for this video
       await loadCloneProfiles();
+      if (data.audition?.pending && data.profile?.id) {
+        setPendingAuditions((a) => [...a, data.profile.id]);
+        pollCloneAudition(data.profile.id);
+      }
       toast({
         title: `Voice "${data.profile.name}" cloned`,
         description: data.audition?.available
           ? "Pick it under AI voices and hit Generate voice — it narrates in the cloned timbre."
-          : "Clone ready — pick it under AI voices and hit Generate voice.",
+          : data.audition?.pending
+            ? "Preview is generating in the background. Pick it under AI voices and hit Generate voice."
+            : "Clone ready — pick it under AI voices and hit Generate voice.",
       });
     } catch (e) {
       toast({
@@ -2270,7 +2301,9 @@ export function VideoDetailDialog({
                         Cloned voices
                       </p>
                       <div className="max-h-40 overflow-y-auto space-y-1 pr-0.5">
-                        {cloneProfiles.map((p) => (
+                        {cloneProfiles.map((p) => {
+                          const previewPending = pendingAuditions.includes(p.id);
+                          return (
                           <div
                             key={p.id}
                             className="flex items-center gap-2 rounded-lg border border-white/8 bg-white/3 px-2.5 py-1.5"
@@ -2279,7 +2312,13 @@ export function VideoDetailDialog({
                               type="button"
                               disabled={!p.hasAudition || cloning}
                               onClick={() => playAudition(p.id)}
-                              title={p.hasAudition ? "Hear the clone" : "No cached audition — use ▶ in the picker"}
+                              title={
+                                previewPending
+                                  ? "Generating the preview — it unlocks the moment it lands"
+                                  : p.hasAudition
+                                    ? "Hear the clone"
+                                    : "No cached audition — use ▶ in the picker"
+                              }
                               className={clsx(
                                 "grid h-6 w-6 shrink-0 place-items-center rounded-full border transition-colors",
                                 p.hasAudition
@@ -2289,7 +2328,9 @@ export function VideoDetailDialog({
                                   : "opacity-40"
                               )}
                             >
-                              {auditionPlaying === p.id ? (
+                              {previewPending ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : auditionPlaying === p.id ? (
                                 <Square className="h-2.5 w-2.5 fill-current" />
                               ) : (
                                 <Play className="h-3 w-3 fill-current" />
@@ -2300,6 +2341,9 @@ export function VideoDetailDialog({
                               {p.durationSec ? (
                                 <span className="text-muted-foreground"> · {p.durationSec.toFixed(0)}s sample</span>
                               ) : null}
+                              {previewPending && (
+                                <span className="text-amber-200/80"> · generating preview…</span>
+                              )}
                             </span>
                             <button
                               type="button"
@@ -2311,7 +2355,8 @@ export function VideoDetailDialog({
                               <Trash2 className="h-3 w-3" />
                             </button>
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}

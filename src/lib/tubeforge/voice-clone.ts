@@ -24,7 +24,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { randomUUID } from "crypto";
 import { db } from "./tenant-db";
-import { currentCtx } from "./tenant";
+import { currentCtx, withCtx, type TenantCtx } from "./tenant";
 import { getProviderCredential } from "./providers/settings";
 import { providerMeta } from "./providers/registry";
 import { joinUrl, providerFetch, providerFetchJson } from "./providers/http";
@@ -375,6 +375,88 @@ async function downloadSample(url: string): Promise<{ buffer: Buffer; filename: 
 export interface CloneResult {
   profile: VoiceProfileDTO;
   auditionWav: Buffer | null;
+  /** true when the audition is being synthesized in the BACKGROUND (self-
+   *  hosted clones on CPU-bound voice servers) — the UI polls
+   *  GET /api/voices/{id}/audition until it lands instead of blocking. */
+  auditionPending?: boolean;
+}
+
+/** What the clone-time preview says. Kept SHORT on purpose: the preview is
+ *  synthesized on the user's voice server, and on a CPU-only box every extra
+ *  second of speech costs ~5-8s of wall time. (~4s of audio.) */
+function defaultAuditionLine(name: string): string {
+  return `Hi, I'm ${name} — your new narrator.`;
+}
+
+/** Profiles whose background audition is currently synthesizing — dedups
+ *  duplicate schedules (and survives dev hot reloads via globalThis). */
+function auditionInFlight(): Set<string> {
+  const g = globalThis as typeof globalThis & { __tfCloneAuditions?: Set<string> };
+  g.__tfCloneAuditions ??= new Set<string>();
+  return g.__tfCloneAuditions;
+}
+
+/**
+ * Synthesize + cache a profile's clone-time audition WITHOUT blocking the
+ * clone response. Fire-and-forget: the caller already answered 200; this
+ * runs detached, tenant-scoped (withCtx — the row update goes to the right
+ * organization), and deduped. Failures are logged and dropped — a profile
+ * without a cached preview still works everywhere (the pickers' ▶ preview
+ * synthesizes fresh TTS on demand).
+ *
+ * The generous 10-minute timeout is deliberate: CPU-bound synthesis
+ * legitimately runs minutes on small machines, and requests queue behind
+ * whatever already holds the server's single-model lock.
+ */
+function scheduleBackgroundAudition(opts: {
+  profileId: string;
+  sampleB64: string;
+  text: string;
+  baseUrl: string;
+  apiKey: string;
+  ctx: TenantCtx;
+}): void {
+  const inFlight = auditionInFlight();
+  if (inFlight.has(opts.profileId)) return;
+  inFlight.add(opts.profileId);
+  const startedAt = Date.now();
+  void withCtx(opts.ctx, async () => {
+    try {
+      const res = await providerFetch(
+        "Self-hosted voice server",
+        joinUrl(opts.baseUrl, "tts"),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(opts.apiKey ? { "X-Voice-Key": opts.apiKey } : {}),
+          },
+          body: JSON.stringify({ text: opts.text, voice: opts.sampleB64, speed: 1 }),
+        },
+        { timeoutMs: 600_000 },
+      );
+      const buf = Buffer.from(new Uint8Array(await res.arrayBuffer()));
+      if (buf.length > 44 && buf.length <= MAX_AUDITION_BYTES) {
+        await db.voiceProfile.update({
+          where: { id: opts.profileId },
+          data: { auditionWav: buf.toString("base64") },
+        });
+        console.info(
+          `voice-clone: background audition ready for ${opts.profileId} ` +
+            `in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `voice-clone: background audition failed for ${opts.profileId}: ` +
+          errorText(err, "unknown"),
+      );
+    } finally {
+      inFlight.delete(opts.profileId);
+    }
+  }).catch(() => {
+    /* never reject an already-answered request's background task */
+  });
 }
 
 /**
@@ -428,8 +510,7 @@ export async function cloneVoice(opts: {
     );
 
   // 3) Clone → voice id.
-  const auditionText = (opts.auditionText ?? "").trim() ||
-    `Hi! This is ${name}. If you pick me, this is exactly how I will narrate your videos.`;
+  const auditionText = (opts.auditionText ?? "").trim() || defaultAuditionLine(name);
   const clone = await providerFetchJson<{
     voice?: string;
     file_id?: string; // purpose "voice-clone-output" — the audition audio
@@ -518,9 +599,12 @@ export async function cloneSynthesisAvailable(voiceId: string): Promise<boolean>
  * the sample to the user's voice_server.py (Chatterbox), which speaks in that
  * voice. Voice samples never leave the user's machine beyond their own server.
  *
- * When a voice server IS reachable (the user's own or the operator's shared
- * one), the clone-time audition is synthesized immediately so the user hears
- * the cloned voice speak the moment the clone lands.
+ * The profile is created IMMEDIATELY — cloning itself is instant. The
+ * clone-time audition (so the user hears the voice speak the moment the clone
+ * lands) is synthesized in the BACKGROUND when a voice server is reachable:
+ * CPU-bound Chatterbox can take minutes under load, and blocking the clone
+ * response on it was the #1 source of "cloning is slow". The UI polls
+ * GET /api/voices/{id}/audition and swaps the preview in when it arrives.
  */
 async function cloneVoiceSelfhost(opts: {
   source: { kind: "upload"; buffer: Buffer; filename: string } | { kind: "url"; url: string };
@@ -544,41 +628,6 @@ async function cloneVoiceSelfhost(opts: {
   const { wav, durationSec } = await prepareSample(raw, extMatch?.[0] ?? ".bin");
   const name = cleanCloneName(opts.name ?? "", sourceLabel);
 
-  // Best-effort clone-time audition: if a voice server is reachable, have the
-  // clone speak a short line so the profile carries a playable preview.
-  // Failure is silent — the clone itself (the stored sample) always succeeds.
-  let auditionWav: Buffer | null = null;
-  const cred = await getProviderCredential("tts", "selfhost");
-  const ep = selfhostEndpoint(cred?.baseUrl, cred?.apiKey);
-  if (ep) {
-    const line =
-      (opts.auditionText ?? "").trim().slice(0, 180) ||
-      `Hi! This is ${name}. If you pick me, this is how I will narrate your videos.`;
-    try {
-      const res = await providerFetch(
-        "Self-hosted voice server",
-        joinUrl(ep.baseUrl, "tts"),
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(ep.apiKey ? { "X-Voice-Key": ep.apiKey } : {}),
-          },
-          body: JSON.stringify({
-            text: line,
-            voice: wav.toString("base64"),
-            speed: 1,
-          }),
-        },
-        { timeoutMs: 120_000 },
-      );
-      const buf = Buffer.from(new Uint8Array(await res.arrayBuffer()));
-      if (buf.length > 44 && buf.length <= MAX_AUDITION_BYTES) auditionWav = buf;
-    } catch {
-      /* server cold/offline — the clone works, the audition is a bonus */
-    }
-  }
-
   const cloneCtx = currentCtx();
   if (!cloneCtx) throw new Error("Voice cloning requires a signed-in user");
   const row = await db.voiceProfile.create({
@@ -590,11 +639,29 @@ async function cloneVoiceSelfhost(opts: {
       sourceLabel,
       durationSec,
       sampleWav: wav.toString("base64"),
-      auditionWav: auditionWav ? auditionWav.toString("base64") : null,
+      auditionWav: null,
     },
   });
 
-  return { profile: toVoiceProfileDTO(row), auditionWav };
+  // Best-effort clone-time audition, now in the background: if a voice
+  // server is reachable (the user's own or the operator's shared one), have
+  // the clone speak a short line so the profile carries a playable preview.
+  // No server → nothing to synthesize with; the profile works regardless.
+  const cred = await getProviderCredential("tts", "selfhost");
+  const ep = selfhostEndpoint(cred?.baseUrl, cred?.apiKey);
+  if (ep) {
+    scheduleBackgroundAudition({
+      profileId: row.id,
+      sampleB64: wav.toString("base64"),
+      text:
+        (opts.auditionText ?? "").trim().slice(0, 180) || defaultAuditionLine(name),
+      baseUrl: ep.baseUrl,
+      apiKey: ep.apiKey,
+      ctx: cloneCtx,
+    });
+    return { profile: toVoiceProfileDTO(row), auditionWav: null, auditionPending: true };
+  }
+  return { profile: toVoiceProfileDTO(row), auditionWav: null, auditionPending: false };
 }
 
 /** The stored sample (base64) for a cloned voice — self-hosted synthesis

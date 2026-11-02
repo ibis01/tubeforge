@@ -82,6 +82,11 @@ export function VoiceView() {
   const [cloneSampleText, setCloneSampleText] = useState("");
   const [cloning, setCloning] = useState(false);
 
+  // Clone-time previews still synthesizing on the (CPU-bound) voice server.
+  // The clone itself returns instantly; the preview lands in the background
+  // and each id is polled until GET /api/voices/{id}/audition answers 200.
+  const [pendingAuditions, setPendingAuditions] = useState<string[]>([]);
+
   // Cached clone-time auditions (instant — no provider call).
   const [auditionId, setAuditionId] = useState<string | null>(null);
   const auditionRef = useRef<HTMLAudioElement | null>(null);
@@ -169,6 +174,31 @@ export function VoiceView() {
     [auditionId, stopAudition, toast]
   );
 
+  /** Poll a fresh clone's background audition until it lands (or ~10 min pass). */
+  function pollAudition(profileId: string, attempt = 0) {
+    if (attempt > 150) {
+      setPendingAuditions((a) => a.filter((x) => x !== profileId));
+      return;
+    }
+    setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/voices/${profileId}/audition`, { cache: "no-store" });
+        if (res.ok) {
+          setPendingAuditions((a) => a.filter((x) => x !== profileId));
+          await loadProfiles();
+          toast({
+            title: "Voice preview ready",
+            description: "Hit ▶ on the cloned voice to hear it.",
+          });
+          return;
+        }
+      } catch {
+        /* transient — keep polling */
+      }
+      pollAudition(profileId, attempt + 1);
+    }, 4000);
+  }
+
   const doClone = async () => {
     if (cloning) return;
     if (cloneMode === "upload" && !cloneFile) {
@@ -195,11 +225,17 @@ export function VoiceView() {
       setCloneUrl("");
       setCloneName("");
       setCloneSampleText("");
+      if (data.audition?.pending && data.profile?.id) {
+        setPendingAuditions((a) => [...a, data.profile.id]);
+        pollAudition(data.profile.id);
+      }
       toast({
         title: `Voice “${data.profile?.name ?? "clone"}” ready`,
         description: data.audition?.available
           ? "Audition it below — every voice picker already offers it."
-          : "Every voice picker already offers it — hit ▶ on the card to hear it.",
+          : data.audition?.pending
+            ? "Preview is generating in the background — it will light up on the card in a moment."
+            : "Every voice picker already offers it — hit ▶ on the card to hear it.",
       });
     } catch (e) {
       toast({
@@ -777,7 +813,9 @@ export function VoiceView() {
             </span>
           </div>
           <div className="space-y-1.5">
-            {profiles.map((p) => (
+            {profiles.map((p) => {
+              const previewPending = pendingAuditions.includes(p.id);
+              return (
               <div
                 key={p.id}
                 className="flex items-center gap-2.5 rounded-lg border border-white/8 bg-white/3 px-3 py-2"
@@ -786,7 +824,13 @@ export function VoiceView() {
                   type="button"
                   disabled={!p.hasAudition}
                   onClick={() => playAudition(p)}
-                  title={p.hasAudition ? "Hear the clone-time preview" : "No cached preview — use ▶ on the catalog card"}
+                  title={
+                    previewPending
+                      ? "Generating the preview — the ▶ unlocks the moment it lands"
+                      : p.hasAudition
+                        ? "Hear the clone-time preview"
+                        : "No cached preview — use ▶ on the catalog card"
+                  }
                   className={clsx(
                     "grid h-7 w-7 shrink-0 place-items-center rounded-full border transition-colors",
                     p.hasAudition
@@ -796,7 +840,9 @@ export function VoiceView() {
                       : "opacity-40"
                   )}
                 >
-                  {auditionId === p.id ? (
+                  {previewPending ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : auditionId === p.id ? (
                     <Square className="h-2.5 w-2.5 fill-current" />
                   ) : (
                     <Play className="h-3 w-3 fill-current" />
@@ -813,6 +859,9 @@ export function VoiceView() {
                     {p.sourceLabel ?? "sample"}
                     {p.durationSec ? ` · ${p.durationSec.toFixed(0)}s` : ""} ·{" "}
                     {PROVIDER_LABELS[p.provider] ?? p.provider}
+                    {previewPending && (
+                      <span className="text-amber-200/80"> · generating preview…</span>
+                    )}
                   </p>
                 </div>
                 <button
@@ -825,7 +874,8 @@ export function VoiceView() {
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
-            ))}
+              );
+            })}
           </div>
         </Card>
       )}

@@ -81,9 +81,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       profile: result.profile,
+      // `pending: true` = the self-hosted voice server is synthesizing the
+      // preview in the background — the UI polls /api/voices/{id}/audition
+      // until it lands instead of having waited for it here.
       audition: result.auditionWav
         ? { available: true, bytes: result.auditionWav.length }
-        : { available: false },
+        : { available: false, pending: Boolean(result.auditionPending) },
     });
   } catch (err) {
     const message = errorText(err, "Voice cloning failed");
