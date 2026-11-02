@@ -38,7 +38,7 @@ export async function register(): Promise<void> {
     g.__tfInstrumentation = { ok: true, at: new Date().toISOString() };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const stackLines = (err instanceof Error ? err.stack : "")
+    const stackLines = ((err instanceof Error ? err.stack : "") ?? "")
       .split("\n")
       .slice(1, 4)
       .join(" | ")
