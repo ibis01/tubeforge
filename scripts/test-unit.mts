@@ -2004,6 +2004,93 @@ await test("billing: verifyStripeSignature rejects tampered, stale, and malforme
   ok(!(await verifyStripeSignature(payload, "garbage", secret)), "garbage header rejected");
 });
 
+await test("shots M2: CAMERA_TO_MOVE covers every CAMERA_MOVES entry", async () => {
+  const { CAMERA_TO_MOVE } = await import("../src/lib/tubeforge/shots.ts");
+  const { CAMERA_MOVES } = await import("../src/lib/tubeforge/director-plan.ts");
+  const { MOTION_MOVE_LABELS } = await import("../src/lib/tubeforge/motion.ts");
+  const moveKinds = new Set(Object.keys(MOTION_MOVE_LABELS)); // runtime MoveKind set
+  for (const move of CAMERA_MOVES) {
+    ok(CAMERA_TO_MOVE[move] !== undefined, `${move} is mapped`);
+    ok(moveKinds.has(CAMERA_TO_MOVE[move]!), `${move} → ${CAMERA_TO_MOVE[move]} is a motion.ts MoveKind`);
+  }
+  eq(CAMERA_TO_MOVE["not-a-real-move"] ?? "hold", "hold", "unknown → hold");
+});
+
+await test("shots M2: buildSceneShots planned path — one execution per DirectorShot, imagePrompt leads", async () => {
+  const { buildSceneShots } = await import("../src/lib/tubeforge/shots.ts");
+  const scene = { index: 3, title: "t", narration: "n", visual: "a fortress at dusk", mood: "amber dusk" } as never;
+  const planScene = {
+    sceneIndex: 3,
+    shots: [
+      { shotIndex: 0, framing: "wide", camera: "push-in", lens: "24mm wide", composition: "leading lines", duration: 3, imagePrompt: "establishing fortress" },
+      { shotIndex: 1, framing: "extreme close-up", camera: "handheld", lens: "85mm f/1.8", composition: "rule of thirds", duration: 3, imagePrompt: "the general's eyes" },
+      { shotIndex: 2, framing: "medium", camera: "crane-up", lens: "35mm", composition: "golden ratio", duration: 3, imagePrompt: "the banner reveal" },
+    ],
+  } as never;
+
+  const plan = buildSceneShots({ scene, planScene, measuredSec: 9 });
+  eq(plan.available.length, 3, "one execution per planned shot");
+  const [s0, s1, s2] = plan.available;
+  eq(s0.source, "scene", "shot 0 = the scene's own image");
+  ok(!s0.prompt, "shot 0 carries no prompt (scene image already has the addendum)");
+  eq(s1.source, "extra", "shots 1+ = extra AI images");
+  ok(s1.prompt!.includes("the general's eyes"), "imagePrompt leads the extra prompt");
+  ok(s1.prompt!.startsWith("a fortress at dusk"), "scene visual opens the prompt");
+  eq(s1.moveKind, "diag-tl", "first handheld → diag-tl");
+  eq(s2.moveKind, "tilt-up", "crane-up → tilt-up (documented approximation)");
+  eq(s0.moveKind, "zoom-in", "push-in → zoom-in");
+  approx(plan.available.reduce((a: number, s: { sec: number }) => a + s.sec, 0), 9, 0.05, "scale-to-fit fills the measured narration exactly");
+});
+
+await test("shots M2: duration reconciliation — extend-only when the plan outruns narration", async () => {
+  const { buildSceneShots } = await import("../src/lib/tubeforge/shots.ts");
+  const scene = { index: 1, narration: "n", visual: "v", mood: "m" } as never;
+  // Plan totals 12s vs 8s measured → pass through UNCHANGED (extend-only,
+  // the Battle Yamuk rule inherited at shot level).
+  const planScene = {
+    sceneIndex: 1,
+    shots: [
+      { shotIndex: 0, framing: "wide", camera: "static", lens: "35mm", composition: "rule of thirds", duration: 6, imagePrompt: "a" },
+      { shotIndex: 1, framing: "medium", camera: "pan-left", lens: "35mm", composition: "rule of thirds", duration: 6, imagePrompt: "b" },
+    ],
+  } as never;
+  const out = buildSceneShots({ scene, planScene, measuredSec: 8 });
+  eq(out.available[0].sec, 6, "planned duration passes through (never shortened)");
+  eq(out.available[1].sec, 6, "second shot untouched too");
+  // Scale-to-fit: plan totals 4s vs 10s measured → ×2.5, rhythm preserved.
+  const planScene2 = {
+    sceneIndex: 1,
+    shots: [
+      { shotIndex: 0, framing: "wide", camera: "static", lens: "35mm", composition: "rule of thirds", duration: 1, imagePrompt: "a" },
+      { shotIndex: 1, framing: "medium", camera: "static", lens: "35mm", composition: "rule of thirds", duration: 3, imagePrompt: "b" },
+    ],
+  } as never;
+  const out2 = buildSceneShots({ scene, planScene: planScene2, measuredSec: 10 });
+  eq(out2.available[0].sec, 2.5, "1s → 2.5s (×2.5)");
+  eq(out2.available[1].sec, 7.5, "3s → 7.5s (×2.5, relative rhythm kept)");
+});
+
+await test("shots M2: no plan → legacy fallback (golden behavior)", async () => {
+  const { buildSceneShots, planShots } = await import("../src/lib/tubeforge/shots.ts");
+  const scene = { index: 2, narration: "n", visual: "v", mood: "m" } as never;
+
+  // Short scene: single shot, the scene image, zoom-in — exactly the legacy path.
+  const short = buildSceneShots({ scene, planScene: null, measuredSec: 2.5 });
+  eq(short.available.length, 1, "≤3s scene = one shot");
+  eq(short.available[0].source, "scene", "the scene image itself");
+  eq(short.available[0].moveKind, "zoom-in", "legacy single-shot camera");
+  approx(short.available[0].sec, 2.5, 0.01, "full scene duration");
+
+  // Long scene: even split, shot 0 scene + pseudo crops, rotation cameras.
+  const long = buildSceneShots({ scene, planScene: null, measuredSec: 10 });
+  const legacy = planShots(10);
+  eq(long.available.length, legacy.count, "shot count = legacy even split");
+  approx(long.available[0].sec, legacy.durations[0], 0.01, "durations = legacy even split");
+  eq(long.available[0].source, "scene", "shot 0 = scene image");
+  ok(long.available.slice(1).every((s) => s.source === "pseudo" && s.crop), "later shots = pseudo crops");
+  ok(long.available[1].moveKind !== long.available[2].moveKind, "consecutive fallback shots never repeat a move");
+});
+
 await test("migrate-stage2: decideBaselinePrefix fingerprints every schema era", async () => {
   const { BASELINE_SENTINELS, decideBaselinePrefix } = await import("../scripts/migrate-stage2.mjs");
   const S = BASELINE_SENTINELS;

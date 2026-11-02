@@ -450,6 +450,21 @@ export async function getApprovedWorldClause(
 }
 
 /**
+ * Render-side accessor (M2) — the APPROVED plan in ONE read, or null. The
+ * shot-execution contract (shots.ts buildSceneShots) consumes this: per-scene
+ * DirectorScene → authoritative shot list. Null for proposed/dismissed/absent
+ * plans — the render is exactly as before.
+ */
+export async function getApprovedPlan(videoId: string): Promise<DirectorPlan | null> {
+  const video = await db.video.findUnique({
+    where: { id: videoId },
+    select: { shotList: true, directorState: true },
+  });
+  if (!video || video.directorState !== "approved") return null;
+  return parsePlan(video.shotList);
+}
+
+/**
  * Render-side accessor (module D) — per-scene motion overrides from an
  * APPROVED plan: the director picks the movement channel per scene, on top of
  * the video-level motion setting. "smart" (the default) means "defer to the
