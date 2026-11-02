@@ -47,9 +47,13 @@ export async function GET() {
           "SELECT COUNT(*)::int AS n FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '_prisma_migrations'"
         )) as { n: number }[];
         const migrationsTable = Number(migrations?.[0]?.n ?? -1) === 1;
+        const tableList = (await mod.db.$queryRawUnsafe(
+          `SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public' ORDER BY 1`
+        )) as { name: string }[];
         out.schema = {
           publicTables: Number(tables?.[0]?.n ?? -1),
           migrationsTable,
+          tableNames: tableList.map((t) => t.name),
         };
         if (migrationsTable) {
           const rows = (await mod.db.$queryRawUnsafe(

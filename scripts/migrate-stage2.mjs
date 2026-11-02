@@ -178,6 +178,21 @@ async function postgresMigrate(prisma) {
     } else {
       log("empty/unfingerprinted database — the full chain will be applied");
     }
+  } else {
+    // Recovery: a migration row stuck finished_at=NULL / rolled_back_at=NULL
+    // (a deploy interrupted mid-run — e.g. a cancelled build — or a genuinely
+    // failing migration) BLOCKS the whole chain: "New migrations cannot be
+    // applied before the error is recovered from". The transaction already
+    // rolled the SQL back, so resolving as rolled-back is safe and is
+    // Prisma's documented production recovery; deploy then retries it.
+    const failed = await prisma.$queryRawUnsafe(
+      `SELECT migration_name FROM "_prisma_migrations"
+        WHERE "finished_at" IS NULL AND "rolled_back_at" IS NULL`
+    );
+    for (const row of failed) {
+      log(`failed migration row detected (${row.migration_name}) — resolving as rolled back for retry`);
+      run(["migrate", "resolve", "--rolled-back", String(row.migration_name), "--schema", "prisma/schema.prisma"]);
+    }
   }
 
   log("running prisma migrate deploy");
