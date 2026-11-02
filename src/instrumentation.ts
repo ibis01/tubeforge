@@ -44,10 +44,14 @@ export async function register(): Promise<void> {
     // Operator's shared voice server (self-hosted/sandbox): make sure the
     // Chatterbox server behind TUBEFORGE_SHARED_VOICE_URL is up. Fire-and-
     // forget + never fatal — a missing voice server only degrades cloning.
+    // The watchdog restarts it if the OOM killer takes it down later.
     if (process.env.TUBEFORGE_SPAWN_VOICE_SERVER === "1") {
       try {
-        const { spawnSharedVoiceServer } = await import("./lib/tubeforge/spawn-voice-server");
+        const { spawnSharedVoiceServer, startVoiceServerWatchdog } = await import(
+          "./lib/tubeforge/spawn-voice-server"
+        );
         const result = await spawnSharedVoiceServer();
+        startVoiceServerWatchdog();
         log.info("shared voice server", { ...result });
       } catch (err) {
         console.error(

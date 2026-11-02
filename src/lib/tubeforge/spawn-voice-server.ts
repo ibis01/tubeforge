@@ -96,6 +96,8 @@ export async function spawnSharedVoiceServer(): Promise<SpawnResult> {
           ...process.env,
           // Persistent model cache inside the project dir (survives reboots).
           HF_HOME: path.join(dir, "hf-cache"),
+          // glibc arena proliferation balloons python RSS on small boxes.
+          MALLOC_ARENA_MAX: "2",
         },
       },
     );
@@ -110,4 +112,23 @@ export async function spawnSharedVoiceServer(): Promise<SpawnResult> {
       detail: `spawn failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+}
+
+// ── Watchdog ────────────────────────────────────────────────────────────────
+//
+// The voice server runs on the same small box as the app; under memory
+// pressure the kernel's OOM killer may take it down mid-synthesis. The
+// watchdog re-runs the (idempotent) spawn check every 60 s — a dead server
+// is restarted in ~1 minute without anyone noticing. Unref'd so it never
+// holds the process open; only active when spawning is enabled.
+
+const g = globalThis as typeof globalThis & { __tfVoiceWatchdog?: NodeJS.Timeout };
+
+export function startVoiceServerWatchdog(): void {
+  if (g.__tfVoiceWatchdog) return;
+  const timer = setInterval(() => {
+    spawnSharedVoiceServer().catch(() => {});
+  }, 60_000);
+  timer.unref();
+  g.__tfVoiceWatchdog = timer;
 }
