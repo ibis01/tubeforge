@@ -14,9 +14,13 @@ const redact = (s: string) =>
     .slice(0, 600);
 
 export async function GET() {
+  const g = globalThis as typeof globalThis & {
+    __tfInstrumentation?: { ok: boolean; error?: string; at: string };
+  };
   const out: Record<string, unknown> = {
     node: process.version,
     nodeEnv: process.env.NODE_ENV ?? null,
+    instrumentation: g.__tfInstrumentation ?? "not-run",
     env: {
       // booleans + protocol only — never the values
       databaseUrl: process.env.DATABASE_URL
