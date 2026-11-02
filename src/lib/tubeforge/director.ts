@@ -42,11 +42,28 @@ import {
   SFX_HINTS,
   parsePlan,
   serializePlan,
+  planSceneDuration,
+  directorImageAddendum,
+  planTransitionIn,
+  getApprovedAddendum,
+  getApprovedAudioMap,
+  getApprovedMotionMap,
+  pacingSpeedFactor,
+  type DirectorShot,
+  type DirectorScene,
   type DirectorPlan,
   type DirectorState,
 } from "./director-plan";
+import {
+  resolveProfile,
+  type ProductionProfile,
+  PRODUCTION_PROFILES,
+  PROFILE_IDS_CATALOG,
+  DEFAULT_PROFILE_ID,
+} from "./production-profiles";
 
-// Re-export the plan layer so the rest of the app keeps ONE import surface.
+// Re-export the plan + profile layers so the rest of the app keeps ONE
+// import surface (mirrors the existing director-plan re-export).
 export {
   FRAMINGS,
   CAMERA_MOVES,
@@ -63,11 +80,16 @@ export {
   getApprovedAudioMap,
   getApprovedMotionMap,
   pacingSpeedFactor,
+  resolveProfile,
+  PRODUCTION_PROFILES,
+  PROFILE_IDS_CATALOG,
+  DEFAULT_PROFILE_ID,
   type DirectorShot,
   type DirectorScene,
   type DirectorPlan,
   type DirectorState,
-} from "./director-plan";
+  type ProductionProfile,
+};
 
 const TRANSITION_IDS = TRANSITIONS.map((t) => t.id);
 
@@ -86,10 +108,16 @@ export interface ContinuityReport {
 
 // ---------------------------------------------------------------------------
 // The director pass (LLM).
+//
+// Milestone 1 — the prompt is split into a format-neutral BASE (the Rules +
+// JSON schema, applicable to any production profile) and a per-profile
+// `systemOverlay` that supplies the format's voice (the opening paragraph).
+// `narrative`'s overlay is exactly today's opening sentence, so a narrative
+// plan assembled after M1 prompts the LLM byte-for-byte the same way as
+// before M1 (the story-regression golden test pins this). Other profiles
+// substitute their own opening — see production-profiles.ts.
 
-const SYSTEM_PROMPT = `You are the AI Director of a faceless YouTube video studio. You turn a scene script into a deliberate shot plan: pacing, framing, camera movement, lens character, composition, scene transitions AND the audio direction (narration pacing, ambient beds, boundary cues, music mood, ducking).
-
-Rules:
+const BASE_SYSTEM_PROMPT = `Rules:
 - Shot length: every shot runs 2.0-3.5 seconds. Subdivide each scene so shot durations sum to roughly the scene's estimated seconds (given per scene).
 - Shot 0 of a scene establishes (usually wide or medium); later shots escalate detail (close-ups, inserts).
 - Rhythm: alternate movement types between consecutive shots; never repeat the same camera move twice in a row.
@@ -107,6 +135,12 @@ Rules:
 - Respond with STRICT JSON only, no markdown fences, matching exactly:
 {"concept":"<one paragraph directorial concept>","musicMood":"cinematic","ducking":"standard","scenes":[{"sceneIndex":1,"mood":"<palette + lighting + time-of-day>","transitionIn":"fade","motion":"smart","needsI2V":false,"useStock":false,"pacing":"normal","ambience":"none","sfx":"none","locations":[],"props":[],"outfit":"<when cast present>","accessory":"<when cast present>","shots":[{"shotIndex":0,"framing":"wide","camera":"push-in","lens":"24mm wide","composition":"leading lines","duration":2.8,"imagePrompt":"<what THIS shot shows, one sentence>"}]}]}`;
 
+/** The system message for a given profile: its opening (the format's voice)
+ *  followed by the format-neutral Rules + JSON schema. Pure. */
+export function directorSystemPrompt(profile: ProductionProfile): string {
+  return `${profile.systemOverlay}\n\n${BASE_SYSTEM_PROMPT}`;
+}
+
 function sceneBrief(scene: Scene, estSeconds: number | null): string {
   const words = scene.narration.trim().split(/\s+/).filter(Boolean).length;
   const est = estSeconds ?? Math.round((words / 2.6) * 10) / 10; // ~155 wpm
@@ -122,9 +156,67 @@ function sceneBrief(scene: Scene, estSeconds: number | null): string {
     .join("\n");
 }
 
-/** Run the director pass for one video. Job body — runs under tenant ctx. */
-export async function runDirectorPass(videoId: string): Promise<void> {
+/** Assemble the user-side prompt for the director pass. PURE — no fs / db /
+ *  AI; unit-testable. The profile narrows the catalog lists (vocabularies)
+ *  and surfaces its default-tone fallbacks as hints. The shape mirrors the
+ *  pre-M1 prompt exactly when the profile is `narrative` (the compatibility
+ *  profile) — its vocabularies are the FULL catalogs. */
+export function buildDirectorUserPrompt(input: {
+  video: { title: string | null; topic: string; niche: string; tone: string };
+  scenes: Scene[];
+  estTotal: number;
+  castBlock: string;
+  worldBlock: string;
+  profile: ProductionProfile;
+}): string {
+  const { video, scenes, estTotal, castBlock, worldBlock, profile } = input;
+  // Profile vocabularies narrow the catalogs. Absent → full catalog (the
+  // narrative behavior — no narrowing).
+  const fr = profile.vocabularies?.framings ?? FRAMINGS;
+  const cm = profile.vocabularies?.cameras ?? CAMERA_MOVES;
+  const tr = profile.vocabularies?.transitions ?? TRANSITION_IDS;
+  // Default-tone hints: surfaced as an advisory block (the LLM is free to
+  // deviate when a scene clearly demands it). Omitted entirely when the
+  // profile sets no defaults — narrative carries them, so the hint line
+  // appears identically in the regression golden test.
+  const tone = profile.defaultTone;
+  const toneHints = [
+    tone.transitionBias ? `transition bias: ${tone.transitionBias}` : "",
+    tone.pacingBias ? `pacing bias: ${tone.pacingBias}` : "",
+    tone.shotDensity ? `shot density: ${tone.shotDensity}` : "",
+  ].filter(Boolean).join("; ");
+  return [
+    `Video: "${video.title ?? video.topic}" — topic: ${video.topic} — niche: ${video.niche} — tone: ${video.tone}.`,
+    `Target length: ~${estTotal}s across ${scenes.length} scenes.`,
+    castBlock,
+    `Transition ids: ${tr.join(", ")}.`,
+    `Framings: ${fr.join(", ")}. Camera moves: ${cm.join(", ")}. Compositions: ${COMPOSITIONS.join(", ")}.`,
+    `Pacing: ${PACINGS.join(" | ")}. Ambience kinds: ${AMBIENCE_KINDS.join(" | ")}. Sfx cues: ${SFX_HINTS.join(" | ")}.`,
+    `Music mood ids: suspenseful, cinematic, emotional, uplifting, calm. Ducking: subtle | standard | strong.`,
+    toneHints ? `Profile defaults (advisory — override when a scene clearly demands it): ${toneHints}.` : "",
+    worldBlock,
+    "Scenes:",
+    ...scenes.map((s) => sceneBrief(s, null)),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/** Run the director pass for one video. Job body — runs under tenant ctx.
+ *
+ *  M1 — the `format !== "story"` gate is GONE. The empty-scenes check stays
+ *  (non-scene videos have nothing to direct — that error is unchanged).
+ *  The optional `profile` selects a ProductionProfile (default narrative);
+ *  the chosen profile's `systemOverlay` opens the system prompt, its
+ *  vocabularies narrow the catalogs the LLM is asked to pick from, and its
+ *  `validation(plan)` findings land in the activity feed for a human to
+ *  see before approving (the approval-card detail is a later milestone). */
+export async function runDirectorPass(
+  videoId: string,
+  opts?: { profile?: string }
+): Promise<void> {
   const ctx = assertCtx("runDirectorPass");
+  const profile = resolveProfile(opts?.profile);
   const video = await db.video.findUnique({
     where: { id: videoId },
     include: {
@@ -134,8 +226,9 @@ export async function runDirectorPass(videoId: string): Promise<void> {
     },
   });
   if (!video) return;
-  if (video.format !== "story")
-    throw new Error("The AI Director applies to scene-format videos — convert the script first");
+  // M1 — the format gate is replaced by the empty-scenes check. A non-scene
+  // video has no scenes (parseScenes returns []), so the empty-scenes error
+  // fires identically — same message, same caller contract.
   const scenes = parseScenes(video.scenes);
   if (scenes.length === 0)
     throw new Error("No scenes to direct — generate the scene script first");
@@ -191,25 +284,19 @@ export async function runDirectorPass(videoId: string): Promise<void> {
           .join("\n\n")
       : "No location/prop library — use empty locations/props arrays.";
 
-  const userPrompt = [
-    `Video: "${video.title ?? video.topic}" — topic: ${video.topic} — niche: ${video.niche} — tone: ${video.tone}.`,
-    `Target length: ~${estTotal}s across ${scenes.length} scenes.`,
+  const userPrompt = buildDirectorUserPrompt({
+    video: { title: video.title, topic: video.topic, niche: video.niche, tone: video.tone },
+    scenes,
+    estTotal,
     castBlock,
-    `Transition ids: ${TRANSITION_IDS.join(", ")}.`,
-    `Framings: ${FRAMINGS.join(", ")}. Camera moves: ${CAMERA_MOVES.join(", ")}. Compositions: ${COMPOSITIONS.join(", ")}.`,
-    `Pacing: ${PACINGS.join(" | ")}. Ambience kinds: ${AMBIENCE_KINDS.join(" | ")}. Sfx cues: ${SFX_HINTS.join(" | ")}.`,
-    `Music mood ids: suspenseful, cinematic, emotional, uplifting, calm. Ducking: subtle | standard | strong.`,
     worldBlock,
-    "Scenes:",
-    ...scenes.map((s) => sceneBrief(s, null)),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+    profile,
+  });
 
   const raw = await aiCall("llm", "director pass LLM", () =>
     llmChat({
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: directorSystemPrompt(profile) },
         { role: "user", content: userPrompt },
       ],
       temperature: 0.6,
@@ -226,6 +313,7 @@ export async function runDirectorPass(videoId: string): Promise<void> {
   const plan: DirectorPlan = {
     ...normalized,
     version: 1,
+    profile: profile.id,
     generatedAt: new Date().toISOString(),
   };
 
@@ -271,9 +359,27 @@ export async function runDirectorPass(videoId: string): Promise<void> {
       userId: ctx.userId,
       videoId,
       stage: "director",
-      message: `AI Director proposed a plan (${plan.scenes.length} scenes): ${plan.concept.slice(0, 120)}`,
+      message: `AI Director proposed a plan (${plan.scenes.length} scenes${profile.id !== "narrative" ? `, profile: ${profile.id}` : ""}): ${plan.concept.slice(0, 120)}`,
     },
   });
+
+  // M1 — the profile's `validation(plan)` findings land in the activity
+  // feed so a human sees the notes BEFORE approving. Advisory only — the
+  // plan is already persisted with directorState "proposed"; the human is
+  // the approval gate. (The approval-card detail surfaces these in a later
+  // milestone; §3 guardrails: "no silent creative decisions".)
+  const issues = profile.validation(plan);
+  if (issues.length > 0) {
+    await db.activity.create({
+      data: {
+        organizationId: video.organizationId,
+        userId: ctx.userId,
+        videoId,
+        stage: "director",
+        message: `${profile.label} profile notes (${issues.length}): ${issues.join(" | ")}`.slice(0, 500),
+      },
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------

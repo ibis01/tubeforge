@@ -866,13 +866,18 @@ export async function runCommentsJob(videoId: string): Promise<void> {
 // Stage 5 — AI Director
 
 /** LLM shot-list pass → Video.shotList with directorState "proposed".
- *  The route closure AND the durable-queue handler both call this. */
-export async function runDirectorJob(videoId: string): Promise<void> {
+ *  The route closure AND the durable-queue handler both call this.
+ *  M1 — `profile` selects a production profile (default narrative); the
+ *  pass persists `profile: <id>` on the plan. */
+export async function runDirectorJob(
+  videoId: string,
+  opts?: { profile?: string }
+): Promise<void> {
   const ctx = assertCtx("runDirectorJob");
   const video = await db.video.findUnique({ where: { id: videoId } });
   if (!video) return;
   try {
-    await runDirectorPass(videoId);
+    await runDirectorPass(videoId, opts);
   } catch (err) {
     const message = errorText(err, "AI Director pass failed");
     await db.video.update({

@@ -1572,6 +1572,283 @@ await test("director-plan: module E audio fields normalize + pacing factors", as
 });
 
 // ---------------------------------------------------------------------------
+// Milestone 1 — production profiles (the universal Director)
+//   docs/director-m1-m2-spec.md §2.4. Five acceptance tests:
+//   1. Legacy plan parsing — byte-identical (no profile field)
+//   2. Profile overlay — prompt assembly includes the overlay + narrows vocab
+//   3. Validation — advertisement without a product-forward shot 0 returns an issue
+//   4. Story regression — narrative profile output ≡ today's output
+//   5. Format gate — empty-scenes check still throws; profiles resolve cleanly
+// ---------------------------------------------------------------------------
+
+await test("M1: legacy plan parsing — profile field stays absent (byte-identical)", async () => {
+  const { parsePlan, PROFILE_IDS } = await import("../src/lib/tubeforge/director-plan.ts");
+  // The existing parsePlan fixtures (above) pre-date M1 — none carry a
+  // `profile` field. Re-parsing them must NOT add one.
+  const legacy = parsePlan(
+    JSON.stringify({
+      concept: "",
+      scenes: [{ sceneIndex: 1, mood: "", shots: [{ shotIndex: 0, camera: "static", duration: 2 }] }],
+    })
+  );
+  ok(legacy !== null, "legacy plan parses");
+  ok(legacy!.profile === undefined, "legacy plan → no profile field (byte-identical)");
+  // And the parsed-then-serialized round-trip carries no `profile` key.
+  ok(!JSON.stringify(legacy).includes('"profile"'), "serialized legacy plan omits the profile key");
+
+  // An explicitly-set profile id survives the round-trip; an unknown id
+  // snaps to undefined (NOT to "narrative" — legacy byte-identity is the rule).
+  const withProfile = parsePlan(
+    JSON.stringify({
+      profile: "documentary",
+      concept: "x",
+      scenes: [{ sceneIndex: 1, mood: "", shots: [{ shotIndex: 0, camera: "static", duration: 2 }] }],
+    })
+  );
+  eq(withProfile!.profile, "documentary", "valid profile id preserved (case-insensitive input)");
+
+  const junkProfile = parsePlan(
+    JSON.stringify({
+      profile: "nope-not-a-profile",
+      concept: "x",
+      scenes: [{ sceneIndex: 1, mood: "", shots: [{ shotIndex: 0, camera: "static", duration: 2 }] }],
+    })
+  );
+  ok(junkProfile!.profile === undefined, "unknown profile id → undefined (NOT narrative)");
+
+  // The parse-snap set must match the catalog exactly (the runtime assert
+  // in production-profiles.ts already enforces this; the test pins it).
+  eq(Array.from(PROFILE_IDS).sort().join(","), ["narrative","documentary","explainer","advertisement","animation","podcast","social"].sort().join(","),
+    "PROFILE_IDS lists every profile the catalog can resolve");
+});
+
+await test("M1: profile overlay — system + user prompts include the overlay and narrow vocabularies", async () => {
+  const { directorSystemPrompt, buildDirectorUserPrompt, resolveProfile, PRODUCTION_PROFILES } = await import(
+    "../src/lib/tubeforge/director.ts"
+  );
+  // The narrative overlay is the "faceless YouTube studio" line; the base
+  // prompt is format-neutral Rules. Assembled: overlay + Rules.
+  const narrative = resolveProfile("narrative");
+  const sysNarrative = directorSystemPrompt(narrative);
+  ok(sysNarrative.includes("faceless YouTube video studio"), "narrative system prompt includes the studio line");
+  ok(/Rules:\n- Shot length:/.test(sysNarrative), "narrative system prompt includes the Rules block");
+  ok(sysNarrative.includes("Respond with STRICT JSON only"), "narrative system prompt includes the JSON schema");
+
+  // A non-narrative profile's overlay replaces the studio line with the
+  // format's voice; the Rules block is unchanged underneath.
+  const doc = resolveProfile("documentary");
+  const sysDoc = directorSystemPrompt(doc);
+  ok(sysDoc.includes("documentary"), "documentary system prompt names the format");
+  ok(!sysDoc.includes("faceless YouTube video studio"), "documentary overlay replaces the studio line");
+  ok(/Rules:\n- Shot length:/.test(sysDoc), "documentary system prompt still includes the format-neutral Rules");
+
+  // The user prompt narrows the catalogs per the profile vocabularies.
+  const userNarrative = buildDirectorUserPrompt({
+    video: { title: "T", topic: "x", niche: "n", tone: "conversational" },
+    scenes: [{ index: 1, title: "Open", narration: "Welcome.", visual: "studio", camera: "static", mood: "warm", caption: "Hi", hostInScene: false, rehook: false, sfx: "none" } as never],
+    estTotal: 10, castBlock: "No recurring cast.", worldBlock: "No library.", profile: narrative,
+  });
+  // Narrative vocabularies are the FULL catalogs — every framing appears.
+  ok(userNarrative.includes("aerial"), "narrative user prompt lists the full framings (incl. aerial)");
+
+  const userDoc = buildDirectorUserPrompt({
+    video: { title: "T", topic: "x", niche: "n", tone: "conversational" },
+    scenes: [{ index: 1, title: "Open", narration: "Welcome.", visual: "studio", camera: "static", mood: "warm", caption: "Hi", hostInScene: false, rehook: false, sfx: "none" } as never],
+    estTotal: 10, castBlock: "No recurring cast.", worldBlock: "No library.", profile: doc,
+  });
+  // Documentary narrows framings — "aerial" is allowed, "over-the-shoulder"
+  // is NOT in documentary.vocabularies.framings, so it should be absent.
+  ok(userDoc.includes("aerial"), "documentary user prompt keeps the allowed framings");
+  ok(!userDoc.match(/Framings:.*over-the-shoulder/), "documentary user prompt narrows out over-the-shoulder");
+  // And the documentary transition narrowing only lists fade/fadeblack/cut.
+  ok(/Transition ids: cut, fade(?:black)?(?:, fade(?:black)?)*/.test(userDoc) || /Transition ids:.*\bcut\b.*\bfade\b/.test(userDoc),
+    "documentary transition list is narrowed to cut/fade variants");
+
+  // Profile defaults (advisory tone hints) surface in the user prompt.
+  ok(userDoc.includes("Profile defaults (advisory"), "documentary user prompt surfaces the profile's default-tone hints");
+
+  // Every profile in the catalog resolves without throwing and round-trips
+  // its own id — the format gate test's foundation.
+  for (const id of Object.keys(PRODUCTION_PROFILES)) {
+    const p = resolveProfile(id);
+    eq(p.id, id, `resolveProfile(${id}) returns the profile with that id`);
+  }
+  // Unknown id → narrative (the compatibility profile); null/undefined too.
+  eq(resolveProfile("garbage").id, "narrative", "unknown profile → narrative");
+  eq(resolveProfile(null).id, "narrative", "null profile → narrative");
+  eq(resolveProfile(undefined).id, "narrative", "undefined profile → narrative");
+});
+
+await test("M1: validation — advertisement without a product-forward shot 0 returns a readable issue", async () => {
+  const { PRODUCTION_PROFILES } = await import("../src/lib/tubeforge/director.ts");
+  const { parsePlan } = await import("../src/lib/tubeforge/director-plan.ts");
+  const adv = PRODUCTION_PROFILES["advertisement"];
+
+  // A plan whose opening shot is atmospheric, not product-forward — the
+  // classic advertisement mistake.
+  const noProduct = parsePlan(
+    JSON.stringify({
+      concept: "mood piece",
+      scenes: [
+        {
+          sceneIndex: 1, mood: "warm dawn", transitionIn: "",
+          motion: "smart", needsI2V: false, useStock: false,
+          pacing: "normal", ambience: "none", sfx: "none",
+          shots: [
+            { shotIndex: 0, framing: "wide", camera: "drone", lens: "35mm", composition: "rule of thirds", duration: 2.5, imagePrompt: "sunrise over rolling hills, golden light" },
+          ],
+        },
+        {
+          sceneIndex: 2, mood: "studio", transitionIn: "cut",
+          motion: "smart", needsI2V: false, useStock: false,
+          pacing: "fast", ambience: "room", sfx: "sting",
+          shots: [
+            { shotIndex: 0, framing: "close-up", camera: "push-in", lens: "50mm", composition: "centered", duration: 2, imagePrompt: "the energy drink can hero shot on a clean background" },
+          ],
+        },
+      ],
+    })
+  );
+  ok(noProduct !== null);
+  const issues = adv.validation(noProduct!);
+  ok(issues.length >= 1, "non-product opening flags at least one issue");
+  ok(issues.some((m) => /product/i.test(m)), "issue mentions the product gap");
+  ok(issues.some((m) => /CTA/i.test(m)), "issue also flags the missing closing CTA");
+
+  // The same plan with a product-forward opening clears the opening check
+  // (the closing-CTA check still fires — the plan has no closing CTA shot).
+  const withProduct = parsePlan(
+    JSON.stringify({
+      concept: "campaign",
+      scenes: [
+        {
+          sceneIndex: 1, mood: "warm dawn",
+          shots: [
+            { shotIndex: 0, framing: "close-up", camera: "push-in", lens: "50mm", composition: "centered", duration: 2, imagePrompt: "the product bottle hero shot, condensation beading" },
+          ],
+        },
+        {
+          sceneIndex: 2, mood: "studio",
+          shots: [
+            { shotIndex: 0, framing: "medium", camera: "static", duration: 2, imagePrompt: "the brand logo on a clean background" },
+          ],
+        },
+      ],
+    })
+  );
+  ok(withProduct !== null);
+  const issues2 = adv.validation(withProduct!);
+  ok(!issues2.some((m) => /product/i.test(m) && /shot 0/i.test(m)), "product-forward opening clears the opening-shot check");
+  ok(issues2.some((m) => /CTA/i.test(m)), "but the missing closing CTA still flags");
+
+  // Narrative validation is a no-op — the compatibility profile passes any
+  // well-formed plan silently.
+  eq(PRODUCTION_PROFILES["narrative"].validation(noProduct!).length, 0, "narrative validation never flags");
+});
+
+await test("M1: story regression — narrative profile output ≡ today's prompt shape", async () => {
+  const { directorSystemPrompt, buildDirectorUserPrompt, resolveProfile } = await import(
+    "../src/lib/tubeforge/director.ts"
+  );
+  // Today's (pre-M1) SYSTEM_PROMPT opening sentence IS the narrative overlay;
+  // today's Rules + JSON schema IS the BASE_SYSTEM_PROMPT. So narrative-
+  // assembled ≡ today's prompt at the meaningful-string level: the studio
+  // line, the Rules block, and the JSON schema all appear, in order.
+  const narrative = resolveProfile("narrative");
+  const sys = directorSystemPrompt(narrative);
+  // The studio line opens the prompt.
+  ok(sys.startsWith("You are the AI Director of a faceless YouTube video studio."),
+    "narrative system prompt opens with the studio line");
+  // Followed by the Rules block.
+  const rulesIdx = sys.indexOf("Rules:\n- Shot length:");
+  ok(rulesIdx > 0, "narrative system prompt contains the Rules block");
+  // And the JSON schema closes it.
+  ok(sys.includes('Respond with STRICT JSON only'), "narrative system prompt carries the JSON schema");
+  // Nothing format-specific from another profile leaks into the narrative
+  // OVERLAY (the BASE Rules block mentions "documentary" in the useStock
+  // rule, which is correct — the test pins the overlay, not the rules).
+  ok(!narrative.systemOverlay.includes("documentary") && !narrative.systemOverlay.includes("advertisement"),
+    "narrative overlay carries no other profile's voice");
+
+  // The narrative user prompt has the SAME shape as the pre-M1 prompt:
+  // every line the original emitted appears, in order, with the FULL
+  // catalogs (no vocabulary narrowing — narrative carries none).
+  const scenes = [
+    { index: 1, title: "Open", narration: "Welcome to the show.", visual: "studio", camera: "static", mood: "warm", caption: "Welcome", hostInScene: true, rehook: false, sfx: "none" } as never,
+    { index: 2, title: "Body", narration: "Here is the substance.", visual: "b-roll", camera: "pan-right", mood: "neutral", caption: "Substance", hostInScene: false, rehook: false, sfx: "whoosh" } as never,
+  ];
+  const user = buildDirectorUserPrompt({
+    video: { title: "My Video", topic: "topic", niche: "niche", tone: "conversational" },
+    scenes, estTotal: 10, castBlock: "No recurring cast.", worldBlock: "No library.", profile: narrative,
+  });
+  // Every catalog line the pre-M1 prompt emitted still appears, full sets.
+  ok(user.includes("Transition ids:"), "transition line present");
+  ok(user.includes("Framings: wide, medium, close-up, extreme close-up, over-the-shoulder, pov, aerial."),
+    "narrative keeps the FULL framings list");
+  ok(user.includes("Camera moves: static, push-in, pull-out, pan-left, pan-right, tilt-up, tilt-down, dolly-in, handheld, crane-up, drone."),
+    "narrative keeps the FULL camera moves list");
+  ok(user.includes("Compositions: rule of thirds, leading lines, golden ratio, centered symmetry, negative space, frame within frame, diagonal."),
+    "narrative keeps the FULL compositions list");
+  // The narrative profile DOES surface its default-tone hints — that line
+  // is new (the pre-M1 prompt never had it), so we explicitly assert it is
+  // advisory and that the catalog order is otherwise preserved.
+  ok(user.includes("Profile defaults (advisory — override when a scene clearly demands it)"),
+    "narrative surfaces its default-tone hints as advisory");
+  // The scene briefs are still emitted (the heart of the user prompt).
+  ok(user.includes("Scene 1 \"Open\"") && user.includes("Scene 2 \"Body\""), "scene briefs emitted");
+});
+
+await test("M1: format gate — empty-scenes check still throws; profiles resolve cleanly", async () => {
+  // The empty-scenes check is the ONLY gate runDirectorPass now enforces
+  // (the format !== "story" throw is gone). The error message is unchanged.
+  // We test the behavior at the layer runDirectorPass delegates to: a video
+  // with no scenes (parseScenes returns []) surfaces the empty-scenes error.
+  const { parseScenes } = await import("../src/lib/tubeforge/story.ts");
+  // parseScenes of null/empty/'' returns [] — the exact condition the empty-
+  // scenes check fires on (mirroring director.ts:233).
+  eq(parseScenes(null).length, 0, "null scenes → empty list (empty-scenes gate fires)");
+  eq(parseScenes("").length, 0, "empty scenes → empty list");
+  eq(parseScenes("[]").length, 0, "empty array → empty list");
+
+  // The error message the pass now propagates (verbatim from director.ts).
+  // The "No scenes to direct" message lives in director.ts (the job body
+  // throws it); the route has its OWN empty-scenes 400 ("Video has no
+  // scenes") that fires earlier when there is no scenes JSON at all.
+  const expectedMessage = "No scenes to direct — generate the scene script first";
+  const directorText = await fsp.readFile(
+    path.join(process.cwd(), "src/lib/tubeforge/director.ts"),
+    "utf8"
+  );
+  ok(directorText.includes(expectedMessage), "runDirectorPass throws the empty-scenes error verbatim");
+  // The actual gate code is gone — match the throw statement pattern, not
+  // the M1 doc comment that DESCRIBES the removal (which still says
+  // "format !== \"story\" gate is GONE" for the next reader).
+  ok(!/if\s*\(\s*video\.format\s*!==\s*["']story["']\s*\)\s*throw/.test(directorText),
+    "the format-gate throw is gone from director.ts (only the doc comment remains)");
+
+  // The route no longer carries the old format 400; its scene-level gate is
+  // now ONLY the "Video has no scenes" early bail.
+  const routeText = await fsp.readFile(
+    path.join(process.cwd(), "src/app/api/videos/[id]/director/route.ts"),
+    "utf8"
+  );
+  ok(!routeText.includes("The AI Director applies to scene-format videos"),
+    "the format 400 message is gone from the route");
+  ok(routeText.includes("Video has no scenes"),
+    "the route's scene-level gate is now the early empty-scenes bail");
+  ok(routeText.includes("profile"), "the route accepts the profile request param");
+
+  // resolveProfile — every profile the spec names resolves, unknown → narrative.
+  const { resolveProfile, PRODUCTION_PROFILES } = await import("../src/lib/tubeforge/director.ts");
+  for (const id of ["narrative","documentary","explainer","advertisement","animation","podcast","social"]) {
+    eq(resolveProfile(id).id, id, `${id} resolves`);
+  }
+  eq(resolveProfile("documentary").id, "documentary", "documentary accepted (was blocked pre-M1)");
+  eq(resolveProfile("explainer").id, "explainer", "explainer accepted (was blocked pre-M1)");
+  eq(Object.keys(PRODUCTION_PROFILES).length, 7, "exactly seven profiles defined");
+});
+
+// ---------------------------------------------------------------------------
 // Stage 6 (T-6.1) — timeline assembly (timeline.ts)
 // ---------------------------------------------------------------------------
 

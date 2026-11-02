@@ -47,6 +47,21 @@ export const COMPOSITIONS = [
 const TRANSITION_IDS = TRANSITIONS.map((t) => t.id);
 const MOTION_IDS = ["smart", "zoom", "pan", "off"] as const;
 
+// Milestone 1 — production profile ids. The low-level layer keeps the id
+// list so `parsePlan` can snap an unknown profile → undefined (legacy plan
+// byte-identical) WITHOUT importing the profile catalog (a higher layer).
+// The catalog (production-profiles.ts) imports this list and asserts every
+// id has a profile — the tests pin the contract both ways.
+export const PROFILE_IDS = [
+  "narrative",
+  "documentary",
+  "explainer",
+  "advertisement",
+  "animation",
+  "podcast",
+  "social",
+] as const;
+
 // Module E — audio direction vocabularies. pacing modulates the narration
 // speed per scene; ambience picks a synthesized ambient bed; sfx suggests the
 // scene-boundary cue (same catalog as sfx.ts).
@@ -106,6 +121,10 @@ export interface DirectorPlan {
   version: 1;
   generatedAt: string; // ISO timestamp
   concept: string; // one-paragraph directorial concept (the "why")
+  /** M1: the production profile that authored this plan (a PROFILE_IDS
+   *  value). Absent on legacy/pre-M1 plans — consumers normalize via
+   *  resolveProfile(plan.profile). Additive: never changes parse shape. */
+  profile?: string;
   musicMood?: string; // module E: music.ts mood preset id (consumer-sanitized)
   ducking?: string; // module E: audiomix DuckIntensity id (consumer-sanitized)
   scenes: DirectorScene[];
@@ -204,6 +223,14 @@ export function parsePlan(json: string | null | undefined): DirectorPlan | null 
     version: 1,
     generatedAt: asString(obj.generatedAt) || new Date().toISOString(),
     concept: asString(obj.concept).slice(0, 600),
+    // M1: snap the profile id to the catalog (case-insensitive). Unknown or
+    // absent → undefined, so a legacy plan parses byte-identical (no profile
+    // field) and consumers normalize via resolveProfile(plan.profile).
+    profile: (PROFILE_IDS as readonly string[]).includes(
+      asString(obj.profile).toLowerCase()
+    )
+      ? asString(obj.profile).toLowerCase()
+      : undefined,
     // Plan-level audio hints pass through as plain strings — the consumers
     // (music.ts / audiomix.ts) own the vocabularies and sanitize on use.
     musicMood: asString(obj.musicMood).slice(0, 40) || undefined,

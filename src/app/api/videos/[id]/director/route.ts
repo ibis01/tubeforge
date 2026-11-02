@@ -56,14 +56,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
-  if (video.format !== "story")
-    return NextResponse.json(
-      { error: "The AI Director applies to scene-format videos — convert the script first" },
-      { status: 400 }
-    );
+  // M1 — the format !== "story" 400 is GONE. The director pass errors on
+  // empty scenes (a non-scene video has nothing to direct); the route
+  // surfaces that identical error from runDirectorPass. A `profile`
+  // request param selects a production profile (default narrative).
 
   const body = await req.json().catch(() => ({}));
   const action = body?.action === "check" ? "check" : "plan";
+  const profile = typeof body?.profile === "string" ? body.profile : undefined;
 
   if (action === "check") {
     const scenes = (video.scenes ? JSON.parse(video.scenes) : []) as { hostInScene?: boolean }[];
@@ -84,7 +84,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
 
   await db.video.update({ where: { id }, data: { error: null } });
-  const accepted = await startJob(id, "director", () => runDirectorJob(id));
+  const accepted = await startJob(id, "director", () => runDirectorJob(id, profile ? { profile } : undefined));
   return NextResponse.json({ accepted, generating: { plan: true } }, { status: accepted ? 202 : 200 });
 }
 
