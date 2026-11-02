@@ -13,10 +13,17 @@
 //        phase 3: create the bootstrap organization 'default' row (only when
 //          legacy content exists) + the partial unique index that guarantees
 //          at most one owner per organization.
-//   2. Postgres (production):
-//        prisma migrate deploy — prisma/migrations/*_stage2_multiuser does all
-//        of the above in SQL (ADD COLUMN ... DEFAULT 'default' + DROP DEFAULT,
-//        RENAME, bootstrap org, partial index).
+//   2. Postgres (production / Vercel):
+//        baseline detection + prisma migrate deploy. A database with tables
+//        but no _prisma_migrations history (Vercel Postgres pushed with
+//        `db push` in the Stage-1 era, before the migration chain existed)
+//        gets the matching prefix of the chain marked as applied via
+//        `migrate resolve` (sentinel tables/columns fingerprint the schema
+//        state), then `migrate deploy` applies the rest — the designed
+//        upgrade path (ADD COLUMN organizationId DEFAULT 'default' + DROP
+//        DEFAULT, Setting -> LegacySetting rename, bootstrap org, partial
+//        index, and every later stage). Runs from postinstall on every
+//        deploy: idempotent (a fully-migrated database is a no-op).
 //
 // WHY THE BOOTSTRAP ORG EXISTS: legacy single-user data must keep a tenant
 // after the schema change. It is parked under organization 'default' until the
@@ -24,12 +31,13 @@
 // claim flow (src/app/api/auth/register) then transfers it to their own new
 // organization and migrates the LegacySetting rows (see ROADMAP Stage 2).
 //
-// Run it with: npm run migrate:stage2 (also called by setup:local).
+// Run it with: npm run migrate:stage2 (also called by setup:local and by
+// postinstall on every install, both providers).
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const prismaBin = join(root, "node_modules", ".bin", "prisma");
@@ -46,10 +54,14 @@ const execSql = (schemaFile, sql) => {
   return child;
 };
 
-// --- resolve DATABASE_URL the same way postinstall.mjs does ---
-let url = "";
+// --- resolve DATABASE_URL the same way postinstall.mjs does: platform env
+// var FIRST (Vercel/CI inject it there and ship no .env file), then the local
+// .env file, then the SQLite fallback. Reading only .env made this script
+// classify a Postgres deployment as SQLite and run PRAGMA/SQLite SQL against
+// it (hard crash) — the same bug class postinstall.mjs carried until d7816e3.
+let url = (process.env.DATABASE_URL || "").trim();
 const envPath = join(root, ".env");
-if (existsSync(envPath)) {
+if (!url && existsSync(envPath)) {
   const m = readFileSync(envPath, "utf8").match(
     /^\s*DATABASE_URL\s*=\s*"?([^"\r\n]+)"?\s*$/m
   );
@@ -74,14 +86,112 @@ const TENANT_TABLES = [
 
 const log = (msg) => console.log(`[migrate-stage2] ${msg}`);
 
+// --- Postgres baseline sentinels -------------------------------------------
+// Fingerprint of the schema state each migration leaves behind. Used ONLY
+// when _prisma_migrations is absent (a database managed outside the chain,
+// e.g. pushed with `prisma db push` before this repo grew migrations): the
+// newest migration whose sentinel exists decides how much of the chain is
+// marked as already applied. Keep in sync with prisma/migrations/*.
+export const BASELINE_SENTINELS = [
+  { migration: "000000000000_init", table: "Setting" },
+  { migration: "20261101000000_stage2_multiuser", table: "User" },
+  { migration: "20261101050000_stage3_queue", column: ["Job", "maxAttempts"] },
+  { migration: "20261101060000_stage3b_usage_storage", table: "StorageUsage" },
+  { migration: "20261101070000_stage3c_job_payload", column: ["Job", "payload"] },
+  { migration: "20261101110000_stage5_director", column: ["Video", "shotList"] },
+  { migration: "20261101123000_stage5_world", table: "Location" },
+  { migration: "20261101140000_stage5_sources", column: ["Video", "researchSources"] },
+  { migration: "20261102000000_stage6_publishing", column: ["Video", "timeline"] },
+  { migration: "20261102010000_stage7_billing", table: "Plan" },
+  { migration: "20261102020000_stage71_billing_integrity", table: "ProcessedWebhookEvent" },
+  { migration: "20261102030000_stage72_credit_reservations", column: ["CreditLedger", "reconcilesId"] },
+];
+
+/** Pure decision: given the schema fingerprint, which migration prefix must
+ *  be baselined as applied? [] when nothing matches (empty/unmanaged
+ *  database — deploy the whole chain). Newest sentinel wins; the chain is
+ *  cumulative, so an older sentinel implies everything before it ran. */
+export function decideBaselinePrefix(
+  sentinels,
+  hasTable,
+  hasColumn
+) {
+  for (let i = sentinels.length - 1; i >= 0; i--) {
+    const s = sentinels[i];
+    const present = s.table
+      ? hasTable(s.table)
+      : s.column
+        ? hasColumn(s.column[0], s.column[1])
+        : false;
+    if (present) return sentinels.slice(0, i + 1).map((x) => x.migration);
+  }
+  return [];
+}
+
+/** Read the Postgres schema fingerprint: public tables + the sentinel
+ *  (table, column) pairs. */
+async function pgFingerprint(prisma) {
+  const tables = await prisma.$queryRawUnsafe(
+    `SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public'`
+  );
+  const tableSet = new Set(tables.map((t) => t.name));
+  const wantedTables = new Set(
+    BASELINE_SENTINELS.filter((s) => s.column)
+      .map((s) => s.column[0])
+      .filter((t) => tableSet.has(t))
+  );
+  const columns = new Set();
+  for (const table of wantedTables) {
+    const cols = await prisma.$queryRawUnsafe(
+      `SELECT column_name AS name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = '${table}'`
+    );
+    for (const c of cols) columns.add(`${table}.${c.name}`);
+  }
+  return {
+    hasTable: (t) => tableSet.has(t),
+    hasColumn: (t, c) => columns.has(`${t}.${c}`),
+  };
+}
+
+/** Baseline + deploy for a Postgres database (see header). Drops nothing:
+ *  `migrate resolve --applied` only RECORDS history; `migrate deploy`
+ *  applies pending migrations from the chain. */
+async function postgresMigrate(prisma) {
+  const historyRows = await prisma.$queryRawUnsafe(
+    `SELECT COUNT(*)::int AS n FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = '_prisma_migrations'`
+  );
+  const managed = Number(historyRows?.[0]?.n ?? 0) > 0;
+
+  if (!managed) {
+    const fp = await pgFingerprint(prisma);
+    const prefix = decideBaselinePrefix(BASELINE_SENTINELS, fp.hasTable, fp.hasColumn);
+    if (prefix.length > 0) {
+      log(
+        `unmanaged schema detected (newest sentinel: ${prefix[prefix.length - 1]}) — ` +
+          `baselining ${prefix.length} migration(s) as applied`
+      );
+      for (const migration of prefix) {
+        run(["migrate", "resolve", "--applied", migration, "--schema", "prisma/schema.prisma"]);
+      }
+    } else {
+      log("empty/unfingerprinted database — the full chain will be applied");
+    }
+  }
+
+  log("running prisma migrate deploy");
+  run(["migrate", "deploy", "--schema", "prisma/schema.prisma"]);
+}
+
 async function main() {
   const { PrismaClient } = await import(join(root, "node_modules", "@prisma/client", "index.js"));
   const prisma = new PrismaClient();
 
   try {
     if (!isSqlite) {
-      log("Postgres detected — running prisma migrate deploy");
-      run(["migrate", "deploy", "--schema", "prisma/schema.prisma"]);
+      log("Postgres detected — baseline detection + migrate deploy");
+      await postgresMigrate(prisma);
       const orgs = await prisma.organization.count();
       log(`organizations present: ${orgs}`);
       return;
@@ -183,7 +293,11 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error("[migrate-stage2] FAILED:", err);
-  process.exit(1);
-});
+// Run as a script; the exports above (BASELINE_SENTINELS, decideBaselinePrefix)
+// stay importable from the unit suite.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error("[migrate-stage2] FAILED:", err);
+    process.exit(1);
+  });
+}

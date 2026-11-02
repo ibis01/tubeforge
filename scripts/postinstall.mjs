@@ -99,10 +99,15 @@ run(['generate', '--schema', schema]);
 if (isSqlite) {
   console.log('[postinstall] prisma db push (sqlite) — creates db file if missing');
   run(['db', 'push', '--schema', 'prisma/schema.sqlite.prisma', '--skip-generate']);
-  // Stage 2+ transition guards (idempotent): organizationId backfill, the
-  // Setting -> LegacySetting rename and the one-owner-per-org partial index.
-  console.log('[postinstall] running scripts/migrate-stage2.mjs (idempotent)');
-  execFileSync('node', ['scripts/migrate-stage2.mjs'], { stdio: 'inherit', cwd: root });
 }
+
+// 4. Stage 2+ transition — BOTH providers, idempotent. On SQLite this is the
+//    legacy column/rename/bootstrap-org transition; on Postgres (Vercel) it
+//    baselines an unmanaged database against prisma/migrations and deploys
+//    the chain — a deploy is the only moment the production schema gets
+//    synced, so without this every route fails on missing tables (P2021)
+//    the moment a new migration lands.
+console.log('[postinstall] running scripts/migrate-stage2.mjs (idempotent)');
+execFileSync('node', ['scripts/migrate-stage2.mjs'], { stdio: 'inherit', cwd: root });
 
 console.log('[postinstall] done');

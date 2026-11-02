@@ -2004,6 +2004,61 @@ await test("billing: verifyStripeSignature rejects tampered, stale, and malforme
   ok(!(await verifyStripeSignature(payload, "garbage", secret)), "garbage header rejected");
 });
 
+await test("migrate-stage2: decideBaselinePrefix fingerprints every schema era", async () => {
+  const { BASELINE_SENTINELS, decideBaselinePrefix } = await import("../scripts/migrate-stage2.mjs");
+  const S = BASELINE_SENTINELS;
+
+  // Fingerprint builder: a set of present tables + (table, column) pairs.
+  const fp = (tables: string[], cols: string[] = []) => {
+    const t = new Set(tables);
+    const c = new Set(cols);
+    return {
+      hasTable: (x: string) => t.has(x),
+      hasColumn: (x: string, y: string) => c.has(`${x}.${y}`),
+    };
+  };
+
+  // Empty database → nothing baselined, deploy the whole chain.
+  eq(decideBaselinePrefix(S, fp([]).hasTable, fp([]).hasColumn).length, 0, "empty DB → no baseline");
+
+  // Stage-1 legacy (Vercel Postgres pushed with db push in the old era):
+  // Setting exists → baseline init only.
+  const legacy = fp(["Channel", "Character", "Video", "Setting"]);
+  eq(
+    decideBaselinePrefix(S, legacy.hasTable, legacy.hasColumn),
+    ["000000000000_init"],
+    "Stage-1 schema → baseline init only"
+  );
+
+  // Fully modern db-push'd schema → the entire chain is baselined.
+  const modern = fp(
+    ["User", "Organization", "Plan", "ProcessedWebhookEvent", "CreditLedger"],
+    ["Video.shotList", "Video.timeline", "Job.payload", "CreditLedger.reconcilesId"]
+  );
+  eq(
+    decideBaselinePrefix(S, modern.hasTable, modern.hasColumn).length,
+    S.length,
+    "modern schema → whole chain baselined (deploy is a no-op)"
+  );
+
+  // Mid-era: stage5_world ran (Location exists) but billing not yet →
+  // baseline through stage5_world; deploy applies stage5_sources onward.
+  const mid = fp(
+    ["User", "StorageUsage", "CharacterAppearance", "Location"],
+    ["Video.shotList", "Job.payload", "Job.maxAttempts"]
+  );
+  const midPrefix = decideBaselinePrefix(S, mid.hasTable, mid.hasColumn);
+  eq(
+    midPrefix[midPrefix.length - 1],
+    "20261101123000_stage5_world",
+    "mid-era schema → newest sentinel wins"
+  );
+  eq(midPrefix.length, 7, "mid-era schema → exactly the chain prefix baselined");
+
+  // Sentinel order matches the migration directory (chain is cumulative).
+  eq(S[0].migration, "000000000000_init", "sentinels start at init");
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

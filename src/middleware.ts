@@ -151,7 +151,15 @@ export async function middleware(req: NextRequest) {
   return NextResponse.next();
 }
 
+// Runtime: Node.js (Next 16 compiles ALL middleware/proxy to Node — the
+// functions-config-manifest pins "/_middleware": {"runtime": "nodejs"} with
+// or without an explicit config). Node middleware on Vercel REQUIRES Fluid
+// Compute, which vercel.json ("fluid": true) now enables for this project —
+// before that, every /api/* invocation died with a bare 500 while pages
+// still rendered (pages don't match this matcher), so the breakage was
+// invisible until registration was attempted. The middleware itself stays
+// WebCrypto-only (see auth-token.ts "Edge-safe token utilities") and must
+// never import node:* APIs regardless.
 export const config = {
-  runtime: "nodejs",
   matcher: ["/api/:path*"],
 };
