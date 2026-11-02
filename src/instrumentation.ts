@@ -38,9 +38,14 @@ export async function register(): Promise<void> {
     g.__tfInstrumentation = { ok: true, at: new Date().toISOString() };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const stackLines = (err instanceof Error ? err.stack : "")
+      .split("\n")
+      .slice(1, 4)
+      .join(" | ")
+      .slice(0, 300);
     g.__tfInstrumentation = {
       ok: false,
-      error: `${message} :: ${(err instanceof Error ? err.stack : "").split("\n").slice(1, 4).join(" | ").slice(0, 300)}`,
+      error: `${message} :: ${stackLines}`,
       at: new Date().toISOString(),
     };
     // Loud but non-fatal — see the header comment.
