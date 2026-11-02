@@ -115,8 +115,15 @@ export function buildSceneShots(input: {
   const plannedTotal = planShotsList.reduce((acc, sh) => acc + sh.duration, 0);
   const scale = plannedTotal > 0 && plannedTotal < dur ? dur / plannedTotal : 1;
 
+  // Owner decision #2 (spec §4): at most EXTRAS_BUDGET fresh AI images per
+  // scene — a longer shot list keeps its RHYTHM (every planned shot renders
+  // with its planned move + reconciled duration) but surplus extras demote
+  // to pseudo crops over the scene art instead of new generations.
+  // MAX_SHOTS stays the hard ceiling on shots per scene.
+  let extraBudget = EXTRAS_BUDGET;
+
   let handheldFlip = false; // alternate diag-tl / diag-br across handheld shots
-  const available: ShotExecution[] = planShotsList.map((sh) => {
+  const available: ShotExecution[] = planShotsList.slice(0, MAX_SHOTS).map((sh) => {
     const base = CAMERA_TO_MOVE[sh.camera] ?? "hold";
     let moveKind: MoveKind = base;
     if (sh.camera === "handheld") {
@@ -124,13 +131,18 @@ export function buildSceneShots(input: {
       handheldFlip = !handheldFlip;
     }
     const isScene = sh.shotIndex === 0;
+    const isExtra = !isScene && extraBudget > 0;
+    if (isExtra) extraBudget -= 1;
     return {
       shotIndex: sh.shotIndex,
-      source: isScene ? "scene" : "extra",
+      source: isScene ? "scene" : isExtra ? "extra" : "pseudo",
       imageFile: shotImageFile(scene.index, sh.shotIndex),
+      crop: isScene || isExtra
+        ? undefined
+        : PSEUDO_CROPS[sh.shotIndex % PSEUDO_CROPS.length],
       moveKind,
       sec: Math.round(sh.duration * scale * 100) / 100,
-      prompt: isScene ? undefined : shotPrompt(scene, sh),
+      prompt: isExtra ? shotPrompt(scene, sh) : undefined,
     };
   });
 
@@ -179,6 +191,10 @@ export const SHOT_MIN_SEC = 2.0;
 /** Hard cap on shots per scene. 7 × 3s covers every realistic scene length
  *  (typical narration scenes run 8–18s); beyond it we split evenly anyway. */
 export const MAX_SHOTS = 7;
+/** Owner decision #2 (spec §4): max FRESH AI images per scene — shot 0 reuses
+ *  the scene art, so a scene spends at most 3 image generations. Surplus
+ *  planned shots keep their move + duration but render as pseudo crops. */
+export const EXTRAS_BUDGET = 3;
 /** Fewer shots than this = the scene is one image (too-short scenes). */
 export const MIN_SHOTS = 1;
 

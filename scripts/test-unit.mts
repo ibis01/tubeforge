@@ -2091,6 +2091,156 @@ await test("shots M2: no plan → legacy fallback (golden behavior)", async () =
   ok(long.available[1].moveKind !== long.available[2].moveKind, "consecutive fallback shots never repeat a move");
 });
 
+await test("shots M2: extras budget — at most 3 fresh AI images per scene, surplus keeps its rhythm as pseudo", async () => {
+  const { buildSceneShots, EXTRAS_BUDGET, MAX_SHOTS } = await import("../src/lib/tubeforge/shots.ts");
+  const scene = { index: 4, title: "t", narration: "n", visual: "a harbor at dawn", mood: "cold light" } as never;
+  const shot = (i: number) => ({
+    shotIndex: i, framing: "wide", camera: "push-in", lens: "35mm",
+    composition: "rule of thirds", duration: 2, imagePrompt: `beat ${i}`,
+  });
+  // 6 planned shots → 1 scene art + 3 extras + 2 pseudo; ALL 6 keep rhythm.
+  const planScene = { sceneIndex: 4, shots: [0, 1, 2, 3, 4, 5].map(shot) } as never;
+  const plan = buildSceneShots({ scene, planScene, measuredSec: 12 });
+  eq(plan.available.length, 6, "every planned shot renders (rhythm preserved)");
+  eq(plan.available[0].source, "scene", "shot 0 = the scene art");
+  const extras = plan.available.filter((s: { source: string }) => s.source === "extra");
+  const pseudos = plan.available.filter((s: { source: string }) => s.source === "pseudo");
+  eq(extras.length, EXTRAS_BUDGET, "exactly the budget generates AI images (owner decision #2)");
+  eq(pseudos.length, 2, "surplus shots demote to pseudo crops");
+  ok(extras.every((s: { prompt?: string }) => s.prompt), "extras carry their generation prompt");
+  ok(pseudos.every((s: { prompt?: string; crop?: unknown }) => !s.prompt && s.crop), "pseudos carry a crop and no prompt");
+  approx(
+    plan.available.reduce((a: number, s: { sec: number }) => a + s.sec, 0),
+    12, 0.05, "reconciliation fills the scene exactly even with demotions"
+  );
+
+  // Hard ceiling: a 10-shot plan truncates to MAX_SHOTS.
+  const huge = { sceneIndex: 4, shots: Array.from({ length: 10 }, (_, i) => shot(i)) } as never;
+  eq(buildSceneShots({ scene, planScene: huge, measuredSec: 12 }).available.length, MAX_SHOTS, "MAX_SHOTS is the hard ceiling");
+});
+
+await test("shots M2: movementForKind — engine-grade MotionShot for every move, stills contract honored", async () => {
+  const { movementForKind, MOTION_MOVE_LABELS } = await import("../src/lib/tubeforge/motion.ts");
+  const kinds = Object.keys(MOTION_MOVE_LABELS);
+  const focal = { x: 0.5, y: 0.5 };
+  for (const k of kinds) {
+    const m = movementForKind(k as never, focal, 40);
+    ok(m.zStart >= 1 && m.zEnd >= 1 && m.zEnd <= 1.5, `${k}: zoom window sane`);
+    ok(m.travel >= 0 && m.travel <= 1, `${k}: travel in range`);
+    ok(Number.isFinite(m.sec) && m.sec > 0, `${k}: finite sec`);
+  }
+  const hold = movementForKind("hold", focal, 40);
+  eq(hold.kind, "hold", "hold is hold");
+  const zin = movementForKind("zoom-in", focal, 40);
+  ok(zin.zEnd > zin.zStart, "zoom-in ends tighter than it starts");
+  const zout = movementForKind("zoom-out", focal, 40);
+  ok(zout.zEnd < zout.zStart, "zoom-out ends wider than it starts");
+  const pan = movementForKind("pan-left", focal, 40);
+  ok(pan.travel > 0, "pans travel");
+  const still = movementForKind("zoom-in", focal, 0);
+  eq(still.kind, "hold", "intensity < 1 holds the camera — the user's stillness contract outranks shot moves");
+});
+
+await test("shots M2: multiShotSceneGraph — per-input zoompan graph with an exact frame budget", async () => {
+  const { multiShotSceneGraph } = await import("../src/lib/tubeforge/motion.ts");
+  const settings = { mode: "smart", intensity: 40, curve: "smooth", vary: true } as never;
+  const fps = 30;
+  const g = multiShotSceneGraph({
+    dur: 10,
+    settings,
+    fps,
+    grade: "eq=saturation=1.05",
+    shots: [
+      { kind: "zoom-in", sec: 4, input: 0 },
+      { kind: "pan-right", sec: 3, input: 0, crop: { w: 2200, h: 1238, x: 820, y: 461 } },
+      { kind: "zoom-out", sec: 3, input: 4 },
+    ] as never,
+  });
+
+  const zoompans = g.match(/zoompan=/g)?.length ?? 0;
+  eq(zoompans, 3, "one zoompan per shot");
+  ok(g.includes("[0:v]"), "scene image base chain present");
+  ok(g.includes("split=2[b0_0][b0_1]"), "the shared input splits once per consuming shot");
+  ok(g.includes("[4:v]"), "the extra image input is referenced directly");
+  ok(!g.includes("split=1"), "single-use inputs never split");
+  ok(g.includes("crop=2200:1238:820:461,"), "the pseudo crop lands pre-zoompan (16:9 ref == work canvas)");
+  ok(g.includes("concat=n=3:v=1:a=0[vc]"), "shots concat in order");
+  ok(g.endsWith("[vc]eq=saturation=1.05[v]"), "the grade finishes the graph");
+
+  // Frame budget: per-shot trims sum EXACTLY to round(dur*fps) — the cut
+  // points land on the reconciled ShotExecution.sec boundaries.
+  const frames = [...g.matchAll(/trim=end_frame=(\d+)/g)].map((m) => Number(m[1]));
+  eq(frames.length, 3, "one trim per shot branch");
+  approx(frames.reduce((a, b) => a + b, 0), 300, 0, "exact frame budget (10s × 30fps)");
+  approx(frames[0] / 300, 0.4, 0.02, "shot durations keep their planned proportion");
+
+  // Pseudo crops scale from the 3840x2160 reference to the actual canvas.
+  const g9 = multiShotSceneGraph({
+    dur: 10, settings, fps, aspect: "9:16",
+    shots: [{ kind: "pan-left", sec: 10, input: 0, crop: { w: 1920, h: 2160, x: 1920, y: 0 } }] as never,
+  });
+  ok(g9.includes("crop=1080:3840:1080:0,"), "crop rects scale to the 9:16 work canvas");
+
+  // Degenerate plan → static scene, never an empty graph.
+  const g0 = multiShotSceneGraph({ dur: 2, settings, fps, shots: [] });
+  ok(g0.startsWith("[0:v]") && g0.endsWith("[v]"), "empty shot list degrades to a static scene");
+});
+
+await test("shots M2 render contract: 2-shot synthetic plan → exact duration + distinct visual segments (real ffmpeg)", async () => {
+  const { multiShotSceneGraph } = await import("../src/lib/tubeforge/motion.ts");
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "tf-m2-"));
+  try {
+    // Two DISTINCT sources + a narration stand-in — the smallest fixture that
+    // exercises the full multi-image command shape buildSegment assembles.
+    const imgA = path.join(tmp, "scene-01.png");
+    const imgB = path.join(tmp, "shot-01-1.png");
+    const wav = path.join(tmp, "scene-01.wav");
+    await genFixture(imgA, ["-f", "lavfi", "-i", "testsrc2=size=1280x720", "-frames:v", "1"]);
+    await genFixture(imgB, ["-f", "lavfi", "-i", "smptebars=size=1280x720", "-frames:v", "1"]);
+    await genFixture(wav, ["-f", "lavfi", "-i", "sine=frequency=220:duration=4", "-ar", "48000", "-ac", "2"]);
+
+    const fps = 12;
+    const dur = 4;
+    const settings = { mode: "smart", intensity: 40, curve: "smooth", vary: true } as never;
+    const graph = multiShotSceneGraph({
+      dur, settings, fps,
+      shots: [
+        { kind: "zoom-in", sec: 2, input: 0 },
+        { kind: "pan-right", sec: 2, input: 2 }, // inputs: 0=scene img, 1=wav, 2=extra img
+      ] as never,
+    });
+    const out = path.join(tmp, "seg.mp4");
+    await genFixture(out, [
+      "-loop", "1", "-framerate", String(fps), "-t", String(dur), "-i", imgA,
+      "-i", wav,
+      "-loop", "1", "-framerate", String(fps), "-t", "3", "-i", imgB,
+      "-filter_complex", `${graph};[1:a]anull[a]`,
+      "-map", "[v]", "-map", "[a]",
+      "-t", String(dur),
+      ...FFMPEG_COMMON,
+    ]);
+
+    // Spec §1.4 acceptance: |rendered − measured| ≤ 0.2s.
+    const probe = await execFileAsync(
+      "ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", out],
+      { timeout: 60_000, maxBuffer: 1024 * 1024 }
+    );
+    approx(parseFloat(probe.stdout.trim()), dur, 0.2, "2-shot segment duration");
+
+    // Spec §1.10 acceptance: frame-hash sampling shows ≥2 distinct segments —
+    // frames either side of the 2s cut come from different sources.
+    const f1 = path.join(tmp, "f1.png");
+    const f2 = path.join(tmp, "f2.png");
+    await genFixture(f1, ["-ss", "0.4", "-i", out, "-frames:v", "1"]);
+    await genFixture(f2, ["-ss", "2.6", "-i", out, "-frames:v", "1"]);
+    const b1 = await fsp.readFile(f1);
+    const b2 = await fsp.readFile(f2);
+    ok(!b1.equals(b2), "frames either side of the shot cut differ (distinct visual segments)");
+  } finally {
+    await fsp.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 await test("migrate-stage2: decideBaselinePrefix fingerprints every schema era", async () => {
   const { BASELINE_SENTINELS, decideBaselinePrefix } = await import("../scripts/migrate-stage2.mjs");
   const S = BASELINE_SENTINELS;

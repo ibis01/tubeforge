@@ -48,13 +48,17 @@ import {
 import {
   planSceneMovements,
   sceneFilterGraph,
+  multiShotSceneGraph,
+  focalForScene,
   sanitizeMotion,
   MOTION_DEFAULTS,
   type MotionScenePlan,
   type MotionSettings,
+  type MoveKind,
   type SceneContext,
 } from "./motion";
-import { getApprovedMotionMap, getApprovedAudioMap } from "./director-plan";
+import { getApprovedMotionMap, getApprovedAudioMap, getApprovedPlan } from "./director-plan";
+import { buildSceneShots, ensureShotImages, PSEUDO_CROPS, type SceneShotPlan } from "./shots";
 import { ensureAmbience } from "./ambience";
 import {
   BLEND_GROUP_MAX,
@@ -361,6 +365,37 @@ export function droneSource(profile: MusicProfile): string {
 
 // ---------- Segments & assembly ----------
 
+/** M2 — project a SceneShotPlan onto concrete ffmpeg shot inputs. Images that
+ *  went missing between generation and composition (cleaned scratch dir,
+ *  interrupted re-render) demote to pseudo crops over the scene art — the
+ *  render always receives a full shot list (spec §1.8 floor). */
+function resolveShotInputs(
+  dir: string,
+  plan: SceneShotPlan,
+  sceneImg: string
+): { file: string; moveKind: MoveKind; sec: number; crop?: { w: number; h: number; x: number; y: number } }[] {
+  const out: {
+    file: string;
+    moveKind: MoveKind;
+    sec: number;
+    crop?: { w: number; h: number; x: number; y: number };
+  }[] = [];
+  for (const sh of plan.available) {
+    const file = path.join(dir, sh.imageFile);
+    if (sh.source === "scene" || fs.existsSync(file)) {
+      out.push({ file, moveKind: sh.moveKind, sec: sh.sec, crop: sh.crop });
+      continue;
+    }
+    out.push({
+      file: sceneImg,
+      moveKind: sh.moveKind,
+      sec: sh.sec,
+      crop: sh.crop ?? PSEUDO_CROPS[sh.shotIndex % PSEUDO_CROPS.length],
+    });
+  }
+  return out;
+}
+
 /** Build one scene segment: visual track of exactly `dur` + narration audio
  * (+ SFX cue + director-planned ambience bed). */
 async function buildSegment(opts: {
@@ -376,13 +411,17 @@ async function buildSegment(opts: {
   sfxKind?: string;
   /** Module E: materialized ambience bed path for this scene (null = none). */
   ambiencePath?: string | null;
+  /** M2: the approved Director shot list for this scene — when present, the
+   * scene renders through the multi-image shot graph instead of the single-
+   * image Smart Motion graph (docs/director-m1-m2-spec.md §1.7). */
+  shotPlan?: SceneShotPlan;
   outPath: string;
   /** Stage 6 (T-6.8) — per-render aspect ratio (default "16:9"). */
   aspect?: "16:9" | "9:16" | "1:1";
   /** Stage 6 (T-6.8) — per-render frame rate (default 30). */
   fps?: number;
 }): Promise<void> {
-  const { scene, dur, mode, motion, plan, outPath } = opts;
+  const { scene, dur, mode, motion, plan, shotPlan, outPath } = opts;
   const dir = videoDir(opts.videoId);
   const wav = path.join(dir, sceneWavFile(scene.index));
   const leadMs = Math.round(LEAD_SEC * 1000);
@@ -453,6 +492,57 @@ async function buildSegment(opts: {
 
   if (mode !== "animated") {
     const img = path.join(dir, sceneImageFile(scene.index));
+
+    // M2 — the approved Director shot list drives the scene (spec §1.7):
+    // per-shot image (scene art / fresh AI render / pseudo crop), per-shot
+    // camera move, per-shot reconciled duration. motion.ts stays the ONLY
+    // zoompan math engine (multiShotSceneGraph → shotZoompan). The scene-
+    // level motion-map override does NOT apply here — per-shot Director
+    // decisions are senior; it keeps governing plan-less scenes (§1.3).
+    const shotInputs = shotPlan?.available?.length
+      ? resolveShotInputs(dir, shotPlan, img)
+      : null;
+    if (shotInputs) {
+      const audioInputCount = audio.inputs.filter((a) => a === "-i").length;
+      const inputFor = new Map<string, number>([[img, 0]]);
+      const extraInputs: string[] = [];
+      // Input order: 0 = scene image, 1 = narration, 2.. = audio extras,
+      // then one still input per distinct shot image. The +1s of slack is
+      // free — each branch trims to its exact frame count, the pad only
+      // guarantees a stream never ends before its trim point.
+      let nextInput = 2 + audioInputCount;
+      for (const sh of shotInputs) {
+        if (inputFor.has(sh.file)) continue;
+        inputFor.set(sh.file, nextInput++);
+        extraInputs.push(
+          "-loop", "1", "-framerate", String(fps), "-t", (sh.sec + 1).toFixed(3), "-i", sh.file
+        );
+      }
+      const vChain = multiShotSceneGraph({
+        dur,
+        settings: motion,
+        fps,
+        aspect,
+        grade: GRADE,
+        focal: focalForScene(scene),
+        shots: shotInputs.map((sh) => ({
+          kind: sh.moveKind,
+          sec: sh.sec,
+          input: inputFor.get(sh.file)!,
+          crop: sh.crop,
+        })),
+      });
+      await run("ffmpeg", [
+        "-loop", "1", "-framerate", String(fps), "-t", dur.toFixed(3), "-i", img,
+        "-i", wav,
+        ...audio.inputs,
+        ...extraInputs,
+        "-filter_complex", `${vChain};${audio.graph}`,
+        ...common,
+      ]);
+      return;
+    }
+
     // Smart Motion: scene-aware plan (from motion.ts) -> ffmpeg filter graph.
     const vChain = sceneFilterGraph({
       dur,
@@ -896,6 +986,51 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
               })
             : [];
 
+    // M2 — the approved Director shot list becomes the authoritative shot
+    // plan of every Ken Burns scene (docs/director-m1-m2-spec.md §1.3). ONE
+    // plan read for the whole video; per scene: buildSceneShots (pure) →
+    // ensureShotImages (≤3 extra AI images, failures demote to pseudo). ANY
+    // failure here falls back to the legacy single-image path — the render
+    // never breaks on the Director. No approved plan → this block is skipped
+    // entirely and every scene renders bit-identical to the pre-M2 path.
+    let shotPlans: (SceneShotPlan | undefined)[] | null = null;
+    if (needsPlan) {
+      try {
+        const approved = await getApprovedPlan(opts.videoId);
+        if (approved && approved.scenes.length > 0) {
+          const byScene = new Map(approved.scenes.map((s) => [s.sceneIndex, s]));
+          const shotPlans2: (SceneShotPlan | undefined)[] = [];
+          let plannedScenes = 0;
+          for (const [i, scene] of scenes.entries()) {
+            // Only scenes that will actually run the Ken Burns path consume
+            // shots — stock scenes with footage and slides/animated keep
+            // their own visual path (their motion plans are ignored too).
+            const usesKenburns =
+              opts.mode === "kenburns" ||
+              (opts.mode === "stock" &&
+                !(scene.stock && fs.existsSync(path.join(dir, scene.stock.file))));
+            if (!usesKenburns) {
+              shotPlans2.push(undefined);
+              continue;
+            }
+            const sp = buildSceneShots({
+              scene,
+              planScene: byScene.get(scene.index) ?? null,
+              measuredSec: durations[i],
+            });
+            shotPlans2.push(await ensureShotImages({ videoId: opts.videoId, scene, plan: sp }));
+            if (byScene.has(scene.index)) plannedScenes++;
+          }
+          // A plan that matches no rendered scene (scenes edited after
+          // approval) has no bearing on this video — legacy path everywhere.
+          if (plannedScenes > 0) shotPlans = shotPlans2;
+        }
+      } catch (err) {
+        console.warn("[render] director shot plan unavailable — legacy motion path:", err);
+        shotPlans = null;
+      }
+    }
+
     // Stage 5 (module D) — an APPROVED director plan overrides the video-level
     // motion mode PER SCENE (the director picks the movement channel per shot
     // list; "off" deliberately stills a scene, zoom/pan narrow it). Only the
@@ -907,6 +1042,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         for (let i = 0; i < scenes.length; i++) {
           const mode = overrides.get(scenes[i].index);
           if (!mode) continue;
+          if (shotPlans?.[i]) continue; // M2: the Director's per-shot moves are senior (spec §1.3)
           plans[i] = planSceneMovements(
             [scenes[i]],
             { ...motion, mode },
@@ -981,6 +1117,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         mode: opts.mode,
         motion,
         plan: plans[i],
+        shotPlan: shotPlans?.[i],
         sfx: opts.sfx !== false,
         sfxKind: planAudio.sfx.get(scene.index),
         ambiencePath: ambiencePaths.get(scene.index) ?? null,

@@ -169,7 +169,7 @@ export function normalizeFocalToken(raw: string | null | undefined): string | nu
  * token > composition keywords in the visual prompt > center.
  * Faces sit slightly above frame center (eyes on the upper third).
  */
-export function focalForScene(scene: Scene): Focal {
+export function focalForScene(scene: Scene): Focal {  // exported for the M2 shot path (render.ts)
   const token = normalizeFocalToken(scene.focal);
   if (token) return FOCAL_TOKENS[token];
 
@@ -848,6 +848,171 @@ export function sceneFilterGraph(opts: {
 
   parts.push(
     `${Array.from({ length: shotCount }, (_, i) => `[v${i}]`).join("")}concat=n=${shotCount}:v=1:a=0[vc]`,
+    `[vc]${grade ? grade : "null"}[v]`
+  );
+  return parts.join(";");
+}
+
+// ---------- M2 — multi-image shot graph (docs/director-m1-m2-spec.md §1.7) ----------
+
+/**
+ * MotionShot for ONE Director-chosen MoveKind, using the engine's own
+ * amplitude conventions (the visible-motion floor, PAN_BASE_ZOOM, the punch
+ * attack). Each shot of the M2 path animates a DIFFERENT image, so zooms
+ * always start wide at 1 — the wide<->tight re-frame banding of
+ * planSceneShots exists to reframe ONE image across cuts, which per-shot
+ * images make unnecessary (the cut itself is the re-frame).
+ */
+export function movementForKind(kind: MoveKind, focal: Focal, intensity: number): MotionShot {
+  // The user's stillness contract outranks any shot move: intensity < 1 (or
+  // the "off" mode, which the caller maps here too) holds every shot — the
+  // Director's CUTS still land (images change), the cameras stay still.
+  if (kind === "hold" || intensity < 1) {
+    return { kind: "hold", zStart: 1, zEnd: 1, focal, travel: 0, sec: 3 };
+  }
+  const amp = Math.max(Math.min(intensity / 100, AMP_CAP), 0.1);
+  if (kind === "zoom-in") return { kind, zStart: 1, zEnd: 1 + amp, focal, travel: 0, sec: 3 };
+  if (kind === "zoom-out") return { kind, zStart: 1 + amp, zEnd: 1, focal, travel: 0, sec: 3 };
+  if (kind === "punch") {
+    return {
+      kind,
+      zStart: 1 + Math.min(Math.max(amp * 2.0, 0.22), 0.36),
+      zEnd: 1 + Math.min(Math.max(amp * 0.75, 0.1), 0.16),
+      focal,
+      travel: 0,
+      sec: 3,
+    };
+  }
+  // Pans / tilts / diagonals — PAN_BASE_ZOOM so the sweep reads, 50% travel.
+  const z = PAN_BASE_ZOOM(intensity);
+  return { kind, zStart: z, zEnd: z, focal, travel: 0.5, sec: 3 };
+}
+
+/** One entry of the M2 multi-image graph — a shot execution projected onto
+ *  the ffmpeg command. `input` is the index of the `-i` that carries this
+ *  shot's still; several shots may share one input (pseudo crops). */
+export interface GraphShotInput {
+  kind: MoveKind;
+  sec: number;
+  input: number;
+  /** Pseudo-shot crop in 3840x2160 REFERENCE pixels (PSEUDO_CROPS space),
+   *  scaled to the actual work canvas by the builder. */
+  crop?: { w: number; h: number; x: number; y: number };
+  /** Per-shot override of the scene focal (defaults to opts.focal). */
+  focal?: Focal;
+}
+
+/** PSEUDO_CROPS coordinates are authored against the 16:9 work canvas. */
+const CROP_REF: [number, number] = [3840, 2160];
+
+/** Crop chain for one pseudo shot, reference-space → work-canvas, clamped
+ *  legal for any aspect (the rect is a framing hint; cover already scaled
+ *  the art, so an approximate mapping on 9:16/1:1 is acceptable). */
+function cropChain(
+  c: { w: number; h: number; x: number; y: number },
+  W: number,
+  H: number
+): string {
+  const sx = W / CROP_REF[0];
+  const sy = H / CROP_REF[1];
+  const w = Math.max(2, Math.min(Math.round(c.w * sx), W));
+  const h = Math.max(2, Math.min(Math.round(c.h * sy), H));
+  const x = Math.max(0, Math.min(Math.round(c.x * sx), W - w));
+  const y = Math.max(0, Math.min(Math.round(c.y * sy), H - h));
+  return `crop=${w}:${h}:${x}:${y},`;
+}
+
+/** Exact per-shot frame counts: proportional scaling of the planned frame
+ *  counts to hit `total` exactly, every shot ≥ 2 frames (largest-remainder
+ *  distribution — no shot absorbs the whole rounding drift). */
+function fitFrames(raw: number[], total: number): number[] {
+  const sum = raw.reduce((a, b) => a + b, 0);
+  if (sum <= 0) return raw.map(() => Math.max(2, Math.floor(total / raw.length)));
+  const out = raw.map((f) => Math.max(2, Math.round((f / sum) * total)));
+  let diff = total - out.reduce((a, b) => a + b, 0);
+  const order = out.map((f, i) => [i, f] as const).sort((a, b) => b[1] - a[1]);
+  let k = 0;
+  while (diff !== 0 && k < total * 4 + 16) {
+    const i = order[k % order.length][0];
+    const step = Math.sign(diff);
+    if (out[i] + step >= 2) {
+      out[i] += step;
+      diff -= step;
+    }
+    k++;
+  }
+  return out;
+}
+
+/**
+ * M2 — the multi-image scene graph (the spec's ONE real render change).
+ * Where sceneFilterGraph splits ONE image into N movement segments, this
+ * gives every shot its OWN input image (the scene art for shot 0 and pseudo
+ * crops, fresh AI renders for extras), runs each through its own zoompan
+ * (d=1, pre-timed — the same shape the single-image graph uses, and the
+ * slides compositor's no-looped-demuxer lesson), then concats. The frame
+ * budget is exact: per-shot frame counts sum to round(dur*fps), so the cut
+ * points land on the reconciled ShotExecution.sec boundaries and the audio
+ * (mixed against the same timeline) never drifts.
+ */
+export function multiShotSceneGraph(opts: {
+  dur: number;
+  shots: GraphShotInput[];
+  settings: MotionSettings;
+  fps: number;
+  aspect?: Aspect;
+  grade?: string;
+  /** Scene-level focal for shots without their own (focalForScene). */
+  focal?: Focal;
+}): string {
+  const { dur, settings, fps, grade = "" } = opts;
+  const aspect = opts.aspect ?? "16:9";
+  const { work, out } = OUTPUT_SIZES[aspect];
+  const [W, H] = work;
+  const [ow, oh] = out;
+  const totalFrames = Math.max(Math.round(dur * fps), 2);
+  const list = opts.shots.slice(0, MAX_SHOTS);
+  if (list.length === 0) {
+    // Degenerate plan — behave like a static scene rather than emit an
+    // empty graph (never a failed render; spec §1.8 floor).
+    return `[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},scale=${ow}:${oh},format=yuv420p${grade ? `,${grade}` : ""}[v]`;
+  }
+
+  const frames = fitFrames(
+    list.map((s) => Math.max(s.sec, 0.01)),
+    totalFrames
+  );
+  const cover = `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}`;
+
+  // One base chain per DISTINCT input; inputs feeding several shots (the
+  // scene image behind its pseudo crops) split once.
+  const byInput = new Map<number, number[]>(); // input idx → shot positions
+  list.forEach((s, i) => {
+    const arr = byInput.get(s.input);
+    if (arr) arr.push(i);
+    else byInput.set(s.input, [i]);
+  });
+  const parts: string[] = [];
+  for (const [input, positions] of byInput) {
+    const labels = positions.map((_, j) => `[b${input}_${j}]`);
+    parts.push(
+      `[${input}:v]${cover}${
+        positions.length > 1 ? `,split=${positions.length}${labels.join("")}` : labels[0]
+      }`
+    );
+  }
+
+  list.forEach((s, i) => {
+    const pos = byInput.get(s.input)!.indexOf(i);
+    const shot = movementForKind(s.kind, s.focal ?? opts.focal ?? FOCAL_CENTER, settings.intensity);
+    const zp = shotZoompan(shot, frames[i], settings, work, out, fps, 1);
+    parts.push(
+      `[b${s.input}_${pos}]${s.crop ? cropChain(s.crop, W, H) : ""}trim=end_frame=${frames[i]},setpts=PTS-STARTPTS,${zp},format=yuv420p[v${i}]`
+    );
+  });
+
+  parts.push(
+    `${list.map((_, i) => `[v${i}]`).join("")}concat=n=${list.length}:v=1:a=0[vc]`,
     `[vc]${grade ? grade : "null"}[v]`
   );
   return parts.join(";");
