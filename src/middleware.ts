@@ -36,6 +36,10 @@ const PUBLIC_API = new Set<string>([
   "/api/auth/register",
   "/api/auth/verify-email",
   "/api/auth/reset-password",
+  // TEMPORARY deployment diagnostic (Vercel registration incident) — public
+  // on purpose: it exposes only env-presence booleans and redacted error
+  // text. Remove when the incident is closed.
+  "/api/diag",
   // OAuth redirect target — Google hits it with ?code&state and NO session
   // cookie; the route authenticates via the signed state token instead.
   "/api/youtube/callback",
