@@ -22,9 +22,13 @@ const prismaBin = join(root, 'node_modules', '.bin', 'prisma');
 const run = (args) =>
   execFileSync(prismaBin, args, { stdio: 'inherit', cwd: root });
 
-// 1. Resolve DATABASE_URL (from .env, with a SQLite fallback if absent).
-let url = '';
-if (existsSync(envPath)) {
+// 1. Resolve DATABASE_URL. Precedence: platform env var FIRST (Vercel/CI
+//    inject it there and ship no .env file — reading only .env made this
+//    script pick SQLite mode on Vercel and crash `prisma db push` with P1012
+//    "the URL must start with the protocol `file:`"), then the local .env
+//    file, then the SQLite fallback for fresh clones.
+let url = (process.env.DATABASE_URL || '').trim();
+if (!url && existsSync(envPath)) {
   const m = readFileSync(envPath, 'utf8').match(
     /^\s*DATABASE_URL\s*=\s*"?([^"\r\n]+)"?\s*$/m
   );
