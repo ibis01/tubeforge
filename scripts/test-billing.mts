@@ -1140,6 +1140,94 @@ await test("E2E aiCall: provider failure/timeout RELEASES the hold — balance f
 });
 
 // ===========================================================================
+// Phase 0 audit follow-ups (docs/audits/phase0-architecture-audit.md):
+// stale-hold sweep (R-10) · CreditBlockedError→402 (C7) · startJob running-
+// row dedupe (R-01)
+// ===========================================================================
+
+await test("stale-hold sweep: releases an old unsettled hold and restores the balance", async () => {
+  const { user, sub } = await makePaidUser(`${MARK}.p10sweep@t.test`, "active");
+  await grantMicro(user.id, sub.id, 100_000);
+  const hold = await billing.reserveCredits({ userId: user.id, estimatedMicro: 40_000, capability: "video" });
+  if (hold.mode !== "held") throw new Error(`expected held, got ${hold.mode}`);
+  // Simulate a process death that outlived the period boundary: widen the
+  // grant window so the backdated hold stays INSIDE it (a real stale hold is
+  // always inside some grant's window — it was taken after a grant existed),
+  // then backdate the hold beyond the stale cutoff.
+  await db.creditGrant.updateMany({
+    where: { userId: user.id },
+    data: { periodStart: new Date(Date.now() - 4 * 60 * 60 * 1000) },
+  });
+  await db.creditLedger.update({
+    where: { id: hold.holdId },
+    data: { createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000) },
+  });
+  const result = await billing.releaseStaleHolds({ olderThanMs: 2 * 60 * 60 * 1000 });
+  eq(result.released, 1, "the stale hold was released");
+  eq(result.alreadySettled, 0, "nothing else interfered");
+  const resolved = await billing.resolveUserPlan(user.id);
+  eq(resolved.creditBalance, 100_000, "balance fully restored (hold + release cancel inside the window)");
+  const rows = await db.creditLedger.findMany({ where: { userId: user.id }, orderBy: { createdAt: "asc" } });
+  eq(rows.length, 2, "hold + hold_release");
+  eq(rows[1].kind, "hold_release", "release kind");
+  eq(rows[1].reconcilesId, rows[0].id, "release reconciles the hold");
+});
+
+await test("stale-hold sweep: fresh holds and settled holds are never touched", async () => {
+  const { user, sub } = await makePaidUser(`${MARK}.p10safe@t.test`, "active");
+  await grantMicro(user.id, sub.id, 100_000);
+  const fresh = await billing.reserveCredits({ userId: user.id, estimatedMicro: 4_000, capability: "image" });
+  if (fresh.mode !== "held") throw new Error(`expected held, got ${fresh.mode}`);
+  const settledHold = await billing.reserveCredits({ userId: user.id, estimatedMicro: 2_000, capability: "tts" });
+  if (settledHold.mode !== "held") throw new Error(`expected held, got ${settledHold.mode}`);
+  const settled = await billing.settleCreditHold({ holdId: settledHold.holdId, ok: true });
+  eq(settled.settled, true, "settled normally");
+  const result = await billing.releaseStaleHolds({ olderThanMs: 2 * 60 * 60 * 1000 });
+  eq(result.released, 0, "fresh holds untouched");
+  eq(result.scanned, 0, "fresh + settled holds not even scanned (cutoff / anti-join)");
+  const rows = await db.creditLedger.findMany({ where: { userId: user.id } });
+  eq(rows.length, 3, "hold + hold + zero-delta adjustment — unchanged");
+  const resolved = await billing.resolveUserPlan(user.id);
+  eq(resolved.creditBalance, 94_000, "balance = 100k − 4k image hold − 2k tts actual");
+});
+
+await test("CreditBlockedError maps to a JSON 402 (Phase 0 audit C7)", async () => {
+  const err = new billing.CreditBlockedError("video", 40_000, 1_000);
+  const res = billing.creditBlockResponse(err);
+  ok(res, "mapped to a Response");
+  eq((res as Response).status, 402, "status 402");
+  const body = (await (res as Response).json()) as { code?: string; capability?: string };
+  eq(body.code, "insufficient_credits", "machine-readable code");
+  eq(body.capability, "video", "capability echoed");
+  ok(billing.creditBlockResponse(new Error("nope")) === null, "other errors fall through");
+});
+
+await test("startJob refuses while a pending OR running row exists for the same entityId+kind (audit R-01)", async () => {
+  const { user } = await makePaidUser(`${MARK}.p10dedupe@t.test`, "active");
+  const org = await makeOrg(user.id);
+  const videoId = `s72dedupe-${MARK}-1`;
+  const jobs = await import("../src/lib/tubeforge/jobs");
+
+  // A running row claimed by ANOTHER process (the worker) — invisible to
+  // this process's in-memory state, and previously to the dedupe too.
+  await db.job.create({
+    data: { organizationId: org.id, userId: user.id, kind: "render", entityId: videoId, status: "running", attempts: 1 },
+  });
+  let started = await withCtx({ userId: user.id, organizationId: org.id, role: "owner" }, () =>
+    jobs.startJob(videoId, "render", async () => {})
+  );
+  eq(started, false, "running row blocks the duplicate enqueue");
+  eq(await db.job.count({ where: { entityId: videoId, kind: "render" } }), 1, "no second job row was created");
+
+  await db.job.updateMany({ where: { entityId: videoId, kind: "render" }, data: { status: "pending" } });
+  started = await withCtx({ userId: user.id, organizationId: org.id, role: "owner" }, () =>
+    jobs.startJob(videoId, "render", async () => {})
+  );
+  eq(started, false, "pending row blocks too (regression guard)");
+  eq(await db.job.count({ where: { entityId: videoId, kind: "render" } }), 1, "still exactly one row");
+});
+
+// ===========================================================================
 // summary
 // ===========================================================================
 console.log(`\n${"─".repeat(56)}`);

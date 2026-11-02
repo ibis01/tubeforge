@@ -27,6 +27,10 @@ async function main(): Promise<void> {
   registerDefaultHandlers();
   initQueue("worker");
 
+  // Release holds orphaned by dead processes (best-effort, never throws).
+  const { startStaleHoldSweeper } = await import("@/lib/tubeforge/billing");
+  startStaleHoldSweeper();
+
   // Adopt orphaned rows from processes that died while we were down.
   await ensureRecovered();
 

@@ -364,12 +364,21 @@ export async function startJob(
   const k = key(entityId, kind);
   if (state.running.has(k) || state.queued.has(k)) return false;
 
-  // Cross-process dedupe: a pending row from a dead request must block a
-  // duplicate enqueue (indexed on entityId+kind; one cheap read).
-  const alreadyPending = await db.job
-    .findFirst({ where: { entityId, kind, status: "pending" }, select: { id: true } })
+  // Cross-process dedupe: a pending OR running row from ANOTHER process
+  // (the worker) must block a duplicate enqueue — the in-memory check above
+  // only sees this process's jobs. Phase 0 audit R-01: checking only
+  // "pending" left a window where a re-click during a worker-executed job
+  // could enqueue a second billable job for the same logical work. A stale
+  // running row left by a dead process is re-pended by boot recovery /
+  // claim liveness, so the block is bounded — and failing closed is the
+  // safe direction.
+  const alreadyQueued = await db.job
+    .findFirst({
+      where: { entityId, kind, status: { in: ["pending", "running"] } },
+      select: { id: true },
+    })
     .catch(() => null);
-  if (alreadyPending) return false;
+  if (alreadyQueued) return false;
 
   state.lastErrors.delete(k);
   state.progress.delete(k);

@@ -29,6 +29,11 @@ export async function register(): Promise<void> {
     registerDefaultHandlers();
     initQueue("web"); // starts the claim loop (TUBEFORGE_NO_CLAIM=1 → enqueue-only)
 
+    // Release holds orphaned by dead processes (best-effort, never throws,
+    // timer is unref'd — see startStaleHoldSweeper).
+    const { startStaleHoldSweeper } = await import("./lib/tubeforge/billing");
+    startStaleHoldSweeper();
+
     const { log } = await import("./lib/tubeforge/log");
     log.info("queue initialized", {
       role: "web",

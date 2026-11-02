@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/tubeforge/tenant";
 import type { Video } from "@prisma/client";
 import { parseJsonLoose, generateScriptPackage } from "@/lib/tubeforge/ai";
 import { aiCall } from "@/lib/tubeforge/budget";
+import { CreditBlockedError, creditBlockResponse } from "@/lib/tubeforge/billing";
 import { generateSceneScriptPackage } from "@/lib/tubeforge/story";
 import { deriveStatus } from "@/lib/tubeforge/status";
 import { startJob } from "@/lib/tubeforge/jobs";
@@ -70,6 +71,10 @@ Return JSON: { "angles": [ { "title": "click-worthy title under 70 chars", "topi
     }
     return angles;
   } catch (err) {
+    // Credit exhaustion is a real user-facing condition — never silently
+    // degrade to filler angles (the user would queue N videos they cannot
+    // script). Rethrow; POST maps it to a 402 before creating any rows.
+    if (err instanceof CreditBlockedError) throw err;
     console.warn("[batch] angle brainstorm failed — using fallback takes:", err instanceof Error ? err.message : err);
     return fallback;
   }
@@ -259,6 +264,8 @@ export async function POST(req: NextRequest) {
       { status: 202 }
     );
   } catch (err) {
+    const block = creditBlockResponse(err);
+    if (block) return block; // 402 insufficient_credits — before any video row exists
     const message = errorText(err, "Invalid request");
     return NextResponse.json({ error: message }, { status: 400 });
   }

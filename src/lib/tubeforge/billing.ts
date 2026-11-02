@@ -565,6 +565,25 @@ export class CreditBlockedError extends Error {
   }
 }
 
+/** Map a thrown CreditBlockedError to a JSON 402 response for interactive
+ *  routes. Returns null for any other error so callers fall through to
+ *  their normal error handling. Phase 0 audit C7: this module's doc-comment
+ *  always promised that "instanceof lets them map to a 402" — this is the
+ *  shared implementation, so no route hand-rolls the mapping. */
+export function creditBlockResponse(err: unknown): Response | null {
+  if (!(err instanceof CreditBlockedError)) return null;
+  return new Response(
+    JSON.stringify({
+      error: err.message,
+      code: "insufficient_credits",
+      capability: err.capability,
+      estimatedMicro: err.estimatedMicro,
+      balanceMicro: err.balanceMicro,
+    }),
+    { status: 402, headers: { "content-type": "application/json" } }
+  );
+}
+
 /** Which tiers enforce reservations. Starter = overdraft design (documented
  *  in hasCredits) — its calls stay on post-call accounting. Pure, unit-pinned. */
 export function reservationEnforcement(tier: string): "unmetered" | "enforced" {
@@ -681,6 +700,97 @@ export async function settleCreditHold(opts: {
       };
     })
   );
+}
+
+// ---------- stale-hold sweep (Stage 7.2 documented follow-up) ----------
+
+/** Age at which a hold is considered stale. The longest legitimate hold is
+ *  an i2v generation polled inline (~10 min incl. retries); 2h is safely
+ *  beyond anything a live call can produce. Overridable for tests. */
+const STALE_HOLD_DEFAULT_MS = 2 * 60 * 60 * 1000;
+
+function staleHoldMaxAgeMs(): number {
+  const raw = Number(process.env.TUBEFORGE_STALE_HOLD_MS ?? 0);
+  return raw > 0 ? raw : STALE_HOLD_DEFAULT_MS;
+}
+
+export interface StaleHoldSweepResult {
+  scanned: number;
+  released: number; // unsettled holds older than the cutoff — released in full
+  alreadySettled: number; // settled between scan and sweep — no-op
+}
+
+/** Release holds whose owning process died between reserveCredits and
+ *  settleCreditHold (hard crash) — the fail-closed limitation documented at
+ *  the top of this module. Each release goes through settleCreditHold
+ *  (ok=false), so it is transactional, single-shot (reconcilesId UNIQUE
+ *  forbids a double release) and restores the full estimate to the
+ *  balance. Only UNSETTLED holds older than the cutoff are targeted (the
+ *  NOT EXISTS anti-join keeps the limit aimed at real work); fresh holds
+ *  are never touched — the cutoff sits hours beyond any legitimate call.
+ *  Note: a release of a hold taken in a PREVIOUS period lands in the
+ *  current period's balance — user-favorable and bounded by the hold size
+ *  (the alternative is the user losing the credits forever). */
+export async function releaseStaleHolds(opts: {
+  olderThanMs?: number;
+  limit?: number;
+  note?: string;
+} = {}): Promise<StaleHoldSweepResult> {
+  const olderThanMs = Math.max(60_000, opts.olderThanMs ?? staleHoldMaxAgeMs());
+  const limit = Math.min(500, Math.max(1, opts.limit ?? 200));
+  const cutoff = new Date(Date.now() - olderThanMs);
+  const stale = await rawDb.$queryRaw<{ id: string }[]>`
+    SELECT h.id FROM "CreditLedger" h
+    WHERE h.kind = 'hold' AND h.createdAt < ${cutoff}
+      AND NOT EXISTS (SELECT 1 FROM "CreditLedger" s WHERE s.reconcilesId = h.id)
+    ORDER BY h.createdAt ASC
+    LIMIT ${limit}`;
+  let released = 0;
+  let alreadySettled = 0;
+  for (const hold of stale) {
+    const result = await settleCreditHold({
+      holdId: hold.id,
+      ok: false,
+      note: opts.note ?? "stale hold sweep — the owning process died before settlement",
+    });
+    if (result.settled) released += 1;
+    else alreadySettled += 1;
+  }
+  return { scanned: stale.length, released, alreadySettled };
+}
+
+let sweepTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Boot-time sweeper (web via instrumentation, worker via worker.mts).
+ *  One sweep shortly after boot, then every
+ *  TUBEFORGE_STALE_HOLD_SWEEP_MS (default 30 min; 0 disables). The timer
+ *  is unref'd so it never holds a process open, and every failure is
+ *  logged, never thrown — the sweeper must not endanger a boot. */
+export function startStaleHoldSweeper(): void {
+  if (sweepTimer) return;
+  const intervalMs =
+    Number(process.env.TUBEFORGE_STALE_HOLD_SWEEP_MS ?? 0) || 30 * 60 * 1000;
+  if (intervalMs <= 0) return;
+  const run = async (): Promise<void> => {
+    try {
+      const r = await releaseStaleHolds();
+      if (r.released > 0)
+        console.info(
+          `[billing] stale-hold sweep released ${r.released} hold(s) ` +
+            `(${r.alreadySettled} already settled of ${r.scanned} scanned)`
+        );
+    } catch (err) {
+      console.warn(
+        "[billing] stale-hold sweep failed:",
+        err instanceof Error ? err.message : err
+      );
+    }
+  };
+  const timer = setInterval(() => void run(), intervalMs);
+  timer.unref?.();
+  sweepTimer = timer;
+  const first = setTimeout(() => void run(), 30_000);
+  first.unref?.();
 }
 
 // ---------- reconciliation ----------
