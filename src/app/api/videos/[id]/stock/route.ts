@@ -60,6 +60,11 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       credit: s.stock?.credit ?? null,
       pageUrl: s.stock?.pageUrl ?? null,
     })),
+    // S4 — per-scene job flags (composite entityIds) so a studio inspector
+    // can watch ONE scene's re-pick without polling the binary GET.
+    sceneJobs: Object.fromEntries(
+      scenes.map((s) => [s.index, isJobRunning(`${id}#scene${s.index}`, "stock")])
+    ),
   });
 }
 

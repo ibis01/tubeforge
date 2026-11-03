@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseScenes } from "@/lib/tubeforge/story";
-import { readSceneStock, readStockKeys } from "@/lib/tubeforge/stock";
+import { readSceneStock, readStockKeys, sanitizeStockQuery } from "@/lib/tubeforge/stock";
 import { startJob, isJobRunning, lastJobError } from "@/lib/tubeforge/jobs";
 import { runStockSceneJob } from "@/lib/tubeforge/queue-handlers";
 
@@ -45,6 +45,8 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 /**
  * POST — (re)search stock footage for ONE scene as a background job.
  * Used by the per-scene "Find footage" button; replaces any existing clip.
+ * Body (S4): { query?: string } — search with the user's exact words instead
+ * of the scene-derived queries. Unsanitizable/absent → the derived queries.
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
@@ -77,9 +79,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
 
   // Job body is runStockSceneJob (queue-handlers.ts) — shared with the
-  // crash-recovery handler; the entityId encodes the scene.
+  // crash-recovery handler; the entityId encodes the scene, the payload
+  // carries the (re-sanitized there) user query override.
+  const body = await req.json().catch(() => null);
+  const queryOverride = sanitizeStockQuery(body?.query) ?? undefined;
   const jobKey = `${id}#scene${index}`;
-  const accepted = await startJob(jobKey, "stock", () => runStockSceneJob(jobKey));
+  const accepted = await startJob(jobKey, "stock", () => runStockSceneJob(jobKey, { queryOverride }), {
+    payload: { query: queryOverride ?? null },
+  });
 
   return NextResponse.json(
     {

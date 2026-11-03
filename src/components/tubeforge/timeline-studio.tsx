@@ -50,6 +50,11 @@
 //     lost), footage setpts'd, the duration floor shrinks by the rate.
 //   • per-scene voice fades → S2 wave 2: afade on the narration WAV, anchored
 //     to its measured (compressed) end; drag the voice clip's edge handles.
+//   • per-scene ARTWORK → S4: the inspector drives the row's scene assets —
+//     re-roll, instruction-based AI edit, user upload, per-scene stock
+//     re-pick (with an optional user search phrase). Row assets, not doc
+//     fields: the render reads art by scene index, the doc never moves.
+//     Slides mode hides the section (the deck owns the look).
 //
 // The preview is an approximation by design: the render (ffmpeg) stays the
 // source of truth. Everything the preview needs is deterministic and lives
@@ -104,6 +109,9 @@ import {
   Mic,
   Loader2,
   Wand2,
+  ImagePlus,
+  Film,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1843,6 +1851,12 @@ export function TimelineStudio({
                 revoicing={clipBusy === "revoice"}
                 hasLogo={video.brandHasLogo}
                 slidesMode={video.renderMode === "slides"}
+                videoId={videoId}
+                stockMode={video.renderMode === "stock"}
+                onArtChanged={() => {
+                  bump(); // the preview repaints with the new art on the next frame
+                  onSaved?.(); // the parent refreshes the row (fresh SceneDTOs)
+                }}
               />
             ) : (
               <div className="hidden lg:flex rounded-lg border border-dashed border-white/10 items-center justify-center p-6 text-center text-xs text-muted-foreground">
@@ -2426,6 +2440,12 @@ interface InspectorProps {
   hasLogo: boolean;
   /** Slides mode: the designed deck owns its look — chroma/PIP hidden. */
   slidesMode: boolean;
+  /** S4 — art actions. The row's scene assets move; the doc does not. */
+  videoId: string;
+  /** Stock-footage render mode: per-scene clip re-pick is available. */
+  stockMode: boolean;
+  /** Called when an art action changed the row's assets (parent refresh). */
+  onArtChanged: () => void;
 }
 
 const RENDER_HONORS = (
@@ -2438,7 +2458,7 @@ const RENDER_HONORS = (
   </Badge>
 );
 
-function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCaption, onAudio, onSeekScene, onGrade, onTitle, onCamera, onSpeed, onChroma, onPip, onRevoice, revoicing, hasLogo, slidesMode }: InspectorProps) {
+function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCaption, onAudio, onSeekScene, onGrade, onTitle, onCamera, onSpeed, onChroma, onPip, onRevoice, revoicing, hasLogo, slidesMode, videoId, stockMode, onArtChanged }: InspectorProps) {
   const shot = scene.shot;
   const grade = scene.grade ?? null;
   const ti = scene.titleOverlay ?? null;
@@ -2452,6 +2472,217 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
   const [scriptDraft, setScriptDraft] = useState(scene.narration);
   useEffect(() => setScriptDraft(scene.narration), [scene.index, scene.narration]);
   const scriptChanged = scriptDraft.trim() !== scene.narration.trim();
+
+  // ---------- art (S4) ----------
+  // The clip's face lives on the ROW's scene assets; these actions call the
+  // SAME pipelines the Scene Studio uses (re-roll / AI edit / upload / stock
+  // re-pick) and watch their jobs. The doc never moves — the render reads
+  // art by scene index.
+  const { toast } = useToast();
+  const [artBusy, setArtBusy] = useState<"reroll" | "edit" | "upload" | "stock" | null>(null);
+  const [artEpoch, setArtEpoch] = useState(0); // thumbnail cache-buster per repaint
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiDraft, setAiDraft] = useState("");
+  const [stockOpen, setStockOpen] = useState(false);
+  const [stockDraft, setStockDraft] = useState("");
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stopPoll = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+  useEffect(() => stopPoll, [stopPoll]); // unmount
+  useEffect(() => {
+    // Scene switch: the poll watches the OLD scene's job to completion is
+    // wrong here — stop, and drop the transient open/draft panels.
+    stopPoll();
+    setArtBusy(null);
+    setAiOpen(false);
+    setStockOpen(false);
+  }, [scene.index, stopPoll]);
+
+  const thumbUrl = scenesMeta?.imageUrl
+    ? `${scenesMeta.imageUrl}${scenesMeta.imageUrl.includes("?") ? "&" : "?"}v=${artEpoch}`
+    : null;
+  const artDisabled = disabled || artBusy !== null || Boolean(scenesMeta?.generating);
+
+  /** Watch a scene-image job (re-roll / AI edit) — the Scene Studio's exact
+   *  contract: poll GET /storyboard every 3s until the scene's generating
+   *  flag drops, bounded at ~8 min (the job's own retries outlast us). */
+  const pollImageJob = useCallback(
+    (index: number, kind: "reroll" | "edit") => {
+      stopPoll();
+      let ticks = 0;
+      pollRef.current = setInterval(async () => {
+        ticks += 1;
+        try {
+          const res = await fetch(`/api/videos/${videoId}/storyboard`, { cache: "no-store" });
+          if (!res.ok) return; // transient — keep waiting
+          const d = (await res.json()) as {
+            scenes?: Array<{ index: number; generating: boolean }>;
+            error?: string | null;
+          };
+          const s = (d.scenes ?? []).find((x) => x.index === index);
+          if (s && !s.generating) {
+            stopPoll();
+            setArtBusy(null);
+            setArtEpoch((v) => v + 1);
+            onArtChanged();
+            if (d.error) {
+              toast({ title: `Scene ${index} art job failed`, description: d.error, variant: "destructive" });
+            } else {
+              toast({
+                title: `Scene ${index} ${kind === "edit" ? "AI-edited" : "repainted"}`,
+                description: "The new frame is on the timeline — the render reads it as this scene's art.",
+              });
+            }
+          } else if (ticks > 160) {
+            stopPoll();
+            setArtBusy(null);
+            toast({
+              title: "Still working in the background",
+              description: "The art job is taking unusually long — Scene Studio shows its progress.",
+            });
+          }
+        } catch {
+          /* transient network — keep waiting */
+        }
+      }, 3000);
+    },
+    [videoId, onArtChanged, stopPoll, toast]
+  );
+
+  /** Watch a per-scene stock job: GET /stock's sceneJobs flags. The honest
+   *  outcome reads off the ROW (hasStock before → after), not internals. */
+  const pollStockJob = useCallback(
+    (index: number, hadStock: boolean) => {
+      stopPoll();
+      let ticks = 0;
+      pollRef.current = setInterval(async () => {
+        ticks += 1;
+        try {
+          const res = await fetch(`/api/videos/${videoId}/stock`, { cache: "no-store" });
+          if (!res.ok) return;
+          const d = (await res.json()) as {
+            sceneJobs?: Record<string, boolean>;
+            scenes?: Array<{ index: number; hasStock: boolean }>;
+          };
+          const running = Boolean(d.sceneJobs?.[String(index)]);
+          if (!running) {
+            stopPoll();
+            setArtBusy(null);
+            onArtChanged();
+            const now = d.scenes?.find((x) => x.index === index)?.hasStock ?? false;
+            if (now) {
+              toast({
+                title: `Scene ${index} stock clip ${hadStock ? "replaced" : "matched"}`,
+                description: "The re-picked clip is on the row — the render reads it in stock mode.",
+              });
+            } else {
+              toast({
+                title: `Scene ${index} — no clip found`,
+                description: "The search came back empty; the scene keeps its storyboard art.",
+              });
+            }
+          } else if (ticks > 60) {
+            stopPoll();
+            setArtBusy(null);
+            toast({
+              title: "Still searching…",
+              description: "The stock job is taking long — the Stock panel shows overall progress.",
+            });
+          }
+        } catch {
+          /* transient network — keep waiting */
+        }
+      }, 3000);
+    },
+    [videoId, onArtChanged, stopPoll, toast]
+  );
+
+  const onReroll = async () => {
+    setArtBusy("reroll");
+    try {
+      const res = await fetch(`/api/videos/${videoId}/storyboard`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scene: scene.index }),
+      });
+      const d = (await res.json().catch(() => ({}))) as { accepted?: boolean; error?: string };
+      if (!res.ok) throw new Error(d.error ?? `HTTP ${res.status}`);
+      if (!d.accepted) toast({ title: "An art job for this scene is already running — watching it" });
+      pollImageJob(scene.index, "reroll");
+    } catch (e) {
+      setArtBusy(null);
+      toast({ title: "Re-roll failed", description: e instanceof Error ? e.message : "try again", variant: "destructive" });
+    }
+  };
+
+  const onAiEdit = async () => {
+    const instruction = aiDraft.trim();
+    if (instruction.length < 3) return;
+    setArtBusy("edit");
+    try {
+      const res = await fetch(`/api/videos/${videoId}/storyboard`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scene: scene.index, instruction }),
+      });
+      const d = (await res.json().catch(() => ({}))) as { accepted?: boolean; error?: string };
+      if (!res.ok) throw new Error(d.error ?? `HTTP ${res.status}`);
+      pollImageJob(scene.index, "edit");
+    } catch (e) {
+      setArtBusy(null);
+      toast({ title: "AI edit failed", description: e instanceof Error ? e.message : "try again", variant: "destructive" });
+    }
+  };
+
+  const onUploadFile = async (file: File | null) => {
+    if (!file) return;
+    setArtBusy("upload");
+    try {
+      const form = new FormData();
+      form.set("scene", String(scene.index));
+      form.set("file", file);
+      const res = await fetch(`/api/videos/${videoId}/storyboard/upload`, {
+        method: "POST",
+        body: form,
+      });
+      const d = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!res.ok) throw new Error(d.error ?? `HTTP ${res.status}`);
+      setArtBusy(null);
+      setArtEpoch((v) => v + 1);
+      onArtChanged();
+      toast({
+        title: `Scene ${scene.index} now uses your artwork`,
+        description: "Renders were invalidated — render again to rebuild the video.",
+      });
+    } catch (e) {
+      setArtBusy(null);
+      toast({ title: "Upload failed", description: e instanceof Error ? e.message : "try again", variant: "destructive" });
+    }
+  };
+
+  const onStock = async () => {
+    setArtBusy("stock");
+    const hadStock = Boolean(scenesMeta?.hasStock);
+    try {
+      const res = await fetch(`/api/videos/${videoId}/stock/${scene.index}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(stockDraft.trim() ? { query: stockDraft.trim() } : {}),
+      });
+      const d = (await res.json().catch(() => ({}))) as { accepted?: boolean; error?: string };
+      if (!res.ok) throw new Error(d.error ?? `HTTP ${res.status}`);
+      pollStockJob(scene.index, hadStock);
+    } catch (e) {
+      setArtBusy(null);
+      toast({ title: "Stock re-pick failed", description: e instanceof Error ? e.message : "try again", variant: "destructive" });
+    }
+  };
+
   return (
     <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.02] p-3">
       <div className="flex items-center gap-2">
@@ -2505,6 +2736,114 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
           in one server step. Custom-audio videos re-attach per-scene audio first.
         </p>
       </section>
+
+      {/* artwork — S4: the clip's face. Re-roll / AI edit / upload / stock
+          re-pick, all through the pipelines the Scene Studio uses. The
+          thumbnail busts its cache per repaint (the art URL is static). */}
+      {!slidesMode && (
+        <section className="space-y-1.5">
+          <header className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+            <ImagePlus className="h-3 w-3" /> Artwork
+            <span className="ml-auto rounded bg-amber-500/15 px-1.5 py-px text-[9px] normal-case tracking-normal text-amber-200">
+              row asset
+            </span>
+          </header>
+          <div className="flex gap-2">
+            <div className="relative h-[52px] w-[92px] shrink-0 overflow-hidden rounded border border-white/10 bg-black/40">
+              {thumbUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={thumbUrl} alt={`Scene ${scene.index} artwork`} className="h-full w-full object-cover" />
+              ) : (
+                <div className="grid h-full place-items-center text-[9px] text-muted-foreground">no art yet</div>
+              )}
+              {(artBusy || scenesMeta?.generating) && (
+                <div className="absolute inset-0 grid place-items-center bg-black/55">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
+                </div>
+              )}
+            </div>
+            <div className="flex min-w-0 flex-1 flex-wrap content-start items-center gap-1">
+              <Button size="sm" variant="outline" className="h-7" disabled={artDisabled} onClick={() => void onReroll()} title="Paint a fresh take from the scene's prompt">
+                {artBusy === "reroll" ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                <span className="ml-1 text-xs">New take</span>
+              </Button>
+              <Button size="sm" variant="outline" className="h-7" disabled={artDisabled} onClick={() => setAiOpen((v) => !v)} title="Edit the current image with an instruction">
+                <Sparkles className="h-3 w-3" />
+                <span className="ml-1 text-xs">AI edit</span>
+              </Button>
+              <Button size="sm" variant="outline" className="h-7" disabled={artDisabled} onClick={() => fileRef.current?.click()} title="Replace with your own artwork (cover-cropped to the canvas)">
+                {artBusy === "upload" ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImagePlus className="h-3 w-3" />}
+                <span className="ml-1 text-xs">Upload</span>
+              </Button>
+              {stockMode && (
+                <Button size="sm" variant="outline" className="h-7" disabled={artDisabled} onClick={() => setStockOpen((v) => !v)} title="Re-search stock footage for this scene">
+                  {artBusy === "stock" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Film className="h-3 w-3" />}
+                  <span className="ml-1 text-xs">Re-pick clip</span>
+                </Button>
+              )}
+            </div>
+          </div>
+          {aiOpen && (
+            <div className="space-y-1.5 rounded border border-white/10 p-2">
+              <Input
+                value={aiDraft}
+                onChange={(e) => setAiDraft(e.target.value)}
+                placeholder='e.g. "make it night", "warmer light", "empty street"'
+                className="h-7 text-xs"
+                maxLength={500}
+                aria-label="AI edit instruction"
+              />
+              <div className="flex justify-end gap-1">
+                <Button size="sm" variant="ghost" className="h-6" onClick={() => { setAiOpen(false); setAiDraft(""); }}>
+                  Cancel
+                </Button>
+                <Button size="sm" className="h-6" disabled={artDisabled || aiDraft.trim().length < 3} onClick={() => void onAiEdit()}>
+                  {artBusy === "edit" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                  <span className="ml-1 text-xs">Apply edit</span>
+                </Button>
+              </div>
+            </div>
+          )}
+          {stockOpen && stockMode && (
+            <div className="space-y-1.5 rounded border border-white/10 p-2">
+              <Input
+                value={stockDraft}
+                onChange={(e) => setStockDraft(e.target.value)}
+                placeholder={scenesMeta?.stockQuery ? `was: ${scenesMeta.stockQuery}` : 'Search with your own words — e.g. "city timelapse night"'}
+                className="h-7 text-xs"
+                maxLength={120}
+                aria-label="Stock search phrase"
+              />
+              <div className="flex justify-end gap-1">
+                <Button size="sm" variant="ghost" className="h-6" onClick={() => { setStockOpen(false); setStockDraft(""); }}>
+                  Cancel
+                </Button>
+                <Button size="sm" className="h-6" disabled={artDisabled} onClick={() => void onStock()}>
+                  {artBusy === "stock" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Film className="h-3 w-3" />}
+                  <span className="ml-1 text-xs">{stockDraft.trim() ? "Search this" : "Re-pick"}</span>
+                </Button>
+              </div>
+            </div>
+          )}
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="hidden"
+            onChange={(e) => {
+              void onUploadFile(e.target.files?.[0] ?? null);
+              e.currentTarget.value = ""; // re-picking the same file re-fires
+            }}
+          />
+          <p className="text-[10px] leading-snug text-muted-foreground">
+            Art is a row asset (scene-{String(scene.index).padStart(2, "0")} on disk), not a doc
+            field — these actions run the same pipelines as Scene Studio and
+            keep the narration and window untouched. The render reads the art
+            by scene index.
+            {!stockMode && " Stock re-pick appears when the render mode is stock footage."}
+          </p>
+        </section>
+      )}
 
       {/* timing */}
       <section className="space-y-1.5">

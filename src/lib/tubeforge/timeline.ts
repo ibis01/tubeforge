@@ -413,6 +413,49 @@ export function parseTimeline(json: string | null | undefined): AssembledTimelin
   }
 }
 
+/** The doc's scene vocabulary — serializeTimeline emits EXACTLY these keys,
+ *  in this order, nothing else. A hostile client (or a lost older doc) can
+ *  carry junk keys (`art`, `image`, `poster`, …) in the persisted column;
+ *  passthrough parsing tolerates them on read, but the WRITER never stores
+ *  what the type doesn't declare — the same "never passed through" doctrine
+ *  the S2/S3 sanitizers apply to the known fields. */
+const TIMELINE_SCENE_FIELDS = [
+  "index",
+  "title",
+  "narration",
+  "visual",
+  "startSec",
+  "endSec",
+  "durationSec",
+  "transitionIn",
+  "transitionOut",
+  "audio",
+  "caption",
+  "source",
+  "stockSource",
+  "stockQuery",
+  "shot",
+  "grade",
+  "titleOverlay",
+  "cameraKeys",
+  "speed",
+  "chroma",
+  "pip",
+] as const;
+
 export function serializeTimeline(timeline: AssembledTimeline): string {
-  return JSON.stringify(timeline);
+  return JSON.stringify({
+    scenes: timeline.scenes.map((s) => {
+      const rec = s as unknown as Record<string, unknown>;
+      const out: Record<string, unknown> = {};
+      for (const f of TIMELINE_SCENE_FIELDS) {
+        if (f in rec) out[f] = rec[f];
+      }
+      return out;
+    }),
+    sceneCount: timeline.sceneCount,
+    totalDurationSec: timeline.totalDurationSec,
+    generatedAt: timeline.generatedAt,
+    ...(timeline.renderPrefs ? { renderPrefs: timeline.renderPrefs } : {}),
+  });
 }

@@ -204,6 +204,23 @@ export async function searchAll(query: string, keys: { pexels: string; pixabay: 
 // ---------- Scene → query derivation ----------
 // The pure logic lives in stock-query.ts (unit-testable, DB-free).
 
+/** Sanitize a user-supplied stock search phrase (S4 per-scene re-pick).
+ *
+ *  The override replaces the scene-derived queries with the user's own
+ *  words, so it must be safe to embed in a URL and short enough to stay a
+ *  SEARCH rather than an essay. Returns null when nothing usable remains —
+ *  the caller then falls back to the scene's derived queries. */
+export function sanitizeStockQuery(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const cleaned = v
+    .replace(/[\u0000-\u001f\u007f]/g, " ") // control chars → spaces
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120)
+    .trim();
+  return cleaned.length >= 2 ? cleaned : null;
+}
+
 /** Rough spoken duration of the scene's narration (a TTS refiner, not exact). */
 function estimatedSceneDuration(scene: Scene): number {
   const words = scene.narration.split(/\s+/).filter(Boolean).length;
@@ -367,6 +384,10 @@ export async function fetchStockForScenes(opts: {
   onProgress?: (done: number, total: number, label: string) => void;
   /** Per-scene override — used by the single-scene refetch endpoint. */
   onlyScene?: number;
+  /** S4 — search with the user's exact words instead of the scene-derived
+   *  queries (per-scene re-pick in the studio). No fallbacks: an override
+   *  that finds nothing is an honest no-match. */
+  queryOverride?: string;
 }): Promise<StockRunResult> {
   const keys = await readStockKeys();
   const dir = videoDir(opts.videoId);
@@ -391,7 +412,12 @@ export async function fetchStockForScenes(opts: {
     if (opts.shouldCancel?.()) throw new Error("__CANCELLED__");
     opts.onProgress?.(i, missing.length, `Searching footage for scene ${scene.index} (${i + 1}/${missing.length})`);
 
-    const ref = await fetchForScene(opts.videoId, scene, keys, sceneQueries(scene));
+    const ref = await fetchForScene(
+      opts.videoId,
+      scene,
+      keys,
+      opts.queryOverride ? [opts.queryOverride] : sceneQueries(scene)
+    );
     opts.onProgress?.(i + 1, missing.length, ref ? `Scene ${scene.index} matched` : `Scene ${scene.index} — no match found`);
 
     if (ref) {

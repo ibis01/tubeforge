@@ -27,7 +27,7 @@ import { registerJobHandler } from "./queue";
 import { runScriptJob } from "./script-job";
 import { runResearchScan } from "./research";
 import { parseScenes } from "./story";
-import { fetchStockForScenes } from "./stock";
+import { fetchStockForScenes, sanitizeStockQuery } from "./stock";
 import { isJobCancelled, setJobProgress, JobCancelledError, type JobKind } from "./jobs";
 import { errorText } from "./redact";
 
@@ -145,14 +145,30 @@ export async function runStockRefresh(
   }
 }
 
+/** S4 — the per-scene stock job's payload: an optional user search phrase.
+ *  Sanitized again on resume — a payload is data, never trusted. (Exported
+ *  for the unit probe.) */
+export function parseStockScenePayload(payload: unknown): { queryOverride?: string } {
+  const rec = asRecord(payload);
+  const raw = rec?.query;
+  const cleaned = typeof raw === "string" ? sanitizeStockQuery(raw) : null;
+  return cleaned ? { queryOverride: cleaned } : {};
+}
+
 /**
  * The PER-SCENE stock job body — extracted from POST /api/videos/[id]/stock/[n]
  * (Stage 3 close-out). entityId is "<videoId>#scene<N>"; always force-refreshes
  * that one scene's clip. Previously the shared "stock" handler passed the
  * composite id straight to runStockRefresh, whose findUnique came back null —
  * a crashed per-scene job resumed as a silent no-op. This dispatch fixes that.
+ *
+ * S4: opts.queryOverride searches the user's exact words instead of the
+ * scene-derived queries (the studio inspector's "search with my own phrase").
  */
-export async function runStockSceneJob(entityId: string): Promise<void> {
+export async function runStockSceneJob(
+  entityId: string,
+  opts: { queryOverride?: string } = {}
+): Promise<void> {
   const ctx = assertCtx("runStockSceneJob");
   const [videoId, suffix] = splitEntityId(entityId, "#scene");
   const sceneIndex = suffix !== null ? Number(suffix) : NaN;
@@ -173,6 +189,7 @@ export async function runStockSceneJob(entityId: string): Promise<void> {
       scenes,
       force: true, // one scene — always refresh its clip
       onlyScene: sceneIndex,
+      queryOverride: opts.queryOverride,
       shouldCancel: () => isJobCancelled(entityId, "stock"),
       onProgress: (current, total, label) =>
         setJobProgress(entityId, "stock", current, total, label),
@@ -188,9 +205,11 @@ export async function runStockSceneJob(entityId: string): Promise<void> {
         userId: ctx.userId,
         videoId,
         stage: "stock",
-        message: scene.stock
-          ? `Scene ${sceneIndex} stock clip re-matched`
-          : `Scene ${sceneIndex} stock clip matched`,
+        message: `Scene ${sceneIndex} stock clip ${
+          scene.stock ? "re-matched" : "matched"
+        } — searched ${
+          opts.queryOverride ? `“${opts.queryOverride}”` : "the scene's script"
+        }`,
       },
     });
   } catch (err) {
@@ -319,7 +338,8 @@ export function registerDefaultHandlers(): void {
   registerJobHandler("research", (sessionId) => runResearchScan(sessionId));
   registerJobHandler("stock", (entityId, payload) => {
     // Composite entityId = the per-scene variant; plain videoId = full refresh.
-    if (entityId.includes("#scene")) return runStockSceneJob(entityId);
+    if (entityId.includes("#scene"))
+      return runStockSceneJob(entityId, parseStockScenePayload(payload));
     const force = asRecord(payload)?.force;
     return runStockRefresh(entityId, { force: force === true });
   });
