@@ -103,6 +103,7 @@ import {
   FileText,
   Mic,
   Loader2,
+  Wand2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -183,6 +184,14 @@ interface ClipOpResponse {
 }
 
 type ClipAction = "split" | "duplicate" | "delete" | "revoice";
+
+/** POST /studio/assist — the AI editor's suggestions (server contract). */
+interface AssistSuggestionDTO {
+  sceneIndex: number;
+  kind: "transition" | "grade" | "title" | "note";
+  value: string;
+  reason: string;
+}
 
 // ---------- working-copy helpers (history + recompute) ----------
 
@@ -1385,6 +1394,57 @@ export function TimelineStudio({
     draw();
   }, [draw]);
 
+  // S3 — AI assist: one LLM pass over the SAVED doc (flush first, the clip-op
+  // contract). Suggestions apply through the studio's own edit callbacks —
+  // the model never writes the doc.
+  const [assistBusy, setAssistBusy] = useState(false);
+  const [assist, setAssist] = useState<AssistSuggestionDTO[] | null>(null);
+  const runAssist = useCallback(async () => {
+    if (!timeline || assistBusy || saving || loading || renderInFlight) return;
+    setAssistBusy(true);
+    try {
+      if (dirty) await save();
+      const res = await fetch(`/api/videos/${videoId}/studio/assist`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = (await res.json()) as { suggestions?: AssistSuggestionDTO[]; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setAssist(data.suggestions ?? []);
+      if (!data.suggestions?.length)
+        toast({ title: "No suggestions", description: "The editor found nothing worth changing — the cut looks good." });
+    } catch (err) {
+      toast({
+        title: "AI assist failed",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setAssistBusy(false);
+    }
+  }, [timeline, assistBusy, saving, loading, renderInFlight, dirty, save, videoId, toast]);
+
+  /** Apply one suggestion through the studio's own edit callbacks. */
+  const applySuggestion = useCallback(
+    (s: AssistSuggestionDTO) => {
+      if (s.kind === "transition") {
+        setTransitionIn(s.sceneIndex, s.value);
+      } else if (s.kind === "grade") {
+        const preset = GRADE_PRESETS[s.value];
+        if (preset) patchScene(s.sceneIndex, { grade: { ...preset } }, { key: `assist-grade:${s.sceneIndex}` });
+      } else if (s.kind === "title") {
+        patchScene(
+          s.sceneIndex,
+          { titleOverlay: { text: s.value, style: "clean", anim: "fade", pos: "bottom", size: 1 } },
+          { key: `assist-title:${s.sceneIndex}` }
+        );
+      }
+      setAssist((list) => (list ? list.filter((x) => x !== s) : list));
+    },
+    [setTransitionIn, patchScene]
+  );
+
   // ---------- keyboard transport + shortcuts ----------
 
   useEffect(() => {
@@ -1520,6 +1580,16 @@ export function TimelineStudio({
           <Button
             size="sm"
             variant="ghost"
+            onClick={() => void runAssist()}
+            disabled={!timeline || assistBusy || saving || loading || renderInFlight}
+            title="One AI pass over the saved timeline — transition, grade, title and pacing suggestions you apply one by one"
+          >
+            {assistBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+            <span className="ml-1.5 text-xs">{assistBusy ? "Reviewing…" : "AI assist"}</span>
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
             onClick={() => void assemble()}
             disabled={loading || saving || renderInFlight}
             title="Re-assemble from current scenes + plan (replaces edits)"
@@ -1538,6 +1608,72 @@ export function TimelineStudio({
           </Button>
         </div>
       </header>
+
+      {/* S3 — the AI assist panel: suggestions apply through the studio's own
+          edit callbacks (never a doc write), each with its reason. */}
+      {assist != null && assist.length > 0 && (
+        <div className="space-y-1.5 rounded-lg border border-primary/25 bg-primary/[0.06] p-2.5">
+          <div className="flex items-center gap-2">
+            <Wand2 className="h-3.5 w-3.5 text-primary/80" />
+            <span className="text-xs font-medium">Editor suggestions</span>
+            <span className="text-[10px] text-muted-foreground">{assist.length} left</span>
+            <button
+              type="button"
+              className="ml-auto text-[10px] text-muted-foreground hover:text-foreground"
+              onClick={() => setAssist(null)}
+            >
+              dismiss
+            </button>
+          </div>
+          <div className="max-h-44 space-y-1 overflow-y-auto">
+            {assist.map((s, i) => (
+              <div
+                key={`${s.sceneIndex}-${s.kind}-${i}`}
+                className="flex items-start gap-2 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1.5"
+              >
+                <Badge variant="secondary" className="mt-px shrink-0 font-mono text-[9px]">
+                  #{s.sceneIndex}
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className="mt-px shrink-0 border-white/15 text-[9px] uppercase tracking-wide text-muted-foreground"
+                >
+                  {s.kind}
+                </Badge>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-xs">
+                    {s.kind === "transition" || s.kind === "grade" ? (
+                      <span className="font-mono text-[11px] text-primary/90">{s.value}</span>
+                    ) : s.kind === "title" ? (
+                      <span className="italic">“{s.value}”</span>
+                    ) : (
+                      <span className="text-muted-foreground">pacing note</span>
+                    )}
+                  </div>
+                  {s.reason && (
+                    <div className="text-[10px] leading-snug text-muted-foreground">{s.reason}</div>
+                  )}
+                </div>
+                {s.kind !== "note" && (
+                  <Button
+                    size="sm"
+                    className="h-6 shrink-0 px-2 text-[10px]"
+                    disabled={saving || renderInFlight}
+                    onClick={() => applySuggestion(s)}
+                    title="Apply through the studio's own edit path — undo works as usual"
+                  >
+                    Apply
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+          <p className="text-[10px] leading-snug text-muted-foreground">
+            Suggestions are validated against the studio's catalogs and applied through the
+            same edits a human click makes — ⌘Z undoes any of them.
+          </p>
+        </div>
+      )}
 
       {!timeline ? (
         <div className="py-8 text-center text-xs text-muted-foreground">
