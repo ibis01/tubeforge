@@ -307,6 +307,9 @@ export function TimelineStudio({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  /** S3 — timestamp of the last successful save (manual or auto); drives
+   *  the quiet “saved” note next to the Save button. */
+  const [savedAt, setSavedAt] = useState<number | null>(null);
   const [playhead, setPlayhead] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [density, setDensity] = useState(DENSITY_DEFAULT);
@@ -411,38 +414,58 @@ export function TimelineStudio({
     }
   }, [videoId, toast]);
 
-  const save = useCallback(async () => {
-    if (!timeline || !dirty) return;
-    setSaving(true);
-    try {
-      const res = await fetch(`/api/videos/${videoId}/assemble`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        // sceneOrder rides along — the row's scenes reorder with the doc so
-        // the render (which maps durations by POSITION onto the row) and the
-        // timeline can never disagree about play order.
-        body: JSON.stringify({
-          ...timeline,
-          sceneOrder: timeline.scenes.map((s) => s.index),
-        }),
-      });
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(err.error ?? `HTTP ${res.status}`);
+  const save = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      const silent = opts?.silent === true;
+      if (!timeline || !dirty) return;
+      setSaving(true);
+      try {
+        const res = await fetch(`/api/videos/${videoId}/assemble`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          // sceneOrder rides along — the row's scenes reorder with the doc so
+          // the render (which maps durations by POSITION onto the row) and the
+          // timeline can never disagree about play order.
+          body: JSON.stringify({
+            ...timeline,
+            sceneOrder: timeline.scenes.map((s) => s.index),
+          }),
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        setDirty(false);
+        setSavedAt(Date.now());
+        onSaved?.();
+        // Autosaves stay quiet (a toast every 2.5 s of editing is noise);
+        // failures ALWAYS surface — a silent lost save is the worst outcome.
+        if (!silent)
+          toast({ title: "Timeline saved", description: "The render will honor your trims and order." });
+      } catch (err) {
+        toast({
+          title: silent ? "Autosave failed" : "Save failed",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setSaving(false);
       }
-      setDirty(false);
-      onSaved?.();
-      toast({ title: "Timeline saved", description: "The render will honor your trims and order." });
-    } catch (err) {
-      toast({
-        title: "Save failed",
-        description: err instanceof Error ? err.message : String(err),
-        variant: "destructive",
-      });
-    } finally {
-      setSaving(false);
-    }
-  }, [videoId, timeline, dirty, onSaved, toast]);
+    },
+    [videoId, timeline, dirty, onSaved, toast]
+  );
+
+  // S3 — autosave: 2.5 s after the last edit, silently. ⌘S stays instant and
+  // toasts; the debounce resets on every further edit, and renders/loads
+  // suspend it (a save racing a server-side clip op would clobber its doc).
+  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!dirty || !timeline || saving || loading || renderInFlight) return;
+    autosaveTimer.current = setTimeout(() => void save({ silent: true }), 2500);
+    return () => {
+      if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    };
+  }, [timeline, dirty, saving, loading, renderInFlight, save]);
 
   // ---------- undo / redo / reset ----------
 
@@ -1460,11 +1483,18 @@ export function TimelineStudio({
               {timeline.sceneCount} scenes · {timeline.totalDurationSec.toFixed(1)}s
             </Badge>
           )}
-          {dirty && (
+          {dirty ? (
             <Badge className="text-[10px] bg-amber-500/15 text-amber-200 border-amber-500/30">
               unsaved
             </Badge>
-          )}
+          ) : savedAt ? (
+            <span
+              className="text-[10px] text-muted-foreground"
+              title="Autosaved 2.5 s after your last edit — ⌘S saves instantly"
+            >
+              saved {new Date(savedAt).toLocaleTimeString()}
+            </span>
+          ) : null}
         </div>
         <div className="ml-auto flex items-center gap-1">
           <Button size="sm" variant="ghost" onClick={undo} disabled={!canUndo || saving || loading} title="Undo (⌘Z)">
