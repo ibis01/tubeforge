@@ -95,3 +95,14 @@ bun.lock
 venv/
 .venv/
 preview/venv/
+
+# --- container platform artifacts (never commit; a sweep once captured a 469MB bundle) ---
+*.bundle
+/.zscripts/
+/Caddyfile
+/LOCAL-SETUP.md
+/scripts/SETUP-local.md
+/examples/
+/mini-services/
+/tests/*runtime*
+/tests/database-runtime-build.sh

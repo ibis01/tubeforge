@@ -687,7 +687,7 @@ function clampLevel(v: number | null | undefined, fallback: number): number {
  * but the narration chain always stays: apad on [voice] is the amix's
  * duration anchor, so the segment's length never depends on the extras.
  */
-async function sceneAudio(
+export async function sceneAudio(
   sfx: boolean,
   sfxKind: string,
   ambiencePath: string | null,
