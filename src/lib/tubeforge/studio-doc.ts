@@ -135,8 +135,10 @@ export function escapeDrawtext(s: string): string {
 
 /**
  * The drawtext chain for one scene's title, appended to the segment's visual
- * graph (whose output is labeled [v]). Returns null when the scene carries
- * no title. `dur` is the segment length (the animation timeline).
+ * graph (whose output is labeled [v] by default — S3 chains chroma/PIP links
+ * ahead of the title, so the chain's INPUT label is a parameter). Returns
+ * null when the scene carries no title. `dur` is the segment length (the
+ * animation timeline).
  *
  * Geometry mirrors the caption grammar: face size relative to frame height,
  * high-contrast outline, inside the safe zone. The animation rides `t` —
@@ -145,7 +147,8 @@ export function escapeDrawtext(s: string): string {
 export function titleDrawtextFilter(
   title: SceneTitle | null | undefined,
   dur: number,
-  vertical: boolean
+  vertical: boolean,
+  inLabel = "[v]"
 ): string | null {
   if (!title) return null;
   const D = Math.max(dur, 0.5);
@@ -208,7 +211,10 @@ export function titleDrawtextFilter(
     }
   }
 
-  return `[v]drawtext=${common}:text='${text}':x='${xExpr}':y='${yExpr}':fontsize=${face}:${look}${alpha ? `:${alpha}` : ""}[vt]`;
+  return `[v]drawtext=${common}:text='${text}':x='${xExpr}':y='${yExpr}':fontsize=${face}:${look}${alpha ? `:${alpha}` : ""}[vt]`.replace(
+    "[v]drawtext",
+    `${inLabel}drawtext`
+  );
 }
 
 // ---------- camera keyframes ----------
@@ -398,10 +404,12 @@ export function pipOverlayFilter(
   const w = Math.max(32, Math.round(opts.frameW * p.size));
   const m = Math.round(opts.frameW * p.margin);
   const bt = Math.max(2, Math.round(opts.frameW * 0.002));
+  // NOTE: long variable names only (main_w/overlay_w) — this ffmpeg build
+  // rejects overlay's short w/W/h/H aliases (evaluated to NaN → hidden).
   const x =
-    p.pos.endsWith("l") ? String(m) : p.pos.endsWith("r") ? `w-W-${m}` : "(w-W)/2";
+    p.pos.endsWith("l") ? String(m) : p.pos.endsWith("r") ? `main_w-overlay_w-${m}` : "(main_w-overlay_w)/2";
   const y =
-    p.pos.startsWith("t") ? String(m) : p.pos.startsWith("b") ? `h-H-${m}` : "(h-H)/2";
+    p.pos.startsWith("t") ? String(m) : p.pos.startsWith("b") ? `main_h-overlay_h-${m}` : "(main_h-overlay_h)/2";
   return {
     chain: [
       `[${opts.pipInput}:v]scale=${w}:-2,format=rgba,colorchannelmixer=aa=${p.opacity.toFixed(2)}${

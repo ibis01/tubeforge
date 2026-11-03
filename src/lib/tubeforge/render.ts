@@ -54,6 +54,7 @@ import {
   sanitizeMotion,
   studioCameraPlan,
   MOTION_DEFAULTS,
+  OUTPUT_SIZES,
   type MotionScenePlan,
   type MotionSettings,
   type MoveKind,
@@ -62,9 +63,15 @@ import {
 import {
   gradeFilter,
   titleDrawtextFilter,
+  chromaFilterChain,
+  pipOverlayFilter,
+  QUALITY_ENCODING,
   type SceneGrade,
   type SceneTitle,
   type SceneCameraKeys,
+  type SceneChroma,
+  type ScenePip,
+  type ExportQuality,
 } from "./studio-doc";
 import { getApprovedMotionMap, getApprovedAudioMap, getApprovedPlan } from "./director-plan";
 import { buildSceneShots, ensureShotImages, PSEUDO_CROPS, type SceneShotPlan } from "./shots";
@@ -170,6 +177,10 @@ export interface RenderOptions {
    *  same play order); null/absent fields fall back to the video-level
    *  behavior, so a missing or stale doc changes nothing. */
   docScenes?: DocSceneSettings[] | null;
+  /** S3 — delivery encode tier (draft CRF 26 / standard 20 / high 18;
+   *  default standard). Rides the segments, the blend masters and the
+   *  subtitle-burn pass. */
+  quality?: ExportQuality;
   onProgress?: (current: number, total: number, label: string) => void;
 }
 
@@ -453,6 +464,12 @@ async function buildSegment(opts: {
    *  fade-out anchors to. */
   docFades?: { inSec: number; outSec: number } | null;
   wavDur?: number;
+  /** S3 — chroma key settings for this scene (null = none; slides never key). */
+  docChroma?: SceneChroma | null;
+  /** S3 — corner logo overlay settings (null = none; requires a brand logo). */
+  docPip?: ScenePip | null;
+  /** S3 — encode quality tier (default "standard": CRF 20 / veryfast). */
+  quality?: ExportQuality;
   /** M2: the approved Director shot list for this scene — when present, the
    * scene renders through the multi-image shot graph instead of the single-
    * image Smart Motion graph (docs/director-m1-m2-spec.md §1.7). */
@@ -473,25 +490,66 @@ async function buildSegment(opts: {
   // classic look is the default), the title overlay chain (null = none) and
   // the footage playback rate (1 = no setpts).
   const grade = gradeForScene(opts.docGrade);
-  const titleChain = titleDrawtextFilter(
-    opts.docTitle ?? null,
-    dur,
-    aspect !== "16:9"
-  );
+  // S3 — keying + corner overlay. Slides keep their designed-deck grammar
+  // (no grade, no keying, no overlay — the brand kit owns the logo there).
+  const chroma = mode !== "slides" ? opts.docChroma ?? null : null;
+  const pip = mode !== "slides" ? opts.docPip ?? null : null;
+  // The logo is a storage object — materialize to a local path for ffmpeg.
+  // SVGs can't be read by this build; the overlay is skipped with a note.
+  let pipLogoPath: string | null = null;
+  if (pip) {
+    for (const ext of ["png", "webp"]) {
+      const key = `${opts.videoId}/brand-logo.${ext}`;
+      if (await storage.exists(key)) {
+        pipLogoPath = await storage.materialize(key);
+        break;
+      }
+    }
+    if (!pipLogoPath)
+      console.warn(`[render] scene ${scene.index}: PIP set but no png/webp brand logo — overlay skipped`);
+  }
   const speed =
     opts.docSpeed && opts.docSpeed > 0.49 && opts.docSpeed < 2.01 && Math.abs(opts.docSpeed - 1) > 0.02
       ? opts.docSpeed
       : null;
-  // Title chains consume the visual graph's [v] and emit [vt]; the map below
-  // follows the chain's tail so input order and labels can never drift.
-  const vMap = titleChain ? "[vt]" : "[v]";
+  // S3 post-base chain: chroma → PIP → title, chained onto the base graph's
+  // [v] tail. Chroma keys PRE-grade (a graded key color would poison the
+  // key) and re-applies the grade to the composite; the title then consumes
+  // the chain's tail label.
+  const [W, H] = OUTPUT_SIZES[aspect].out;
+  const postParts: string[] = [];
+  let tail = "[v]";
+  if (chroma) {
+    const c = chromaFilterChain(chroma, { w: W, h: H, dur, fps, grade });
+    postParts.push(c.chain);
+    tail = c.outLabel;
+  }
+  const hasPip = pip != null && pipLogoPath != null;
+  const pipChainFor = (idx: number): string =>
+    pipOverlayFilter(pip!, { pipInput: idx, frameW: W, frameH: H, inLabel: tail }).chain;
+  if (hasPip) tail = "[vp]";
+  const titleChain = titleDrawtextFilter(opts.docTitle ?? null, dur, aspect !== "16:9", tail);
+  // vMap follows the chain's tail so input order and labels can never drift.
+  const vMap = titleChain ? "[vt]" : tail;
+  const fullVisual = (base: string, pipIdx: number | null): string => {
+    const parts = [base, ...postParts];
+    if (pipIdx != null && hasPip) parts.push(pipChainFor(pipIdx));
+    if (titleChain) parts.push(titleChain);
+    return parts.join(";");
+  };
+  const pipInputs = hasPip
+    ? ["-loop", "1", "-framerate", String(fps), "-t", (dur + 0.5).toFixed(3), "-i", pipLogoPath!]
+    : [];
   const visualSuffix = (inputLabel: string): string => {
     // Stock/animated footage: the doc's playback rate is a setpts on the
-    // clip itself (the loop covers the shorter effective length).
+    // clip itself (the loop covers the shorter effective length). With a
+    // chroma key the grade moves AFTER the composite (keying sees raw art).
     const speedLead = speed ? `setpts=PTS/${speed.toFixed(4)},` : "";
-    return `[${inputLabel}:v]${speedLead}${grade}[v]`;
+    const inner = [speedLead, chroma ? "" : grade].filter(Boolean).join("");
+    return `[${inputLabel}:v]${inner || "null"}[v]`;
   };
   const FOOTAGE = "0"; // the clip's input index in both footage paths
+  const quality = QUALITY_ENCODING[opts.quality ?? "standard"];
   // One helper owns BOTH the extra audio inputs and the graph, so input
   // order and stream labels can never drift apart.
   const audio = await sceneAudio(
@@ -516,7 +574,7 @@ async function buildSegment(opts: {
     "-map", vMap, "-map", "[a]",
     "-t", dur.toFixed(3),
     "-r", String(fps),
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+    "-c:v", "libx264", "-preset", quality.preset, "-crf", quality.crf,
     "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
     "-y", outPath,
@@ -563,7 +621,8 @@ async function buildSegment(opts: {
         "-stream_loop", "-1", "-t", dur.toFixed(3), "-i", clip,
         "-i", wav,
         ...audio.inputs,
-        "-filter_complex", `${visualSuffix(FOOTAGE)};${audio.graph}`,
+        ...pipInputs,
+        "-filter_complex", `${fullVisual(visualSuffix(FOOTAGE), hasPip ? 2 + audio.inputs.filter((a) => a === "-i").length : null)};${audio.graph}`,
         ...common,
       ]);
       return;
@@ -603,7 +662,7 @@ async function buildSegment(opts: {
         settings: motion,
         fps,
         aspect,
-        grade,
+        grade: chroma ? "" : grade,
         focal: focalForScene(scene),
         shots: shotInputs.map((sh) => ({
           kind: sh.moveKind,
@@ -612,12 +671,17 @@ async function buildSegment(opts: {
           crop: sh.crop,
         })),
       });
+      // The PIP logo rides AFTER the shot stills (input order: 0 = scene
+      // image, 1 = narration, 2.. = audio extras, then stills, then logo —
+      // the index is positional, nextInput counts it).
+      if (hasPip) extraInputs.push(...pipInputs);
+      const pipIdxShot = hasPip ? nextInput : null;
       await run("ffmpeg", [
         "-loop", "1", "-framerate", String(fps), "-t", dur.toFixed(3), "-i", img,
         "-i", wav,
         ...audio.inputs,
         ...extraInputs,
-        "-filter_complex", `${vChain}${titleChain ? `;${titleChain}` : ""};${audio.graph}`,
+        "-filter_complex", `${fullVisual(vChain, pipIdxShot)};${audio.graph}`,
         ...common,
       ]);
       return;
@@ -630,13 +694,14 @@ async function buildSegment(opts: {
       settings: motion,
       fps,
       aspect,
-      grade,
+      grade: chroma ? "" : grade,
     });
     await run("ffmpeg", [
       "-loop", "1", "-framerate", String(fps), "-t", dur.toFixed(3), "-i", img,
       "-i", wav,
       ...audio.inputs,
-      "-filter_complex", `${vChain}${titleChain ? `;${titleChain}` : ""};${audio.graph}`,
+      ...pipInputs,
+      "-filter_complex", `${fullVisual(vChain, hasPip ? 2 + audio.inputs.filter((a) => a === "-i").length : null)};${audio.graph}`,
       ...common,
     ]);
   } else {
@@ -645,7 +710,8 @@ async function buildSegment(opts: {
       "-stream_loop", "-1", "-t", dur.toFixed(3), "-i", clip,
       "-i", wav,
       ...audio.inputs,
-      "-filter_complex", `${visualSuffix(FOOTAGE)};${audio.graph}`,
+      ...pipInputs,
+      "-filter_complex", `${fullVisual(visualSuffix(FOOTAGE), hasPip ? 2 + audio.inputs.filter((a) => a === "-i").length : null)};${audio.graph}`,
       ...common,
     ]);
   }
@@ -795,7 +861,8 @@ async function blendRun(
   durationsSec: number[],
   settings: TransitionSettings[],
   outPath: string,
-  groupMax: number
+  groupMax: number,
+  quality: { crf: string; preset: string } = QUALITY_ENCODING.standard
 ): Promise<void> {
   const tmp = (i: number, round: number) =>
     outPath.replace(/\.mp4$/, `.blend-r${round}-${i}.mp4`);
@@ -836,8 +903,8 @@ async function blendRun(
           "-filter_complex", `${graph.video};${graph.audio}`,
           "-map", "[v]", "-map", "[a]",
           // Intermediates at crf 16 (near-transparent) — only the final master
-          // uses the delivery crf 20 the downstream passes expect.
-          "-c:v", "libx264", "-preset", "veryfast", "-crf", isFinal ? "20" : "16",
+          // uses the delivery quality the downstream passes expect.
+          "-c:v", "libx264", "-preset", isFinal ? quality.preset : "veryfast", "-crf", isFinal ? quality.crf : "16",
           "-pix_fmt", "yuv420p",
           "-c:a", "aac", "-b:a", isFinal ? "160k" : "256k",
           "-ar", "48000", "-ac", "2",
@@ -905,9 +972,12 @@ async function stitchSegments(opts: {
   /** One sanitized {style, durationSec} per boundary (N−1 for N segments). */
   settings: TransitionSettings[];
   outPath: string;
+  /** S3 — delivery encode tier for blend masters (default standard). */
+  quality?: { crf: string; preset: string };
 }): Promise<void> {
   const n = opts.segPaths.length;
   const boundaries = opts.settings.slice(0, Math.max(0, n - 1));
+  const q = opts.quality ?? QUALITY_ENCODING.standard;
   if (n < 2 || boundaries.length === 0 || boundaries.every((s) => s.style === "cut")) {
     await concatSegments(opts.segPaths, opts.outPath);
     return;
@@ -924,12 +994,12 @@ async function stitchSegments(opts: {
 
   // No cuts at all → one run covers everything → today's single-master path.
   if (runs.length === 1) {
-    await blendRun(opts.segPaths, opts.durationsSec, boundaries, opts.outPath, groupMax);
+    await blendRun(opts.segPaths, opts.durationsSec, boundaries, opts.outPath, groupMax, q);
     return;
   }
 
-  // Mixed cuts + blends: blend each run into its own master (crf 20 — the
-  // concat copies these streams untouched), then join at the cuts.
+  // Mixed cuts + blends: blend each run into its own master (delivery
+  // quality — the concat copies these streams untouched), then join at the cuts.
   const runOutputs: string[] = [];
   for (const [ri, run] of runs.entries()) {
     const paths = opts.segPaths.slice(run.from, run.to + 1);
@@ -943,7 +1013,8 @@ async function stitchSegments(opts: {
       opts.durationsSec.slice(run.from, run.to + 1),
       boundaries.slice(run.from, run.to),
       runOut,
-      groupMax
+      groupMax,
+      q
     );
     runOutputs.push(runOut);
   }
@@ -985,6 +1056,8 @@ async function finalize(opts: {
   /** S2 — prebuilt per-scene music-bed automation chain ([music]→[mvol],
    *  from musicLevelAutomation on the blended segments); null = plain bed. */
   musicAutomation?: string | null;
+  /** S3 — delivery encode tier for the subtitle-burn pass (default standard). */
+  quality?: { crf: string; preset: string };
 }): Promise<void> {
   const { base, out, burnSubtitles, music } = opts;
   const workDir = path.dirname(base);
@@ -1045,12 +1118,13 @@ async function finalize(opts: {
   // is illegal ffmpeg (filtering + streamcopy are mutually exclusive, and the
   // copy also saved the no-caption path a pointless full re-encode).
   const burn = burnSubtitles && Boolean(opts.srtPath);
+  const q = opts.quality ?? QUALITY_ENCODING.standard;
   const stageC = burn
     ? ([
         "-filter_complex",
         `[0:v]subtitles=f='${opts.srtPath}':force_style='${opts.subtitleStyle ?? SUBTITLE_STYLE}'[v];[1:a]${normalizationFilter(measured)}[a]`,
         "-map", "[v]", "-map", "[a]",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", q.preset, "-crf", q.crf, "-pix_fmt", "yuv420p",
       ] as string[])
     : ([
         "-filter_complex", `[1:a]${normalizationFilter(measured)}[a]`,
@@ -1376,6 +1450,10 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         docCamera: doc?.cameraKeys ?? null,
         docSpeed: doc?.speed ?? null,
         docFades: doc?.voiceFades ?? null,
+        // S3 — keying + corner overlay ride the same aligned doc.
+        docChroma: doc?.chroma ?? null,
+        docPip: doc?.pip ?? null,
+        quality: opts.quality ?? "standard",
         wavDur: wavs[i],
         outPath: segPath,
         aspect: motionAspect,
@@ -1409,6 +1487,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       durationsSec: durations,
       settings: boundary,
       outPath: basePath,
+      quality: QUALITY_ENCODING[opts.quality ?? "standard"],
     });
 
     // 4) Subtitles + music, then move into place.
@@ -1488,6 +1567,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       segments,
       subtitleStyle: opts.mode === "slides" ? SUBTITLE_STYLE_VERTICAL : undefined,
       musicAutomation,
+      quality: QUALITY_ENCODING[opts.quality ?? "standard"],
     });
 
     // Always refresh the exported caption track for the ZIP (full render only).

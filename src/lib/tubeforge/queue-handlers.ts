@@ -251,6 +251,9 @@ function parseRenderPayload(payload: unknown): RenderJobOptions {
     out.aspectRatio = p.aspectRatio;
   if (p.frameRate === 24 || p.frameRate === 30 || p.frameRate === 60)
     out.frameRate = p.frameRate;
+  // S3 — delivery encode tier survives a crash resume.
+  if (p.quality === "draft" || p.quality === "standard" || p.quality === "high")
+    out.quality = p.quality;
   // Stage 6 (T-6.10) — per-scene duration overrides from the assembled
   // timeline (the route can pass them explicitly to disable timeline
   // consumption by sending []).

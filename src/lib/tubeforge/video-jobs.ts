@@ -58,6 +58,7 @@ import {
 import { qcForVideo } from "./qc";
 import { parsePlan, getApprovedAudioMap } from "./director-plan";
 import { parseTimeline, docSceneSettings, type DocSceneSettings } from "./timeline";
+import type { ExportQuality } from "./studio-doc";
 import { sanitizeTransition, transitionSummary } from "./transitions";
 import {
   loadSlideDeck,
@@ -448,6 +449,9 @@ export interface RenderJobOptions {
    *  disables timeline consumption (the route uses this when the user
    *  clicks "render without timeline"). */
   sceneDurationsSec?: number[];
+  /** S3 — delivery encode tier (draft | standard | high). When unset, the
+   *  job falls back to the timeline doc's renderPrefs, then standard. */
+  quality?: ExportQuality;
 }
 
 /** Render the final/preview MP4 (+ QC battery on full renders). */
@@ -504,6 +508,10 @@ export async function runRenderJob(
   // captions) rides along whenever the doc is aligned. "Render without
   // timeline" (explicit empty durations) drops it with the durations.
   let docScenes: DocSceneSettings[] | null = null;
+  // S3 — delivery quality: the render button's explicit pick wins; the
+  // timeline doc's renderPrefs (the export-preset card saves there) is the
+  // fallback; standard otherwise.
+  let docQuality: ExportQuality | undefined;
   if (Array.isArray(opts.sceneDurationsSec)) {
     sceneDurationsSec = opts.sceneDurationsSec;
   } else {
@@ -517,6 +525,7 @@ export async function runRenderJob(
         sceneDurationsSec = ds;
       }
       docScenes = docSceneSettings(timeline, scenes.length);
+      docQuality = timeline.renderPrefs?.quality ?? undefined;
     }
   }
 
@@ -568,6 +577,7 @@ export async function runRenderJob(
       sceneLimit,
       aspectRatio: aspect,
       frameRate,
+      quality: opts.quality ?? docQuality,
       sceneDurationsSec,
       docScenes,
       motion: {

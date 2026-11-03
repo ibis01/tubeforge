@@ -148,6 +148,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     body?.frameRate === 24 || body?.frameRate === 30 || body?.frameRate === 60
       ? body.frameRate
       : undefined;
+  // S3 — delivery encode tier (the export-preset picker sends it; absent =
+  // the timeline doc's renderPrefs, then standard).
+  const quality: "draft" | "standard" | "high" | undefined =
+    body?.quality === "draft" || body?.quality === "standard" || body?.quality === "high"
+      ? body.quality
+      : undefined;
 
   // Stage 6 (T-6.10) — when the user explicitly clicks "render without
   // timeline" (the route body carries `ignoreTimeline: true`), pass an empty
@@ -167,6 +173,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     sceneLimit,
     aspectRatio,
     frameRate,
+    quality,
     sceneDurationsSec,
   };
 
