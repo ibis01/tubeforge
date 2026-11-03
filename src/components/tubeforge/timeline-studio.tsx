@@ -32,8 +32,15 @@
 //     same read. These are row mutations — after one, the undo history
 //     resets with the server's new doc (a deleted scene cannot be un-deleted
 //     by a client-side undo).
-//   • audio levels + transition labels → preview + saved doc; their render
-//     wiring lands with S2 — the inspector says so explicitly.
+//   • per-scene transition styles → S2: the render consumes the doc's
+//     transitionIn seam by seam (cut seams become hard stitch points; the
+//     blend math is per-boundary in transitions.ts).
+//   • per-scene captions → S2: edited text replaces that scene's cues in
+//     BOTH caption paths (smart/ASR + one-per-scene fallback).
+//   • per-scene audio levels → S2: voice/SFX/ambience are the segment mix
+//     weights; music rides the library bed as a per-scene volume automation.
+//     The synthesized-drone fallback keeps its fixed profile (it never had
+//     a slider) — the inspector's Mix note says so.
 //
 // The preview is an approximation by design: the render (ffmpeg) stays the
 // source of truth. Everything the preview needs is deterministic and lives
@@ -1757,13 +1764,13 @@ interface InspectorProps {
   onSeekScene: (t: number) => void;
 }
 
-const PREVIEW_ONLY = (
+const RENDER_HONORS = (
   <Badge
     variant="outline"
-    className="text-[9px] border-sky-400/30 bg-sky-400/10 text-sky-200 shrink-0"
-    title="Live in the preview and saved with the doc; the render reads these from S2."
+    className="text-[9px] border-emerald-400/30 bg-emerald-400/10 text-emerald-200 shrink-0"
+    title="Saved with the doc and consumed by the render — what you edit here is what the MP4 plays."
   >
-    preview
+    render honors
   </Badge>
 );
 
@@ -1824,7 +1831,7 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
       {/* transition */}
       <section className="space-y-1.5">
         <header className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-          <Scissors className="h-3 w-3" /> Transition in {PREVIEW_ONLY}
+          <Scissors className="h-3 w-3" /> Transition in {RENDER_HONORS}
         </header>
         <Select
           value={scene.transitionIn ?? "cut"}
@@ -1843,14 +1850,15 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
           </SelectContent>
         </Select>
         <p className="text-[10px] leading-snug text-muted-foreground">
-          The seam into this scene. Video-level default lives in Render controls.
+          The seam into this scene — the render blends it exactly; “Hard Cut” stitches with no blend.
+          Video-level default lives in Render controls.
         </p>
       </section>
 
       {/* caption */}
       <section className="space-y-1.5">
         <header className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-          <Subtitles className="h-3 w-3" /> Caption {PREVIEW_ONLY}
+          <Subtitles className="h-3 w-3" /> Caption {RENDER_HONORS}
         </header>
         <Textarea
           rows={2}
@@ -1863,12 +1871,15 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
           }}
           className="text-xs leading-snug"
         />
+        <p className="text-[10px] leading-snug text-muted-foreground">
+          Edited text replaces this scene's burned cues (smart captions too).
+        </p>
       </section>
 
       {/* audio */}
       <section className="space-y-2">
         <header className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-          <AudioLines className="h-3 w-3" /> Mix {PREVIEW_ONLY}
+          <AudioLines className="h-3 w-3" /> Mix {RENDER_HONORS}
         </header>
         {(
           [
@@ -1894,6 +1905,10 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
             </span>
           </div>
         ))}
+        <p className="text-[10px] leading-snug text-muted-foreground">
+          Voice/SFX/ambience are the render's mix weights. Music rides the library bed
+          per scene — the synthesized fallback bed keeps its fixed profile.
+        </p>
       </section>
 
       {/* meta */}
