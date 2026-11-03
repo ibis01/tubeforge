@@ -8,7 +8,10 @@ import { safeZipName, streamZip, zipMethodFor, type StreamZipEntry } from "@/lib
 import { listVariants } from "@/lib/tubeforge/ai";
 import { parseScenes, sceneImageFile } from "@/lib/tubeforge/story";
 import { LENGTHS, TONES, VOICES } from "@/lib/tubeforge/types";
-import { resolveMusicForVideo, isMusicEnabledForVideo } from "@/lib/tubeforge/music";
+import { resolveMusicForVideo, isMusicEnabledForVideo, musicBedActive } from "@/lib/tubeforge/music";
+import { docMusicPick } from "@/lib/tubeforge/studio-doc";
+import { parseTimeline } from "@/lib/tubeforge/timeline";
+import { getApprovedAudioMap } from "@/lib/tubeforge/director-plan";
 import * as storage from "@/lib/tubeforge/storage";
 
  type Ctx = { params: Promise<{ id: string }> };
@@ -201,8 +204,17 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   // monetized upload can always prove its soundtrack and b-roll are safe.
   // ("a technically good video does not create copyright problems later")
   try {
-    const musicEnabled = await isMusicEnabledForVideo(video);
-    const resolvedMusic = musicEnabled ? await resolveMusicForVideo(video) : null;
+    // S7 (audit) — credits mirror the render's music truth EXACTLY (doc pick
+    // > plan > row, via musicBedActive + the same resolver inputs), so the
+    // license listed is the track the render actually lays: a doc pick or a
+    // plan mood can no longer make the credits name a different bed — or
+    // skip one — than the export ships.
+    const docPick = docMusicPick(parseTimeline(video.timeline)?.renderPrefs ?? null);
+    const musicEnabled = musicBedActive(docPick, await isMusicEnabledForVideo(video));
+    const planAudio = await getApprovedAudioMap(video.id);
+    const resolvedMusic = musicEnabled
+      ? await resolveMusicForVideo(video, planAudio.musicMood, docPick)
+      : null;
     const creditLines: string[] = [
       `CREDITS & LICENSES — "${video.title ?? video.topic}"`,
       `Exported ${new Date().toISOString()}`,

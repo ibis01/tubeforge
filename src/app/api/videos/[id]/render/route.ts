@@ -4,7 +4,10 @@ import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseScenes } from "@/lib/tubeforge/story";
 import { isJobRunning, lastJobError, jobProgress, startJob } from "@/lib/tubeforge/jobs";
 import { runRenderJob, type RenderJobOptions } from "@/lib/tubeforge/video-jobs";
-import { resolveMusicForVideo } from "@/lib/tubeforge/music";
+import { resolveMusicForVideo, isMusicEnabledForVideo, musicBedActive } from "@/lib/tubeforge/music";
+import { docMusicPick } from "@/lib/tubeforge/studio-doc";
+import { parseTimeline } from "@/lib/tubeforge/timeline";
+import { getApprovedAudioMap } from "@/lib/tubeforge/director-plan";
 import { sanitizeTransition } from "@/lib/tubeforge/transitions";
 import { resolveUserPlan, hasCredits, RENDER_ESTIMATE_MICRO, planSupportsResolution, microToCredits } from "@/lib/tubeforge/billing";
 
@@ -177,8 +180,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     sceneDurationsSec,
   };
 
-  // Response-time music resolution (the job re-resolves for itself).
-  const resolved = music ? await resolveMusicForVideo(video) : null;
+  // Response-time music resolution (the job re-resolves for itself) — the
+  // SAME flag truth the job applies (musicBedActive): the doc pick re-tops
+  // the chain and a disabled bed is silence, so the response never promises
+  // a bed — or a drone — the job will not lay.
+  const docPick = docMusicPick(parseTimeline(video.timeline)?.renderPrefs ?? null);
+  const musicOn = music && musicBedActive(docPick, await isMusicEnabledForVideo(video));
+  const planAudio = await getApprovedAudioMap(id);
+  const resolved = musicOn ? await resolveMusicForVideo(video, planAudio.musicMood, docPick) : null;
 
   // Scene transitions: per-video override (null = built-in crossfade 0.5s).
   // Slides beats read like slide changes — hard cuts are the format's native
@@ -211,7 +220,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       transition,
       music: resolved
         ? { track: resolved.track.name, why: resolved.why }
-        : music
+        : musicOn
           ? "synthesized-fallback"
           : false,
     },

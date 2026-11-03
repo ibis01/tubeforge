@@ -18,6 +18,8 @@ import { docMusicPick } from "@/lib/tubeforge/studio-doc";
 import { getApprovedAudioMap } from "@/lib/tubeforge/director-plan";
 import {
   resolveMusicForVideo,
+  isMusicEnabledForVideo,
+  musicBedActive,
   trackAbsolutePath,
 } from "@/lib/tubeforge/music";
 import { droneSource, musicProfileForNiche } from "@/lib/tubeforge/render";
@@ -69,6 +71,15 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     if (docPick?.mode === "off")
       return NextResponse.json(
         { error: "The studio pick mutes the music bed for this video" },
+        { status: 400 }
+      );
+    // S7 (audit) — same flag truth as the render: a disabled bed (per-video
+    // row or Settings master, no doc pick) auditions as an honest refusal,
+    // not the drone — the render ships true silence there, and the audition
+    // must never promise a bed that will not be laid.
+    if (!musicBedActive(docPick, await isMusicEnabledForVideo(video)))
+      return NextResponse.json(
+        { error: "The music bed is off for this video — enable it in Settings or pick one here" },
         { status: 400 }
       );
     try {

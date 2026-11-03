@@ -54,6 +54,8 @@ import {
   resolveDuckingForVideo,
   getSfxEnabled,
   trackAbsolutePath,
+  isMusicEnabledForVideo,
+  musicBedActive,
 } from "./music";
 import { qcForVideo } from "./qc";
 import { parsePlan, getApprovedAudioMap } from "./director-plan";
@@ -549,9 +551,17 @@ export async function runRenderJob(
   // feed the music resolver (manual per-video overrides still win); pacing
   // was already applied at voiceover synthesis time.
   const planAudio = await getApprovedAudioMap(videoId);
-  // S7 — the doc pick re-tops the chain (doc > plan > row); "off" flips the
-  // music flag so the render ships true silence instead of the drone.
-  const music = opts.music !== false && docMusic?.mode !== "off";
+  // S7 (audit) — one flag truth (musicBedActive): the body option can force
+  // silence, the doc pick re-tops the chain ("off" → true silence — the
+  // FLAG, not a resolver null, is what switches the finalizer's drone
+  // fallback off; any other pick overrides the row/Settings chain), and
+  // with no pick the pre-S7 chain decides. Until this audit the Settings
+  // master switch never actually silenced a render: its resolver null was
+  // conflated with "no match" and the finalizer droned anyway — now the
+  // flag honors isMusicEnabledForVideo's own documented contract.
+  const music =
+    opts.music !== false &&
+    musicBedActive(docMusic, await isMusicEnabledForVideo(video));
   const resolved = music ? await resolveMusicForVideo(video, planAudio.musicMood, docMusic) : null;
   const duckFallback = music ? await resolveDuckingForVideo(video, planAudio.ducking) : "standard";
   const sfx = await getSfxEnabled();

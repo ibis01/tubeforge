@@ -288,6 +288,58 @@ if (vid) {
   check("classic probe video created", false, JSON.stringify(created).slice(0, 120));
 }
 
+// ---- 9b. S7-audit: the Settings master switch is REAL everywhere ----
+// The pre-audit render only consulted the body option + the doc pick for its
+// music flag, so a Settings-off resolver-null was conflated with "no match"
+// and the finalizer droned over a bed the user had switched off. The flag
+// now flows through musicBedActive (the same truth the render, the mix
+// preview and the export credits use). The audition is the probe's window
+// into that truth: a disabled bed must REFUSE, not drone — and an explicit
+// doc pick must still override the switch.
+if (FIXTURE && trackB) {
+  // no doc pick on the fixture (restored in 8) + master switch OFF
+  res = await call("PUT", "/api/settings", { "music.enabled": false });
+  check("Settings: the music master switch flips off", res.status === 200, res.status);
+  res = await call("GET", `/api/videos/${FIXTURE}/studio/sound?bank=music`);
+  const offSettingsBody = await res.json().catch(() => ({}));
+  check(
+    "Settings music off + no doc pick → the audition refuses (silence, not the drone)",
+    res.status === 400 && /off for this video/i.test(offSettingsBody?.error ?? ""),
+    `${res.status}, ${JSON.stringify(offSettingsBody)}`
+  );
+
+  // an explicit doc pick overrides the master switch — the bed plays
+  res = await call("GET", `/api/videos/${FIXTURE}/assemble`);
+  const doc9 = (await res.json())?.timeline;
+  res = await call("PUT", `/api/videos/${FIXTURE}/assemble`, {
+    scenes: doc9.scenes,
+    totalDurationSec: doc9.totalDurationSec,
+    generatedAt: doc9.generatedAt,
+    renderPrefs: { quality: "standard", music: { mode: "track", trackId: trackB.id } },
+  });
+  res = await call("GET", `/api/videos/${FIXTURE}/studio/sound?bank=music`);
+  const overrideWav = Buffer.from(await res.arrayBuffer());
+  check(
+    "an explicit doc pick plays even with the master switch off (the override)",
+    res.status === 200 &&
+      overrideWav.slice(0, 4).toString() === "RIFF" &&
+      whyOf(res).startsWith("studio pick"),
+    `${res.status}, why="${whyOf(res)}"`
+  );
+
+  // restore: pick cleared + master switch back on (cleanup removes the rest)
+  res = await call("PUT", `/api/videos/${FIXTURE}/assemble`, {
+    scenes: doc9.scenes,
+    totalDurationSec: doc9.totalDurationSec,
+    generatedAt: doc9.generatedAt,
+  });
+  const restoredPick = res.status === 200;
+  res = await call("PUT", "/api/settings", { "music.enabled": true });
+  check("fixture restored: no doc pick + master switch back on", restoredPick && res.status === 200, res.status);
+} else {
+  check("S7-audit corners skipped — fixture missing", false, "FIXTURE/trackB unavailable");
+}
+
 // ---- 10. the factory cleans up: probe rows + files leave no litter ----
 try {
   if (vid) await db.video.delete({ where: { id: vid } }).catch(() => {});

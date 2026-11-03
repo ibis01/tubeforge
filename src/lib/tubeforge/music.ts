@@ -108,6 +108,28 @@ export async function isMusicEnabledForVideo(video: { musicEnabled: boolean | nu
   return (await getMusicSettings()).enabled;
 }
 
+/**
+ * S7-audit: the ONE pure truth for "does this render lay a bed at all" —
+ * consumed by the render flag (video-jobs), the mix preview
+ * (audio-preview), the music audition (sound route) and the export credits
+ * so the four surfaces can never drift again. The doc pick re-tops the
+ * chain, mirroring the resolver's own enablement line:
+ *   "off"         → false — true silence. The FLAG is what silences the
+ *                   finalizer's drone fallback; a resolver null alone reads
+ *                   as "no match" and drones (the pre-S7 conflation).
+ *   auto/mood/    → true — an explicit studio pick overrides the per-video
+ *   track           row AND the Settings master switch.
+ *   no pick       → the pre-S7 chain decides (row override ?? Settings).
+ * (probe: scripts/s7-unit-probe.mts pins the full matrix)
+ */
+export function musicBedActive(
+  docPick: MusicPick | null | undefined,
+  fallbackEnabled: boolean
+): boolean {
+  if (docPick?.mode === "off") return false;
+  return docPick ? true : fallbackEnabled;
+}
+
 // ---------------------------------------------------------------------------
 // DTO + helpers
 // ---------------------------------------------------------------------------

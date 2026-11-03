@@ -2,7 +2,9 @@
 // Two layers, mirroring the sprint's evidence pattern:
 //   1. PURE boundaries (no I/O): the MusicPick sanitizer at the doc choke
 //      point, the renderPrefs round-trip through the real doc serializer,
-//      the zod save boundary, and the off/absent semantics.
+//      the zod save boundary, the off/absent semantics, and the bed-flag
+//      truth matrix (musicBedActive — the S7-audit one-truth every surface
+//      shares: render flag, mix preview, audition, export credits).
 //   2. DB-backed precedence (real rows, real resolver): the doc pick re-tops
 //      the chain (doc > plan > row), "auto" skips the pins, "off" refuses to
 //      pick, junk falls down the chain — never a crash, never a hostile hit.
@@ -16,7 +18,7 @@ import {
 import { assembleSaveSchema } from "../src/lib/tubeforge/validation";
 import { assembleTimeline, parseTimeline, serializeTimeline } from "../src/lib/tubeforge/timeline";
 import { parseScenes } from "../src/lib/tubeforge/story";
-import { resolveMusicForVideo } from "../src/lib/tubeforge/music";
+import { resolveMusicForVideo, musicBedActive } from "../src/lib/tubeforge/music";
 import { withCtx } from "../src/lib/tubeforge/tenant";
 import { PrismaClient } from "@prisma/client";
 import crypto from "node:crypto";
@@ -146,6 +148,38 @@ check(
     });
     return ok.success && !badMode.success && !badId.success;
   })()
+);
+
+// =====================================================================
+// 1b. the bed flag (pure) — the S7-audit one-truth matrix
+// =====================================================================
+// The pre-audit render computed its music flag from the body option and the
+// doc pick ONLY, so a Settings-off resolver-null was conflated with
+// "no match" and the finalizer droned over a bed the user had switched off
+// (isMusicEnabledForVideo's own contract says "false → NO bed whatsoever").
+// musicBedActive is now the single truth — this matrix is the contract.
+check(
+  "musicBedActive: \"off\" is true silence even when the chain is on",
+  musicBedActive({ mode: "off" }, true) === false &&
+    musicBedActive({ mode: "off" }, false) === false
+);
+check(
+  "musicBedActive: any other pick overrides the Settings master switch",
+  musicBedActive({ mode: "auto" }, false) === true &&
+    musicBedActive({ mode: "mood", moodId: "calm" }, false) === true &&
+    musicBedActive({ mode: "track", trackId: "cmx" }, false) === true
+);
+check(
+  "musicBedActive: no pick follows the row/Settings chain (off finally silences the render)",
+  musicBedActive(null, true) === true &&
+    musicBedActive(undefined, false) === false
+);
+check(
+  "musicBedActive: junk reads as no pick through docMusicPick — silence stays silent",
+  musicBedActive(
+    docMusicPick({ quality: "standard", music: { mode: "track", trackId: "../../etc/passwd" } }),
+    false
+  ) === false
 );
 
 // =====================================================================

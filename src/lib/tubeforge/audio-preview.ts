@@ -24,6 +24,7 @@ import {
   resolveMusicForVideo,
   resolveDuckingForVideo,
   isMusicEnabledForVideo,
+  musicBedActive,
   trackAbsolutePath,
 } from "./music";
 import {
@@ -101,11 +102,11 @@ export async function buildAudioPreview(
   // Music resolution — exactly what the render route would pick. Three
   // states, mirroring the finalizer: DISABLED (voice only), enabled + track
   // (ducked library bed), enabled + no match (ducked synthesized drone).
-  // S7 — the studio's doc pick rides the SAME chain the render uses
-  // (doc > plan > row), and "off" mutes the preview just like the render.
+  // S7 (audit) — the SAME flag truth the render uses (musicBedActive): an
+  // explicit pick overrides the Settings master switch, "off" and a
+  // disabled chain are true silence. What you hear stays what ships.
   const docPick = docMusicPick(parseTimeline(video.timeline)?.renderPrefs ?? null);
-  const musicEnabled =
-    (await isMusicEnabledForVideo(video)) && docPick?.mode !== "off";
+  const musicEnabled = musicBedActive(docPick, await isMusicEnabledForVideo(video));
   const planAudio = await getApprovedAudioMap(video.id);
   const resolved = musicEnabled
     ? await resolveMusicForVideo(video, planAudio.musicMood, docPick)
