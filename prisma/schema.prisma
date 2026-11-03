@@ -109,6 +109,17 @@ model Session {
   @@index([expiresAt])
 }
 
+
+// Deployment-level key/value store for app-wide flags — the AuthGate's
+// enabled switch + access-password hash (auth.ts). Restored by the
+// 20261102040000_auth_setting migration: the Stage-3 cleanup removed the
+// legacy single-user table together with its last reader; the AuthGate
+// reintroduced a reader and this model follows it back into the schema.
+model Setting {
+  key   String @id
+  value String
+}
+
 // Per-user key/value store. Replaces the global Setting table (R-CRIT-2).
 // Non-secret preferences only — secrets go to ProviderCredential /
 // YouTubeAccount (encrypted at rest).

@@ -52,12 +52,20 @@ import {
   multiShotSceneGraph,
   focalForScene,
   sanitizeMotion,
+  studioCameraPlan,
   MOTION_DEFAULTS,
   type MotionScenePlan,
   type MotionSettings,
   type MoveKind,
   type SceneContext,
 } from "./motion";
+import {
+  gradeFilter,
+  titleDrawtextFilter,
+  type SceneGrade,
+  type SceneTitle,
+  type SceneCameraKeys,
+} from "./studio-doc";
 import { getApprovedMotionMap, getApprovedAudioMap, getApprovedPlan } from "./director-plan";
 import { buildSceneShots, ensureShotImages, PSEUDO_CROPS, type SceneShotPlan } from "./shots";
 import { ensureAmbience } from "./ambience";
@@ -94,8 +102,18 @@ const SUBTITLE_STYLE =
 /** Vertical-frame caption style (slides mode opt-in) — inside the Shorts safe zone. */
 const SUBTITLE_STYLE_VERTICAL =
   "FontName=Noto Sans SC,FontSize=19,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H8C000000,BorderStyle=1,Outline=2.2,Shadow=0,Alignment=2,MarginV=190";
-/** Subtle finishing grade — a touch of contrast/saturation + soft vignette. */
-const GRADE = "eq=contrast=1.05:saturation=1.08,vignette=PI/5";
+// The classic finishing grade moved to studio-doc.ts's gradeFilter (null →
+// "eq=contrast=1.05:saturation=1.08,vignette=PI/5") — ONE function owns the
+// default so the doc override and the fallback can never drift.
+
+/**
+ * S2 wave 2 — the per-scene grade: the doc's edited grade wins scene by
+ * scene; null/absent falls back to the classic look. One function owns the
+ * mapping so the preview badge and the render can never drift.
+ */
+function gradeForScene(docGrade: SceneGrade | null | undefined): string {
+  return gradeFilter(docGrade);
+}
 
 /** A library music track resolved for this render (music.ts). */
 export interface ResolvedTrack {
@@ -426,6 +444,11 @@ async function buildSegment(opts: {
   ambiencePath?: string | null;
   /** S2: per-scene mix levels from the timeline doc (null = classic mix). */
   docLevels?: SceneAudioLevels | null;
+  /** S2 wave 2 — per-scene creative layer. All optional (null = classic). */
+  docGrade?: SceneGrade | null;
+  docTitle?: SceneTitle | null;
+  docCamera?: SceneCameraKeys | null;
+  docSpeed?: number | null;
   /** M2: the approved Director shot list for this scene — when present, the
    * scene renders through the multi-image shot graph instead of the single-
    * image Smart Motion graph (docs/director-m1-m2-spec.md §1.7). */
@@ -442,6 +465,29 @@ async function buildSegment(opts: {
   const leadMs = Math.round(LEAD_SEC * 1000);
   const aspect = opts.aspect ?? "16:9";
   const fps = opts.fps ?? FPS;
+  // S2 wave 2 — the per-scene creative layer resolves ONCE: the grade (the
+  // classic look is the default), the title overlay chain (null = none) and
+  // the footage playback rate (1 = no setpts).
+  const grade = gradeForScene(opts.docGrade);
+  const titleChain = titleDrawtextFilter(
+    opts.docTitle ?? null,
+    dur,
+    aspect !== "16:9"
+  );
+  const speed =
+    opts.docSpeed && opts.docSpeed > 0.49 && opts.docSpeed < 2.01 && Math.abs(opts.docSpeed - 1) > 0.02
+      ? opts.docSpeed
+      : null;
+  // Title chains consume the visual graph's [v] and emit [vt]; the map below
+  // follows the chain's tail so input order and labels can never drift.
+  const vMap = titleChain ? "[vt]" : "[v]";
+  const visualSuffix = (inputLabel: string): string => {
+    // Stock/animated footage: the doc's playback rate is a setpts on the
+    // clip itself (the loop covers the shorter effective length).
+    const speedLead = speed ? `setpts=PTS/${speed.toFixed(4)},` : "";
+    return `[${inputLabel}:v]${speedLead}${grade}[v]`;
+  };
+  const FOOTAGE = "0"; // the clip's input index in both footage paths
   // One helper owns BOTH the extra audio inputs and the graph, so input
   // order and stream labels can never drift apart.
   const audio = await sceneAudio(
@@ -454,7 +500,7 @@ async function buildSegment(opts: {
   );
 
   const common = [
-    "-map", "[v]", "-map", "[a]",
+    "-map", vMap, "-map", "[a]",
     "-t", dur.toFixed(3),
     "-r", String(fps),
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
@@ -493,7 +539,6 @@ async function buildSegment(opts: {
     ]);
     return;
   }
-
   if (mode === "stock") {
     // Hybrid: matched stock footage when the scene has a clip on disk,
     // otherwise fall through to the Smart Motion art path below.
@@ -505,7 +550,7 @@ async function buildSegment(opts: {
         "-stream_loop", "-1", "-t", dur.toFixed(3), "-i", clip,
         "-i", wav,
         ...audio.inputs,
-        "-filter_complex", `[0:v]${GRADE}[v];${audio.graph}`,
+        "-filter_complex", `${visualSuffix(FOOTAGE)};${audio.graph}`,
         ...common,
       ]);
       return;
@@ -545,7 +590,7 @@ async function buildSegment(opts: {
         settings: motion,
         fps,
         aspect,
-        grade: GRADE,
+        grade,
         focal: focalForScene(scene),
         shots: shotInputs.map((sh) => ({
           kind: sh.moveKind,
@@ -559,7 +604,7 @@ async function buildSegment(opts: {
         "-i", wav,
         ...audio.inputs,
         ...extraInputs,
-        "-filter_complex", `${vChain};${audio.graph}`,
+        "-filter_complex", `${vChain}${titleChain ? `;${titleChain}` : ""};${audio.graph}`,
         ...common,
       ]);
       return;
@@ -572,13 +617,13 @@ async function buildSegment(opts: {
       settings: motion,
       fps,
       aspect,
-      grade: GRADE,
+      grade,
     });
     await run("ffmpeg", [
       "-loop", "1", "-framerate", String(fps), "-t", dur.toFixed(3), "-i", img,
       "-i", wav,
       ...audio.inputs,
-      "-filter_complex", `${vChain};${audio.graph}`,
+      "-filter_complex", `${vChain}${titleChain ? `;${titleChain}` : ""};${audio.graph}`,
       ...common,
     ]);
   } else {
@@ -587,7 +632,7 @@ async function buildSegment(opts: {
       "-stream_loop", "-1", "-t", dur.toFixed(3), "-i", clip,
       "-i", wav,
       ...audio.inputs,
-      "-filter_complex", `[0:v]${GRADE}[v];${audio.graph}`,
+      "-filter_complex", `${visualSuffix(FOOTAGE)};${audio.graph}`,
       ...common,
     ]);
   }
@@ -1189,6 +1234,22 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       }
     }
 
+    // S2 wave 2 — the studio's per-scene CAMERA KEYFRAMES outrank every auto
+    // camera (LAST word, after the Director's motion map): the doc's two-key
+    // plan replaces the motion plan AND drops the Director's shot graph for
+    // that scene — an explicit user edit is senior by definition; the
+    // Director keeps every scene the user didn't touch. Ken Burns scenes
+    // only: footage modes play real clips, where camera keys have no
+    // purchase (the inspector says so on those scenes).
+    if (docScenes && needsPlan && opts.mode === "kenburns") {
+      for (let i = 0; i < scenes.length; i++) {
+        const cam = docScenes[i]?.cameraKeys ?? null;
+        if (!cam) continue;
+        plans[i] = studioCameraPlan(cam, durations[i]);
+        if (shotPlans) shotPlans[i] = undefined;
+      }
+    }
+
     // Stage 5 (module E) — audio direction from an APPROVED plan: per-scene
     // ambience beds (synthesized once, looped under the narration) + the
     // director's scene-boundary cue suggestions. The plan can only ADD a
@@ -1263,6 +1324,10 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
               ambient: doc.ambientLevel ?? 0.1,
             }
           : null,
+        // S2 wave 2 — the creative layer rides the same aligned doc.
+        docGrade: doc?.grade ?? null,
+        docTitle: doc?.titleOverlay ?? null,
+        docCamera: doc?.cameraKeys ?? null,
         outPath: segPath,
         aspect: motionAspect,
         fps: motionFps,

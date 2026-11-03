@@ -30,6 +30,7 @@
 // the per-video motionIntensity / motionCurve / motionVary overrides.
 
 import type { AssembledTimeline } from "./timeline";
+import { cameraAtKeys, type SceneCameraKeys } from "./studio-doc";
 
 // ---------- settings ----------
 
@@ -228,35 +229,52 @@ function ease(curve: "smooth" | "linear", p: number): number {
 /**
  * The approximate Ken Burns camera for scene `sceneIndex` at local time
  * `localSec` into its `durationSec` window. Pure + deterministic.
+ *
+ * S2 wave 2 — a doc scene carrying `cameraKeys` (the user's two-key camera)
+ * overrides the auto cycle entirely: the window lerps from.key → to.key with
+ * the doc's ease, in the SAME vocabulary the render's zoompan consumes
+ * (window center fractions + scale). The 40% framing margin of the auto
+ * moves doesn't apply — the user asked for exactly this framing; the render
+ * clamps the window legally, and so does this interpolation via clamping cx/cy.
  */
 export function cameraAt(
   sceneIndex: number,
   localSec: number,
   durationSec: number,
-  s: PreviewSettings
+  s: PreviewSettings,
+  keys?: SceneCameraKeys | null
 ): CameraTransform {
   if (durationSec <= 0) return IDENTITY;
-  const p = ease(s.motionCurve, Math.min(1, Math.max(0, localSec / durationSec)));
+  const p = Math.min(1, Math.max(0, localSec / durationSec));
+  if (keys) {
+    const k = cameraAtKeys(keys, p);
+    return {
+      scale: k.scale,
+      dx: (0.5 - k.cx) * k.scale,
+      dy: (0.5 - k.cy) * k.scale,
+    };
+  }
+  const e = ease(s.motionCurve, p);
   const amp = s.motionIntensity / 100; // 0.12 default
   switch (cameraMoveFor(sceneIndex, s.motionVary)) {
     case "push-in":
       // 1.00 → 1+amp, centered.
-      return { scale: 1 + amp * p, dx: 0, dy: 0 };
+      return { scale: 1 + amp * e, dx: 0, dy: 0 };
     case "pull-out":
       // 1+amp → 1.00, centered.
-      return { scale: 1 + amp * (1 - p), dx: 0, dy: 0 };
+      return { scale: 1 + amp * (1 - e), dx: 0, dy: 0 };
     case "pan-right": {
       // Hold a base zoom (half amplitude — keeps pan edges covered with
       // margin), travel left→right. Travel span: half the zoom overshoot
       // so no edge is ever exposed on 16:9 or 9:9 sources.
       const base = 1 + amp / 2;
       const span = amp / 4; // fraction of frame width
-      return { scale: base, dx: -span + 2 * span * p, dy: 0 };
+      return { scale: base, dx: -span + 2 * span * e, dy: 0 };
     }
     case "pan-left": {
       const base = 1 + amp / 2;
       const span = amp / 4;
-      return { scale: base, dx: span - 2 * span * p, dy: 0 };
+      return { scale: base, dx: span - 2 * span * e, dy: 0 };
     }
   }
 }
@@ -382,18 +400,18 @@ export function resolveFrame(
     layers.push({
       sceneIndex: outgoing.index,
       localSec: outgoing.durationSec,
-      camera: cameraAt(outgoing.index, outgoing.durationSec, outgoing.durationSec, s),
+      camera: cameraAt(outgoing.index, outgoing.durationSec, outgoing.durationSec, s, outgoing.cameraKeys),
     });
     layers.push({
       sceneIndex: incoming.index,
       localSec: Math.max(0, t - incoming.startSec),
-      camera: cameraAt(incoming.index, Math.max(0, t - incoming.startSec), incoming.durationSec, s),
+      camera: cameraAt(incoming.index, Math.max(0, t - incoming.startSec), incoming.durationSec, s, incoming.cameraKeys),
     });
   } else {
     layers.push({
       sceneIndex: scene.index,
       localSec: localSec,
-      camera: cameraAt(scene.index, localSec, scene.durationSec, s),
+      camera: cameraAt(scene.index, localSec, scene.durationSec, s, scene.cameraKeys),
     });
   }
 

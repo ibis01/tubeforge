@@ -35,6 +35,16 @@ import type { DirectorPlan } from "./director-plan";
 import { planSceneDuration, planTransitionIn } from "./director-plan";
 import { sanitizeTransition, TRANSITION_IDS, type TransitionStyle } from "./transitions";
 import { R_LEAD_SEC, R_TAIL_SEC, R_MIN_SEG_SEC } from "./preview-lanes";
+import {
+  sanitizeGrade,
+  sanitizeTitle,
+  sanitizeCamera,
+  sanitizeSpeed,
+  sanitizeVoiceFades,
+  type SceneGrade,
+  type SceneTitle,
+  type SceneCameraKeys,
+} from "./studio-doc";
 
 export type SceneSource = "ai" | "stock" | "slides";
 
@@ -48,7 +58,13 @@ export interface TimelineShot {
 }
 
 export interface TimelineAudio {
-  voice: { enabled: boolean; level: number }; // 0..1
+  voice: {
+    enabled: boolean;
+    level: number;
+    /** S2 wave 2 — narration fade in/out (seconds, 0..3); absent = none. */
+    fadeInSec?: number;
+    fadeOutSec?: number;
+  }; // 0..1
   music: { enabled: boolean; level: number; ducking: boolean };
   sfx: { enabled: boolean; level: number; kind: string | null };
   ambient: { enabled: boolean; level: number; kind: string | null };
@@ -76,6 +92,12 @@ export interface TimelineScene {
   stockSource: string | null; // "pexels" | "pixabay" | null
   stockQuery: string | null;
   shot: TimelineShot | null;
+  /** S2 wave 2 — per-scene creative overrides. Optional + absent from the
+   *  assembly seed (the classic look is the default), present once edited. */
+  grade?: SceneGrade | null;
+  titleOverlay?: SceneTitle | null;
+  cameraKeys?: SceneCameraKeys | null;
+  speed?: number | null;
 }
 
 export interface AssembledTimeline {
@@ -296,6 +318,13 @@ export interface DocSceneSettings {
   ambientLevel: number | null;
   /** Edited caption text (null = no override — the row's field wins). */
   caption: string | null;
+  /** S2 wave 2 — creative layer. Null = classic render behavior. */
+  grade: SceneGrade | null;
+  titleOverlay: SceneTitle | null;
+  cameraKeys: SceneCameraKeys | null;
+  speed: number | null;
+  /** Per-scene narration fade in/out (null = no afade). */
+  voiceFades: { inSec: number; outSec: number } | null;
 }
 
 /** Clamp a doc level into 0..1; anything absent/out-of-range is null (no
@@ -333,6 +362,14 @@ export function docSceneSettings(
       typeof s.caption?.text === "string" && s.caption.text.trim().length > 0
         ? s.caption.text
         : null,
+    // S2 wave 2 — the creative layer, re-sanitized at the extraction choke
+    // point (the UI normalizes on load too; both call studio-doc's exact
+    // functions so a hostile persisted doc can never reach the render raw).
+    grade: sanitizeGrade(s.grade),
+    titleOverlay: sanitizeTitle(s.titleOverlay),
+    cameraKeys: sanitizeCamera(s.cameraKeys),
+    speed: sanitizeSpeed(s.speed),
+    voiceFades: sanitizeVoiceFades(s.audio?.voice?.fadeInSec, s.audio?.voice?.fadeOutSec),
   }));
 }
 

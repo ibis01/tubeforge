@@ -204,6 +204,7 @@ export type MoveKind =
   | "diag-tl" // drift toward upper-left (x-, y-)
   | "diag-br" // drift toward lower-right (x+, y+)
   | "punch" // fast attack then slow drift (rehook opener)
+  | "studio" // S2: the user's two-key camera (from/to framing + ease)
   | "hold"; // static frame
 
 export interface MotionShot {
@@ -213,6 +214,13 @@ export interface MotionShot {
   focal: Focal; // point locked in frame for this shot
   travel: number; // 0..1 fraction of max window travel (pans/tilts/diags)
   sec: number; // target seconds for this shot
+  /** S2 "studio" shots — the user's two-key camera, expressed in the SAME
+   *  vocabulary as the studio preview (window center fractions + scale).
+   *  Absent on every engine-authored shot; optional so all existing
+   *  constructors stay untouched. */
+  from?: { scale: number; x: number; y: number };
+  to?: { scale: number; x: number; y: number };
+  ease?: "smooth" | "linear" | "pop";
 }
 
 export interface MotionScenePlan {
@@ -232,8 +240,33 @@ export const MOTION_MOVE_LABELS: Record<MoveKind, string> = {
   "diag-tl": "Diagonal drift (up-left)",
   "diag-br": "Diagonal drift (down-right)",
   punch: "Punch-in hook",
+  studio: "Studio keyframes",
   hold: "Static hold",
 };
+
+/** S2 — build the ONE-shot plan a doc's cameraKeys renders through: the user
+ *  two-key camera spans the whole scene, outranking the Director's auto
+ *  camera for that scene (an explicit user edit is senior by definition). */
+export function studioCameraPlan(keys: { from: { scale: number; x: number; y: number }; to: { scale: number; x: number; y: number }; ease: "smooth" | "linear" | "pop" }, sec: number): MotionScenePlan {
+  return {
+    sceneType: "standard",
+    move: "Studio keyframes",
+    shots: [
+      {
+        kind: "studio",
+        zStart: keys.from.scale,
+        zEnd: keys.to.scale,
+        focal: { x: keys.from.x, y: keys.from.y },
+        travel: 0,
+        sec,
+        from: keys.from,
+        to: keys.to,
+        ease: keys.ease,
+      },
+    ],
+    staticImage: false,
+  };
+}
 
 // Per-kind shot pacing (seconds per camera shot). Calm scenes HOLD one move
 // across most of the scene (the spec: "movement should progress smoothly
@@ -743,7 +776,27 @@ function shotZoompan(
   let xExpr: string;
   let yExpr: string;
 
-  if (kind === "hold") {
+  if (kind === "studio" && shot.from && shot.to) {
+    // S2 — the user's two-key camera. The window CENTER lerps between the
+    // two keys with the chosen ease; scale lerps too; the focal-anchor clamp
+    // (`clip`) keeps every intermediate window legal — exactly the guarantee
+    // the engine's own focal-anchor math gives its own shots.
+    const easeExpr =
+      shot.ease === "linear"
+        ? `(on/${last})`
+        : shot.ease === "pop"
+          ? `(1-(1-(on/${last}))*(1-(on/${last})))`
+          : `(0.5-0.5*cos(PI*on/${last}))`;
+    const z0 = Math.min(Math.max(shot.from.scale, 1), 2.2);
+    const z1 = Math.min(Math.max(shot.to.scale, 1), 2.2);
+    const cx0 = Math.min(Math.max(shot.from.x, 0), 1);
+    const cx1 = Math.min(Math.max(shot.to.x, 0), 1);
+    const cy0 = Math.min(Math.max(shot.from.y, 0), 1);
+    const cy1 = Math.min(Math.max(shot.to.y, 0), 1);
+    zExpr = `${fmt(z0, 4)}+${fmt(z1 - z0, 4)}*${easeExpr}`;
+    xExpr = `clip(iw*(${fmt(cx0, 4)}+${fmt(cx1 - cx0, 4)}*${easeExpr})-iw/(2*zoom)\,0\,iw-iw/zoom)`;
+    yExpr = `clip(ih*(${fmt(cy0, 4)}+${fmt(cy1 - cy0, 4)}*${easeExpr})-ih/(2*zoom)\,0\,ih-ih/zoom)`;
+  } else if (kind === "hold") {
     zExpr = "1";
     xExpr = "iw/2-(iw/zoom)/2";
     yExpr = "ih/2-(ih/zoom)/2";

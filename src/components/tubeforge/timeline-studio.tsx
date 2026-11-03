@@ -41,6 +41,12 @@
 //     weights; music rides the library bed as a per-scene volume automation.
 //     The synthesized-drone fallback keeps its fixed profile (it never had
 //     a slider) — the inspector's Mix note says so.
+//   • per-scene GRADE → S2 wave 2: the segment's finishing filter (eq +
+//     colorbalance + vignette); null = the classic look, scene by scene.
+//   • per-scene TITLE overlay → S2 wave 2: drawtext on the segment, animated.
+//   • per-scene CAMERA KEYS → S2 wave 2: a two-key zoompan plan that
+//     outranks the Director's auto camera for that scene (Ken Burns only).
+//   • per-scene SPEED + voice fades → S2 wave 2 (wired in the voice/pace wave).
 //
 // The preview is an approximation by design: the render (ffmpeg) stays the
 // source of truth. Everything the preview needs is deterministic and lives
@@ -112,6 +118,16 @@ import type {
 } from "@/lib/tubeforge/types";
 import { TRANSITIONS } from "@/lib/tubeforge/transitions";
 import {
+  GRADE_PRESETS,
+  sanitizeGrade,
+  sanitizeTitle,
+  sanitizeCamera,
+  sanitizeSpeed,
+  type SceneGrade,
+  type SceneTitle,
+  type SceneCameraKeys,
+} from "@/lib/tubeforge/studio-doc";
+import {
   formatTimecode,
   previewSettingsFrom,
   resolveFrame,
@@ -175,6 +191,14 @@ function cloneTimeline(t: AssembledTimelineDTO): AssembledTimelineDTO {
         ambient: { ...s.audio.ambient },
       },
       caption: s.caption ? { ...s.caption } : null,
+      // S2 wave 2 — the creative layer deep-copies too (one undo step = one
+      // coherent document, never a shared reference into the past).
+      grade: s.grade ? { ...s.grade } : s.grade,
+      titleOverlay: s.titleOverlay ? { ...s.titleOverlay } : s.titleOverlay,
+      cameraKeys: s.cameraKeys
+        ? { from: { ...s.cameraKeys.from }, to: { ...s.cameraKeys.to }, ease: s.cameraKeys.ease }
+        : s.cameraKeys,
+      speed: s.speed,
     })),
     sceneCount: t.sceneCount,
     totalDurationSec: t.totalDurationSec,
@@ -222,6 +246,12 @@ function normalizeTimelineDoc(t: AssembledTimelineDTO | null): AssembledTimeline
           sfx: a?.sfx ?? { enabled: false, level: 0, kind: null },
           ambient: a?.ambient ?? { enabled: false, level: 0, kind: null },
         },
+        // S2 wave 2 — the creative layer re-sanitized at the load choke
+        // point (same studio-doc functions the render's extractor calls).
+        grade: sanitizeGrade(s.grade),
+        titleOverlay: sanitizeTitle(s.titleOverlay),
+        cameraKeys: sanitizeCamera(s.cameraKeys),
+        speed: sanitizeSpeed(s.speed),
       };
     }),
   };
@@ -885,6 +915,36 @@ export function TimelineStudio({
     const f = resolveFrame(playhead, timeline, settings);
     if (!f) return;
 
+    // S2 wave 2 — the doc's per-scene creative layer in the preview.
+    // Approximate by contract: the filter() model is multiplicative where
+    // the render's eq is additive, and the vignette is a radial gradient —
+    // the RENDER stays the source of truth; this is the honest rough cut.
+    const gradeOf = (idx: number): SceneGrade | null | undefined =>
+      timeline.scenes.find((s) => s.index === idx)?.grade;
+    const applyGradeFilter = (g: SceneGrade | null | undefined) => {
+      if (!g) return;
+      ctx.filter = `brightness(${g.brightness}) contrast(${g.contrast}) saturate(${g.saturation})`;
+    };
+    const applyGradeOverlays = (g: SceneGrade | null | undefined) => {
+      ctx.filter = "none";
+      if (!g) return;
+      if (Math.abs(g.temperature) > 0.01) {
+        // Warm lifts toward amber, cool toward steel-blue.
+        const warm = g.temperature > 0;
+        ctx.fillStyle = warm
+          ? `rgba(255,158,64,${(g.temperature * 0.13).toFixed(3)})`
+          : `rgba(72,138,255,${(-g.temperature * 0.13).toFixed(3)})`;
+        ctx.fillRect(0, 0, W, H);
+      }
+      if (g.vignette > 0.01) {
+        const grad = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.42, W / 2, H / 2, Math.hypot(W, H) / 2);
+        grad.addColorStop(0, "rgba(0,0,0,0)");
+        grad.addColorStop(1, `rgba(0,0,0,${(g.vignette * 0.6).toFixed(3)})`);
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, W, H);
+      }
+    };
+
     const drawLayer = (idx: number, localSec: number, cam: { scale: number; dx: number; dy: number }) => {
       const img = imagePool.current.get(idx);
       const vid = stockPool.current.get(idx);
@@ -933,7 +993,10 @@ export function TimelineStudio({
       const s = cover * cam.scale;
       const dw = sw * s;
       const dh = sh * s;
+      const g = gradeOf(idx);
+      applyGradeFilter(g);
       ctx.drawImage(src, (W - dw) / 2 + cam.dx * W, (H - dh) / 2 + cam.dy * H, dw, dh);
+      applyGradeOverlays(g);
     };
 
     const black = (a: number) => {
@@ -1055,6 +1118,51 @@ export function TimelineStudio({
     } else {
       const layer = f.layers[0];
       if (layer) drawLayer(layer.sceneIndex, layer.localSec, layer.camera);
+    }
+
+    // S2 wave 2 — the scene's title overlay, mirroring titleDrawtextFilter's
+    // geometry (face relative to frame height, safe-zone margins) and the
+    // animation curves (fade 0.4s in / 0.5s out, rise & slide ease-out).
+    const activeScene = timeline.scenes.find((s) => s.index === f.activeIndex);
+    const ti = activeScene?.titleOverlay;
+    if (ti && activeScene) {
+      const D = Math.max(activeScene.durationSec, 0.5);
+      const lt = f.localSec;
+      let alpha = 1;
+      let offY = 0;
+      let offX = 0;
+      if (ti.anim !== "none") {
+        const fin = Math.min(1, lt / 0.4);
+        const fout = lt > D - 0.5 ? Math.max(0, (D - lt) / 0.5) : 1;
+        alpha = Math.min(fin, fout);
+        if (ti.anim === "rise") offY = 40 * Math.pow(1 - Math.min(lt / 0.6, 1), 2) * (H / 480);
+        if (ti.anim === "slide") offX = 0.12 * Math.pow(1 - Math.min(lt / 0.55, 1), 2) * W;
+      }
+      const vertical = settings.aspectRatio !== "16:9";
+      const face = Math.max(12, Math.round(H * (vertical ? 0.05 : 0.062) * ti.size));
+      const margin = Math.round(H * (vertical ? 0.09 : 0.075));
+      ctx.font = `600 ${face}px "Noto Sans SC", system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "alphabetic";
+      const y = ti.pos === "top" ? margin + face : ti.pos === "center" ? H / 2 + face / 2 : H - margin - (vertical ? H * 0.02 : 0);
+      const x = W / 2 - offX;
+      ctx.globalAlpha = Math.min(1, Math.max(0, alpha));
+      if (ti.style === "lower") {
+        const m = ctx.measureText(ti.text);
+        ctx.fillStyle = "rgba(0,0,0,0.45)";
+        ctx.fillRect(x - m.width / 2 - face * 0.55, y - face * 1.28 + offY, m.width + face * 1.1, face * 1.66);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText(ti.text, x, y + offY);
+      } else {
+        const bw = ti.style === "outline" ? face * 0.2 : ti.style === "bold" ? face * 0.14 : face * 0.05;
+        ctx.lineJoin = "round";
+        ctx.lineWidth = Math.max(2, bw);
+        ctx.strokeStyle = ti.style === "clean" ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.92)";
+        ctx.strokeText(ti.text, x, y + offY);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText(ti.text, x, y + offY);
+      }
+      ctx.globalAlpha = 1;
     }
 
     // Burned captions — mirrors the render's subtitle geometry (phone-first
@@ -1403,10 +1511,13 @@ export function TimelineStudio({
                   setPlaying(false);
                   seek(t);
                 }}
+                onGrade={(g) => patchScene(selectedScene.index, { grade: g }, { key: `grade:${selectedScene.index}` })}
+                onTitle={(t) => patchScene(selectedScene.index, { titleOverlay: t }, { key: `title:${selectedScene.index}` })}
+                onCamera={(c) => patchScene(selectedScene.index, { cameraKeys: c }, { key: `cam:${selectedScene.index}` })}
               />
             ) : (
               <div className="hidden lg:flex rounded-lg border border-dashed border-white/10 items-center justify-center p-6 text-center text-xs text-muted-foreground">
-                Select a clip to edit its timing, transition, caption and mix.
+                Select a clip to edit its timing, transition, caption, grade, title, camera and mix.
               </div>
             )}
           </div>
@@ -1762,6 +1873,10 @@ interface InspectorProps {
   onCaption: (c: { text: string; startSec: number; endSec: number } | null) => void;
   onAudio: (track: "voice" | "music" | "sfx" | "ambient", level: number) => void;
   onSeekScene: (t: number) => void;
+  /** S2 wave 2 — the creative layer. */
+  onGrade: (g: SceneGrade | null) => void;
+  onTitle: (t: SceneTitle | null) => void;
+  onCamera: (c: SceneCameraKeys | null) => void;
 }
 
 const RENDER_HONORS = (
@@ -1774,8 +1889,11 @@ const RENDER_HONORS = (
   </Badge>
 );
 
-function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCaption, onAudio, onSeekScene }: InspectorProps) {
+function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCaption, onAudio, onSeekScene, onGrade, onTitle, onCamera }: InspectorProps) {
   const shot = scene.shot;
+  const grade = scene.grade ?? null;
+  const ti = scene.titleOverlay ?? null;
+  const cam = scene.cameraKeys ?? null;
   return (
     <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.02] p-3">
       <div className="flex items-center gap-2">
@@ -1873,6 +1991,224 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
         />
         <p className="text-[10px] leading-snug text-muted-foreground">
           Edited text replaces this scene's burned cues (smart captions too).
+        </p>
+      </section>
+
+      {/* grade — S2 wave 2 */}
+      <section className="space-y-2">
+        <header className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+          <span className="h-3 w-3 rounded-sm bg-gradient-to-br from-amber-300 to-rose-400" /> Grade {RENDER_HONORS}
+        </header>
+        <div className="flex flex-wrap gap-1">
+          {Object.entries(GRADE_PRESETS).map(([id, p]) => (
+            <Button
+              key={id}
+              size="sm"
+              variant="ghost"
+              disabled={disabled}
+              onClick={() => onGrade({ ...p })}
+              className="h-6 px-2 text-[10px] capitalize"
+            >
+              {id}
+            </Button>
+          ))}
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={disabled || !grade}
+            onClick={() => onGrade(null)}
+            className="h-6 px-2 text-[10px]"
+            title="Back to the classic look"
+          >
+            reset
+          </Button>
+        </div>
+        {(
+          [
+            ["brightness", "Bright", 0.5, 1.5, 0.02],
+            ["contrast", "Contrast", 0.5, 1.5, 0.02],
+            ["saturation", "Saturate", 0, 2, 0.05],
+            ["temperature", "Temp", -1, 1, 0.05],
+            ["vignette", "Vignette", 0, 1, 0.05],
+          ] as const
+        ).map(([key, label, min, max, step]) => (
+          <div key={key} className="flex items-center gap-2">
+            <span className="w-16 shrink-0 text-[10px] text-muted-foreground">{label}</span>
+            <Slider
+              className="h-1.5 flex-1"
+              value={[grade ? Math.round((grade[key] as number) * 100) : key === "temperature" || key === "vignette" ? 0 : 100]}
+              min={Math.round(min * 100)}
+              max={Math.round(max * 100)}
+              step={Math.round(step * 100)}
+              disabled={disabled}
+              onValueChange={(v) =>
+                onGrade({
+                  brightness: grade?.brightness ?? 1,
+                  contrast: grade?.contrast ?? 1,
+                  saturation: grade?.saturation ?? 1,
+                  temperature: grade?.temperature ?? 0,
+                  vignette: grade?.vignette ?? 0,
+                  [key]: (v[0] ?? 0) / 100,
+                })
+              }
+            />
+            <span className="w-9 text-right font-mono text-[10px] text-muted-foreground">
+              {grade ? Math.round((grade[key] as number) * 100) : 100}%
+            </span>
+          </div>
+        ))}
+        <p className="text-[10px] leading-snug text-muted-foreground">
+          Per-scene color over the AI art (Ken Burns + stock). No pick = the classic look; slides keep their tuned deck.
+        </p>
+      </section>
+
+      {/* title overlay — S2 wave 2 */}
+      <section className="space-y-1.5">
+        <header className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+          <span className="font-black leading-none text-sm text-primary/80">T</span> Title {RENDER_HONORS}
+        </header>
+        <Input
+          disabled={disabled}
+          value={ti?.text ?? ""}
+          maxLength={90}
+          placeholder="No title — type a headline for this scene"
+          onChange={(e) => {
+            const text = e.target.value;
+            onTitle(
+              text.trim()
+                ? { text, style: ti?.style ?? "clean", anim: ti?.anim ?? "fade", pos: ti?.pos ?? "bottom", size: ti?.size ?? 1 }
+                : null
+            );
+          }}
+          className="h-7 text-xs"
+          aria-label="Title text"
+        />
+        {ti && (
+          <div className="grid grid-cols-2 gap-1.5">
+            <Select
+              value={ti.style}
+              disabled={disabled}
+              onValueChange={(v) => onTitle({ ...ti, style: v as SceneTitle["style"] })}
+            >
+              <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="clean" className="text-xs">Clean</SelectItem>
+                <SelectItem value="bold" className="text-xs">Bold</SelectItem>
+                <SelectItem value="outline" className="text-xs">Outline</SelectItem>
+                <SelectItem value="lower" className="text-xs">Lower third</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
+              value={ti.anim}
+              disabled={disabled}
+              onValueChange={(v) => onTitle({ ...ti, anim: v as SceneTitle["anim"] })}
+            >
+              <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none" className="text-xs">No motion</SelectItem>
+                <SelectItem value="fade" className="text-xs">Fade</SelectItem>
+                <SelectItem value="rise" className="text-xs">Rise</SelectItem>
+                <SelectItem value="slide" className="text-xs">Slide</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
+              value={ti.pos}
+              disabled={disabled}
+              onValueChange={(v) => onTitle({ ...ti, pos: v as SceneTitle["pos"] })}
+            >
+              <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="top" className="text-xs">Top</SelectItem>
+                <SelectItem value="center" className="text-xs">Center</SelectItem>
+                <SelectItem value="bottom" className="text-xs">Bottom</SelectItem>
+              </SelectContent>
+            </Select>
+            <div className="flex items-center gap-2">
+              <Slider
+                className="h-1.5 flex-1"
+                value={[Math.round(ti.size * 100)]}
+                min={50}
+                max={150}
+                step={5}
+                disabled={disabled}
+                onValueChange={(v) => onTitle({ ...ti, size: (v[0] ?? 100) / 100 })}
+              />
+              <span className="w-8 text-right font-mono text-[10px] text-muted-foreground">{Math.round(ti.size * 100)}%</span>
+            </div>
+          </div>
+        )}
+        <p className="text-[10px] leading-snug text-muted-foreground">
+          Burned onto this scene's frames, animated in/out — under the caption track.
+        </p>
+      </section>
+
+      {/* camera keyframes — S2 wave 2 */}
+      <section className="space-y-2">
+        <header className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+          <span className="text-sm leading-none">◆</span> Camera keys {RENDER_HONORS}
+        </header>
+        {(
+          [
+            ["from", "Start"],
+            ["to", "End"],
+          ] as const
+        ).map(([key, label]) => {
+          const k = cam?.[key] ?? { scale: 1, x: 0.5, y: 0.5 };
+          return (
+            <div key={key} className="space-y-1 rounded-md border border-white/10 p-2">
+              <div className="text-[10px] font-medium text-foreground/80">{label} framing</div>
+              {(
+                [
+                  ["scale", "Zoom", 1, 2.2],
+                  ["x", "Pan X", 0, 1],
+                  ["y", "Pan Y", 0, 1],
+                ] as const
+              ).map(([field, label2, min, max]) => (
+                <div key={field} className="flex items-center gap-2">
+                  <span className="w-12 shrink-0 text-[10px] text-muted-foreground">{label2}</span>
+                  <Slider
+                    className="h-1 flex-1"
+                    value={[Math.round(k[field] * 100)]}
+                    min={Math.round(min * 100)}
+                    max={Math.round(max * 100)}
+                    step={5}
+                    disabled={disabled}
+                    onValueChange={(v) =>
+                      onCamera({
+                        from: cam?.from ?? { scale: 1, x: 0.5, y: 0.5 },
+                        to: cam?.to ?? { scale: 1, x: 0.5, y: 0.5 },
+                        ease: cam?.ease ?? "smooth",
+                        [key]: { ...k, [field]: (v[0] ?? 0) / 100 },
+                      })
+                    }
+                  />
+                  <span className="w-8 text-right font-mono text-[10px] text-muted-foreground">
+                    {Math.round(k[field] * 100)}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          );
+        })}
+        <div className="flex items-center gap-1.5">
+          <Select
+            value={cam?.ease ?? "smooth"}
+            disabled={disabled || !cam}
+            onValueChange={(v) => cam && onCamera({ ...cam, ease: v as SceneCameraKeys["ease"] })}
+          >
+            <SelectTrigger className="h-7 flex-1 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="smooth" className="text-xs">Smooth (ease in-out)</SelectItem>
+              <SelectItem value="linear" className="text-xs">Linear</SelectItem>
+              <SelectItem value="pop" className="text-xs">Pop (ease out)</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button size="sm" variant="ghost" disabled={disabled || !cam} onClick={() => onCamera(null)} className="h-7 text-xs">
+            Auto
+          </Button>
+        </div>
+        <p className="text-[10px] leading-snug text-muted-foreground">
+          Two keyframes, start → end framing with easing — overrides the Director's auto camera for this AI-art scene.
         </p>
       </section>
 

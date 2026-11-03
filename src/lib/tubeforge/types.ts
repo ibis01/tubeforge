@@ -446,7 +446,7 @@ export interface TimelineSceneDTO {
   transitionIn: string | null;
   transitionOut: string | null;
   audio: {
-    voice: { enabled: boolean; level: number };
+    voice: { enabled: boolean; level: number; fadeInSec?: number; fadeOutSec?: number };
     music: { enabled: boolean; level: number; ducking: boolean };
     sfx: { enabled: boolean; level: number; kind: string | null };
     ambient: { enabled: boolean; level: number; kind: string | null };
@@ -463,6 +463,29 @@ export interface TimelineSceneDTO {
     motion: string | null;
     mood: string | null;
   } | null;
+  /** S2 wave 2 — per-scene creative overrides (all optional; legacy docs
+   *  and "reset" carry undefined). Sanitized in studio-doc.ts. */
+  grade?: {
+    brightness: number;
+    contrast: number;
+    saturation: number;
+    temperature: number;
+    vignette: number;
+  } | null;
+  titleOverlay?: {
+    text: string;
+    style: "clean" | "bold" | "outline" | "lower";
+    anim: "none" | "fade" | "rise" | "slide";
+    pos: "top" | "center" | "bottom";
+    size: number;
+  } | null;
+  cameraKeys?: {
+    from: { scale: number; x: number; y: number };
+    to: { scale: number; x: number; y: number };
+    ease: "smooth" | "linear" | "pop";
+  } | null;
+  /** Per-scene playback rate (0.5..2); null/undefined = normal. */
+  speed?: number | null;
 }
 
 export interface AssembledTimelineDTO {
