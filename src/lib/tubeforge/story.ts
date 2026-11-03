@@ -169,6 +169,18 @@ export async function readSceneImage(videoId: string, index: number): Promise<Bu
   return storage.get(key);
 }
 
+/**
+ * One per-scene voiceover WAV — the Timeline Studio's preview audio source.
+ * The render's audio graph measures these exact files, so preview sync and
+ * final mix can never disagree about what was said where.
+ */
+export async function readSceneWav(videoId: string, index: number): Promise<Buffer | null> {
+  if (!Number.isInteger(index) || index < 1 || index > 99) return null;
+  const key = `${videoId}/${sceneWavFile(index)}`;
+  if (!(await storage.exists(key))) return null;
+  return storage.get(key);
+}
+
 // ---------- Scene normalization ----------
 
 /** Coerce one raw LLM scene object into a valid Scene (shared by all writers). */

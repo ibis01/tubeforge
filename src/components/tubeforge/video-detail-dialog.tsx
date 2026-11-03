@@ -33,7 +33,7 @@ import { InlineCloneSetup } from "@/components/tubeforge/inline-clone-setup";
 import { BrandKitCard } from "@/components/tubeforge/brand-kit";
 import { SceneEditorDialog } from "@/components/tubeforge/scene-editor";
 import { DirectorCard } from "@/components/tubeforge/director-card";
-import { EditingStudio } from "@/components/tubeforge/editing-studio";
+import { TimelineStudio } from "@/components/tubeforge/timeline-studio";
 import { CircleCheck, CircleX, CircleHelp, Ban, Brush } from "lucide-react";
 import {
   pollVoiceover,
@@ -1578,13 +1578,15 @@ export function VideoDetailDialog({
 
   const videoTab = (
     <div className="space-y-5">
-      {/* Stage 6 T-6.9 — Editing Studio. Mounted first so the user can trim
-          the timeline BEFORE the render commits the trims to disk. The
-          Studio is hidden when the video isn't scene-format or has no
-          scenes — the same gate the /assemble endpoint enforces. */}
-      {isStory && scenes.length > 0 && (
-        <EditingStudio
+      {/* Stage 6 — the Timeline Studio: lanes + live preview + inspector.
+          Mounted first so the user can trim the timeline BEFORE the render
+          commits the trims to disk. Hidden when the video isn't scene-format
+          or has no scenes — the same gate the /assemble endpoint enforces. */}
+      {isStory && scenes.length > 0 && video && (
+        <TimelineStudio
           videoId={video.id}
+          video={video}
+          scenes={scenes}
           canAssemble={Boolean(video.hasVoiceover)}
           renderInFlight={busy === "render" || busy === "preview"}
           onSaved={() => void refreshVideo(video.id)}

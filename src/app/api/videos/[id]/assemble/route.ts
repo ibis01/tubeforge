@@ -92,8 +92,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
 /** PUT — save a user-edited timeline body (assembleSaveSchema). The route is
  *  permissive on deep content (the schema only validates the per-scene index
- *  + start/end + duration shape); the Editing Studio is the source of truth
- *  for those edits. */
+ *  + start/end + duration shape); the Timeline Studio is the source of truth
+ *  for those edits.
+ *
+ *  sceneOrder: when present, the row's scenes array is rewritten into the
+ *  SAME play order (validated as an exact permutation). The render maps
+ *  timeline durations onto the row's scenes BY POSITION, so the row must
+ *  move with the doc — one db update, never two sources of truth. */
 export async function PUT(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -117,6 +122,27 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     throw err;
   }
 
+  // Optional row reorder — an exact permutation of the current scene
+  // indices, or the save is rejected whole (no partial reorders).
+  let rowScenes: string | null = null;
+  if (body.sceneOrder) {
+    const current = parseScenes(video.scenes);
+    const currentIdx = new Set(current.map((s) => s.index));
+    const orderIdx = new Set(body.sceneOrder);
+    const sameSet =
+      currentIdx.size === orderIdx.size &&
+      body.sceneOrder.length === current.length &&
+      body.sceneOrder.every((i) => currentIdx.has(i));
+    if (!sameSet)
+      return NextResponse.json(
+        { error: "sceneOrder must be a permutation of the current scene indices" },
+        { status: 400 }
+      );
+    const byIdx = new Map(current.map((s) => [s.index, s]));
+    const reordered = body.sceneOrder.map((i) => byIdx.get(i)!);
+    rowScenes = JSON.stringify(reordered);
+  }
+
   const timeline: AssembledTimeline = {
     scenes: body.scenes as AssembledTimeline["scenes"],
     sceneCount: body.scenes.length,
@@ -126,7 +152,10 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
 
   await db.video.update({
     where: { id },
-    data: { timeline: serializeTimeline(timeline) },
+    data: {
+      timeline: serializeTimeline(timeline),
+      ...(rowScenes !== null ? { scenes: rowScenes } : {}),
+    },
   });
 
   return NextResponse.json({ timeline });

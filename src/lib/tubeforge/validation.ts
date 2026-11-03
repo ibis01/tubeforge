@@ -167,7 +167,13 @@ export const publishSchema = z.object({
 /** PUT /api/videos/[id]/assemble — save a user-edited timeline.
  *  The body is the AssembledTimeline JSON itself; the schema validates
  *  structure (not the deep scene content — that's the video row's job).
- *  The route persists it so the render job consumes the saved version. */
+ *  The route persists it so the render job consumes the saved version.
+ *
+ *  sceneOrder (optional): the play order as an array of scene indices —
+ *  present whenever the editor reordered clips. The route rewrites the
+ *  video row's scenes array into the SAME order (one update, doc + row
+ *  in lockstep) so the render — which maps timeline durations onto the
+ *  row's scenes by POSITION — can never see the two disagree. */
 export const assembleSaveSchema = z.object({
   scenes: z
     .array(
@@ -181,6 +187,7 @@ export const assembleSaveSchema = z.object({
     .min(1, "Timeline must contain at least one scene"),
   totalDurationSec: z.number().min(0),
   generatedAt: z.string().optional(),
+  sceneOrder: z.array(z.number().int().min(1)).optional(),
 });
 
 /** PATCH /api/videos/[id] — Stage 6 render defaults (aspect / frameRate /

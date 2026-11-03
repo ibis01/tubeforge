@@ -62,6 +62,18 @@ import {
 } from "../src/lib/tubeforge/arthash";
 import { sceneQueries } from "../src/lib/tubeforge/stock-query";
 import { selfhostEndpoint, sharedVoiceServer } from "../src/lib/tubeforge/shared-voice";
+import type { AssembledTimeline, TimelineScene } from "../src/lib/tubeforge/timeline";
+import {
+  cameraAt,
+  formatTimecode,
+  PREVIEW_DEFAULTS,
+  previewSettingsFrom,
+  projectLanes,
+  resolveFrame,
+  seamBoundaries,
+  snapToBoundaries,
+  type PreviewSettings,
+} from "../src/lib/tubeforge/preview-lanes";
 import type { Scene } from "../src/lib/tubeforge/types";
 
 const execFileAsync = promisify(execFile);
@@ -2614,6 +2626,187 @@ await test("migrate-stage2: decideBaselinePrefix fingerprints every schema era",
   // Sentinel order matches the migration directory (chain is cumulative).
   eq(S[0].migration, "000000000000_init", "sentinels start at init");
 });
+
+// ---------- preview lanes (Timeline Studio projection) ----------
+
+suiteStart("preview lanes — the Timeline Studio projection");
+
+{
+  // A 3-scene document: durations 3/4/2, fade at the 1→2 seam, cut at 2→3,
+  // caption on scene 1 only, voice muted on scene 3.
+  const mkScene = (o: Partial<TimelineScene> & Pick<TimelineScene, "index" | "startSec" | "endSec" | "durationSec">): TimelineScene => ({
+    index: o.index,
+    title: o.title ?? `Scene ${o.index}`,
+    narration: "n",
+    visual: "v",
+    startSec: o.startSec,
+    endSec: o.endSec,
+    durationSec: o.durationSec,
+    transitionIn: o.transitionIn ?? null,
+    transitionOut: o.transitionOut ?? null,
+    audio: o.audio ?? {
+      voice: { enabled: true, level: 1 },
+      music: { enabled: true, level: 0.6, ducking: true },
+      sfx: { enabled: false, level: 0, kind: null },
+      ambient: { enabled: false, level: 0, kind: null },
+    },
+    caption: o.caption ?? null,
+    source: o.source ?? "ai",
+    stockSource: null,
+    stockQuery: null,
+    shot: null,
+  });
+  const tl: AssembledTimeline = {
+    scenes: [
+      mkScene({ index: 1, startSec: 0, endSec: 3, durationSec: 3, transitionOut: "fade", caption: { text: "First!", startSec: 0, endSec: 3 } }),
+      mkScene({ index: 2, startSec: 3, endSec: 7, durationSec: 4, transitionIn: "fade", transitionOut: "cut" }),
+      mkScene({
+        index: 3, startSec: 7, endSec: 9, durationSec: 2, transitionIn: "cut", transitionOut: "fade",
+        audio: {
+          voice: { enabled: true, level: 0 },
+          music: { enabled: true, level: 0.6, ducking: true },
+          sfx: { enabled: false, level: 0, kind: null },
+          ambient: { enabled: false, level: 0, kind: null },
+        },
+      }),
+    ],
+    sceneCount: 3,
+    totalDurationSec: 9,
+    generatedAt: new Date().toISOString(),
+  };
+  const S = PREVIEW_DEFAULTS;
+
+  await test("projectLanes: three lanes share the scene windows", () => {
+    const lanes = projectLanes(tl);
+    eq(lanes.video.length, 3, "one video clip per scene");
+    eq(lanes.voice.length, 3, "one voice clip per scene");
+    eq(lanes.captions.length, 1, "caption clips only for captioned scenes");
+    ok(lanes.video[0].durationSec === 3 && lanes.voice[2].durationSec === 2, "lanes mirror durations");
+    ok(lanes.voice[2].enabled === false, "level 0 voice clip reads as disabled");
+    ok(lanes.video[1].transitionIn === "fade" && lanes.video[1].transitionOut === "cut", "transition fields carried");
+    ok(lanes.captions[0].text === "First!", "caption text carried");
+  });
+
+  await test("cameraAt: deterministic cycle, eased, honors overrides", () => {
+    // vary cycle: scene1 push-in, scene2 pan-right, scene3 pull-out, scene4 pan-left.
+    const c1 = cameraAt(1, 1.5, 3, S);
+    eq(Math.round(c1.scale * 1000) / 1000, 1.06, "push-in midpoint: scale 1+12%*0.5 (smooth=0.5 at p=0.5)");
+    ok(c1.dx === 0 && c1.dy === 0, "push-in stays centered");
+
+    const c2 = cameraAt(2, 2, 4, S);
+    ok(Math.abs(c2.dx - 0) < 1e-9, "pan-right midpoint dx=0 (symmetric travel)");
+    eq(Math.round(c2.scale * 1000) / 1000, 1.06, "pan holds the half-amplitude base zoom");
+
+    const c2start = cameraAt(2, 0, 4, S);
+    const c2end = cameraAt(2, 4, 4, S);
+    ok(c2start.dx < 0 && c2end.dx > 0, "pan travels left→right");
+
+    const lin: PreviewSettings = { ...S, motionCurve: "linear" };
+    const atQuarter = cameraAt(1, 0.75, 3, lin); // p=0.25
+    eq(Math.round(atQuarter.scale * 1e5) / 1e5, 1.03, "linear quarter: exactly 25% of amplitude");
+    const smoothQuarter = cameraAt(1, 0.75, 3, S);
+    // easeInOutSine(0.25) = (1−cos(π/4))/2 ≈ 0.14645 → 1.01757.
+    ok(Math.abs(smoothQuarter.scale - 1.017573) < 1e-4, "smooth quarter eases under linear");
+
+    const flat: PreviewSettings = { ...S, motionVary: false };
+    ok(cameraAt(3, 1, 2, flat).dx === 0, "no-vary collapses everything to push-in");
+  });
+
+  await test("resolveFrame: mid-scene single layer", () => {
+    const f = resolveFrame(1.0, tl, S);
+    ok(f !== null, "frame resolves");
+    if (!f) return;
+    eq(f.activeIndex, 1, "inside scene 1");
+    ok(Math.abs(f.localSec - 1) < 1e-9, "local time within scene");
+    eq(f.layers.length, 1, "no blend → one layer");
+    ok(f.blend === null, "no seam state");
+    eq(f.caption, "First!", "scene caption visible");
+  });
+
+  await test("resolveFrame: fade seam → outgoing under incoming", () => {
+    const f = resolveFrame(3.0, tl, S); // the 1|2 seam (fade 0.5s)
+    ok(f !== null, "seam frame resolves");
+    if (!f) return;
+    eq(f.activeIndex, 2, "incoming scene owns the seam window");
+    ok(f.blend !== null, "seam reports blend state");
+    if (f.blend) {
+      eq(f.blend.fromIndex, 1, "outgoing is scene 1");
+      eq(f.blend.toIndex, 2, "incoming is scene 2");
+      eq(f.blend.style, "fade", "style is the incoming transitionIn");
+      ok(Math.abs(f.blend.progress - 0.5) < 0.01, "boundary sits mid-blend");
+    }
+    eq(f.layers.length, 2, "blend paints two layers");
+    ok(f.layers[0].sceneIndex === 1 && f.layers[1].sceneIndex === 2, "paint order: outgoing first");
+  });
+
+  await test("resolveFrame: cut seam never blends; clamp + empty guard", () => {
+    const f = resolveFrame(7.0, tl, S); // the 2|3 seam (cut)
+    ok(f !== null && f.blend === null && f.layers.length === 1, "cut = hard switch, no blend window");
+
+    const past = resolveFrame(99, tl, S);
+    ok(past !== null && past.activeIndex === 3, "t beyond total clamps into the last scene");
+
+    const empty: AssembledTimeline = { scenes: [], sceneCount: 0, totalDurationSec: 0, generatedAt: "" };
+    ok(resolveFrame(1, empty, S) === null, "empty timeline resolves null");
+  });
+
+  await test("resolveFrame: short scenes cap the blend window (40% rule)", () => {
+    // scene 3 is 2s; seam 2→3 is a cut so build a tiny doc to probe the cap.
+    const short: AssembledTimeline = {
+      ...tl,
+      scenes: [
+        mkScene({ index: 1, startSec: 0, endSec: 3, durationSec: 3 }),
+        mkScene({ index: 2, startSec: 3, endSec: 4, durationSec: 1, transitionIn: "fade" }), // 1s scene
+      ],
+      sceneCount: 2,
+      totalDurationSec: 4,
+    };
+    // Cap = min(0.5, 1*0.4) = 0.4 → window starts at 3 − 0.2 = 2.8.
+    // 2.77 would blend under the uncapped 0.5s window (start 2.75) — the
+    // cap is what excludes it.
+    const early = resolveFrame(2.77, short, S);
+    ok(early?.blend === null, "t before the capped window start does not blend");
+    const inWin = resolveFrame(2.85, short, S);
+    ok(inWin?.blend !== null, "t past the capped window start blends");
+    if (inWin?.blend) {
+      approx(inWin.blend.progress, 0.125, 0.02, "capped blend progress just past its start");
+    }
+  });
+
+  await test("playhead helpers: snap + boundaries + timecode", () => {
+    const bounds = seamBoundaries(tl);
+    ok(bounds.includes(0) && bounds.includes(9), "start/end are boundaries");
+    ok(bounds.includes(3) && bounds.includes(7), "seams are boundaries");
+
+    eq(snapToBoundaries(3.04, bounds, 0.15), 3, "seams attract the playhead within the snap radius");
+    eq(snapToBoundaries(3.4, bounds, 0.15), 3.4, "outside the radius: untouched");
+
+    eq(formatTimecode(65.5, 30), "01:05.15", "timecode frames at fps");
+    eq(formatTimecode(0, 30), "00:00.00", "zero");
+    eq(formatTimecode(59.999, 25), "01:00.00", "rounds up across the minute boundary");
+  });
+
+  await test("previewSettingsFrom: clamps like the render", () => {
+    const s = previewSettingsFrom({
+      aspectRatio: "junk",
+      frameRate: 48,
+      motionIntensity: 50,
+      motionCurve: "linear",
+      motionVary: false,
+      transitionDurationSec: 2,
+    });
+    eq(s.aspectRatio, "16:9", "unknown ratio falls back to 16:9");
+    eq(s.frameRate, 30, "non-catalog fps falls back to 30");
+    eq(s.motionIntensity, 30, "intensity clamps to the render ceiling");
+    eq(s.motionCurve, "linear", "curve passes through");
+    eq(s.motionVary, false, "vary false survives (only null defaults true)");
+    eq(s.transitionDurationSec, 1.5, "blend clamps to the render ceiling");
+
+    const d = previewSettingsFrom({});
+    eq(d.transitionDurationSec, 0.5, "null duration → render default 0.5s");
+    ok(d.motionVary === true, "null vary → default true");
+  });
+}
 
 // ---------- summary ----------
 
