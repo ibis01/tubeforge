@@ -58,7 +58,8 @@ import {
 import { qcForVideo } from "./qc";
 import { parsePlan, getApprovedAudioMap } from "./director-plan";
 import { parseTimeline, docSceneSettings, type DocSceneSettings } from "./timeline";
-import type { ExportQuality } from "./studio-doc";
+import type { ExportQuality, MusicPick } from "./studio-doc";
+import { docMusicPick } from "./studio-doc";
 import { sanitizeTransition, transitionSummary } from "./transitions";
 import {
   loadSlideDeck,
@@ -480,7 +481,6 @@ export async function runRenderJob(
   const subtitles =
     opts.subtitles ?? (projectBurn !== null ? projectBurn : mode !== "slides"); // slides default: no burned captions
   const smartCaptions = opts.smartCaptions !== false; // default: ASR-synced cues
-  const music = opts.music !== false; // default: ambient bed
   const sceneLimit =
     Number.isInteger(opts.sceneLimit) && (opts.sceneLimit as number) >= 1
       ? Math.min(opts.sceneLimit as number, scenes.length)
@@ -516,6 +516,10 @@ export async function runRenderJob(
   // with the SAME aligned-doc condition as the durations: a doc that is not
   // trusted for timing is not trusted for looks either.
   let docCaptionStyle: string | null = null;
+  // S7 — the doc's music pick (the studio's score: auto/mood/pinned/off).
+  // Same aligned-doc condition; "off" mutes the bed outright (true silence —
+  // not the drone fallback a null resolver result would produce).
+  let docMusic: MusicPick | null = null;
   if (Array.isArray(opts.sceneDurationsSec)) {
     sceneDurationsSec = opts.sceneDurationsSec;
   } else {
@@ -531,6 +535,7 @@ export async function runRenderJob(
       docScenes = docSceneSettings(timeline, scenes.length);
       docQuality = timeline.renderPrefs?.quality ?? undefined;
       docCaptionStyle = timeline.renderPrefs?.captionStyle ?? null;
+      docMusic = docMusicPick(timeline.renderPrefs);
     }
   }
 
@@ -544,7 +549,10 @@ export async function runRenderJob(
   // feed the music resolver (manual per-video overrides still win); pacing
   // was already applied at voiceover synthesis time.
   const planAudio = await getApprovedAudioMap(videoId);
-  const resolved = music ? await resolveMusicForVideo(video, planAudio.musicMood) : null;
+  // S7 — the doc pick re-tops the chain (doc > plan > row); "off" flips the
+  // music flag so the render ships true silence instead of the drone.
+  const music = opts.music !== false && docMusic?.mode !== "off";
+  const resolved = music ? await resolveMusicForVideo(video, planAudio.musicMood, docMusic) : null;
   const duckFallback = music ? await resolveDuckingForVideo(video, planAudio.ducking) : "standard";
   const sfx = await getSfxEnabled();
   const musicTrack = resolved

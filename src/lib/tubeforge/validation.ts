@@ -195,6 +195,17 @@ export const assembleSaveSchema = z.object({
       /** S6 — the caption-style pick (sanitized against the catalog at the
        *  parse choke point; junk never reaches the render). */
       captionStyle: z.string().max(40).optional(),
+      /** S7 — the music pick: mode is the enum, ids are capped slugs/cuids.
+       *  Catalog truth (mood presets, the org's active tracks) is validated
+       *  one layer out at the resolver — a hostile id falls down the
+       *  precedence chain, never selects a path or a crash. */
+      music: z
+        .object({
+          mode: z.enum(["auto", "mood", "track", "off"]),
+          moodId: z.string().max(64).optional(),
+          trackId: z.string().max(64).optional(),
+        })
+        .optional(),
     })
     .optional(),
 });

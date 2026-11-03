@@ -509,7 +509,12 @@ export interface AssembledTimelineDTO {
   totalDurationSec: number;
   generatedAt: string;
   /** S3 — render preferences riding the doc root (quality tier). */
-  renderPrefs?: { quality: "draft" | "standard" | "high"; captionStyle?: string | null } | null;
+  renderPrefs?: {
+    quality: "draft" | "standard" | "high";
+    captionStyle?: string | null;
+    /** S7 — the studio's music pick (absent = follow the Settings chain). */
+    music?: { mode: "auto" | "mood" | "track" | "off"; moodId?: string; trackId?: string } | null;
+  } | null;
 }
 
 export type QcStatusDTO = "pass" | "fail" | "unmeasured";

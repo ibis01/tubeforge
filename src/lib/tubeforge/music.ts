@@ -26,6 +26,7 @@ import { currentCtx } from "./tenant";
 import type { MusicTrack } from "@prisma/client";
 import { sanitizeDuckIntensity, type DuckIntensity } from "./audiomix";
 import { getUserSetting } from "./settings";
+import { sanitizeMusicPick, type MusicPick } from "./studio-doc";
 
 const execFileAsync = promisify(execFile);
 
@@ -726,6 +727,22 @@ export async function resolveDuckingForVideo(
  *   mood = per-video mood ?? APPROVED director-plan suggestion (module E —
  *          picked from the script's emotional progression) ?? auto
  *   gain/fades/ducking = per-video overrides ?? plan suggestion ?? settings defaults
+ *
+ * S7 — the studio's doc pick rides in as `docPick` (the timeline doc's
+ * renderPrefs.music, already shape-sanitized by studio-doc) and re-tops the
+ * chains per the sprint doctrine: doc pick > plan > row:
+ *   mood  = doc mood ?? per-video mood ?? plan mood ?? auto
+ *   track = doc pinned track ?? per-video pin ?? settings pin ?? auto-match
+ *           (doc "auto" SKIPS both pins — "re-match for me" is a real pick)
+ *   off   = the studio mutes the bed. The music FLAG must be flipped by the
+ *           caller (video-jobs / audio-preview) so the render goes silent
+ *           rather than falling back to the drone; the resolver also refuses
+ *           to pick against an explicit off, defensively.
+ * A doc pick that names a mood/track the catalog doesn't have (unknown mood,
+ * inactive or cross-tenant track) falls down the chain — junk can only ever
+ * resolve to a real catalog entry or the pre-S7 behavior, never a crash.
+ * A doc pick also overrides the Settings master switch (musicEnabled): an
+ * explicit studio pick is a creative act; "off" mutes, any other pick plays.
  */
 export async function resolveMusicForVideo(
   video: {
@@ -740,28 +757,40 @@ export async function resolveMusicForVideo(
     niche: string;
     audioDuration: number | null;
   },
-  planMood?: string | null
+  planMood?: string | null,
+  docPick?: MusicPick | null
 ): Promise<ResolvedMusic | null> {
   const settings = await getMusicSettings();
-  const enabled = video.musicEnabled ?? settings.enabled;
+  // Shape re-sanitize at this boundary too (defense in depth — the module is
+  // also called with picks built outside the doc parse).
+  const doc = docPick ? sanitizeMusicPick(docPick) : null;
+  if (doc?.mode === "off") return null; // callers flip the music flag first
+  const docWantsMusic = !!doc; // auto/mood/track: an explicit studio pick
+  const enabled = docWantsMusic || (video.musicEnabled ?? settings.enabled);
   if (!enabled) return null;
 
   const duckIntensity = await resolveDuckingForVideo(video);
   const mood =
-    video.musicMood && isMusicMoodId(video.musicMood)
-      ? video.musicMood
-      : planMood && isMusicMoodId(planMood)
-        ? planMood
-        : "auto";
+    doc?.mode === "mood" && doc.moodId && isMusicMoodId(doc.moodId)
+      ? doc.moodId
+      : video.musicMood && isMusicMoodId(video.musicMood)
+        ? video.musicMood
+        : planMood && isMusicMoodId(planMood)
+          ? planMood
+          : "auto";
 
   let track: MusicTrack | null = null;
   let why = "";
 
-  if (video.musicTrackId) {
+  if (doc?.mode === "track" && doc.trackId) {
+    track = await db.musicTrack.findFirst({ where: { id: doc.trackId, isActive: true } });
+    if (track) why = `studio pick “${track.name}”`;
+  }
+  if (!track && doc?.mode !== "auto" && video.musicTrackId) {
     track = await db.musicTrack.findFirst({ where: { id: video.musicTrackId, isActive: true } });
     if (track) why = `pinned track “${track.name}”`;
   }
-  if (!track && settings.mode === "manual" && settings.trackId) {
+  if (!track && doc?.mode !== "auto" && settings.mode === "manual" && settings.trackId) {
     track = await db.musicTrack.findFirst({ where: { id: settings.trackId, isActive: true } });
     if (track) why = `default track “${track.name}”`;
   }
@@ -769,7 +798,9 @@ export async function resolveMusicForVideo(
     track = await autoPickTrack(video.niche, video.audioDuration, mood);
     if (track)
       why =
-        mood !== "auto"
+        doc && mood !== "auto" && doc.mode === "mood"
+        ? `studio mood ${mood} → “${track.name}”`
+        : mood !== "auto"
         ? `${mood} mood → “${track.name}”`
         : `auto mood-match (${video.niche || "documentary"} → ${moodTagsOf(track)[0] ?? "ambient"})`;
   }

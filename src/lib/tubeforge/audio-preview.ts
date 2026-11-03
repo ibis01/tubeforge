@@ -17,6 +17,9 @@ import { promisify } from "util";
 import type { MusicTrack, Video } from "@prisma/client";
 import { parseScenes, sceneWavFile } from "./story";
 import { videoDir } from "./ai";
+import { parseTimeline } from "./timeline";
+import { docMusicPick } from "./studio-doc";
+import { getApprovedAudioMap } from "./director-plan";
 import {
   resolveMusicForVideo,
   resolveDuckingForVideo,
@@ -98,8 +101,15 @@ export async function buildAudioPreview(
   // Music resolution — exactly what the render route would pick. Three
   // states, mirroring the finalizer: DISABLED (voice only), enabled + track
   // (ducked library bed), enabled + no match (ducked synthesized drone).
-  const musicEnabled = await isMusicEnabledForVideo(video);
-  const resolved = musicEnabled ? await resolveMusicForVideo(video) : null;
+  // S7 — the studio's doc pick rides the SAME chain the render uses
+  // (doc > plan > row), and "off" mutes the preview just like the render.
+  const docPick = docMusicPick(parseTimeline(video.timeline)?.renderPrefs ?? null);
+  const musicEnabled =
+    (await isMusicEnabledForVideo(video)) && docPick?.mode !== "off";
+  const planAudio = await getApprovedAudioMap(video.id);
+  const resolved = musicEnabled
+    ? await resolveMusicForVideo(video, planAudio.musicMood, docPick)
+    : null;
   const duck: DuckIntensity = resolved
     ? resolved.duckIntensity
     : await resolveDuckingForVideo(video);

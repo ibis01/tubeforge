@@ -64,6 +64,12 @@
 //     doc-level (the burn is one global pass), mapped to the SAME ASS params
 //     the render uses; the preview mirrors the geometry. Junk can only ever
 //     select a catalog look.
+//   • MUSIC PICK → S7: the studio picks the bed the render lays under the
+//     voice (follow settings / auto match / story mood / pinned library
+//     track / mute) — doc-level, re-topping the resolver's chain (doc >
+//     plan > row); "off" ships true silence, not the drone fallback. The
+//     audition button plays the EXACT bed the render will mix, and the mix
+//     preview rides the same chain.
 //
 // The preview is an approximation by design: the render (ffmpeg) stays the
 // source of truth. Everything the preview needs is deterministic and lives
@@ -133,7 +139,9 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -146,6 +154,7 @@ import type {
   TimelineSceneDTO,
 } from "@/lib/tubeforge/types";
 import { TRANSITIONS } from "@/lib/tubeforge/transitions";
+import { MUSIC_MOODS as MUSIC_MOOD_PRESETS } from "@/lib/tubeforge/types";
 import {
   GRADE_PRESETS,
   sanitizeGrade,
@@ -158,6 +167,9 @@ import {
   CAPTION_STYLES,
   captionPreview,
   sanitizeCaptionStyle,
+  docMusicPick,
+  sanitizeMusicPick,
+  type MusicPick,
   type SceneGrade,
   type SceneTitle,
   type SceneCameraKeys,
@@ -281,10 +293,12 @@ function normalizeTimelineDoc(t: AssembledTimelineDTO | null): AssembledTimeline
     // S6 — the caption pick re-sanitizes at the load choke point (the same
     // studio-doc function the render side reads, so a hostile persisted
     // pick can only ever be a catalog look or nothing).
+    // S7 — the music pick rides the same choke point.
     renderPrefs: t.renderPrefs
       ? {
           quality: t.renderPrefs.quality ?? "standard",
           captionStyle: sanitizeCaptionStyle(t.renderPrefs.captionStyle),
+          music: sanitizeMusicPick(t.renderPrefs.music),
         }
       : t.renderPrefs,
     scenes: t.scenes.map((s) => {
@@ -725,6 +739,73 @@ export function TimelineStudio({
     },
     [timeline, applyEdit]
   );
+
+  // ---------- S7 — the music pick ----------
+  // The score: one doc-level pick riding renderPrefs (the bed is one global
+  // mix pass, so the pick is per-VIDEO, like the caption style). "Follow
+  // Settings" (null) keeps the pre-S7 chain intact; auto/mood/track re-top
+  // the resolver's chain (doc > plan > row); "off" mutes the bed outright.
+  // One pick = one undo step; the autosave persists it with every other doc
+  // field. The library list is fetched once for the picker; a failed fetch
+  // degrades to the mood presets (the render resolves ids independently).
+  const [musicTracks, setMusicTracks] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    let dead = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/music", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as { tracks?: { id: string; name: string; isActive?: boolean }[] };
+        if (!dead && Array.isArray(data.tracks))
+          setMusicTracks(
+            data.tracks
+              .filter((t) => t.isActive !== false)
+              .map((t) => ({ id: t.id, name: t.name }))
+          );
+      } catch {
+        /* the picker degrades to the mood presets */
+      }
+    })();
+    return () => {
+      dead = true;
+    };
+  }, []);
+
+  const setMusicPick = useCallback(
+    (pick: MusicPick | null) => {
+      if (!timeline) return;
+      const next = cloneTimeline(timeline);
+      const prefs = next.renderPrefs ?? { quality: "standard" as const };
+      next.renderPrefs = { ...prefs, music: pick };
+      applyEdit(next);
+    },
+    [timeline, applyEdit]
+  );
+
+  // The score's ears — the audition plays the EXACT bed the render will mix
+  // (the route resolves through the same chain: doc pick > plan > row). One
+  // element, stopped on unmount.
+  const musicAuditionRef = useRef<HTMLAudioElement | null>(null);
+  const [musicAuditioning, setMusicAuditioning] = useState(false);
+  const stopMusicAudition = useCallback(() => {
+    musicAuditionRef.current?.pause();
+    musicAuditionRef.current = null;
+    setMusicAuditioning(false);
+  }, []);
+  useEffect(() => stopMusicAudition, [stopMusicAudition]);
+  const toggleMusicAudition = useCallback(() => {
+    if (musicAuditioning) {
+      stopMusicAudition();
+      return;
+    }
+    stopMusicAudition();
+    const el = new Audio(`/api/videos/${videoId}/studio/sound?bank=music`);
+    el.addEventListener("ended", stopMusicAudition);
+    el.addEventListener("error", stopMusicAudition);
+    musicAuditionRef.current = el;
+    setMusicAuditioning(true);
+    void el.play().catch(stopMusicAudition);
+  }, [musicAuditioning, stopMusicAudition, videoId]);
 
   // ---------- drag-and-drop reorder ----------
 
@@ -1697,6 +1778,85 @@ export function TimelineStudio({
             </Select>
           </div>
           <span className="h-5 w-px bg-white/10" aria-hidden />
+          {/* S7 — the score: doc-level music pick. The render + the mix
+              preview resolve through the SAME chain (doc > plan > row);
+              "Follow Settings" keeps the pre-S7 behavior, "Mute bed" ships
+              true silence, and the audition button plays the resolved bed. */}
+          <div className="flex items-center gap-1.5 mr-1">
+            <Music2 className="h-3.5 w-3.5 text-muted-foreground" />
+            <Select
+              value={
+                (() => {
+                  const p = docMusicPick(timeline?.renderPrefs);
+                  if (!p) return "follow";
+                  return p.mode === "mood"
+                    ? `mood:${p.moodId}`
+                    : p.mode === "track"
+                      ? `track:${p.trackId}`
+                      : p.mode;
+                })()
+              }
+              onValueChange={(v) => {
+                if (v === "follow") return setMusicPick(null);
+                if (v === "auto" || v === "off") return setMusicPick({ mode: v });
+                const i = v.indexOf(":");
+                const kind = i === -1 ? v : v.slice(0, i);
+                const id = i === -1 ? "" : v.slice(i + 1);
+                if (kind === "mood" && id) return setMusicPick({ mode: "mood", moodId: id });
+                if (kind === "track" && id) return setMusicPick({ mode: "track", trackId: id });
+              }}
+              disabled={saving || loading || renderInFlight}
+            >
+              <SelectTrigger
+                className="h-7 w-[138px] text-[11px]"
+                title="The music bed the render lays under the voice — a studio pick outranks the plan and Settings; the audition button plays the resolved bed"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px]">Bed</SelectLabel>
+                  <SelectItem value="follow" className="text-[11px]">
+                    Follow Settings
+                  </SelectItem>
+                  <SelectItem value="auto" className="text-[11px]">
+                    Auto match
+                  </SelectItem>
+                  <SelectItem value="off" className="text-[11px]">
+                    Mute bed
+                  </SelectItem>
+                </SelectGroup>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px]">Story mood</SelectLabel>
+                  {MUSIC_MOOD_PRESETS.filter((m) => m.id !== "auto").map((m) => (
+                    <SelectItem key={m.id} value={`mood:${m.id}`} className="text-[11px]">
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+                {musicTracks.length > 0 ? (
+                  <SelectGroup>
+                    <SelectLabel className="text-[10px]">Library tracks</SelectLabel>
+                    {musicTracks.map((t) => (
+                      <SelectItem key={t.id} value={`track:${t.id}`} className="text-[11px]">
+                        {t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                ) : null}
+              </SelectContent>
+            </Select>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0"
+              onClick={toggleMusicAudition}
+              disabled={saving || loading || renderInFlight}
+              title="Audition the bed the render will mix (30 s)"
+            >
+              {musicAuditioning ? <Square className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+            </Button>
+          </div>
           <Button size="sm" variant="ghost" onClick={undo} disabled={!canUndo || saving || loading} title="Undo (⌘Z)">
             <Undo2 className="h-3.5 w-3.5" />
           </Button>
@@ -2151,8 +2311,8 @@ function LaneLabelRow() {
       <span className="flex items-center gap-1">
         <Subtitles className="h-2.5 w-2.5" /> captions
       </span>
-      <span className="flex items-center gap-1 text-muted-foreground/50">
-        <Music2 className="h-2.5 w-2.5" /> music bed is per-video (Settings)
+      <span className="flex items-center gap-1 text-muted-foreground/80">
+        <Music2 className="h-2.5 w-2.5" /> music — the studio picks the bed (S7)
       </span>
     </div>
   );

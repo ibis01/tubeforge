@@ -459,6 +459,9 @@ export interface RenderPrefs {
   quality: ExportQuality;
   /** S6 — the caption look the render burns (null/absent = "classic"). */
   captionStyle?: string | null;
+  /** S7 — the music pick the render lays under the voice (absent = follow
+   *  the per-video Settings exactly as before S7). */
+  music?: MusicPick | null;
 }
 
 export function sanitizeRenderPrefs(v: unknown): RenderPrefs | null {
@@ -470,7 +473,82 @@ export function sanitizeRenderPrefs(v: unknown): RenderPrefs | null {
   // junk reads as no pick (the classic look) and the key is omitted so a
   // legacy doc serializes byte-stable.
   const cs = sanitizeCaptionStyle(rec.captionStyle);
-  return cs ? { quality: q, captionStyle: cs } : { quality: q };
+  // S7 — the music pick: same doctrine, absent/junk reads as "no opinion"
+  // (follow the Settings chain) and the key is omitted for byte-stability.
+  const mp = sanitizeMusicPick(rec.music);
+  return {
+    quality: q,
+    ...(cs ? { captionStyle: cs } : {}),
+    ...(mp ? { music: mp } : {}),
+  };
+}
+
+// ---------- S7: the music pick — the score the render lays under ----------
+//
+// Until now the music bed was decided entirely OUTSIDE the studio: per-video
+// row overrides → account Settings → the auto-match engine, with the APPROVED
+// plan's mood riding between. S7 makes the bed a studio pick on the doc root
+// (the bed is one global pass, so the pick is per-VIDEO like the caption
+// style, not per-scene). The priority doctrine is the sprint's: doc pick >
+// plan > row. "off" is a real pick — the studio mutes the bed outright (true
+// silence, not the synthesized drone fallback).
+//
+// PURE on purpose (this module imports nothing): shape validation only.
+// CATALOG validation happens one layer out, at the resolver — a hostile
+// moodId/trackId can only ever fall down the existing precedence chain
+// (row pin → settings pin → auto-match), never select a path or a crash.
+
+export type MusicPickMode = "auto" | "mood" | "track" | "off";
+
+export interface MusicPick {
+  mode: MusicPickMode;
+  /** mode "mood" — a story-mood preset id (the resolver validates against
+   *  the client-safe MUSIC_MOODS catalog). */
+  moodId?: string;
+  /** mode "track" — a MusicTrack row id (the resolver validates against the
+   *  org-scoped, active library). */
+  trackId?: string;
+}
+
+const MUSIC_PICK_MODES: readonly MusicPickMode[] = ["auto", "mood", "track", "off"];
+
+/** Track/mood ids are slugs or cuids — anything else (paths, script, SQL)
+ *  is junk before it ever reaches the resolver. */
+const MUSIC_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** The doc boundary: accept anything a persisted doc may carry and return a
+ *  clean pick or null (null + junk = "no opinion" — follow the Settings
+ *  chain). Fields irrelevant to the mode are dropped so a pick is always
+ *  self-consistent ("mood" carries moodId, "track" carries trackId). */
+export function sanitizeMusicPick(v: unknown): MusicPick | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const rec = v as Record<string, unknown>;
+  const mode = rec.mode;
+  if (typeof mode !== "string") return null;
+  const m = mode.trim().toLowerCase();
+  if (!MUSIC_PICK_MODES.includes(m as MusicPickMode)) return null;
+  const cleanId = (x: unknown): string | undefined => {
+    if (typeof x !== "string") return undefined;
+    const s = x.trim().toLowerCase();
+    return MUSIC_ID_RE.test(s) ? s : undefined;
+  };
+  if (m === "mood") {
+    const moodId = cleanId(rec.moodId);
+    return moodId ? { mode: "mood", moodId } : null;
+  }
+  if (m === "track") {
+    const trackId = cleanId(rec.trackId);
+    return trackId ? { mode: "track", trackId } : null;
+  }
+  return { mode: m as MusicPickMode };
+}
+
+/** The doc's pick, already sanitized (the render + preview + audition read
+ *  this). Absent or junk → null ("no opinion" — the pre-S7 chain decides). */
+export function docMusicPick(
+  prefs: RenderPrefs | null | undefined
+): MusicPick | null {
+  return sanitizeMusicPick(prefs?.music);
 }
 
 // ---------- S6: caption styles — the words' face ----------
