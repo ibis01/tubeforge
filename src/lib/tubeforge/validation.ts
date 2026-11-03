@@ -206,13 +206,14 @@ export const renderDefaultsSchema = z.object({
 });
 
 /** POST /api/videos/[id]/studio/clip — Timeline Studio clip operations
- *  (split / duplicate / delete). Split needs the playhead's local time in
- *  the scene window; the server maps it onto the narration span. */
+ *  (split / duplicate / delete / revoice). Split needs the playhead's local
+ *  time in the scene window; revoice needs the edited narration text. */
 export const clipOpSchema = z
   .object({
-    action: z.enum(["split", "duplicate", "delete"]),
+    action: z.enum(["split", "duplicate", "delete", "revoice"]),
     sceneIndex: z.number().int().min(1).max(9999),
     atSec: z.number().finite().min(0).max(3600).optional(),
+    narration: z.string().max(4000).optional(),
   })
   .superRefine((v, ctx) => {
     if (v.action === "split" && typeof v.atSec !== "number") {
@@ -220,6 +221,13 @@ export const clipOpSchema = z
         code: z.ZodIssueCode.custom,
         path: ["atSec"],
         message: "atSec is required for split",
+      });
+    }
+    if (v.action === "revoice" && !(v.narration ?? "").trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["narration"],
+        message: "narration is required for revoice",
       });
     }
   });

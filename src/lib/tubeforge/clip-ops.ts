@@ -173,6 +173,21 @@ export function applyDuplicateToDoc(
   return recomputeDocTimes({ ...doc, scenes });
 }
 
+/** Re-voice one entry in place: new narration text + the fresh read's window.
+ *  The edited caption (if any) stays — the studio keeps it in sync. */
+export function applyRevoiceToDoc(
+  doc: AssembledTimeline,
+  sceneIndex: number,
+  narration: string,
+  durSec: number
+): AssembledTimeline {
+  const p = docPosition(doc, sceneIndex);
+  const old = cloneEntry(doc.scenes[p]);
+  const next = { ...old, narration, durationSec: durSec };
+  const scenes = [...doc.scenes.slice(0, p), next, ...doc.scenes.slice(p + 1)];
+  return recomputeDocTimes({ ...doc, scenes });
+}
+
 // ---------- helpers ----------
 
 /** The render's segment formula for a scene WAV (render.ts wavDurations). */
@@ -262,13 +277,15 @@ async function syncVoiceover(
 
 // ---------- orchestrator ----------
 
-export type ClipOpAction = "split" | "duplicate" | "delete";
+export type ClipOpAction = "split" | "duplicate" | "delete" | "revoice";
 
 export interface ClipOpBody {
   action: ClipOpAction;
   sceneIndex: number;
   /** Split only: the playhead's LOCAL time inside the scene window. */
   atSec?: number;
+  /** Revoice only: the edited narration (the surgical new read). */
+  narration?: string;
 }
 
 export interface ClipOpResult {
@@ -375,6 +392,35 @@ export async function performClipOp(video: Video, body: ClipOpBody): Promise<Cli
       audioDuration: merged,
       newIndex: nextIndex,
       activity: `Scene ${target.index} duplicated as scene ${nextIndex} (${sceneSegmentSec(wavDur).toFixed(1)}s, same read)${merged === null ? "; voiceover.wav not rebuilt (a scene WAV is missing)" : ""}`,
+    };
+  }
+
+  // S3 — transcript editing: a surgical re-voice. The row's narration, the
+  // scene WAV, the doc's narration + window and the merged voiceover all
+  // move in ONE server update — the same lockstep contract as split.
+  if (body.action === "revoice") {
+    if (video.voiceSource !== "tts")
+      throw new Error("Re-voicing reads with the studio voice — re-attach the per-scene voiceover first (this video uses custom audio)");
+    const narration = (body.narration ?? "").trim();
+    if (!narration) throw new Error("The edited narration is empty");
+    if (narration === target.narration.trim())
+      throw new Error("The narration is unchanged — nothing to re-voice");
+
+    // Row first (the render maps by position onto it), then the fresh read.
+    rowScenes[p] = { ...target, narration };
+    const wavDur = await synthSceneWav(dir, target.index, narration, video.voice, video.ttsSpeed);
+
+    const nextDoc = applyRevoiceToDoc(doc, target.index, narration, sceneSegmentSec(wavDur));
+
+    const merged = await syncVoiceover(video.id, dir, rowScenes);
+    const words = narration.split(/\s+/).filter(Boolean).length;
+    return {
+      rowScenes,
+      timeline: nextDoc,
+      sceneOrder: rowScenes.map((s) => s.index),
+      audioDuration: merged,
+      newIndex: target.index,
+      activity: `Scene ${target.index} re-voiced — ${words} words, ${sceneSegmentSec(wavDur).toFixed(1)}s window${merged === null ? "; voiceover.wav not rebuilt (a scene WAV is missing)" : ""}`,
     };
   }
 

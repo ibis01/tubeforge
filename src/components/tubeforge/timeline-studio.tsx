@@ -100,6 +100,9 @@ import {
   Maximize2,
   Layers,
   PictureInPicture2,
+  FileText,
+  Mic,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -179,7 +182,7 @@ interface ClipOpResponse {
   wavDurations?: Record<number, number>;
 }
 
-type ClipAction = "split" | "duplicate" | "delete";
+type ClipAction = "split" | "duplicate" | "delete" | "revoice";
 
 // ---------- working-copy helpers (history + recompute) ----------
 
@@ -823,7 +826,7 @@ export function TimelineStudio({
     activeClip != null && playhead >= activeClip.startSec && playhead < activeClip.endSec;
 
   const clipOp = useCallback(
-    async (action: ClipAction) => {
+    async (action: ClipAction, extra?: { narration?: string }) => {
       if (!timeline || clipBusy || saving || loading || renderInFlight) return;
       const target = activeClip;
       if (!target) {
@@ -874,6 +877,7 @@ export function TimelineStudio({
             action,
             sceneIndex: target.index,
             ...(action === "split" ? { atSec: playhead - target.startSec } : {}),
+            ...(action === "revoice" ? { narration: extra?.narration ?? "" } : {}),
           }),
         });
         if (!res.ok) {
@@ -907,7 +911,13 @@ export function TimelineStudio({
         onSaved?.(); // the parent refreshes the row (the scene list gains/loses a scene)
         toast({
           title:
-            action === "split" ? "Scene split" : action === "duplicate" ? "Scene duplicated" : "Scene deleted",
+            action === "split"
+              ? "Scene split"
+              : action === "duplicate"
+                ? "Scene duplicated"
+                : action === "revoice"
+                  ? "Scene re-voiced"
+                  : "Scene deleted",
           description: data.activity,
         });
       } catch (err) {
@@ -1693,6 +1703,8 @@ export function TimelineStudio({
                 onSpeed={(v) => patchScene(selectedScene.index, { speed: v }, { key: `speed:${selectedScene.index}` })}
                 onChroma={(c) => patchScene(selectedScene.index, { chroma: c }, { key: `chroma:${selectedScene.index}` })}
                 onPip={(p) => patchScene(selectedScene.index, { pip: p }, { key: `pip:${selectedScene.index}` })}
+                onRevoice={(narration) => void clipOp("revoice", { narration })}
+                revoicing={clipBusy === "revoice"}
                 hasLogo={video.brandHasLogo}
                 slidesMode={video.renderMode === "slides"}
               />
@@ -2270,6 +2282,10 @@ interface InspectorProps {
   /** S3 — keying + overlay. */
   onChroma: (c: SceneChroma | null) => void;
   onPip: (p: ScenePip | null) => void;
+  /** S3 — transcript editing: re-read the edited narration server-side. */
+  onRevoice: (narration: string) => void;
+  /** A re-voice is in flight (drives the button spinner). */
+  revoicing: boolean;
   /** The video has a brand logo (PIP source). */
   hasLogo: boolean;
   /** Slides mode: the designed deck owns its look — chroma/PIP hidden. */
@@ -2286,13 +2302,20 @@ const RENDER_HONORS = (
   </Badge>
 );
 
-function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCaption, onAudio, onSeekScene, onGrade, onTitle, onCamera, onSpeed, onChroma, onPip, hasLogo, slidesMode }: InspectorProps) {
+function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCaption, onAudio, onSeekScene, onGrade, onTitle, onCamera, onSpeed, onChroma, onPip, onRevoice, revoicing, hasLogo, slidesMode }: InspectorProps) {
   const shot = scene.shot;
   const grade = scene.grade ?? null;
   const ti = scene.titleOverlay ?? null;
   const cam = scene.cameraKeys ?? null;
   const chroma = scene.chroma ?? null;
   const pip = scene.pip ?? null;
+  // S3 — the staged narration (transcript editing). Local until the explicit
+  // re-voice: text edits NEVER land on the row without a matching audio read,
+  // the two can never drift. Resets when the scene changes or the server's
+  // copy updates (a re-voice rebuilds the doc).
+  const [scriptDraft, setScriptDraft] = useState(scene.narration);
+  useEffect(() => setScriptDraft(scene.narration), [scene.index, scene.narration]);
+  const scriptChanged = scriptDraft.trim() !== scene.narration.trim();
   return (
     <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.02] p-3">
       <div className="flex items-center gap-2">
@@ -2309,6 +2332,43 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
           {scene.startSec.toFixed(1)}–{scene.endSec.toFixed(1)}s
         </span>
       </div>
+
+      {/* script / transcript — S3 */}
+      <section className="space-y-1.5">
+        <header className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+          <FileText className="h-3 w-3" /> Script {RENDER_HONORS}
+        </header>
+        <Textarea
+          value={scriptDraft}
+          disabled={disabled || revoicing}
+          onChange={(e) => setScriptDraft(e.target.value)}
+          className="min-h-[72px] text-xs leading-relaxed"
+          aria-label="Scene narration"
+        />
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-muted-foreground">
+            {scriptDraft.trim().split(/\s+/).filter(Boolean).length} words
+            {scriptChanged
+              ? ` · was ${scene.narration.trim().split(/\s+/).filter(Boolean).length}`
+              : ""}
+          </span>
+          <Button
+            size="sm"
+            className="ml-auto h-7"
+            disabled={disabled || revoicing || !scriptDraft.trim() || !scriptChanged}
+            onClick={() => onRevoice(scriptDraft.trim())}
+            title="Synthesize a fresh read of the edited text with this video's own voice and pace"
+          >
+            {revoicing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Mic className="h-3 w-3" />}
+            <span className="ml-1.5 text-xs">Re-voice scene</span>
+          </Button>
+        </div>
+        <p className="text-[10px] leading-snug text-muted-foreground">
+          Editing the script re-reads the scene with the video's own voice — the
+          row, the scene WAV, the timeline window and the merged voiceover update
+          in one server step. Custom-audio videos re-attach per-scene audio first.
+        </p>
+      </section>
 
       {/* timing */}
       <section className="space-y-1.5">
