@@ -198,3 +198,22 @@ export const renderDefaultsSchema = z.object({
   frameRate: z.union([z.literal(24), z.literal(30), z.literal(60)]).optional(),
   burnCaptions: z.boolean().optional(),
 });
+
+/** POST /api/videos/[id]/studio/clip — Timeline Studio clip operations
+ *  (split / duplicate / delete). Split needs the playhead's local time in
+ *  the scene window; the server maps it onto the narration span. */
+export const clipOpSchema = z
+  .object({
+    action: z.enum(["split", "duplicate", "delete"]),
+    sceneIndex: z.number().int().min(1).max(9999),
+    atSec: z.number().finite().min(0).max(3600).optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.action === "split" && typeof v.atSec !== "number") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["atSec"],
+        message: "atSec is required for split",
+      });
+    }
+  });

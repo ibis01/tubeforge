@@ -75,6 +75,13 @@ import {
   type PreviewSettings,
 } from "../src/lib/tubeforge/preview-lanes";
 import type { Scene } from "../src/lib/tubeforge/types";
+import {
+  applyDeleteToDoc,
+  applyDuplicateToDoc,
+  applySplitToDoc,
+  sceneSegmentSec,
+  splitNarrationAt,
+} from "../src/lib/tubeforge/clip-ops";
 
 const execFileAsync = promisify(execFile);
 
@@ -2805,6 +2812,148 @@ suiteStart("preview lanes — the Timeline Studio projection");
     const d = previewSettingsFrom({});
     eq(d.transitionDurationSec, 0.5, "null duration → render default 0.5s");
     ok(d.motionVary === true, "null vary → default true");
+  });
+}
+
+
+// ---------- clip ops (Timeline Studio row surgery — pure parts) ----------
+
+suiteStart("clip ops: narration split + doc surgery");
+
+{
+  // A minimal but fully-shaped doc + entry factory (mirrors timeline.ts).
+  const LEAD = 0.35;
+  const mkEntry = (
+    index: number,
+    durationSec: number,
+    startSec: number,
+    over: Partial<TimelineScene> = {}
+  ): TimelineScene => ({
+    index,
+    title: `Scene ${index}`,
+    narration: "narration text",
+    visual: "visual",
+    startSec,
+    endSec: startSec + durationSec,
+    durationSec,
+    transitionIn: "fade",
+    transitionOut: "fade",
+    audio: {
+      voice: { enabled: true, level: 1 },
+      music: { enabled: true, level: 0.6, ducking: true },
+      sfx: { enabled: false, level: 0, kind: null },
+      ambient: { enabled: false, level: 0, kind: null },
+    },
+    caption: { text: `cap ${index}`, startSec, endSec: startSec + durationSec },
+    source: "ai",
+    stockSource: null,
+    stockQuery: null,
+    shot: { framing: "wide", camera: "push", lens: null, composition: null, motion: null, mood: null },
+    ...over,
+  });
+
+  const mkDoc = (entries: TimelineScene[]): AssembledTimeline => ({
+    scenes: entries,
+    sceneCount: entries.length,
+    totalDurationSec: entries.reduce((a, s) => a + s.durationSec, 0),
+    generatedAt: "2026-01-01T00:00:00.000Z",
+  });
+
+  const WORDS20 = Array.from({ length: 20 }, (_, i) => `w${i}`).join(" ");
+
+  await test("splitNarrationAt: mid-playhead splits the word list proportionally", () => {
+    const wav = 8; // narration span = [0.60, 8.10] interior
+    const mid = splitNarrationAt(WORDS20, wav, LEAD + 4);
+    ok(mid !== null, "mid split is legal");
+    const f = (mid as { first: string }).first.split(/\s+/).length;
+    const s = (mid as { second: string }).second.split(/\s+/).length;
+    eq(f + s, 20, "no words lost or duplicated");
+    ok(Math.abs(f - 10) <= 2, `near-half split (got ${f}/20)`);
+    eq((mid as { first: string }).first + " " + (mid as { second: string }).second, WORDS20, "join reconstructs the narration");
+  });
+
+  await test("splitNarrationAt: quarter playhead skews the boundary early", () => {
+    const q = splitNarrationAt(WORDS20, 8, LEAD + 2.175); // ~25% of the span
+    ok(q !== null, "legal");
+    const f = (q as { first: string }).first.split(/\s+/).length;
+    ok(f <= 7, `first half short (got ${f}/20)`);
+  });
+
+  await test("splitNarrationAt: playhead outside the speakable span refuses", () => {
+    eq(splitNarrationAt(WORDS20, 8, 0.1), null, "before the lead-in guard");
+    eq(splitNarrationAt(WORDS20, 8, LEAD + 8), null, "past the read's tail");
+    eq(splitNarrationAt(WORDS20, 8, LEAD + 7.76 + 10), null, "into the breathing tail");
+  });
+
+  await test("splitNarrationAt: degenerate narrations refuse", () => {
+    eq(splitNarrationAt("oneword", 8, LEAD + 4), null, "single word");
+    eq(splitNarrationAt(WORDS20, 0, LEAD + 4), null, "no measured wav");
+    eq(splitNarrationAt("", 8, LEAD + 4), null, "empty narration");
+  });
+
+  const base = mkDoc([
+    mkEntry(1, 3, 0),
+    mkEntry(2, 4, 3, { transitionIn: "wipe", transitionOut: "slide" }),
+    mkEntry(3, 5, 7),
+  ]);
+
+  await test("applySplitToDoc: two entries, cut at the razor, later windows shift", () => {
+    const out = applySplitToDoc(base, 2, 99, 2.2, 2.6, "second half narration");
+    eq(out.sceneCount, 4, "one scene became two");
+    eq(out.scenes.length, 4, "doc + count agree");
+    const [a, b] = [out.scenes[1], out.scenes[2]];
+    eq(a.index, 2, "first half keeps the index");
+    eq(a.durationSec, 2.2, "first half duration");
+    eq(a.transitionOut, "cut", "the razor point is a cut");
+    eq(a.transitionIn, "wipe", "the old seam into the first half survives");
+    eq(b.index, 99, "second half mints a fresh index");
+    eq(b.durationSec, 2.6, "second half duration");
+    eq(b.transitionIn, "cut", "razor point from the incoming side");
+    eq(b.transitionOut, "slide", "the old seam out of the scene survives");
+    eq(b.caption, null, "the second half starts caption-free");
+    eq(b.shot, null, "no plan entry exists for a fresh index");
+    eq(b.narration, "second half narration", "second half carries its half of the script");
+    eq(out.scenes[3].index, 3, "the tail scene keeps its identity");
+    approx(out.scenes[3].startSec, 7.8, 0.011, "tail scene shifts by the duration delta");
+    approx(out.totalDurationSec, 12.8, 0.011, "total = sum of the new windows");
+    approx(b.startSec, 5.2, 0.011, "second half starts after the first");
+  });
+
+  await test("applySplitToDoc: the input doc is never mutated", () => {
+    const before = JSON.stringify(base);
+    const out = applySplitToDoc(base, 2, 99, 2.2, 2.6, "x");
+    out.scenes[0].title = "MUTATED";
+    out.scenes[1].audio.voice.level = 0.123;
+    eq(JSON.stringify(base), before, "input doc untouched by edits to the result");
+  });
+
+  await test("applyDeleteToDoc: the gap closes", () => {
+    const out = applyDeleteToDoc(base, 2);
+    eq(out.sceneCount, 2, "one entry gone");
+    eq(out.scenes.map((s) => s.index), [1, 3], "order preserved");
+    approx(out.scenes[1].startSec, 3, 0.011, "scene 3 pulls forward to 3s");
+    approx(out.totalDurationSec, 8, 0.011, "total loses the deleted window");
+  });
+
+  await test("applyDuplicateToDoc: an exact copy with a cut seam", () => {
+    const out = applyDuplicateToDoc(base, 2, 99, 4.0);
+    eq(out.sceneCount, 4, "copy inserted");
+    const [a, c] = [out.scenes[1], out.scenes[2]];
+    eq(a.index, 2, "original keeps its index");
+    eq(a.transitionOut, "cut", "seam into the copy is a cut");
+    eq(c.index, 99, "copy mints a fresh index");
+    eq(c.transitionIn, "cut", "copy enters on a cut");
+    eq(c.durationSec, 4.0, "copy carries the given duration");
+    eq(c.caption?.text, "cap 2", "an exact copy keeps the caption");
+    approx(c.startSec, 7, 0.011, "copy starts where the original ended");
+    approx(out.scenes[3].startSec, 11, 0.011, "the tail scene shifts by the copy");
+    approx(out.totalDurationSec, 16, 0.011, "total grows by the copy");
+  });
+
+  await test("sceneSegmentSec mirrors the render's segment formula", () => {
+    eq(sceneSegmentSec(3), 4.2, "wav + 0.35 lead + 0.85 tail");
+    eq(sceneSegmentSec(0.5), 2.0, "never below MIN_SEG_SEC");
+    eq(sceneSegmentSec(0), 2.0, "degenerate wav still gets a legal window");
   });
 }
 
