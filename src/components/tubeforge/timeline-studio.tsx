@@ -25,6 +25,13 @@
 // Honesty contract (what the RENDER honors vs what the preview shows):
 //   • durationSec edits   → honored by the render (existing T-6.10 contract).
 //   • order (sceneOrder)   → row + doc saved in lockstep; render follows.
+//   • split / duplicate / delete → POST /studio/clip: the ROW's scenes, the
+//     per-scene art/WAV assets, the merged voiceover.wav and the timeline
+//     doc all move together in ONE server update. A split re-voices both
+//     halves with the video's own voice; a duplicate is a byte copy of the
+//     same read. These are row mutations — after one, the undo history
+//     resets with the server's new doc (a deleted scene cannot be un-deleted
+//     by a client-side undo).
 //   • audio levels + transition labels → preview + saved doc; their render
 //     wiring lands with S2 — the inspector says so explicitly.
 //
@@ -55,6 +62,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Copy,
   GripVertical,
   Music2,
   Pause,
@@ -67,6 +75,7 @@ import {
   SkipBack,
   SkipForward,
   Subtitles,
+  Trash2,
   Undo2,
   Volume2,
   VolumeX,
@@ -123,6 +132,16 @@ export interface TimelineStudioProps {
   /** Called after a successful Save so the parent can refresh the row. */
   onSaved?: () => void;
 }
+
+/** POST /studio/clip — row-mutating clip operations (server contract). */
+interface ClipOpResponse {
+  timeline: AssembledTimelineDTO;
+  sceneOrder: number[];
+  newIndex: number | null;
+  activity: string;
+}
+
+type ClipAction = "split" | "duplicate" | "delete";
 
 // ---------- working-copy helpers (history + recompute) ----------
 
@@ -236,6 +255,8 @@ export function TimelineStudio({
   const [selected, setSelected] = useState<number | null>(null);
   const [mediaVersion, setMediaVersion] = useState(0); // bump → redraw preview
   const [brokenVo, setBrokenVo] = useState<Set<number>>(new Set());
+  const [clipBusy, setClipBusy] = useState<ClipAction | null>(null);
+  const [deleteArmed, setDeleteArmed] = useState(false);
 
   const timeline = history.present;
   const canUndo = history.past.length > 0;
@@ -636,6 +657,129 @@ export function TimelineStudio({
     if (!playing && !el.paused) el.pause();
   }, [playhead, playing, timeline, settings, videoId, brokenVo]);
 
+  // ---------- clip operations (server row edits: split / duplicate / delete) ----------
+
+  /** The clip every row-level op targets: the selection if set, else the clip
+   *  under the playhead. The razor additionally requires the playhead to sit
+   *  INSIDE that clip — it cuts where the playhead is. */
+  const activeClip = useMemo(() => {
+    if (!timeline) return null;
+    if (selected != null) {
+      const s = timeline.scenes.find((x) => x.index === selected);
+      if (s) return s;
+    }
+    return timeline.scenes.find((x) => playhead >= x.startSec && playhead < x.endSec) ?? null;
+  }, [timeline, selected, playhead]);
+
+  const playheadInClip =
+    activeClip != null && playhead >= activeClip.startSec && playhead < activeClip.endSec;
+
+  const clipOp = useCallback(
+    async (action: ClipAction) => {
+      if (!timeline || clipBusy || saving || loading || renderInFlight) return;
+      const target = activeClip;
+      if (!target) {
+        toast({
+          title: "Select a clip first",
+          description: "Click a clip in the lanes, or park the playhead over one.",
+        });
+        return;
+      }
+      if (action === "split" && !playheadInClip) {
+        toast({
+          title: "Park the playhead inside the clip",
+          description:
+            "The razor cuts where the playhead is — move it into the middle of the narration, away from the scene's edges.",
+        });
+        return;
+      }
+      setDeleteArmed(false);
+      setClipBusy(action);
+      try {
+        // Flush pending edits first — the op works on the SAVED row + doc.
+        if (dirty) await save();
+        const res = await fetch(`/api/videos/${videoId}/studio/clip`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action,
+            sceneIndex: target.index,
+            ...(action === "split" ? { atSec: playhead - target.startSec } : {}),
+          }),
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        const data = (await res.json()) as ClipOpResponse;
+        // A row mutation is not doc-undoable — history resets with the new doc.
+        setHistory({ past: [], present: normalizeTimelineDoc(data.timeline), future: [] });
+        setDirty(false);
+        // The per-scene WAVs changed on disk (split re-voices; duplicate adds a
+        // file) — drop every cached Audio so the pool re-fetches lazily.
+        for (const el of voPool.current.values()) el.pause();
+        voPool.current.clear();
+        setBrokenVo(new Set());
+        if (data.newIndex != null) {
+          setSelected(data.newIndex);
+          const fresh = data.timeline.scenes.find((s) => s.index === data.newIndex);
+          if (fresh) {
+            setPlaying(false);
+            seek(fresh.startSec + 0.001);
+          }
+        } else {
+          setSelected(null);
+          setPlaying(false);
+          seek(Math.min(playhead, Math.max(0, data.timeline.totalDurationSec - 0.001)));
+        }
+        bump(); // repaint the preview with the refreshed pools
+        onSaved?.(); // the parent refreshes the row (the scene list gains/loses a scene)
+        toast({
+          title:
+            action === "split" ? "Scene split" : action === "duplicate" ? "Scene duplicated" : "Scene deleted",
+          description: data.activity,
+        });
+      } catch (err) {
+        toast({
+          title: "Clip operation failed",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setClipBusy(null);
+      }
+    },
+    [
+      timeline,
+      clipBusy,
+      saving,
+      loading,
+      renderInFlight,
+      activeClip,
+      playheadInClip,
+      dirty,
+      save,
+      videoId,
+      playhead,
+      seek,
+      bump,
+      onSaved,
+      toast,
+    ]
+  );
+
+  // Two-step delete: the first press arms, the second within 4s executes.
+  // Arming clears when the target changes or any other op runs.
+  useEffect(() => {
+    if (!deleteArmed) return;
+    const t = setTimeout(() => setDeleteArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [deleteArmed]);
+
+  useEffect(() => {
+    setDeleteArmed(false);
+  }, [activeClip?.index]);
+
   // ---------- the preview canvas ----------
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -912,6 +1056,7 @@ export function TimelineStudio({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
+      // Text-entry surfaces own their keys entirely.
       if (
         target &&
         (target.tagName === "INPUT" ||
@@ -920,10 +1065,14 @@ export function TimelineStudio({
           target.isContentEditable)
       )
         return;
-      // A focused BUTTON only owns Space (it clicks) — ⌘Z/⌘S are the app's,
-      // so they pass through even with a button focused.
-      if (target && target.tagName === "BUTTON" && e.key !== " ") return;
-      if (!timeline || loading || saving) return;
+      // A focused BUTTON keeps only Enter (it clicks the button). Every other
+      // key — Space (transport), ⌘Z/⌘S, S/D/⌫ (clip ops), arrows (frames) —
+      // is the studio's; the switch's preventDefault suppresses the browser's
+      // Space-activates-button default. (The old guard inverted this: it let
+      // Space through and swallowed everything else, killing S/D/⌫ in the
+      // most common flow — click a clip (a button), then razor it.)
+      if (target && target.tagName === "BUTTON" && e.key === "Enter") return;
+      if (!timeline || loading || saving || clipBusy) return;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key.toLowerCase() === "z") {
         e.preventDefault();
@@ -941,6 +1090,31 @@ export function TimelineStudio({
           e.preventDefault();
           if (playhead >= total - 0.001) setPlayhead(0);
           setPlaying((v) => !v);
+          break;
+        case "s":
+        case "S":
+          e.preventDefault();
+          void clipOp("split");
+          break;
+        case "d":
+        case "D":
+          e.preventDefault();
+          void clipOp("duplicate");
+          break;
+        case "Backspace":
+        case "Delete":
+          e.preventDefault();
+          if (deleteArmed) {
+            void clipOp("delete");
+          } else if (activeClip) {
+            setDeleteArmed(true);
+            toast({
+              title: "Press ⌫ again to delete",
+              description: `Scene ${activeClip.index} will leave the row everywhere — this is not undoable.`,
+            });
+          } else {
+            toast({ title: "Select a clip first", description: "Click a clip in the lanes, or park the playhead over one." });
+          }
           break;
         case "ArrowLeft":
           e.preventDefault();
@@ -964,7 +1138,7 @@ export function TimelineStudio({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [timeline, loading, saving, dirty, total, playhead, undo, redo, save, stepFrame]);
+  }, [timeline, loading, saving, clipBusy, dirty, total, playhead, undo, redo, save, stepFrame, clipOp, deleteArmed, activeClip]);
 
   // ---------- render gate ----------
 
@@ -1076,6 +1250,53 @@ export function TimelineStudio({
                     <ChevronRight className="h-3.5 w-3.5" />
                   </Button>
                 </div>
+                <span className="h-5 w-px bg-white/10 mx-0.5" aria-hidden />
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void clipOp("split")}
+                    disabled={!playheadInClip || clipBusy != null || saving || loading || renderInFlight}
+                    title="Split at the playhead (S) — park the playhead mid-narration; both halves are re-voiced with the video's own voice"
+                  >
+                    <Scissors className={clsx("h-3.5 w-3.5", clipBusy === "split" && "animate-pulse")} />
+                    <span className="ml-1.5 text-xs">{clipBusy === "split" ? "Splitting…" : "Split"}</span>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void clipOp("duplicate")}
+                    disabled={activeClip == null || clipBusy != null || saving || loading || renderInFlight}
+                    title="Duplicate the selected clip (D) — same read, same art, a fresh scene in the row"
+                  >
+                    <Copy className={clsx("h-3.5 w-3.5", clipBusy === "duplicate" && "animate-pulse")} />
+                    <span className="ml-1.5 text-xs">{clipBusy === "duplicate" ? "Copying…" : "Duplicate"}</span>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={deleteArmed ? "destructive" : "ghost"}
+                    onClick={() => {
+                      if (deleteArmed) {
+                        void clipOp("delete");
+                      } else if (activeClip) {
+                        setDeleteArmed(true);
+                        toast({
+                          title: "Press again to delete",
+                          description: `Scene ${activeClip.index} will leave the row everywhere — this is not undoable.`,
+                        });
+                      } else {
+                        toast({ title: "Select a clip first", description: "Click a clip in the lanes, or park the playhead over one." });
+                      }
+                    }}
+                    disabled={activeClip == null || clipBusy != null || saving || loading || renderInFlight}
+                    title={deleteArmed ? "Confirm delete (⌫)" : "Delete the selected clip (⌫) — removes the scene from the row; not undoable"}
+                  >
+                    <Trash2 className={clsx("h-3.5 w-3.5", clipBusy === "delete" && "animate-pulse")} />
+                    <span className="ml-1.5 text-xs">
+                      {clipBusy === "delete" ? "Deleting…" : deleteArmed ? "Confirm" : "Delete"}
+                    </span>
+                  </Button>
+                </div>
                 <span className="font-mono text-xs tabular-nums text-foreground/90">
                   {formatTimecode(playhead, settings.frameRate)}
                   <span className="text-muted-foreground"> / {formatTimecode(total, settings.frameRate)}</span>
@@ -1115,6 +1336,8 @@ export function TimelineStudio({
               <p className="text-[10px] leading-relaxed text-muted-foreground">
                 Live preview — approximate camera &amp; blends; narration synced from the real per-scene
                 WAVs. The render (ffmpeg) stays the source of truth.
+                Split re-voices both halves with the video's own voice; duplicate/delete move the row,
+                the merged voiceover and the doc together.
                 {brokenVo.size > 0 && " Some scene voiceovers are missing — those scenes preview silently."}
               </p>
             </div>
