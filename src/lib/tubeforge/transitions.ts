@@ -54,6 +54,9 @@ export const TRANSITIONS: TransitionDef[] = [
 
 const TRANSITION_IDS = new Set(TRANSITIONS.map((t) => t.id));
 
+/** The catalog ids (route validation + doc-overlay sanitizing). */
+export { TRANSITION_IDS };
+
 // ---------- defaults & sanitizing ----------
 
 export const TRANSITION_DEFAULT = {
@@ -71,8 +74,14 @@ export function sanitizeTransitionStyle(v: unknown): TransitionStyle {
     : TRANSITION_DEFAULT.style;
 }
 
-/** Clamp a stored/client duration into the legal window; NaN → default. */
+/** Clamp a stored/client duration into the legal window; absent/NaN → the
+ *  0.5s default. (Number(null) is 0 — a naive Number() coercion turned
+ *  every unset Video.transitionDuration into the 0.2s MINIMUM, silently
+ *  blending default renders 2.5× faster than the studio preview showed.
+ *  Caught by the S2 render-evidence differential; preview + render now
+ *  agree on 0.5s.) */
 export function sanitizeTransitionDuration(v: unknown): number {
+  if (v === null || v === undefined) return TRANSITION_DEFAULT.durationSec;
   const n = Number(v);
   if (!Number.isFinite(n)) return TRANSITION_DEFAULT.durationSec;
   return Math.min(TRANSITION_DURATION_MAX, Math.max(TRANSITION_DURATION_MIN, n));
@@ -204,7 +213,222 @@ export function transitionSummary(style: TransitionStyle, durationSec: number): 
   return `${def?.label ?? style} · ${durationSec.toFixed(1)}s between scenes`;
 }
 
-// ---------- blended-timeline consumers (captions, Shorts) ----------
+// ---------- per-boundary transitions (Timeline Studio S2) ----------
+//
+// The timeline doc carries a transitionIn PER SCENE (the seam INTO that
+// scene), editable in the studio's inspector and seeded by the AI Director's
+// plan. The single-style API above blends every boundary identically; the
+// *Multi functions below take ONE {style, durationSec} PER BOUNDARY
+// (N−1 entries for N segments) so the render can honor the doc exactly.
+//
+// The math generalizes: each boundary k removes d_k seconds from the shared
+// timeline, so the xfade offset for boundary b is
+//     offset_b = (Σ durations[0..b]) − (Σ d_k for k ≤ b)
+// and the final duration is Σ durations − Σ d_k.
+//
+// "cut" boundaries cannot be expressed inside an xfade chain — a hard cut is
+// the absence of a blend. partitionByCuts() splits the segment list into
+// RUNS at cut boundaries; each run blends internally (chained xfade), runs
+// join with the stream-copy concat. A cut lands exactly where the doc says.
+
+/** One sanitized {style, durationSec} per boundary — length N−1 for N
+ *  segments. Every entry passes through sanitizeTransition. */
+export function sanitizeBoundarySettings(
+  raw: ({ style?: unknown; durationSec?: unknown } | null | undefined)[]
+): TransitionSettings[] {
+  return raw.map((s) => sanitizeTransition(s));
+}
+
+/** Uniform boundary settings — the classic single-style behavior as a
+ *  per-boundary array (N−1 copies of one setting). */
+export function uniformBoundarySettings(
+  nSegments: number,
+  setting: TransitionSettings
+): TransitionSettings[] {
+  return Array.from({ length: Math.max(0, nSegments - 1) }, () => sanitizeTransition(setting));
+}
+
+export interface SegmentRun {
+  /** Inclusive segment-index range of one blend run (no cut inside). */
+  from: number;
+  to: number;
+}
+
+/** Partition N segments into runs separated by "cut" boundaries. A cut at
+ *  boundary b ends the run at segment b; segment b+1 starts the next run.
+ *  Every non-cut boundary stays INSIDE its run (it becomes a real blend).
+ *  All-cut (or N=1) degenerates to N single-segment runs — the caller
+ *  short-circuits that to the plain concat. */
+export function partitionByCuts(nSegments: number, settings: TransitionSettings[]): SegmentRun[] {
+  const n = Math.max(0, Math.floor(nSegments));
+  if (n === 0) return [];
+  const runs: SegmentRun[] = [];
+  let from = 0;
+  for (let b = 0; b < n - 1 && b < settings.length; b++) {
+    if (settings[b].style === "cut") {
+      runs.push({ from, to: b });
+      from = b + 1;
+    }
+  }
+  runs.push({ from, to: n - 1 });
+  return runs;
+}
+
+/** Effective blend debt of one boundary — a "cut" is the ABSENCE of a
+ *  blend: it removes no time, shifts nothing, and dips nowhere. Every
+ *  duration consumer goes through here so a mixed cut/blend document stays
+ *  internally consistent. */
+function boundaryDebtSec(s: TransitionSettings | undefined): number {
+  if (!s || s.style === "cut") return 0;
+  return sanitizeTransitionDuration(s.durationSec);
+}
+
+/** xfade offsets with PER-BOUNDARY durations (formula in the section
+ *  header). Audio acrossfades overlap the same d_k tails/heads, so A/V
+ *  sync needs no extra bookkeeping — same contract as the uniform chain. */
+export function transitionOffsetsMulti(
+  durationsSec: number[],
+  settings: TransitionSettings[]
+): number[] {
+  const offsets: number[] = [];
+  let acc = 0;
+  let debt = 0;
+  for (let b = 0; b < durationsSec.length - 1; b++) {
+    acc += Math.max(durationsSec[b], 0);
+    debt += boundaryDebtSec(settings[b]);
+    offsets.push(Math.max(acc - debt, 0));
+  }
+  return offsets;
+}
+
+/** Final duration after all blends: Σ durations − Σ d_k (cut boundaries
+ *  carry no debt); null when there is nothing to blend. */
+export function transitionTotalDurationMulti(
+  durationsSec: number[],
+  settings: TransitionSettings[]
+): number | null {
+  if (durationsSec.length < 2) return null;
+  const sum = durationsSec.reduce((a, b) => a + Math.max(b, 0), 0);
+  const debt = settings.reduce(
+    (a, s, i) => (i < durationsSec.length - 1 ? a + boundaryDebtSec(s) : a),
+    0
+  );
+  return Math.max(sum - debt, 0);
+}
+
+/** Expected black-dip windows for BLENDED-timeline QC — one window per
+ *  fadeblack boundary only (mixed catalogs dip exactly where told to). */
+export function fadeblackWindowsMulti(
+  durationsSec: number[],
+  settings: TransitionSettings[]
+): [number, number][] {
+  if (durationsSec.length < 2) return [];
+  return transitionOffsetsMulti(durationsSec, settings)
+    .map((off, b) => ({ off, s: settings[b] ?? TRANSITION_DEFAULT }))
+    .filter(({ s }) => s.style === "fadeblack")
+    .map(({ off, s }) => [
+      Math.max(off - 0.15, 0),
+      off + sanitizeTransitionDuration(s.durationSec) + 0.15,
+    ]);
+}
+
+/**
+ * Chained xfade + acrossfade graph honoring each boundary's own style and
+ * duration. Returns null for < 2 segments. THROWS on a "cut" boundary —
+ * cuts are stitch points, not blends; partitionByCuts first and blend each
+ * run (the render's stitchSegments orchestrates exactly that).
+ */
+export function buildTransitionGraphMulti(
+  durationsSec: number[],
+  settings: TransitionSettings[]
+): TransitionGraph | null {
+  if (durationsSec.length < 2) return null;
+  const sanitized = sanitizeBoundarySettings(settings.slice(0, durationsSec.length - 1));
+  if (sanitized.some((s) => s.style === "cut"))
+    throw new Error("cut boundary inside an xfade run — partitionByCuts first");
+  const offsets = transitionOffsetsMulti(durationsSec, sanitized);
+
+  const video: string[] = [];
+  const audio: string[] = [];
+  let vLabel = "0:v";
+  let aLabel = "0:a";
+
+  for (let b = 0; b < offsets.length; b++) {
+    const { style, durationSec: d } = sanitized[b];
+    const vOut = b === offsets.length - 1 ? "v" : `bx${b}`;
+    const aOut = b === offsets.length - 1 ? "a" : `ba${b}`;
+    video.push(
+      `[${vLabel}][${b + 1}:v]xfade=transition=${style}:duration=${d.toFixed(3)}:offset=${offsets[b].toFixed(3)},format=yuv420p[${vOut}]`
+    );
+    audio.push(`[${aLabel}][${b + 1}:a]acrossfade=d=${d.toFixed(3)}[${aOut}]`);
+    vLabel = vOut;
+    aLabel = aOut;
+  }
+
+  return {
+    video: video.join(";"),
+    audio: audio.join(";"),
+    totalDurationSec: transitionTotalDurationMulti(durationsSec, sanitized) ?? 0,
+  };
+}
+
+/**
+ * Memory-bounded grouping for per-boundary runs — same contract as
+ * planBlendGroups, but each group's OUT duration subtracts only the blend
+ * debt of its INTERNAL boundaries (from..to−1), so the next round's offsets
+ * stay exact with mixed durations.
+ */
+export function planBlendGroupsMulti(
+  durationsSec: number[],
+  settings: TransitionSettings[],
+  groupMax: number = BLEND_GROUP_MAX
+): BlendGroup[] {
+  const cap = Math.max(2, Math.min(BLEND_GROUP_MAX, Math.floor(groupMax) || BLEND_GROUP_MAX));
+  const n = durationsSec.length;
+  if (n === 0) return [];
+  const groupCount = Math.ceil(n / cap);
+  const base = Math.floor(n / groupCount);
+  const extra = n % groupCount;
+  const groups: BlendGroup[] = [];
+  let idx = 0;
+  for (let g = 0; g < groupCount; g++) {
+    const size = base + (g < extra ? 1 : 0);
+    let sum = 0;
+    let debt = 0;
+    for (let i = idx; i < idx + size; i++) sum += Math.max(durationsSec[i], 0);
+    for (let b = idx; b < idx + size - 1; b++) debt += boundaryDebtSec(settings[b]);
+    groups.push({
+      from: idx,
+      to: idx + size - 1,
+      outDurationSec: Math.max(sum - debt, 0),
+    });
+    idx += size;
+  }
+  return groups;
+}
+
+/**
+ * Rebase segment-timeline consumers onto the BLENDED timeline with
+ * PER-BOUNDARY blend debt: scene i's start shifts left by the sum of every
+ * d_k before it; with trimEnd, a non-final scene also loses its own
+ * outgoing blend (d_i) at the tail. Uniform settings reproduce
+ * shiftSegmentsForBlend exactly.
+ */
+export function shiftSegmentsForBlendMulti<
+  T extends { start: number; duration: number }
+>(segments: T[], settings: TransitionSettings[], trimEnd = false): T[] {
+  return segments.map((seg, i) => {
+    let shift = 0;
+    for (let k = 0; k < i; k++) shift += boundaryDebtSec(settings[k]);
+    const ownBlend =
+      trimEnd && i < segments.length - 1 ? boundaryDebtSec(settings[i]) : 0;
+    return {
+      ...seg,
+      start: Math.max(seg.start - shift, 0),
+      duration: ownBlend > 0 ? Math.max(seg.duration - ownBlend, 0.5) : seg.duration,
+    };
+  });
+}
 
 // ---------- memory-bounded blending plan ----------
 //

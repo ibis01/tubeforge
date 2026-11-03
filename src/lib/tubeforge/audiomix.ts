@@ -151,6 +151,45 @@ export function mixTail(voiceWeight = 1, musicWeight = 1): string {
   return `[voice][mduck]amix=inputs=2:duration=first:normalize=0:weights='${voiceWeight} ${musicWeight}'[mix]`;
 }
 
+// ---------- per-scene music bed automation (Timeline Studio S2) ----------
+
+/**
+ * Per-scene music-bed level automation: a `volume` expression riding the
+ * bed at factor[i] over segment i's window on the BLENDED timeline,
+ * inserted between bedChain and duckChain (label [music] → [mvol]).
+ *
+ * Window rule — PRIORITY, not coverage: term i is active from segment i's
+ * start to segment (i+1)'s start. Blended-timeline windows OVERLAP at each
+ * seam (that's the blend), and simple gte/lt coverage would double-fire in
+ * the overlap; priority windows give the seam to the incoming scene, which
+ * is both gapless and single-valued. Past the last window the expression is
+ * 0 — the bed is already trimmed to the video length, so nothing is lost.
+ *
+ * Returns null when the factors are uniform (a no-op volume filter would
+ * cost a re-encode for nothing) or the input is malformed — callers skip
+ * the chain entirely and keep the plain [music] label.
+ */
+export function musicLevelAutomation(
+  segments: { start: number; duration: number }[],
+  factors: number[]
+): string | null {
+  if (segments.length === 0 || factors.length !== segments.length) return null;
+  const f = factors.map((x) => (Number.isFinite(x) ? Math.min(Math.max(x, 0), 8) : 1));
+  if (f.every((x) => Math.abs(x - f[0]) < 0.001)) return null;
+  const terms = segments.map((seg, i) => {
+    const start = Math.max(0, seg.start);
+    const next = segments[i + 1];
+    const end = next
+      ? Math.max(next.start, start + 0.05)
+      : start + Math.max(seg.duration, 0.05);
+    return `${f[i].toFixed(3)}*gte(t,${start.toFixed(3)})*lt(t,${end.toFixed(3)})`;
+  });
+  // eval=frame — the volume filter evaluates its expression ONCE at init by
+  // default (t=0 → the first window's factor, frozen for the whole stream).
+  // Per-frame eval is what makes the automation actually move with t.
+  return `[music]volume='${terms.join("+")}':eval=frame[mvol]`;
+}
+
 // ---------- loudness measurement (pass 1) ----------
 
 export interface LoudnessMeasurement {

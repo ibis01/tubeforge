@@ -694,7 +694,8 @@ export interface ResolvedMusic {
 }
 
 /** Slider (0..1) → linear bed gain. Track is anchored at -16 LUFS pre-gain. */
-const sliderToGain = (slider: number) => Math.max(0, Math.min(1, slider)) * 0.3;
+export const MUSIC_SLIDER_GAIN = 0.3; // the 0..1 slider's full-scale linear gain
+const sliderToGain = (slider: number) => Math.max(0, Math.min(1, slider)) * MUSIC_SLIDER_GAIN;
 
 /**
  * Resolve the effective ducking for one render: per-video override →

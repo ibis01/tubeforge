@@ -3063,6 +3063,264 @@ suiteStart("razor guard: speakableSpan");
   });
 }
 
+// ---------- S2: per-boundary transitions + doc overlay + music automation ----------
+
+suiteStart("S2 honest mix: per-boundary transitions");
+
+{
+  const {
+    buildTransitionGraph,
+    buildTransitionGraphMulti,
+    fadeblackWindows,
+    fadeblackWindowsMulti,
+    partitionByCuts,
+    planBlendGroups,
+    planBlendGroupsMulti,
+    sanitizeBoundarySettings,
+    shiftSegmentsForBlend,
+    shiftSegmentsForBlendMulti,
+    transitionOffsets,
+    transitionOffsetsMulti,
+    transitionTotalDuration,
+    transitionTotalDurationMulti,
+    uniformBoundarySettings,
+    TRANSITION_DURATION_MAX,
+  } = await import("../src/lib/tubeforge/transitions");
+  const { docSceneSettings } = await import("../src/lib/tubeforge/timeline");
+  const { musicLevelAutomation } = await import("../src/lib/tubeforge/audiomix");
+  const { MUSIC_SLIDER_GAIN } = await import("../src/lib/tubeforge/music");
+
+  const uniform = (n: number, style = "fade", d = 0.5) =>
+    uniformBoundarySettings(n, { style, durationSec: d }) as { style: string; durationSec: number }[];
+  const segs = (durs: number[]) =>
+    durs.map((d, i) => ({ start: durs.slice(0, i).reduce((a, b) => a + b, 0), duration: d }));
+
+  await test("uniform Multi settings reproduce the classic API exactly", () => {
+    const durs = [3, 4, 5, 2.5];
+    const s = uniform(4, "fade", 0.5);
+    eq(transitionOffsetsMulti(durs, s), transitionOffsets(durs, 0.5), "offsets");
+    eq(transitionTotalDurationMulti(durs, s), transitionTotalDuration(durs, 0.5), "total");
+    eq(
+      JSON.stringify(fadeblackWindowsMulti(durs, uniform(4, "fadeblack", 0.5))),
+      JSON.stringify(fadeblackWindows(durs, 0.5)),
+      "fadeblack windows"
+    );
+    const g1 = planBlendGroups(durs, 0.5, 2);
+    const g2 = planBlendGroupsMulti(durs, s, 2);
+    eq(g2, g1, "blend groups");
+    const graph1 = buildTransitionGraph(durs, "fade", 0.5)!;
+    const graph2 = buildTransitionGraphMulti(durs, s)!;
+    eq(graph2.video, graph1.video, "video graph");
+    eq(graph2.audio, graph1.audio, "audio graph");
+    const shifted1 = shiftSegmentsForBlend(segs(durs), 0.5);
+    const shifted2 = shiftSegmentsForBlendMulti(segs(durs), s);
+    eq(shifted2, shifted1, "segment shift");
+    const trimmed1 = shiftSegmentsForBlend(segs(durs), 0.5, true);
+    const trimmed2 = shiftSegmentsForBlendMulti(segs(durs), s, true);
+    eq(trimmed2, trimmed1, "trimmed shift");
+  });
+
+  await test("per-boundary offsets: each seam removes its own d", () => {
+    const durs = [3, 4, 5];
+    const s = sanitizeBoundarySettings([
+      { style: "fade", durationSec: 0.5 },
+      { style: "fadeblack", durationSec: 1.0 },
+    ]);
+    // b0: 3 − 0.5 = 2.5; b1: 7 − (0.5+1.0) = 5.5
+    const off = transitionOffsetsMulti(durs, s);
+    approx(off[0], 2.5, 1e-9, "offset 0");
+    approx(off[1], 5.5, 1e-9, "offset 1");
+    approx(transitionTotalDurationMulti(durs, s)!, 10.5, 1e-9, "total = Σ − Σd");
+  });
+
+  await test("per-boundary graph honors each seam's style + duration", () => {
+    const durs = [3, 4, 5];
+    const s = sanitizeBoundarySettings([
+      { style: "wipeleft", durationSec: 0.4 },
+      { style: "circleopen", durationSec: 0.9 },
+    ]);
+    const g = buildTransitionGraphMulti(durs, s)!;
+    ok(g.video.includes("xfade=transition=wipeleft:duration=0.400:offset=2.600"), "boundary 0 style+duration");
+    ok(g.video.includes("xfade=transition=circleopen:duration=0.900:offset=5.700"), "boundary 1 style+duration");
+    ok(g.audio.includes("acrossfade=d=0.400"), "audio crossfade d0");
+    ok(g.audio.includes("acrossfade=d=0.900"), "audio crossfade d1");
+  });
+
+  await test("cut boundaries: partition runs, graph refuses, windows filter", () => {
+    // 6 segments, boundaries [cut, fade, cut, fade, fade]
+    const s = sanitizeBoundarySettings([
+      { style: "cut", durationSec: 0.5 },
+      { style: "fade", durationSec: 0.5 },
+      { style: "cut", durationSec: 0.5 },
+      { style: "fadeblack", durationSec: 0.5 },
+      { style: "fade", durationSec: 0.5 },
+    ]);
+    eq(partitionByCuts(6, s), [
+      { from: 0, to: 0 },
+      { from: 1, to: 2 },
+      { from: 3, to: 5 },
+    ], "runs split at cuts");
+    // All cut → N singleton runs.
+    const allCut = uniform(3, "cut", 0.5);
+    eq(partitionByCuts(3, allCut).length, 3, "all cut → 3 runs");
+    // A cut inside a run is a programming error — the graph throws.
+    let threw = false;
+    try {
+      buildTransitionGraphMulti([3, 4, 5], allCut);
+    } catch {
+      threw = true;
+    }
+    ok(threw, "cut inside a run throws");
+    // fadeblack windows only for fadeblack boundaries (mixed catalog).
+    const durs = [3, 4, 5, 3];
+    const mixed = sanitizeBoundarySettings([
+      { style: "fade", durationSec: 0.5 },
+      { style: "fadeblack", durationSec: 0.8 },
+      { style: "fade", durationSec: 0.5 },
+    ]);
+    const wins = fadeblackWindowsMulti(durs, mixed);
+    eq(wins.length, 1, "one fadeblack window");
+    // b1 offset: 7 − (0.5+0.8) = 5.7 → [5.55, 6.65]
+    approx(wins[0][0], 5.55, 1e-9, "window start");
+    approx(wins[0][1], 6.65, 1e-9, "window end");
+  });
+
+  await test("blend groups with per-boundary debt stay exact", () => {
+    // 6 segments, cap 4 → 2 groups of 3; internal debt differs per group.
+    const durs = [2, 2, 2, 2, 2, 2];
+    const s = sanitizeBoundarySettings([
+      { style: "fade", durationSec: 0.2 },
+      { style: "fade", durationSec: 1.0 },
+      { style: "fade", durationSec: 0.2 },
+      { style: "fade", durationSec: 1.0 },
+      { style: "fade", durationSec: 0.2 },
+    ]);
+    const groups = planBlendGroupsMulti(durs, s, 4);
+    eq(groups.length, 2, "two groups of 3");
+    // group 0: 6 − (0.2 + 1.0) = 4.8; group 1: 6 − (0.2 + 1.0) = 4.8
+    approx(groups[0].outDurationSec, 4.8, 1e-9, "group 0 out");
+    approx(groups[1].outDurationSec, 4.8, 1e-9, "group 1 out");
+    // Uniform equivalence at the cap boundary (3 inputs, cap 2 → 2+1).
+    const g1 = planBlendGroups([2, 2, 2], 0.5, 2);
+    const g2 = planBlendGroupsMulti([2, 2, 2], uniform(3, "fade", 0.5), 2);
+    eq(g2, g1, "cap-2 grouping matches");
+  });
+
+  await test("shiftSegmentsForBlendMulti: per-scene trimEnd debts", () => {
+    const durs = [3, 4, 5];
+    const s = sanitizeBoundarySettings([
+      { style: "fade", durationSec: 0.2 },
+      { style: "fade", durationSec: 1.0 },
+    ]);
+    const out = shiftSegmentsForBlendMulti(segs(durs), s, true);
+    approx(out[0].start, 0, 1e-9, "scene 0 unshifted");
+    approx(out[0].duration, 2.8, 1e-9, "scene 0 loses its own 0.2 blend");
+    approx(out[1].start, 3 - 0.2, 1e-9, "scene 1 shifts by d0 only");
+    approx(out[1].duration, 3.0, 1e-9, "scene 1 loses its own 1.0 blend");
+    approx(out[2].start, 7 - 1.2, 1e-9, "scene 2 shifts by d0+d1");
+    eq(out[2].duration, 5, "final scene keeps its duration");
+  });
+
+  await test("docSceneSettings: alignment guard + field sanitizing", () => {
+    eq(docSceneSettings(null, 3), null, "no doc");
+    eq(docSceneSettings({ scenes: [], sceneCount: 0, totalDurationSec: 0, generatedAt: "" }, 3), null, "misaligned");
+    const scene = (over: Record<string, unknown>) => ({
+      index: 1, title: "t", narration: "n", visual: "v",
+      startSec: 0, endSec: 5, durationSec: 5,
+      transitionIn: "fade", audio: null, caption: null,
+      source: "ai", stockSource: null, stockQuery: null, shot: null,
+      ...over,
+    });
+    const doc = {
+      scenes: [
+        scene({ transitionIn: "wipeleft", audio: { voice: { enabled: true, level: 0.8 }, music: { enabled: true, level: 0.6, ducking: true }, sfx: { enabled: true, level: 0.55, kind: "boom" }, ambient: { enabled: false, level: 0, kind: null } }, caption: { text: "  Edited!  ", startSec: 0, endSec: 5 } }),
+        scene({ transitionIn: "not-a-transition", audio: null, caption: null }), // legacy doc shape
+        scene({ transitionIn: null, audio: { voice: { enabled: true, level: 9 }, music: { enabled: true, level: -1, ducking: true }, sfx: { enabled: true, level: 0.35, kind: null }, ambient: { enabled: true, level: 0.1, kind: null } }, caption: { text: "   ", startSec: 0, endSec: 5 } }),
+      ],
+      sceneCount: 3, totalDurationSec: 15, generatedAt: "",
+    };
+    const out = docSceneSettings(doc as never, 3)!;
+    ok(out, "aligned doc extracts");
+    eq(out[0].transitionIn, "wipeleft", "valid transition passes");
+    eq(out[0].voiceLevel, 0.8, "voice level");
+    eq(out[0].sfxLevel, 0.55, "sfx level");
+    eq(out[0].caption, "  Edited!  ", "caption text passes through (verbatim)");
+    eq(out[1].transitionIn, null, "unknown transition id → no override");
+    eq(out[1].voiceLevel, null, "missing audio block → no override");
+    eq(out[1].caption, null, "missing caption → no override");
+    eq(out[2].voiceLevel, null, "out-of-range level (9) → no override, not clamped");
+    eq(out[2].musicLevel, null, "negative level → no override");
+    eq(out[2].caption, null, "whitespace caption → no override");
+  });
+
+  await test("musicLevelAutomation: uniform → null; priority windows", () => {
+    eq(musicLevelAutomation([], []), null, "empty");
+    eq(musicLevelAutomation(segs([3, 3]), [1, 1]), null, "uniform factors are a no-op");
+    eq(musicLevelAutomation(segs([3, 3]), [1]), null, "length mismatch");
+    // Blended-timeline windows overlap at seams — priority windows hand the
+    // seam to the incoming scene (end_i = start_{i+1}), never double-firing.
+    const blended = [
+      { start: 0, duration: 3 },
+      { start: 2.5, duration: 3 }, // 0.5s blend overlap
+    ];
+    const chain = musicLevelAutomation(blended, [1, 0.5])!;
+    ok(
+      chain.startsWith("[music]volume='") && chain.endsWith("':eval=frame[mvol]"),
+      "label contract (per-frame eval — once-eval would freeze t=0)"
+    );
+    ok(chain.includes("1.000*gte(t,0.000)*lt(t,2.500)"), "scene 0 owns [0, next start)");
+    ok(chain.includes("0.500*gte(t,2.500)*lt(t,5.500)"), "scene 1 owns from its start");
+    // Non-finite factors read as 1 (no override), absurd values clamp at 8.
+    const clamped = musicLevelAutomation(segs([2, 2]), [Number.NaN, 100])!;
+    ok(clamped.includes("1.000*gte(t,0.000)"), "NaN → 1");
+    ok(clamped.includes("8.000*gte(t,2.000)"), "clamp at 8");
+  });
+
+  await test("cut boundaries carry ZERO debt everywhere (mixed docs)", () => {
+    const durs = [3, 4, 5, 3];
+    // [cut(0.5), fade(0.5), cut(0.9)] — the cuts' durations must NOT count.
+    const mixed = sanitizeBoundarySettings([
+      { style: "cut", durationSec: 0.5 },
+      { style: "fade", durationSec: 0.5 },
+      { style: "cut", durationSec: 0.9 },
+    ]);
+    // offsets: b0 = 3 − 0 = 3; b1 = 7 − 0.5 = 6.5; b2 = 12 − 0.5 = 11.5
+    const off = transitionOffsetsMulti(durs, mixed);
+    approx(off[0], 3, 1e-9, "cut boundary: no debt, offset = plain boundary");
+    approx(off[1], 6.5, 1e-9, "blend after a cut: only blend debt counted");
+    approx(off[2], 11.5, 1e-9, "trailing cut: no debt");
+    approx(transitionTotalDurationMulti(durs, mixed)!, 14.5, 1e-9, "total = Σ − blend debt only");
+    // Shifts: scene 2 shifts by the CUT's debt (0), scene 3 by cut+fade (0.5).
+    const shifted = shiftSegmentsForBlendMulti(segs(durs), mixed, true);
+    approx(shifted[1].start, 3, 1e-9, "scene after a cut: unshifted");
+    eq(shifted[0].duration, 3, "scene ending in a cut: keeps its full duration");
+    approx(shifted[1].duration, 3.5, 1e-9, "scene ending in a fade: loses 0.5");
+    approx(shifted[2].start, 7 - 0.5, 1e-9, "scene 2 shifts by the fade only");
+    // All-cut docs shift nothing at all.
+    const allCut = uniform(3, "cut", 0.9);
+    eq(shiftSegmentsForBlendMulti(segs([3, 4, 5]), allCut), segs([3, 4, 5]), "all-cut → identity");
+  });
+
+  await test("MUSIC_SLIDER_GAIN pins the slider curve the automation divides by", () => {
+    eq(MUSIC_SLIDER_GAIN, 0.3, "slider curve constant");
+    ok(TRANSITION_DURATION_MAX === 1.5, "duration clamp ceiling unchanged");
+  });
+
+  await test("sanitizeTransitionDuration: absent means DEFAULT (0.5), not the 0.2 minimum", async () => {
+    const { sanitizeTransitionDuration, TRANSITION_DEFAULT, TRANSITION_DURATION_MIN } =
+      await import("../src/lib/tubeforge/transitions");
+    // The pre-S2 bug: Number(null) = 0 → clamp → 0.2 — default renders blended
+    // 2.5× faster than the 0.5s the studio preview showed.
+    eq(sanitizeTransitionDuration(null), TRANSITION_DEFAULT.durationSec, "null → 0.5 default");
+    eq(sanitizeTransitionDuration(undefined), TRANSITION_DEFAULT.durationSec, "undefined → 0.5 default");
+    eq(sanitizeTransitionDuration(Number.NaN), TRANSITION_DEFAULT.durationSec, "NaN → 0.5 default");
+    eq(sanitizeTransitionDuration("abc"), TRANSITION_DEFAULT.durationSec, "garbage → 0.5 default");
+    eq(sanitizeTransitionDuration(0), TRANSITION_DURATION_MIN, "explicit 0 still clamps to the 0.2 minimum");
+    eq(sanitizeTransitionDuration(0.7), 0.7, "legal value passes");
+    eq(sanitizeTransitionDuration(9), 1.5, "ceiling clamps");
+  });
+}
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

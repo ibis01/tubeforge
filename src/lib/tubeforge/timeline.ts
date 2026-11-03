@@ -33,7 +33,7 @@
 import type { Scene } from "./types";
 import type { DirectorPlan } from "./director-plan";
 import { planSceneDuration, planTransitionIn } from "./director-plan";
-import { sanitizeTransition } from "./transitions";
+import { sanitizeTransition, TRANSITION_IDS, type TransitionStyle } from "./transitions";
 import { R_LEAD_SEC, R_TAIL_SEC, R_MIN_SEG_SEC } from "./preview-lanes";
 
 export type SceneSource = "ai" | "stock" | "slides";
@@ -272,6 +272,69 @@ export function assembleTimeline(scenes: Scene[], opts: AssembleOptions = {}): A
 }
 
 // ---------- (de)serialization for the Video.timeline column ----------
+
+// ---------- doc overlay (S2 — what the render reads back) ----------
+//
+// The saved timeline doc is the Studio's editable projection of the video
+// row. S2 makes the render CONSUME the edited fields instead of just the
+// durations: per-scene transition style, per-scene audio levels, per-scene
+// caption text. This interface is that bridge — extracted from the doc,
+// sanitized, aligned BY POSITION to the row's scenes (the sceneOrder
+// contract keeps them in the same play order).
+
+export interface DocSceneSettings {
+  /** Valid catalog transition id for the seam INTO this scene (null = no
+   *  override — the video-level style wins). */
+  transitionIn: string | null;
+  /** 0..1 narration level (null = doc silent — render default 1.0). */
+  voiceLevel: number | null;
+  /** 0..1 music-bed level for this scene's window (null = no override). */
+  musicLevel: number | null;
+  /** 0..1 SFX cue weight (null = no override — render default 0.35). */
+  sfxLevel: number | null;
+  /** 0..1 ambience bed weight (null = no override — render default 0.10). */
+  ambientLevel: number | null;
+  /** Edited caption text (null = no override — the row's field wins). */
+  caption: string | null;
+}
+
+/** Clamp a doc level into 0..1; anything absent/out-of-range is null (no
+ *  override — never a silent clamp that would mask a corrupt doc). */
+function docLevel(v: unknown): number | null {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0 || n > 1) return null;
+  return n;
+}
+
+/**
+ * Extract the render-facing per-scene settings from a saved timeline doc.
+ * Returns null when the doc is absent or out of alignment with the scene
+ * count (the same guard the duration consumption uses — a stale doc must
+ * never reach the render partially). Docs saved by older studio versions
+ * may lack audio/caption blocks; every field is optional-chained so those
+ * docs read as "no override" instead of crashing.
+ */
+export function docSceneSettings(
+  timeline: AssembledTimeline | null,
+  sceneCount: number
+): DocSceneSettings[] | null {
+  if (!timeline || !Array.isArray(timeline.scenes)) return null;
+  if (timeline.scenes.length !== sceneCount || sceneCount === 0) return null;
+  return timeline.scenes.map((s) => ({
+    transitionIn:
+      typeof s.transitionIn === "string" && TRANSITION_IDS.has(s.transitionIn as TransitionStyle)
+        ? s.transitionIn
+        : null,
+    voiceLevel: docLevel(s.audio?.voice?.level),
+    musicLevel: docLevel(s.audio?.music?.level),
+    sfxLevel: docLevel(s.audio?.sfx?.level),
+    ambientLevel: docLevel(s.audio?.ambient?.level),
+    caption:
+      typeof s.caption?.text === "string" && s.caption.text.trim().length > 0
+        ? s.caption.text
+        : null,
+  }));
+}
 
 /** Parse a persisted timeline JSON. Tolerant of legacy/null — null when the
  *  structure is unreadable (the render falls back to recomputing inline). */
