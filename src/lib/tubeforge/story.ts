@@ -811,8 +811,9 @@ export async function editSceneImage(opts: {
 
 const MAX_SCENE_UPLOAD_BYTES = 15 * 1024 * 1024;
 
-/** Magic-byte sniffing — extensions lie, file signatures don't. */
-function sniffImageFormat(buf: Buffer): "png" | "jpeg" | "webp" | null {
+/** Magic-byte sniffing — extensions lie, file signatures don't. (S4 export:
+ *  pinned by the unit probe; the upload guard's first line of defense.) */
+export function sniffImageFormat(buf: Buffer): "png" | "jpeg" | "webp" | null {
   if (buf.length > 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47)
     return "png";
   if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "jpeg";
