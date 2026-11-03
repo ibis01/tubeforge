@@ -57,7 +57,7 @@ import {
 } from "./music";
 import { qcForVideo } from "./qc";
 import { parsePlan, getApprovedAudioMap } from "./director-plan";
-import { parseTimeline } from "./timeline";
+import { parseTimeline, docSceneSettings, type DocSceneSettings } from "./timeline";
 import { sanitizeTransition, transitionSummary } from "./transitions";
 import {
   loadSlideDeck,
@@ -500,6 +500,10 @@ export async function runRenderJob(
   // uses this when the user clicks "render without timeline"). The render's
   // own safety clamps (MIN_SEG_SEC + 3× the measured narration) still apply.
   let sceneDurationsSec: number[] | undefined;
+  // S2 — the doc's edited projection (per-scene transitions, audio levels,
+  // captions) rides along whenever the doc is aligned. "Render without
+  // timeline" (explicit empty durations) drops it with the durations.
+  let docScenes: DocSceneSettings[] | null = null;
   if (Array.isArray(opts.sceneDurationsSec)) {
     sceneDurationsSec = opts.sceneDurationsSec;
   } else {
@@ -512,6 +516,7 @@ export async function runRenderJob(
       if (ds.every((d) => typeof d === "number" && Number.isFinite(d) && d > 0)) {
         sceneDurationsSec = ds;
       }
+      docScenes = docSceneSettings(timeline, scenes.length);
     }
   }
 
@@ -564,6 +569,7 @@ export async function runRenderJob(
       aspectRatio: aspect,
       frameRate,
       sceneDurationsSec,
+      docScenes,
       motion: {
         mode: (video.motionMode ?? "smart") as "smart" | "zoom" | "pan" | "off",
         intensity: video.motionIntensity ?? 12,

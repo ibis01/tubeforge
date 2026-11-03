@@ -33,6 +33,7 @@ import {
   measureLoudness,
   normalizationFilter,
   sanitizeDuckIntensity,
+  musicLevelAutomation,
   type DuckIntensity,
 } from "./audiomix";
 import { getCapability, VIDEO_DEFAULT_MODEL } from "./providers/settings";
@@ -63,12 +64,17 @@ import { ensureAmbience } from "./ambience";
 import {
   BLEND_GROUP_MAX,
   sanitizeTransition,
-  buildTransitionGraph,
-  shiftSegmentsForBlend,
-  fadeblackWindows,
-  planBlendGroups,
+  sanitizeTransitionStyle,
+  buildTransitionGraphMulti,
+  fadeblackWindowsMulti,
+  partitionByCuts,
+  planBlendGroupsMulti,
+  shiftSegmentsForBlendMulti,
+  TRANSITION_IDS,
   type TransitionSettings,
 } from "./transitions";
+import type { DocSceneSettings } from "./timeline";
+import { MUSIC_SLIDER_GAIN } from "./music";
 
 const execFileAsync = promisify(execFile);
 
@@ -139,6 +145,13 @@ export interface RenderOptions {
    *  to the measured WAV durations — the timeline is a projection, never
    *  the source of truth. */
   sceneDurationsSec?: number[];
+  /** S2 — per-scene settings from the SAVED timeline doc (the Timeline
+   *  Studio's edited projection): per-boundary transition styles, per-scene
+   *  voice/music/SFX/ambience levels, per-scene caption text. Aligned BY
+   *  POSITION to `scenes` (the sceneOrder contract keeps row and doc in the
+   *  same play order); null/absent fields fall back to the video-level
+   *  behavior, so a missing or stale doc changes nothing. */
+  docScenes?: DocSceneSettings[] | null;
   onProgress?: (current: number, total: number, label: string) => void;
 }
 
@@ -411,6 +424,8 @@ async function buildSegment(opts: {
   sfxKind?: string;
   /** Module E: materialized ambience bed path for this scene (null = none). */
   ambiencePath?: string | null;
+  /** S2: per-scene mix levels from the timeline doc (null = classic mix). */
+  docLevels?: SceneAudioLevels | null;
   /** M2: the approved Director shot list for this scene — when present, the
    * scene renders through the multi-image shot graph instead of the single-
    * image Smart Motion graph (docs/director-m1-m2-spec.md §1.7). */
@@ -429,7 +444,14 @@ async function buildSegment(opts: {
   const fps = opts.fps ?? FPS;
   // One helper owns BOTH the extra audio inputs and the graph, so input
   // order and stream labels can never drift apart.
-  const audio = await sceneAudio(opts.sfx, opts.sfxKind ?? scene.sfx, opts.ambiencePath ?? null, leadMs, dur);
+  const audio = await sceneAudio(
+    opts.sfx,
+    opts.sfxKind ?? scene.sfx,
+    opts.ambiencePath ?? null,
+    leadMs,
+    dur,
+    opts.docLevels ?? null
+  );
 
   const common = [
     "-map", "[v]", "-map", "[a]",
@@ -571,10 +593,27 @@ async function buildSegment(opts: {
   }
 }
 
+/** Per-scene audio levels for one segment's graph (S2 — from the timeline
+ *  doc's edited projection; defaults preserve the pre-S2 mix exactly). */
+export interface SceneAudioLevels {
+  voice: number; // narration gain, 0..1 (1 = full)
+  sfx: number; // SFX cue weight (amix weight, 0 = skip the cue)
+  ambient: number; // ambience bed weight (amix weight, 0 = skip the bed)
+}
+
+const SCENE_AUDIO_DEFAULTS: SceneAudioLevels = { voice: 1, sfx: 0.35, ambient: 0.1 };
+
+/** Clamp a doc level into the graph's legal range. */
+function clampLevel(v: number | null | undefined, fallback: number): number {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Math.min(n, 1);
+}
+
 /**
  * Audio inputs + graph for one scene, built together so input order and
  * stream labels can never drift apart:
- *   [1:a] narration, delayed to its lead-in and padded to the scene length;
+ *   [1:a] narration, delayed to its lead-in, padded to the scene length;
  *   [2:a] the scene's SFX cue fired 40 ms after the cut (when enabled);
  *   [3:a] the director-planned ambience bed, looped for the scene and riding
  *         well under the voice (module E).
@@ -583,22 +622,37 @@ async function buildSegment(opts: {
  * stream in the graph then ends on its own, so ffmpeg always tears down
  * cleanly. normalize=0 keeps the amix weights as literal gains (default
  * normalization would scale every source down by 1/Σw).
+ *
+ * S2: `levels` (from the timeline doc) scales the narration and REPLACES the
+ * historic cue/bed weights — the studio's inspector sliders are the mix now.
+ * A zero level drops the cue/bed input entirely (cheaper than mixing silence)
+ * but the narration chain always stays: apad on [voice] is the amix's
+ * duration anchor, so the segment's length never depends on the extras.
  */
 async function sceneAudio(
   sfx: boolean,
   sfxKind: string,
   ambiencePath: string | null,
   leadMs: number,
-  totalSec: number
+  totalSec: number,
+  levels?: SceneAudioLevels | null
 ): Promise<{ inputs: string[]; graph: string }> {
-  const voice = `[1:a]adelay=${leadMs}:all=1,apad=whole_dur=${totalSec.toFixed(3)}[voice]`;
+  const lv = levels
+    ? {
+        voice: clampLevel(levels.voice, SCENE_AUDIO_DEFAULTS.voice),
+        sfx: clampLevel(levels.sfx, SCENE_AUDIO_DEFAULTS.sfx),
+        ambient: clampLevel(levels.ambient, SCENE_AUDIO_DEFAULTS.ambient),
+      }
+    : SCENE_AUDIO_DEFAULTS;
+  const voiceGain = Math.abs(lv.voice - 1) < 0.001 ? "" : `,volume=${lv.voice.toFixed(3)}`;
+  const voice = `[1:a]adelay=${leadMs}:all=1,apad=whole_dur=${totalSec.toFixed(3)}${voiceGain}[voice]`;
   // SFX lands 40 ms after the cut so the impact sits with the first frame,
-  // not in the file's leading edge; ride ~9 dB under the narration — these
-  // are synthesized accents, and mixing them hot makes the edit sound like a
-  // test bench instead of a film. The ambience bed rides lower still (~13 dB
-  // under): felt, not heard.
-  const sfxPath = sfx ? await ensureSfx(sfxKind) : null;
-  const ambPath = sfx ? ambiencePath : null; // one switch, every synthesized extra
+  // not in the file's leading edge; the doc's per-scene level is the mix
+  // weight (0.35 classic default; the assembly seeds boom=0.55, riser=0.4,
+  // sting=0.45 — the render now honors those too). The ambience bed rides
+  // lower (0.10 classic): synthesized noise beds any louder read as hiss.
+  const sfxPath = sfx && lv.sfx > 0.001 ? await ensureSfx(sfxKind) : null;
+  const ambPath = sfx && lv.ambient > 0.001 ? ambiencePath : null; // one switch, every synthesized extra
   if (!sfxPath && !ambPath) return { inputs: [], graph: `${voice};[voice]anull[a]` };
 
   const inputs: string[] = [];
@@ -610,18 +664,15 @@ async function sceneAudio(
     inputs.push("-i", sfxPath);
     chains.push(`[${idx}:a]adelay=40:all=1[sfx]`);
     labels.push("[sfx]");
-    weights.push("0.35");
+    weights.push(lv.sfx.toFixed(3));
     idx++;
   }
   if (ambPath) {
     inputs.push("-stream_loop", "-1", "-t", totalSec.toFixed(3), "-i", ambPath);
-    // Beds ride at 0.10 (−20 dB under the voice): they are synthesized
-    // from filtered noise + LFOs, and at the old 0.22 they read as an
-    // annoying constant hiss under the whole narration (Battle Yamuk
-    // feedback). Felt at most, never heard.
+    // The bed's own highpass stays; its MIX WEIGHT is the doc's level.
     chains.push(`[${idx}:a]volume=0.85,highpass=f=120[amb]`);
     labels.push("[amb]");
-    weights.push("0.10");
+    weights.push(lv.ambient.toFixed(3));
   }
   return {
     inputs,
@@ -640,51 +691,42 @@ async function concatSegments(segPaths: string[], outPath: string): Promise<void
 }
 
 /**
- * Stitch segments with real transitions: chained xfade (video) + acrossfade
- * (audio). A full N-input chain buffers frames for every not-yet-consumed
- * input — measured at 2.4–3.1 GB RSS for 12×1080p inputs, which the kernel
+ * Blend ONE run of ≥2 segments (no "cut" inside) into `outPath`, honoring
+ * each boundary's own style + duration. Memory-bounded grouping: a full
+ * N-input xfade chain buffers frames for every not-yet-consumed input —
+ * measured at 2.4–3.1 GB RSS for 12×1080p inputs, which the kernel
  * OOM-kills in a 4 GB container — so blending runs in bounded GROUPS
- * (planBlendGroups, ≤BLEND_GROUP_MAX inputs per ffmpeg pass), then blends
- * the group outputs, recursing until one master remains. Group intermediates
+ * (planBlendGroupsMulti, ≤groupMax inputs per ffmpeg pass), then blends the
+ * group outputs, recursing until one master remains. Group intermediates
  * re-encode at crf 16 (near-transparent) so at most one extra generation
- * touches any frame before the final join. Falls back to the stream-copy
- * concat for "cut" or single-segment renders.
+ * touches any frame before the final join.
+ *
+ * Between rounds, the boundary settings CARRY OVER: the next round's inputs
+ * are the group outputs, and the boundary between group k and k+1 is the
+ * original boundary at segment groups[k].to — so a per-scene transition
+ * survives regrouping exactly.
  */
-async function stitchSegments(opts: {
-  segPaths: string[];
-  durationsSec: number[];
-  transition: TransitionSettings;
-  outPath: string;
-}): Promise<void> {
-  const graph0 = buildTransitionGraph(
-    opts.durationsSec,
-    opts.transition.style,
-    opts.transition.durationSec
-  );
-  if (!graph0) {
-    await concatSegments(opts.segPaths, opts.outPath);
-    return;
-  }
-  const { style, durationSec: d } = opts.transition;
+async function blendRun(
+  segPaths: string[],
+  durationsSec: number[],
+  settings: TransitionSettings[],
+  outPath: string,
+  groupMax: number
+): Promise<void> {
   const tmp = (i: number, round: number) =>
-    opts.outPath.replace(/\.mp4$/, `.blend-r${round}-${i}.mp4`);
-
-  // Memory-scaled group cap: the default cap of 4 was measured ~1 GB peak RSS
-  // on the reference VM. On smaller hosts (≤6 GB total, e.g. a 4 GB sandbox
-  // or small VPS) drop to 2 — an OOM-killed pass resolves via the zombie
-  // poll with a truncated intermediate, and the next round then dies with
-  // the cryptic "moov atom not found" instead of the real cause.
-  const groupMax = os.totalmem() <= 6 * 1024 * 1024 * 1024 ? 2 : BLEND_GROUP_MAX;
+    outPath.replace(/\.mp4$/, `.blend-r${round}-${i}.mp4`);
 
   // Round 0 inputs are the real segments; later rounds blend group outputs.
   let round = 0;
-  let paths = opts.segPaths.slice();
-  let durations = opts.durationsSec.slice();
+  let paths = segPaths.slice();
+  let durations = durationsSec.slice();
+  let boundaries = settings.slice();
 
   while (paths.length > 1) {
-    const groups = planBlendGroups(durations, d, groupMax);
+    const groups = planBlendGroupsMulti(durations, boundaries, groupMax);
     const nextPaths: string[] = [];
     const nextDurations: number[] = [];
+    const nextBoundaries: TransitionSettings[] = [];
     const singlePass = groups.length === 1 && groups[0].to - groups[0].from + 1 === paths.length;
 
     for (const [gi, g] of groups.entries()) {
@@ -694,43 +736,48 @@ async function stitchSegments(opts: {
         // Pass-through: no blend needed inside a lone segment group.
         nextPaths.push(groupPaths[0]);
         nextDurations.push(groupDurations[0]);
-        continue;
-      }
-      const graph = buildTransitionGraph(groupDurations, style, d);
-      if (!graph) throw new Error("blend group too small for xfade");
-      // The last group of the last round writes the real output; every other
-      // pass writes a near-lossless intermediate.
-      const isFinal =
-        singlePass && gi === groups.length - 1;
-      const outPath = isFinal ? opts.outPath : tmp(gi, round);
-      const args: string[] = [];
-      for (const p of groupPaths) args.push("-i", p);
-      args.push(
-        "-filter_complex", `${graph.video};${graph.audio}`,
-        "-map", "[v]", "-map", "[a]",
-        // Intermediates at crf 16 (near-transparent) — only the final master
-        // uses the delivery crf 20 the downstream passes expect.
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", isFinal ? "20" : "16",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", isFinal ? "160k" : "256k",
-        "-ar", "48000", "-ac", "2",
-        "-y", outPath
-      );
-      await run("ffmpeg", args);
-      // Verify the pass actually wrote a playable file. An OOM-killed ffmpeg
-      // resolves "successfully" through the zombie poll (its stderr carries no
-      // failure signature — just truncated progress lines), leaving a file
-      // without a moov atom that fails HERE instead of in the next round with
-      // a confusing message about the wrong file.
-      try {
-        await probeDuration(outPath);
-      } catch {
-        throw new Error(
-          `Blend pass ${round}.${gi} (${style}, ${groupPaths.length} inputs) wrote an unreadable file — the machine most likely ran out of memory mid-encode. Free RAM or retry; small-RAM hosts automatically use lighter blend groups.`
+      } else {
+        // Internal boundaries only (from..to−1) — the group's outer seams
+        // belong to the NEXT round, between group outputs.
+        const groupSettings = boundaries.slice(g.from, g.to);
+        const graph = buildTransitionGraphMulti(groupDurations, groupSettings);
+        if (!graph) throw new Error("blend group too small for xfade");
+        // The last group of the last round writes the real output; every other
+        // pass writes a near-lossless intermediate.
+        const isFinal = singlePass && gi === groups.length - 1;
+        const groupOut = isFinal ? outPath : tmp(gi, round);
+        const args: string[] = [];
+        for (const p of groupPaths) args.push("-i", p);
+        args.push(
+          "-filter_complex", `${graph.video};${graph.audio}`,
+          "-map", "[v]", "-map", "[a]",
+          // Intermediates at crf 16 (near-transparent) — only the final master
+          // uses the delivery crf 20 the downstream passes expect.
+          "-c:v", "libx264", "-preset", "veryfast", "-crf", isFinal ? "20" : "16",
+          "-pix_fmt", "yuv420p",
+          "-c:a", "aac", "-b:a", isFinal ? "160k" : "256k",
+          "-ar", "48000", "-ac", "2",
+          "-y", groupOut
         );
+        await run("ffmpeg", args);
+        // Verify the pass actually wrote a playable file. An OOM-killed ffmpeg
+        // resolves "successfully" through the zombie poll (its stderr carries no
+        // failure signature — just truncated progress lines), leaving a file
+        // without a moov atom that fails HERE instead of in the next round with
+        // a confusing message about the wrong file.
+        try {
+          await probeDuration(groupOut);
+        } catch {
+          throw new Error(
+            `Blend pass ${round}.${gi} (${groupPaths.length} inputs) wrote an unreadable file — the machine most likely ran out of memory mid-encode. Free RAM or retry; small-RAM hosts automatically use lighter blend groups.`
+          );
+        }
+        nextPaths.push(groupOut);
+        nextDurations.push(g.outDurationSec);
       }
-      nextPaths.push(outPath);
-      nextDurations.push(g.outDurationSec);
+      // The boundary AFTER this group becomes a next-round boundary (the
+      // last group has none — its tail is the run's end).
+      if (gi < groups.length - 1) nextBoundaries.push(boundaries[g.to]);
     }
 
     // Clean up the consumed intermediates. A singleton group passes its
@@ -744,14 +791,82 @@ async function stitchSegments(opts: {
         if (!stillNeeded.has(p)) fs.rmSync(p, { force: true });
       }
     }
+
     paths = nextPaths;
     durations = nextDurations;
-    round += 1;
+    boundaries = nextBoundaries;
+    round++;
   }
 
-  // Single-segment input: no blend needed at all — the segment IS the base.
-  if (paths.length === 1 && paths[0] !== opts.outPath) {
-    fs.copyFileSync(paths[0], opts.outPath);
+  // Single-segment survivor (every round pass-through): the segment IS the
+  // run's output.
+  if (paths.length === 1 && paths[0] !== outPath) {
+    fs.copyFileSync(paths[0], outPath);
+  }
+}
+
+/**
+ * Stitch segments with the timeline doc's PER-BOUNDARY transitions (S2):
+ * each seam blends with its own style + duration; "cut" seams are STITCH
+ * points, not blends. All-cut (or single-segment) renders take the classic
+ * stream-copy concat; a video with no cuts blends in one run (the classic
+ * behavior, now per-boundary); a MIXED doc partitions at the cuts — each
+ * run blends internally (memory-bounded, per-boundary), then the runs join
+ * with the stream-copy concat, so a hard cut lands exactly where the doc
+ * says and costs no re-encode.
+ */
+async function stitchSegments(opts: {
+  segPaths: string[];
+  durationsSec: number[];
+  /** One sanitized {style, durationSec} per boundary (N−1 for N segments). */
+  settings: TransitionSettings[];
+  outPath: string;
+}): Promise<void> {
+  const n = opts.segPaths.length;
+  const boundaries = opts.settings.slice(0, Math.max(0, n - 1));
+  if (n < 2 || boundaries.length === 0 || boundaries.every((s) => s.style === "cut")) {
+    await concatSegments(opts.segPaths, opts.outPath);
+    return;
+  }
+
+  // Memory-scaled group cap: the default cap of 4 was measured ~1 GB peak RSS
+  // on the reference VM. On smaller hosts (≤6 GB total, e.g. a 4 GB sandbox
+  // or small VPS) drop to 2 — an OOM-killed pass resolves via the zombie
+  // poll with a truncated intermediate, and the next round then dies with
+  // the cryptic "moov atom not found" instead of the real cause.
+  const groupMax = os.totalmem() <= 6 * 1024 * 1024 * 1024 ? 2 : BLEND_GROUP_MAX;
+
+  const runs = partitionByCuts(n, boundaries);
+
+  // No cuts at all → one run covers everything → today's single-master path.
+  if (runs.length === 1) {
+    await blendRun(opts.segPaths, opts.durationsSec, boundaries, opts.outPath, groupMax);
+    return;
+  }
+
+  // Mixed cuts + blends: blend each run into its own master (crf 20 — the
+  // concat copies these streams untouched), then join at the cuts.
+  const runOutputs: string[] = [];
+  for (const [ri, run] of runs.entries()) {
+    const paths = opts.segPaths.slice(run.from, run.to + 1);
+    if (paths.length === 1) {
+      runOutputs.push(paths[0]); // a lone segment between cuts passes through
+      continue;
+    }
+    const runOut = opts.outPath.replace(/\.mp4$/, `.run${ri}.mp4`);
+    await blendRun(
+      paths,
+      opts.durationsSec.slice(run.from, run.to + 1),
+      boundaries.slice(run.from, run.to),
+      runOut,
+      groupMax
+    );
+    runOutputs.push(runOut);
+  }
+  await concatSegments(runOutputs, opts.outPath);
+  // The .runN.mp4 masters are fully consumed by the concat.
+  for (const p of runOutputs) {
+    if (/\.run\d+\.mp4$/.test(p)) fs.rmSync(p, { force: true });
   }
 }
 
@@ -783,6 +898,9 @@ async function finalize(opts: {
   segments: { start: number; duration: number }[];
   /** Caption look — vertical style for 9:16 renders (undefined = 16:9 default). */
   subtitleStyle?: string;
+  /** S2 — prebuilt per-scene music-bed automation chain ([music]→[mvol],
+   *  from musicLevelAutomation on the blended segments); null = plain bed. */
+  musicAutomation?: string | null;
 }): Promise<void> {
   const { base, out, burnSubtitles, music } = opts;
   const workDir = path.dirname(base);
@@ -804,9 +922,14 @@ async function finalize(opts: {
       const fadeIn = Math.min(track.fadeInSec, Math.max(total / 3, 0.2));
       const fadeOut = Math.min(track.fadeOutSec, Math.max(total / 3, 0.2));
       args.push("-stream_loop", "-1", "-i", track.filePath);
+      // S2 — per-scene bed levels ride between the bed chain and the ducker
+      // (the automation's [mvol] output label; without it the bed is [music]).
+      const automation =
+        opts.musicAutomation && /^\[music\]/.test(opts.musicAutomation) ? opts.musicAutomation : null;
       filters.push(
         bedChain({ totalSec: total, gain: track.gain, fadeInSec: fadeIn, fadeOutSec: fadeOut }),
-        duckChain(duck),
+        ...(automation ? [automation] : []),
+        duckChain(duck, automation ? "mvol" : "music"),
         mixTail(1, 1)
       );
     } else {
@@ -901,6 +1024,16 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
   const scenes = opts.sceneLimit
     ? opts.scenes.slice(0, opts.sceneLimit)
     : opts.scenes;
+  // S2 — the timeline doc's per-scene settings, aligned BY POSITION to the
+  // scenes this render will actually cut. A doc for the FULL list is sliced
+  // to the preview render's head; a doc that matches neither length is
+  // dropped whole — the same all-or-nothing guard as the durations.
+  const docScenes =
+    opts.docScenes && opts.docScenes.length === opts.scenes.length
+      ? opts.docScenes.slice(0, scenes.length)
+      : opts.docScenes && opts.docScenes.length === scenes.length
+        ? opts.docScenes
+        : null;
   const isPreview = Boolean(opts.sceneLimit && opts.sceneLimit < opts.scenes.length);
   const outName = isPreview ? "preview.mp4" : "final.mp4";
   const outPath = path.join(dir, outName);
@@ -1110,6 +1243,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
             : `Composing scene ${i + 1}`;
       report(i, label);
       const segPath = path.join(tmpDir, `seg-${String(i + 1).padStart(2, "0")}.mp4`);
+      const doc = docScenes?.[i] ?? null;
       await buildSegment({
         videoId: opts.videoId,
         scene,
@@ -1121,6 +1255,14 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         sfx: opts.sfx !== false,
         sfxKind: planAudio.sfx.get(scene.index),
         ambiencePath: ambiencePaths.get(scene.index) ?? null,
+        // S2 — the doc's per-scene mix (voice/SFX/ambience) IS the mix.
+        docLevels: doc
+          ? {
+              voice: doc.voiceLevel ?? 1,
+              sfx: doc.sfxLevel ?? 0.35,
+              ambient: doc.ambientLevel ?? 0.1,
+            }
+          : null,
         outPath: segPath,
         aspect: motionAspect,
         fps: motionFps,
@@ -1128,25 +1270,53 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       segPaths.push(segPath);
     }
 
-    // 3) Stitch into the base video — blended transitions or stream-copy cuts.
+    // 3) Stitch into the base video — the timeline doc's PER-BOUNDARY
+    // transitions (S2): the incoming scene's transitionIn style wins over
+    // the video-level default seam by seam; cuts become stitch points.
+    // Slides keep their native hard-cut grammar UNLESS the doc carries a
+    // real per-scene pick (the studio's preview has been showing the doc's
+    // blends all along — the render now matches it).
     report(scenes.length, "Stitching scenes");
     const trans = sanitizeTransition(opts.transition);
+    const boundary: TransitionSettings[] = [];
+    for (let b = 0; b + 1 < scenes.length; b++) {
+      const docStyle = docScenes?.[b + 1]?.transitionIn ?? null;
+      boundary.push({
+        style:
+          docStyle != null && TRANSITION_IDS.has(docStyle as never)
+            ? sanitizeTransitionStyle(docStyle)
+            : trans.style,
+        durationSec: trans.durationSec,
+      });
+    }
     const basePath = path.join(tmpDir, "base.mp4");
     await stitchSegments({
       segPaths,
       durationsSec: durations,
-      transition: trans,
+      settings: boundary,
       outPath: basePath,
     });
 
     // 4) Subtitles + music, then move into place.
     // Captions must live on the BLENDED timeline: each boundary pulls every
     // later scene d seconds earlier, so unshifted cues would drift late and
-    // run past the end of the shorter video.
+    // run past the end of the shorter video. Per-boundary debt now (S2) —
+    // mixed cut/blend docs shift each seam by its own d.
     const blended =
-      trans.style === "cut" || scenes.length < 2
+      scenes.length < 2 || boundary.every((s) => s.style === "cut")
         ? segments
-        : shiftSegmentsForBlend(segments, trans.durationSec);
+        : shiftSegmentsForBlendMulti(segments, boundary);
+
+    // S2 — the doc's edited captions override the row's field (text only;
+    // timing stays the render's blended windows). Applies to the smart path
+    // (one whole-scene cue replaces that scene's chunks) and the fallback.
+    const docCaptions = docScenes ? docScenes.map((d) => d.caption) : null;
+    const capScenes = docCaptions
+      ? scenes.map((s, i) => {
+          const edited = docCaptions[i];
+          return edited ? { ...s, caption: edited } : s;
+        })
+      : scenes;
 
     let srtPath: string | null = null;
     if (opts.burnSubtitles) {
@@ -1160,6 +1330,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
             scenes,
             segments: blended,
             asr: true,
+            captionOverrides: docCaptions,
             onProgress: (label) => opts.onProgress?.(scenes.length + 1, scenes.length + 1, label),
           });
           fs.writeFileSync(srtPath, smart.srt);
@@ -1168,10 +1339,25 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
           );
         } catch (err) {
           console.warn("[render] smart captions failed — falling back to scene captions:", err);
-          fs.writeFileSync(srtPath, buildSrtFromSegments(scenes, blended));
+          fs.writeFileSync(srtPath, buildSrtFromSegments(capScenes, blended));
         }
       } else {
-        fs.writeFileSync(srtPath, buildSrtFromSegments(scenes, blended));
+        fs.writeFileSync(srtPath, buildSrtFromSegments(capScenes, blended));
+      }
+    }
+    // S2 — per-scene music-bed levels from the doc: a RELATIVE automation on
+    // the library bed (factor = docLevel / video-slider-level, the same 0..1
+    // slider curve both sides). Uniform or absent levels produce no filter —
+    // the classic bed. The drone fallback keeps its fixed profile (it never
+    // carried a slider), and a slider parked at 0 keeps the global mute.
+    let musicAutomation: string | null = null;
+    if (opts.music && opts.musicTrack && docScenes) {
+      const sliderLevel = opts.musicTrack.gain / MUSIC_SLIDER_GAIN;
+      if (sliderLevel > 0.001) {
+        const factors = docScenes.map((d) =>
+          d.musicLevel != null ? Math.min(Math.max(d.musicLevel / sliderLevel, 0), 8) : 1
+        );
+        musicAutomation = musicLevelAutomation(blended, factors);
       }
     }
     report(scenes.length, "Adding captions & music");
@@ -1187,6 +1373,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       scenes,
       segments,
       subtitleStyle: opts.mode === "slides" ? SUBTITLE_STYLE_VERTICAL : undefined,
+      musicAutomation,
     });
 
     // Always refresh the exported caption track for the ZIP (full render only).
@@ -1194,7 +1381,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       const exportSrt = path.join(dir, "subtitles.srt");
       if (opts.burnSubtitles && srtPath && fs.existsSync(srtPath))
         fs.copyFileSync(srtPath, exportSrt);
-      else fs.writeFileSync(exportSrt, buildSrtFromSegments(scenes, blended));
+      else fs.writeFileSync(exportSrt, buildSrtFromSegments(capScenes, blended));
     }
 
     const durationSec = await probeDuration(outPath);
@@ -1215,10 +1402,9 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       durationSec,
       fileBytes,
       aspect: motionAspect,
-      blackWindows:
-        trans.style === "fadeblack" && scenes.length > 1
-          ? fadeblackWindows(durations, trans.durationSec)
-          : [],
+      // QC black-frame exemptions — every fadeblack boundary in the doc's
+      // per-scene catalog (S2: mixed styles dip exactly where told to).
+      blackWindows: scenes.length > 1 ? fadeblackWindowsMulti(durations, boundary) : [],
     };
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -271,6 +271,11 @@ export interface SmartCaptionOpts {
   segments: { start: number; duration: number }[]; // global render segment map
   asr: boolean; // attempt the ASR alignment pass (silent fallback to narration)
   onProgress?: (label: string) => void;
+  /** S2 — per-scene caption text edited in the Timeline Studio (aligned by
+   *  position, null = no edit). An edited scene renders ONE cue spanning its
+   *  window with the edited text instead of its ASR/narration chunks — the
+   *  user's edit is the contract, chunking is only for unedited scenes. */
+  captionOverrides?: (string | null)[] | null;
 }
 
 /**
@@ -315,7 +320,21 @@ export async function buildSmartSrt(
   for (const [i, scene] of opts.scenes.entries()) {
     const wavPath = path.join(dir, sceneWavFile(scene.index));
     const segment = opts.segments[i];
-    if (!segment || !fs.existsSync(wavPath)) continue;
+    if (!segment) continue;
+
+    // S2 — a studio-edited caption replaces this scene's cues whole: one
+    // cue across the scene's blended window, the edited text verbatim.
+    const override = opts.captionOverrides?.[i];
+    if (typeof override === "string" && override.trim()) {
+      cues.push({
+        start: segment.start + 0.02,
+        end: segment.start + segment.duration,
+        text: override.trim(),
+      });
+      continue;
+    }
+
+    if (!fs.existsSync(wavPath)) continue;
 
     const chunks = captionChunks(scene.narration);
     if (chunks.length === 0) continue;
