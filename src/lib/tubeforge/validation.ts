@@ -188,6 +188,12 @@ export const assembleSaveSchema = z.object({
   totalDurationSec: z.number().min(0),
   generatedAt: z.string().optional(),
   sceneOrder: z.array(z.number().int().min(1)).optional(),
+  /** S3 — render preferences riding the doc root (quality tier). */
+  renderPrefs: z
+    .object({
+      quality: z.enum(["draft", "standard", "high"]),
+    })
+    .optional(),
 });
 
 /** PATCH /api/videos/[id] — Stage 6 render defaults (aspect / frameRate /

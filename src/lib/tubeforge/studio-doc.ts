@@ -288,3 +288,170 @@ export function sanitizeVoiceFades(vin: unknown, vout: unknown): VoiceFades | nu
   if (fin < 0.02 && fout < 0.02) return null;
   return { inSec: fin, outSec: fout };
 }
+
+// ---------- chroma key (S3) ----------
+
+/** Per-scene green/blue-screen keying. The keyed pixels reveal a solid
+ * background fill. Colors are "#rrggbb" in the doc (the UI's native color
+ * grammar); the filter builder converts to ffmpeg's 0xRRGGBB. */
+export interface SceneChroma {
+  /** Key color ("#00FF00" = classic green screen). */
+  color: string;
+  /** 0.01..0.35 — chroma distance counted as keyed (bigger = hungrier key). */
+  similarity: number;
+  /** 0..0.2 — edge softness between keyed and kept pixels. */
+  blend: number;
+  /** What shows through the keyed pixels ("#000000" = black). */
+  background: string;
+}
+
+export const CHROMA_PRESETS: { id: string; label: string; color: string }[] = [
+  { id: "green", label: "Green", color: "#00FF00" },
+  { id: "blue", label: "Blue", color: "#0038FF" },
+  { id: "magenta", label: "Magenta", color: "#FF00FF" },
+];
+
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+
+function sanitizeHex(v: unknown, fallback: string): string {
+  return typeof v === "string" && HEX_RE.test(v.trim()) ? v.trim().toUpperCase() : fallback;
+}
+
+export function sanitizeChroma(v: unknown): SceneChroma | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const c = v as Record<string, unknown>;
+  return {
+    color: sanitizeHex(c.color, "#00FF00"),
+    similarity: clampNum(c.similarity, 0.01, 0.35, 0.12),
+    blend: clampNum(c.blend, 0, 0.2, 0.02),
+    background: sanitizeHex(c.background, "#000000"),
+  };
+}
+
+const hexToFfmpeg = (hex: string): string => `0x${hex.slice(1)}`;
+
+/**
+ * The chroma-key chain for one scene's visual graph. `inLabel` is the base
+ * graph's tail (post camera/motion, PRE grade on purpose: the grade's
+ * saturation/contrast shift would move the key color and poison the key).
+ * The grade is re-applied to the composite so the scene keeps its look.
+ * Returns the chain + the label the next link consumes.
+ */
+export function chromaFilterChain(
+  c: SceneChroma,
+  opts: { w: number; h: number; dur: number; fps: number; inLabel?: string; grade?: string }
+): { chain: string; outLabel: string } {
+  const inLabel = opts.inLabel ?? "[v]";
+  const grade = opts.grade && opts.grade !== "null" ? opts.grade : "null";
+  return {
+    chain: [
+      `${inLabel}chromakey=${hexToFfmpeg(c.color)}:${c.similarity.toFixed(3)}:${c.blend.toFixed(3)}[vck]`,
+      `color=c=${hexToFfmpeg(c.background)}:s=${opts.w}x${opts.h}:r=${opts.fps}:d=${(opts.dur + 0.5).toFixed(3)}[vcbg]`,
+      `[vcbg][vck]overlay=0:0:shortest=1,${grade}[vc]`,
+    ].join(";"),
+    outLabel: "[vc]",
+  };
+}
+
+// ---------- picture-in-picture / logo overlay (S3) ----------
+
+/** A per-scene corner overlay (the video's brand logo). 9-grid position,
+ * size as a fraction of frame width, opacity, optional white hairline. */
+export type PipPos = "tl" | "tc" | "tr" | "ml" | "mc" | "mr" | "bl" | "bc" | "br";
+
+export interface ScenePip {
+  pos: PipPos;
+  /** Logo width as a fraction of the frame width, 0.06..0.4. */
+  size: number;
+  /** 0.1..1 opacity. */
+  opacity: number;
+  /** White hairline frame around the logo. */
+  border: boolean;
+  /** Distance from the frame edge as a fraction of width, 0.01..0.08. */
+  margin: number;
+}
+
+const PIP_POS: PipPos[] = ["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br"];
+
+export function sanitizePip(v: unknown): ScenePip | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const p = v as Record<string, unknown>;
+  return {
+    pos: PIP_POS.includes(p.pos as PipPos) ? (p.pos as PipPos) : "br",
+    size: clampNum(p.size, 0.06, 0.4, 0.18),
+    opacity: clampNum(p.opacity, 0.1, 1, 1),
+    border: p.border === true,
+    margin: clampNum(p.margin, 0.01, 0.08, 0.03),
+  };
+}
+
+/**
+ * The PIP overlay link: scales the logo input, fades it by opacity, then
+ * overlays it at the 9-grid position. `pipInput` is the logo's input index
+ * in the ffmpeg invocation; `inLabel`/`outLabel` chain like chroma's.
+ */
+export function pipOverlayFilter(
+  p: ScenePip,
+  opts: { pipInput: number; frameW: number; frameH: number; inLabel?: string }
+): { chain: string; outLabel: string } {
+  const inLabel = opts.inLabel ?? "[v]";
+  const w = Math.max(32, Math.round(opts.frameW * p.size));
+  const m = Math.round(opts.frameW * p.margin);
+  const bt = Math.max(2, Math.round(opts.frameW * 0.002));
+  const x =
+    p.pos.endsWith("l") ? String(m) : p.pos.endsWith("r") ? `w-W-${m}` : "(w-W)/2";
+  const y =
+    p.pos.startsWith("t") ? String(m) : p.pos.startsWith("b") ? `h-H-${m}` : "(h-H)/2";
+  return {
+    chain: [
+      `[${opts.pipInput}:v]scale=${w}:-2,format=rgba,colorchannelmixer=aa=${p.opacity.toFixed(2)}${
+        p.border ? `,drawbox=color=white@0.9:t=${bt}` : ""
+      }[vpi]`,
+      `${inLabel}[vpi]overlay=x='${x}':y='${y}':format=auto[vp]`,
+    ].join(";"),
+    outLabel: "[vp]",
+  };
+}
+
+// ---------- export presets (S3) ----------
+
+export type ExportQuality = "draft" | "standard" | "high";
+
+/** x264 encode settings per quality tier (segments + final master). */
+export const QUALITY_ENCODING: Record<ExportQuality, { crf: string; preset: string }> = {
+  draft: { crf: "26", preset: "ultrafast" },
+  standard: { crf: "20", preset: "veryfast" },
+  high: { crf: "18", preset: "medium" },
+};
+
+export interface ExportPreset {
+  id: string;
+  label: string;
+  note: string;
+  aspect: "16:9" | "9:16" | "1:1";
+  fps: 24 | 30 | 60;
+  quality: ExportQuality;
+  burnSubtitles: boolean;
+}
+
+export const EXPORT_PRESETS: ExportPreset[] = [
+  { id: "yt-standard", label: "YouTube 1080p", note: "16:9 · 30 fps · standard, captions burned", aspect: "16:9", fps: 30, quality: "standard", burnSubtitles: true },
+  { id: "yt-cinema", label: "Cinematic master", note: "16:9 · 24 fps · high quality, captions burned", aspect: "16:9", fps: 24, quality: "high", burnSubtitles: true },
+  { id: "reels", label: "Reels / TikTok", note: "9:16 · 30 fps · vertical with big captions", aspect: "9:16", fps: 30, quality: "standard", burnSubtitles: true },
+  { id: "shorts-60", label: "Shorts 60 fps", note: "9:16 · 60 fps · extra-smooth motion", aspect: "9:16", fps: 60, quality: "standard", burnSubtitles: true },
+  { id: "square", label: "Square social", note: "1:1 · 30 fps · feed post", aspect: "1:1", fps: 30, quality: "standard", burnSubtitles: true },
+  { id: "clean-draft", label: "Clean draft", note: "16:9 · 30 fps · fast draft, no captions", aspect: "16:9", fps: 30, quality: "draft", burnSubtitles: false },
+];
+
+/** Render preferences persisted on the timeline doc's root. Aspect / fps /
+ * burnCaptions live on the video row (renderDefaultsSchema); the quality
+ * tier lives here because the row has no column for it. */
+export interface RenderPrefs {
+  quality: ExportQuality;
+}
+
+export function sanitizeRenderPrefs(v: unknown): RenderPrefs | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const q = (v as Record<string, unknown>).quality;
+  return q === "draft" || q === "standard" || q === "high" ? { quality: q } : null;
+}

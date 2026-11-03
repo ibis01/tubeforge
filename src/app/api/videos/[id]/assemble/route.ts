@@ -169,6 +169,8 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     sceneCount: body.scenes.length,
     totalDurationSec: body.totalDurationSec,
     generatedAt: body.generatedAt ?? new Date().toISOString(),
+    // S3 — render prefs (quality tier) ride the doc root.
+    renderPrefs: body.renderPrefs ?? null,
   };
 
   await db.video.update({

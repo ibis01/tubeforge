@@ -41,9 +41,15 @@ import {
   sanitizeCamera,
   sanitizeSpeed,
   sanitizeVoiceFades,
+  sanitizeChroma,
+  sanitizePip,
+  sanitizeRenderPrefs,
   type SceneGrade,
   type SceneTitle,
   type SceneCameraKeys,
+  type SceneChroma,
+  type ScenePip,
+  type RenderPrefs,
 } from "./studio-doc";
 
 export type SceneSource = "ai" | "stock" | "slides";
@@ -98,6 +104,9 @@ export interface TimelineScene {
   titleOverlay?: SceneTitle | null;
   cameraKeys?: SceneCameraKeys | null;
   speed?: number | null;
+  /** S3 — chroma key + corner logo overlay (absent = none). */
+  chroma?: SceneChroma | null;
+  pip?: ScenePip | null;
 }
 
 export interface AssembledTimeline {
@@ -105,6 +114,9 @@ export interface AssembledTimeline {
   sceneCount: number;
   totalDurationSec: number;
   generatedAt: string;
+  /** S3 — render preferences persisted with the doc (quality tier; the
+   *  aspect/fps/burnCaptions live on the video row). Absent = standard. */
+  renderPrefs?: RenderPrefs | null;
 }
 
 // ---------- helpers ----------
@@ -325,6 +337,9 @@ export interface DocSceneSettings {
   speed: number | null;
   /** Per-scene narration fade in/out (null = no afade). */
   voiceFades: { inSec: number; outSec: number } | null;
+  /** S3 — chroma key / corner logo overlay (null = none). */
+  chroma: SceneChroma | null;
+  pip: ScenePip | null;
 }
 
 /** Clamp a doc level into 0..1; anything absent/out-of-range is null (no
@@ -370,6 +385,9 @@ export function docSceneSettings(
     cameraKeys: sanitizeCamera(s.cameraKeys),
     speed: sanitizeSpeed(s.speed),
     voiceFades: sanitizeVoiceFades(s.audio?.voice?.fadeInSec, s.audio?.voice?.fadeOutSec),
+    // S3 — keying + overlay, sanitized at the same choke point.
+    chroma: sanitizeChroma(s.chroma),
+    pip: sanitizePip(s.pip),
   }));
 }
 
@@ -380,13 +398,15 @@ export function parseTimeline(json: string | null | undefined): AssembledTimelin
   try {
     const raw = JSON.parse(json) as unknown;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-    const obj = raw as { scenes?: unknown; sceneCount?: unknown; totalDurationSec?: unknown; generatedAt?: unknown };
+    const obj = raw as { scenes?: unknown; sceneCount?: unknown; totalDurationSec?: unknown; generatedAt?: unknown; renderPrefs?: unknown };
     if (!Array.isArray(obj.scenes)) return null;
     return {
       scenes: obj.scenes as TimelineScene[],
       sceneCount: Number(obj.sceneCount) || 0,
       totalDurationSec: Number(obj.totalDurationSec) || 0,
       generatedAt: typeof obj.generatedAt === "string" ? obj.generatedAt : new Date().toISOString(),
+      // S3 — render prefs ride the root (dropped silently when corrupt).
+      renderPrefs: sanitizeRenderPrefs(obj.renderPrefs),
     };
   } catch {
     return null;
