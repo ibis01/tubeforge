@@ -55,6 +55,10 @@
 //     re-pick (with an optional user search phrase). Row assets, not doc
 //     fields: the render reads art by scene index, the doc never moves.
 //     Slides mode hides the section (the deck owns the look).
+//   • per-scene SOUND PICKS → S5: the inspector chooses the scene's SFX cue
+//     (whoosh/boom/riser/sting) and ambience bed (room/city/rain/wind/waves/
+//     crowd/nature) — the doc's kinds outrank the plan's at the render; the
+//     audition button plays the exact synthesized wav the render will mix.
 //
 // The preview is an approximation by design: the render (ffmpeg) stays the
 // source of truth. Everything the preview needs is deterministic and lives
@@ -95,6 +99,7 @@ import {
   Scissors,
   SkipBack,
   SkipForward,
+  Square,
   Subtitles,
   Trash2,
   Undo2,
@@ -150,6 +155,13 @@ import {
   type SceneChroma,
   type ScenePip,
 } from "@/lib/tubeforge/studio-doc";
+import {
+  AMBIENCE_CATALOG,
+  SFX_CATALOG,
+  sanitizeAmbienceKind,
+  sanitizeSfxKind,
+  soundChoice,
+} from "@/lib/tubeforge/studio-sound";
 import {
   formatTimecode,
   previewSettingsFrom,
@@ -277,8 +289,19 @@ function normalizeTimelineDoc(t: AssembledTimelineDTO | null): AssembledTimeline
         audio: {
           voice: a?.voice ?? { enabled: true, level: 1 },
           music: a?.music ?? { enabled: true, level: 0.6, ducking: true },
-          sfx: a?.sfx ?? { enabled: false, level: 0, kind: null },
-          ambient: a?.ambient ?? { enabled: false, level: 0, kind: null },
+          // S5 — the sound kinds re-sanitize at the load choke point (the
+          // render's extractor calls the exact same studio-sound functions,
+          // so a hostile persisted doc can never reach the render raw).
+          sfx: {
+            enabled: a?.sfx?.enabled ?? false,
+            level: a?.sfx?.level ?? 0,
+            kind: sanitizeSfxKind(a?.sfx?.kind),
+          },
+          ambient: {
+            enabled: a?.ambient?.enabled ?? false,
+            level: a?.ambient?.level ?? 0,
+            kind: sanitizeAmbienceKind(a?.ambient?.kind),
+          },
         },
         // S2 wave 2 — the creative layer re-sanitized at the load choke
         // point (same studio-doc functions the render's extractor calls).
@@ -641,6 +664,33 @@ export function TimelineStudio({
       groupedEdit(`audio:${index}:${track}`, next);
     },
     [timeline, groupedEdit]
+  );
+
+  /** S5 — the sound stage: picking a scene's SFX cue / ambience bed writes
+   *  the doc's kind; the render resolves doc > plan > row. One pick = one
+   *  undo step. Picking from "none" seeds the level with the sound's own
+   *  default (the number the render assumes); clearing the pick parks the
+   *  level at 0 — the assembly seed's exact shape. */
+  const setSoundKind = useCallback(
+    (index: number, bank: "sfx" | "ambient", kind: string | null) => {
+      if (!timeline) return;
+      const next = cloneTimeline(timeline);
+      const i = next.scenes.findIndex((s) => s.index === index);
+      if (i === -1) return;
+      const track = next.scenes[i].audio[bank];
+      const choice = kind ? soundChoice(kind, bank === "sfx" ? "sfx" : "ambience") : null;
+      next.scenes[i].audio = {
+        ...next.scenes[i].audio,
+        [bank]: {
+          ...track,
+          kind,
+          enabled: kind !== null,
+          level: kind ? (track.level > 0 ? track.level : (choice?.defaultLevel ?? 0.35)) : 0,
+        },
+      };
+      applyEdit(next);
+    },
+    [timeline, applyEdit]
   );
 
   // ---------- drag-and-drop reorder ----------
@@ -1837,6 +1887,7 @@ export function TimelineStudio({
                 onTransition={(v) => setTransitionIn(selectedScene.index, v)}
                 onCaption={(v) => patchScene(selectedScene.index, { caption: v ? { ...v } : null }, { key: `cap:${selectedScene.index}` })}
                 onAudio={(track, level) => setAudioLevel(selectedScene.index, track, level)}
+                onSoundKind={(bank, kind) => setSoundKind(selectedScene.index, bank, kind)}
                 onSeekScene={(t) => {
                   setPlaying(false);
                   seek(t);
@@ -2423,6 +2474,9 @@ interface InspectorProps {
   onTransition: (style: string) => void;
   onCaption: (c: { text: string; startSec: number; endSec: number } | null) => void;
   onAudio: (track: "voice" | "music" | "sfx" | "ambient", level: number) => void;
+  /** S5 — the sound stage: pick the scene's SFX cue / ambience bed
+   *  (null = follow the plan's pick). Writes the doc's kind. */
+  onSoundKind: (bank: "sfx" | "ambient", kind: string | null) => void;
   onSeekScene: (t: number) => void;
   /** S2 wave 2 — the creative layer. */
   onGrade: (g: SceneGrade | null) => void;
@@ -2458,7 +2512,7 @@ const RENDER_HONORS = (
   </Badge>
 );
 
-function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCaption, onAudio, onSeekScene, onGrade, onTitle, onCamera, onSpeed, onChroma, onPip, onRevoice, revoicing, hasLogo, slidesMode, videoId, stockMode, onArtChanged }: InspectorProps) {
+function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCaption, onAudio, onSoundKind, onSeekScene, onGrade, onTitle, onCamera, onSpeed, onChroma, onPip, onRevoice, revoicing, hasLogo, slidesMode, videoId, stockMode, onArtChanged }: InspectorProps) {
   const shot = scene.shot;
   const grade = scene.grade ?? null;
   const ti = scene.titleOverlay ?? null;
@@ -2472,6 +2526,39 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
   const [scriptDraft, setScriptDraft] = useState(scene.narration);
   useEffect(() => setScriptDraft(scene.narration), [scene.index, scene.narration]);
   const scriptChanged = scriptDraft.trim() !== scene.narration.trim();
+
+  // ---------- audition (S5) ----------
+  // The sound stage's ears: each pick can play the EXACT synthesized wav the
+  // render will mix (the audition route streams the same cached file
+  // ensureSfx / ensureAmbience materialize). One element, one sound at a
+  // time; stopped on unmount — an <audio> must never outlive its panel.
+  const auditionRef = useRef<HTMLAudioElement | null>(null);
+  const [auditioning, setAuditioning] = useState<string | null>(null); // `${bank}:${kind}`
+  const stopAudition = useCallback(() => {
+    auditionRef.current?.pause();
+    auditionRef.current = null;
+    setAuditioning(null);
+  }, []);
+  useEffect(() => stopAudition, [stopAudition]);
+  const toggleAudition = useCallback(
+    (bank: "sfx" | "ambient", kind: string) => {
+      const key = `${bank}:${kind}`;
+      if (auditioning === key) {
+        stopAudition();
+        return;
+      }
+      stopAudition();
+      const el = new Audio(
+        `/api/videos/${videoId}/studio/sound?bank=${bank === "sfx" ? "sfx" : "ambience"}&kind=${encodeURIComponent(kind)}`
+      );
+      el.addEventListener("ended", stopAudition);
+      el.addEventListener("error", stopAudition);
+      auditionRef.current = el;
+      setAuditioning(key);
+      void el.play().catch(stopAudition);
+    },
+    [auditioning, stopAudition, videoId]
+  );
 
   // ---------- art (S4) ----------
   // The clip's face lives on the ROW's scene assets; these actions call the
@@ -3357,16 +3444,11 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
         <header className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
           <AudioLines className="h-3 w-3" /> Mix {RENDER_HONORS}
         </header>
-        {(
-          [
-            ["voice", "Voice"],
-            ["music", "Music bed"],
-            ["sfx", `SFX${scene.audio.sfx.kind ? ` (${scene.audio.sfx.kind})` : ""}`],
-            ["ambient", `Ambience${scene.audio.ambient.kind ? ` (${scene.audio.ambient.kind})` : ""}`],
-          ] as const
-        ).map(([track, label]) => (
+        {(["voice", "music"] as const).map((track) => (
           <div key={track} className="flex items-center gap-2">
-            <span className="w-24 shrink-0 text-[10px] text-muted-foreground">{label}</span>
+            <span className="w-24 shrink-0 text-[10px] text-muted-foreground">
+              {track === "voice" ? "Voice" : "Music bed"}
+            </span>
             <Slider
               className="h-1.5 flex-1"
               value={[Math.round((scene.audio[track].level ?? 0) * 100)]}
@@ -3381,9 +3463,97 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
             </span>
           </div>
         ))}
+
+        {/* S5 — the sound stage: the scene's own SFX cue + ambience bed. The
+            doc pick outranks the plan's (the render resolves doc > plan >
+            row); the audition button plays the exact synthesized wav the
+            render will mix. Slides mode keeps the stage — sound is not a
+            look; the deck owns only the visuals. */}
+        {(
+          [
+            ["sfx", "SFX cue", SFX_CATALOG],
+            ["ambient", "Ambience bed", AMBIENCE_CATALOG],
+          ] as const
+        ).map(([bank, label, catalog]) => {
+          const docKind = bank === "sfx" ? scene.audio.sfx.kind : scene.audio.ambient.kind;
+          const bankId = bank === "sfx" ? "sfx" : "ambience";
+          const picked = soundChoice(docKind, bankId);
+          // When following the plan, the SFX pick IS visible client-side
+          // (the row's sfx field); ambience is decided server-side from the
+          // approved shot plan — the honest label says so.
+          const planSfx = bank === "sfx" && scenesMeta?.sfx && scenesMeta.sfx !== "none" ? scenesMeta.sfx : null;
+          const effectiveKind = docKind ?? planSfx;
+          const effective = soundChoice(effectiveKind, bankId);
+          const note = picked?.note ?? null;
+          return (
+            <div key={bank} className="space-y-1 rounded-md border border-white/10 bg-white/[0.03] p-2">
+              <div className="flex items-center gap-1.5">
+                <span className="w-16 shrink-0 text-[10px] font-medium text-foreground/80">{label}</span>
+                <Select
+                  value={docKind ?? "auto"}
+                  onValueChange={(v) => onSoundKind(bank, v === "auto" ? null : v)}
+                  disabled={disabled}
+                >
+                  <SelectTrigger className="h-6 flex-1 text-[11px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto" className="text-[11px]">
+                      {bank === "sfx"
+                        ? planSfx
+                          ? `Auto — plan: ${planSfx}`
+                          : "Auto — no cue planned"
+                        : "Auto — the Director's bed"}
+                    </SelectItem>
+                    {catalog.map((c) => (
+                      <SelectItem key={c.id} value={c.id} className="text-[11px]">
+                        {c.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 w-6 shrink-0 px-0"
+                  disabled={disabled || !effective}
+                  onClick={() => effective && toggleAudition(bank, effective.id)}
+                  title={
+                    effective
+                      ? `${auditioning === `${bank}:${effective.id}` ? "Stop" : "Audition"} — the exact synthesized sound the render will mix`
+                      : "Nothing to audition — follow the plan's pick or choose a sound"
+                  }
+                >
+                  {auditioning === `${bank}:${effective?.id ?? ""}` ? (
+                    <Square className="h-3 w-3" />
+                  ) : (
+                    <Volume2 className="h-3 w-3" />
+                  )}
+                </Button>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-16 shrink-0 text-[10px] text-muted-foreground">Level</span>
+                <Slider
+                  className="h-1.5 flex-1"
+                  value={[Math.round(((bank === "sfx" ? scene.audio.sfx.level : scene.audio.ambient.level) ?? 0) * 100)]}
+                  min={0}
+                  max={100}
+                  step={5}
+                  disabled={disabled}
+                  onValueChange={(v) => onAudio(bank, (v[0] ?? 0) / 100)}
+                />
+                <span className="w-9 text-right font-mono text-[10px] text-muted-foreground">
+                  {Math.round(((bank === "sfx" ? scene.audio.sfx.level : scene.audio.ambient.level) ?? 0) * 100)}%
+                </span>
+              </div>
+              {note && <p className="text-[10px] leading-snug text-muted-foreground">{note}</p>}
+            </div>
+          );
+        })}
         <p className="text-[10px] leading-snug text-muted-foreground">
-          Voice/SFX/ambience are the render's mix weights. Music rides the library bed
-          per scene — the synthesized fallback bed keeps its fixed profile.
+          Voice/music are the render's mix weights. The SFX cue and ambience bed are the
+          studio's own picks — saved in the doc, honored by the render ahead of the plan;
+          “Auto” follows the Director. The synthesized fallback bed keeps its fixed profile.
         </p>
       </section>
 

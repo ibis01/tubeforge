@@ -35,6 +35,7 @@ import type { DirectorPlan } from "./director-plan";
 import { planSceneDuration, planTransitionIn } from "./director-plan";
 import { sanitizeTransition, TRANSITION_IDS, type TransitionStyle } from "./transitions";
 import { R_LEAD_SEC, R_TAIL_SEC, R_MIN_SEG_SEC } from "./preview-lanes";
+import { sanitizeSfxKind, sanitizeAmbienceKind } from "./studio-sound";
 import {
   sanitizeGrade,
   sanitizeTitle,
@@ -340,6 +341,11 @@ export interface DocSceneSettings {
   /** S3 — chroma key / corner logo overlay (null = none). */
   chroma: SceneChroma | null;
   pip: ScenePip | null;
+  /** S5 — the studio's sound picks (null = no override — the plan's cue/bed
+   *  wins). Sanitized against the studio-sound catalogs at the extraction
+   *  choke point; the render resolves precedence with resolveSoundChoice. */
+  sfxKind: string | null;
+  ambientKind: string | null;
 }
 
 /** Clamp a doc level into 0..1; anything absent/out-of-range is null (no
@@ -388,6 +394,11 @@ export function docSceneSettings(
     // S3 — keying + overlay, sanitized at the same choke point.
     chroma: sanitizeChroma(s.chroma),
     pip: sanitizePip(s.pip),
+    // S5 — the sound picks, sanitized at the same choke point (the UI
+    // normalizes on load too; both call studio-sound's exact functions so a
+    // hostile persisted doc can never reach the render raw).
+    sfxKind: sanitizeSfxKind(s.audio?.sfx?.kind),
+    ambientKind: sanitizeAmbienceKind(s.audio?.ambient?.kind),
   }));
 }
 

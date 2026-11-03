@@ -24,6 +24,7 @@ import { zaiClientFor } from "./zai-client";
 import * as storage from "./storage";
 import { aiCall } from "./budget";
 import { ensureSfx } from "./sfx";
+import { resolveSoundChoice, SFX_CATALOG, AMBIENCE_CATALOG } from "./studio-sound";
 import {
   voiceSplitChain,
   bedChain,
@@ -448,8 +449,9 @@ async function buildSegment(opts: {
   motion: MotionSettings;
   plan?: MotionScenePlan;
   sfx: boolean;
-  /** Module E: director-suggested cue (approved plan) — falls back to the
-   * story pass's own cue for the scene. */
+  /** S5 — the RESOLVED sound pick for this scene: the timeline doc's studio
+   *  pick outranks the plan's cue, which outranks the story pass's row value
+   *  (resolveSoundChoice at the call site — the one precedence rule). */
   sfxKind?: string;
   /** Module E: materialized ambience bed path for this scene (null = none). */
   ambiencePath?: string | null;
@@ -1374,16 +1376,18 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     // ambience beds (synthesized once, looped under the narration) + the
     // director's scene-boundary cue suggestions. The plan can only ADD a
     // cue — it never removes one the story pass already chose.
+    // S5 — the doc's studio picks outrank the plan's; beds materialize
+    // ON DEMAND (a doc-only pick synthesizes its own bed — the old
+    // plan-prebuilt map could never have heard it).
     const planAudio = await getApprovedAudioMap(opts.videoId);
-    const ambiencePaths = new Map<number, string>();
-    for (const kind of new Set(planAudio.ambience.values())) {
-      const p = await ensureAmbience(kind).catch(() => null);
-      if (p) {
-        for (const [sceneIndex, k] of planAudio.ambience) {
-          if (k === kind) ambiencePaths.set(sceneIndex, p);
-        }
+    const ambienceCache = new Map<string, string | null>();
+    const ambiencePathFor = async (kind: string | null): Promise<string | null> => {
+      if (!kind) return null;
+      if (!ambienceCache.has(kind)) {
+        ambienceCache.set(kind, await ensureAmbience(kind).catch(() => null));
       }
-    }
+      return ambienceCache.get(kind) ?? null;
+    };
 
     // 1.5) Keynote slides — design the deck (LLM, cached) and screenshot it.
     // (Cancellation rides the same onProgress checkpoints as every stage —
@@ -1425,6 +1429,17 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       report(i, label);
       const segPath = path.join(tmpDir, `seg-${String(i + 1).padStart(2, "0")}.mp4`);
       const doc = docScenes?.[i] ?? null;
+      // S5 — the one precedence rule: the doc's studio pick, then the plan's,
+      // then the story pass's row value; null everywhere = no sound. The
+      // resolver sanitizes ALL three sources (a plan row is data too).
+      const sfxKind =
+        resolveSoundChoice(doc?.sfxKind ?? null, planAudio.sfx.get(scene.index) ?? scene.sfx, SFX_CATALOG) ??
+        "none";
+      const ambienceKind = resolveSoundChoice(
+        doc?.ambientKind ?? null,
+        planAudio.ambience.get(scene.index) ?? null,
+        AMBIENCE_CATALOG
+      );
       await buildSegment({
         videoId: opts.videoId,
         scene,
@@ -1434,8 +1449,8 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         plan: plans[i],
         shotPlan: shotPlans?.[i],
         sfx: opts.sfx !== false,
-        sfxKind: planAudio.sfx.get(scene.index),
-        ambiencePath: ambiencePaths.get(scene.index) ?? null,
+        sfxKind,
+        ambiencePath: await ambiencePathFor(ambienceKind),
         // S2 — the doc's per-scene mix (voice/SFX/ambience) IS the mix.
         docLevels: doc
           ? {
