@@ -6,10 +6,15 @@
 //                       (OpenAI, DeepSeek, Groq, Mistral, OpenRouter, Ollama,
 //                       LM Studio, vLLM …) configured in Settings → AI Provider.
 //
-// Stage 2: config lives in the ACTING USER's UserSetting rows (aiProvider /
-// aiBaseUrl / aiModel) with the API key in ProviderCredential (encrypted at
-// rest), cached ~8s per user. If the custom provider is half-configured the
-// layer fails safe and falls back to the Z.ai gateway.
+// Settings resolution (cached ~8s per user):
+//   1. the MODERN per-capability rows (Settings → AI Providers writes
+//      UserSetting "ai.chat" + ProviderCredential("chat", …) via
+//      saveCapability) — the source of truth since the capability UI;
+//   2. the LEGACY flat rows (aiProvider / aiBaseUrl / aiModel — the pre-
+//      capability onboarding) as a fallback for accounts that never touched
+//      the capability UI.
+// If the custom provider is half-configured the layer fails safe and falls
+// back to the Z.ai gateway.
 //
 // The response shape matches zai.chat.completions.create —
 // { choices: [{ message: { content } }] } — so call sites stay untouched.
@@ -19,6 +24,7 @@
 import ZAI from "z-ai-web-dev-sdk";
 import { safeFetch } from "./net-guard";
 import { allowPrivateProviderHosts } from "./providers/http";
+import { getCapability } from "./providers/settings";
 import { currentCtx } from "./tenant";
 import { getProviderCredential, getUserSettings } from "./settings";
 
@@ -51,13 +57,40 @@ async function readLLMSettings(): Promise<LLMSettings> {
 
   const cfg: LLMSettings = { provider: "zai", baseUrl: "", apiKey: "", model: "" };
   try {
-    const map = await getUserSettings(["aiProvider", "aiBaseUrl", "aiModel"]);
-    cfg.provider = map.get("aiProvider") === "openai" ? "openai" : "zai";
-    cfg.baseUrl = (map.get("aiBaseUrl") ?? "").trim().replace(/\/+$/, "");
-    cfg.model = (map.get("aiModel") ?? "").trim();
-    if (cfg.provider === "openai") {
-      const cred = await getProviderCredential("chat", "openai");
-      cfg.apiKey = cred?.apiKey?.trim() ?? "";
+    const map = await getUserSettings(["ai.chat", "aiProvider", "aiBaseUrl", "aiModel"]);
+    // Modern capability row FIRST — the Settings → AI Providers card writes
+    // here (saveCapability). Without this, a provider picked in the modern
+    // UI never reached the Director: llmChat kept reading the legacy flat
+    // rows and silently stayed on the Z.ai gateway.
+    const modern = map.get("ai.chat");
+    if (modern) {
+      try {
+        const blob = JSON.parse(modern) as { provider?: string; model?: string };
+        if (blob.provider === "openai") {
+          // getCapability re-uses the same parser as the settings route and
+          // injects the ProviderCredential secret half (baseUrl fallback).
+          const cap = await getCapability("chat");
+          cfg.provider = "openai";
+          cfg.baseUrl = (cap.baseUrl ?? "").trim().replace(/\/+$/, "");
+          cfg.model = (blob.model ?? "").trim();
+          cfg.apiKey = (cap.apiKey ?? "").trim();
+        } else {
+          // Z.ai gateway — an explicit chat-model pick rides along to the
+          // SDK call (previously the pick only ever reached image/TTS paths).
+          cfg.model = typeof blob.model === "string" ? blob.model.trim() : "";
+        }
+      } catch {
+        /* corrupt ai.chat row — fall through to the legacy rows */
+      }
+    }
+    if (!modern) {
+      cfg.provider = map.get("aiProvider") === "openai" ? "openai" : "zai";
+      cfg.baseUrl = (map.get("aiBaseUrl") ?? "").trim().replace(/\/+$/, "");
+      cfg.model = (map.get("aiModel") ?? "").trim();
+      if (cfg.provider === "openai") {
+        const cred = await getProviderCredential("chat", "openai");
+        cfg.apiKey = cred?.apiKey?.trim() ?? "";
+      }
     }
   } catch (err) {
     console.warn("[llm] settings read failed, defaulting to Z.ai:", err);
@@ -73,7 +106,9 @@ async function effectiveSettings(): Promise<LLMSettings> {
   if (s.provider === "openai" && s.baseUrl && s.apiKey) return s;
   if (s.provider === "openai")
     console.warn("[llm] custom LLM selected but baseUrl/apiKey incomplete — using Z.ai gateway");
-  return { ...s, provider: "zai" };
+  // The half-configured provider's model name must NOT ride to the gateway —
+  // it names a model the gateway may not serve.
+  return { ...s, provider: "zai", model: "" };
 }
 
 // ---------- Z.ai gateway client (own instance — no import cycle with ai.ts) ----------
@@ -154,7 +189,11 @@ async function chatWith(s: LLMSettings, body: LLMChatBody, timeoutMs = 300_000):
     return openaiFetch(s, "/chat/completions", payload, timeoutMs);
   }
   const zai = await getZai();
-  return zai.chat.completions.create(body as never) as Promise<LLMCompletion>;
+  // An explicit chat-model pick (Settings → AI Providers) rides to the
+  // gateway; absent = the gateway's own default, exactly as before.
+  return zai.chat.completions.create(
+    (s.model ? { ...body, model: s.model } : body) as never
+  ) as Promise<LLMCompletion>;
 }
 
 /** Vision against explicit settings (OpenAI-style multimodal content parts). */
