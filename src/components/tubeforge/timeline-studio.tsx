@@ -70,6 +70,14 @@
 //     plan > row); "off" ships true silence, not the drone fallback. The
 //     audition button plays the EXACT bed the render will mix, and the mix
 //     preview rides the same chain.
+//   • NARRATOR → S8: the studio picks WHO reads. Unlike S6/S7 this is not a
+//     doc field — the voice is baked into the per-scene WAVs, so the pick is
+//     a deliberate server ACTION: stage it in the picker, audition it on
+//     the video's own opening line, commit with the two-step Re-voice. The
+//     server re-reads EVERY scene with the new voice, re-derives every doc
+//     window (creative fields carried across), rebuilds voiceover.wav and
+//     drops only the stale renders. History resets — a row mutation is not
+//     doc-undoable (the same doctrine as the clip ops).
 //
 // The preview is an approximation by design: the render (ffmpeg) stays the
 // source of truth. Everything the preview needs is deterministic and lives
@@ -221,6 +229,18 @@ interface ClipOpResponse {
   newIndex: number | null;
   activity: string;
   /** Fresh per-scene read lengths after the op (a split re-voices). */
+  wavDurations?: Record<number, number>;
+}
+
+/** POST /studio/voice — S8: the narrator swap (server contract). A row
+ * mutation like the clip ops — the studio swaps its doc in whole. */
+interface VoiceSwapResponse {
+  timeline: AssembledTimelineDTO;
+  sceneOrder: number[];
+  activity: string;
+  /** The narrator now baked into every scene WAV. */
+  voice: string;
+  /** Fresh per-scene read lengths after the swap (every scene re-read). */
   wavDurations?: Record<number, number>;
 }
 
@@ -1144,6 +1164,178 @@ export function TimelineStudio({
     setDeleteArmed(false);
   }, [activeClip?.index]);
 
+  // ---------- S8 — the narrator pick ----------
+  // The voice: unlike the caption/music picks this is NOT a doc field — the
+  // narrator is baked into the per-scene WAVs, so the pick is a deliberate
+  // server ACTION (a row mutation + real TTS), never a casual dropdown
+  // flip. The picker STAGES a pending voice, the audition plays it on the
+  // video's own opening line, and the two-step Re-voice commits: the server
+  // re-reads every scene, re-derives every doc window (creative fields
+  // carried across), rebuilds voiceover.wav and drops only the stale
+  // renders. The voice catalog is fetched once for the picker; a failed
+  // fetch degrades to the current narrator.
+  const [voices, setVoices] = useState<{ id: string; label: string; clone: boolean }[]>([]);
+  useEffect(() => {
+    let dead = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/settings/voices", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as { voices?: { id: string; label: string }[] };
+        if (!dead && Array.isArray(data.voices))
+          setVoices(
+            data.voices.map((v) => ({
+              id: v.id,
+              label: v.label,
+              clone: v.id.startsWith("voice_clone_"),
+            }))
+          );
+      } catch {
+        /* the picker degrades to the current narrator */
+      }
+    })();
+    return () => {
+      dead = true;
+    };
+  }, []);
+
+  /** Staged pick (null = keep the current narrator). */
+  const [voicePick, setVoicePick] = useState<string | null>(null);
+  const [voiceBusy, setVoiceBusy] = useState<"audition" | "swap" | null>(null);
+  /** Two-step commit, like the delete arm — a swap re-reads every scene. */
+  const [voiceArmed, setVoiceArmed] = useState(false);
+
+  // The narrator's ears — the audition synthesizes the PICKED voice on the
+  // video's own opening line (the preview route's one-off text), so what
+  // you hear is what the swap will re-read. One element, stopped on unmount.
+  const voiceAuditionRef = useRef<HTMLAudioElement | null>(null);
+  const stopVoiceAudition = useCallback(() => {
+    voiceAuditionRef.current?.pause();
+    voiceAuditionRef.current = null;
+    setVoiceBusy((b) => (b === "audition" ? null : b));
+  }, []);
+  useEffect(() => stopVoiceAudition, [stopVoiceAudition]);
+
+  const auditionVoice = useCallback(
+    async (voice: string) => {
+      stopVoiceAudition();
+      if (!voice) return;
+      setVoiceBusy("audition");
+      try {
+        const line =
+          timeline?.scenes.find((s) => (s.narration ?? "").trim())?.narration ?? "";
+        const res = await fetch("/api/settings/voices/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ voice, ...(line ? { text: line.slice(0, 200) } : {}) }),
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const el = new Audio(url);
+        el.addEventListener("ended", () => {
+          URL.revokeObjectURL(url);
+          stopVoiceAudition();
+        });
+        el.addEventListener("error", () => {
+          URL.revokeObjectURL(url);
+          stopVoiceAudition();
+        });
+        voiceAuditionRef.current = el;
+        await el.play();
+      } catch (err) {
+        stopVoiceAudition();
+        toast({
+          title: "Audition failed",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      }
+    },
+    [timeline, stopVoiceAudition, toast]
+  );
+
+  // The commit: flush the doc, POST the swap, hot-swap the doc in whole
+  // (history resets — a row mutation is not doc-undoable), drop every
+  // cached per-scene WAV so the voice lane + preview re-fetch lazily.
+  const voiceSwap = useCallback(
+    async () => {
+      if (!voicePick || !timeline || voiceBusy || clipBusy || saving || loading || renderInFlight)
+        return;
+      setVoiceArmed(false);
+      stopVoiceAudition();
+      setVoiceBusy("swap");
+      try {
+        // Flush pending edits first — the swap works on the SAVED row + doc.
+        if (dirty) await save();
+        const res = await fetch(`/api/videos/${videoId}/studio/voice`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ voice: voicePick }),
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        const data = (await res.json()) as VoiceSwapResponse;
+        setHistory({ past: [], present: normalizeTimelineDoc(data.timeline), future: [] });
+        setDirty(false);
+        if (data.wavDurations) setWavDurations(data.wavDurations);
+        for (const el of voPool.current.values()) el.pause();
+        voPool.current.clear();
+        setBrokenVo(new Set());
+        setWavVersion((v) => v + 1);
+        setPlaying(false);
+        seek(Math.min(playhead, Math.max(0, data.timeline.totalDurationSec - 0.001)));
+        setVoicePick(null);
+        bump();
+        onSaved?.(); // the parent re-fetches the row (the picker shows the new narrator)
+        toast({ title: "Narrator swapped", description: data.activity });
+      } catch (err) {
+        toast({
+          title: "Voice swap failed",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setVoiceBusy(null);
+      }
+    },
+    [
+      voicePick,
+      timeline,
+      voiceBusy,
+      clipBusy,
+      saving,
+      loading,
+      renderInFlight,
+      dirty,
+      save,
+      videoId,
+      playhead,
+      seek,
+      bump,
+      onSaved,
+      toast,
+      stopVoiceAudition,
+    ]
+  );
+
+  // Two-step commit: the first press arms (4 s window), the second executes;
+  // re-picking a voice disarms. A swap re-reads every scene — the pause is
+  // the cost disclosure.
+  useEffect(() => {
+    if (!voiceArmed) return;
+    const t = setTimeout(() => setVoiceArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [voiceArmed]);
+  useEffect(() => {
+    setVoiceArmed(false);
+  }, [voicePick]);
+
   // ---------- the preview canvas ----------
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -1855,6 +2047,109 @@ export function TimelineStudio({
               title="Audition the bed the render will mix (30 s)"
             >
               {musicAuditioning ? <Square className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+            </Button>
+          </div>
+          <span className="h-5 w-px bg-white/10" aria-hidden />
+          {/* S8 — the narrator: unlike S6/S7 this pick is a server ACTION
+              (real TTS re-reads every scene), so it stages PENDING, auditions
+              on the video's own opening line, and commits through a two-step
+              button — never a casual dropdown flip. */}
+          <div className="flex items-center gap-1.5 mr-1">
+            <Mic className="h-3.5 w-3.5 text-muted-foreground" />
+            <Select
+              value={voicePick ?? video.voice}
+              onValueChange={(v) => {
+                stopVoiceAudition();
+                setVoicePick(v === video.voice ? null : v);
+              }}
+              disabled={saving || loading || renderInFlight || clipBusy != null || voiceBusy != null}
+            >
+              <SelectTrigger
+                className="h-7 w-[150px] text-[11px]"
+                title="Who narrates — pick to stage the swap, audition to hear it on your own opening line, Re-voice to re-read every scene"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {/* degraded mode: catalog fetch failed → still show the row's
+                    narrator so the control never lies about the current state */}
+                {!voices.some((v) => v.id === video.voice) ? (
+                  <SelectItem value={video.voice} className="text-[11px]">
+                    {video.voice} (current)
+                  </SelectItem>
+                ) : null}
+                {voices.filter((v) => !v.clone).length > 0 ? (
+                  <SelectGroup>
+                    <SelectLabel className="text-[10px]">Studio voices</SelectLabel>
+                    {voices
+                      .filter((v) => !v.clone)
+                      .map((v) => (
+                        <SelectItem key={v.id} value={v.id} className="text-[11px]">
+                          {v.label}
+                        </SelectItem>
+                      ))}
+                  </SelectGroup>
+                ) : null}
+                {voices.some((v) => v.clone) ? (
+                  <SelectGroup>
+                    <SelectLabel className="text-[10px]">Your clones</SelectLabel>
+                    {voices
+                      .filter((v) => v.clone)
+                      .map((v) => (
+                        <SelectItem key={v.id} value={v.id} className="text-[11px]">
+                          {v.label}
+                        </SelectItem>
+                      ))}
+                  </SelectGroup>
+                ) : null}
+              </SelectContent>
+            </Select>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0"
+              onClick={() =>
+                voiceBusy === "audition"
+                  ? stopVoiceAudition()
+                  : void auditionVoice(voicePick ?? video.voice)
+              }
+              disabled={saving || loading || renderInFlight || voiceBusy === "swap" || clipBusy != null}
+              title="Audition this voice reading your own opening line"
+            >
+              {voiceBusy === "audition" ? (
+                <Square className="h-3.5 w-3.5" />
+              ) : (
+                <Volume2 className="h-3.5 w-3.5" />
+              )}
+            </Button>
+            <Button
+              size="sm"
+              variant={voiceArmed ? "destructive" : "ghost"}
+              className="h-7 px-2"
+              onClick={() => (voiceArmed ? void voiceSwap() : setVoiceArmed(true))}
+              disabled={
+                !voicePick ||
+                voicePick === video.voice ||
+                saving ||
+                loading ||
+                renderInFlight ||
+                clipBusy != null ||
+                voiceBusy != null
+              }
+              title="Re-voice the whole video — every scene is re-read with the picked voice (a real TTS pass), windows re-derive, creative edits survive"
+            >
+              {voiceBusy === "swap" ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Mic className="h-3.5 w-3.5" />
+              )}
+              <span className="ml-1.5 text-xs">
+                {voiceBusy === "swap"
+                  ? `Re-reading ${timeline?.sceneCount ?? ""} scenes…`
+                  : voiceArmed
+                    ? `Re-voice ${timeline?.sceneCount ?? ""} scenes?`
+                    : "Re-voice"}
+              </span>
             </Button>
           </div>
           <Button size="sm" variant="ghost" onClick={undo} disabled={!canUndo || saving || loading} title="Undo (⌘Z)">

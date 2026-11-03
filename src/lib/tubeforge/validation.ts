@@ -245,3 +245,17 @@ export const clipOpSchema = z
       });
     }
   });
+
+/** POST /api/videos/[id]/studio/voice — S8: swap the narrator for the whole
+ *  video. Shape only (1..64 chars, no whitespace control) — catalog truth
+ *  (the speakable stock + cloned voices) is validated one layer out at the
+ *  route via resolvePreviewVoice, so a hostile id can only ever 400, never
+ *  reach the TTS call. */
+export const voiceSwapSchema = z.object({
+  voice: z
+    .string()
+    .trim()
+    .min(1, "Pick a voice to narrate with")
+    .max(64)
+    .regex(/^[A-Za-z0-9_-]+$/, "Voice ids are slugs or clone ids"),
+});

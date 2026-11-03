@@ -438,3 +438,140 @@ export async function performClipOp(video: Video, body: ClipOpBody): Promise<Cli
     activity: `Scene ${target.index} removed — ${nextDoc.sceneCount} scenes, ${nextDoc.totalDurationSec.toFixed(1)}s${merged === null ? "; voiceover.wav not rebuilt (a scene WAV is missing)" : ""}`,
   };
 }
+
+// ---------- S8: the voice — a whole-video narrator swap ----------
+//
+// The last creative decision still made OUTSIDE the studio: WHO narrates.
+// video.voice is set at creation and, until S8, changing it meant leaving
+// the studio for the settings PUT — which nukes EVERY voice-keyed artifact
+// (scene WAVs + the merged voiceover included) and resets hasVoiceover, so
+// the voiceover stage must re-run and a generic re-assembly rebuilds the
+// doc from scratch. Every per-scene creative edit riding on top of the old
+// reads — grades, titles, camera keys, chroma, PIP, scene audio, trims —
+// was lost to the burn-down.
+//
+// performVoiceSwap is the surgical counterpart: it re-reads each scene with
+// the NEW voice (same ttsSpeed — pacing is a separate knob), re-derives
+// each doc window from its fresh read through the SAME applyRevoiceToDoc
+// the transcript lane uses (so every creative field on the scene SURVIVES;
+// only the window honestly resets — a trim tuned to the old read is stale
+// the moment the words are re-read), rebuilds the merged voiceover.wav,
+// and drops ONLY the artifacts that are genuinely stale: the rendered
+// outputs. The per-scene WAVs and the merged voiceover are REBUILT, not
+// deleted; hasVoiceover never flips.
+
+/** Rendered artifacts keyed to the OLD reads — these die on a voice swap.
+ * The per-scene scene-XX.wav and the merged voiceover.wav are NOT stale:
+ * the swap itself rebuilds them (the .wav/.mp4 split is the whole point —
+ * scene-02.wav is the new read, scene-02.mp4 is a render of the old one).
+ * voice-source.* and short-thumb.png ride the renders and die with them. */
+const VOICE_SWAP_STALE =
+  /\/(final\.mp4|preview\.mp4|subtitles\.srt|short\.mp4|short-thumb\.png|scene-\d{2}\.mp4)$/;
+
+/** Pure: does one storage key die when the narrator changes? (probe) */
+export function isVoiceSwapStale(key: string): boolean {
+  return VOICE_SWAP_STALE.test(key);
+}
+
+export interface VoiceSwapResult {
+  rowScenes: Scene[];
+  timeline: AssembledTimeline;
+  sceneOrder: number[];
+  /** Updated row.audioDuration (null = keep the current value). */
+  audioDuration: number | null;
+  /** The narrator now baked into every scene WAV. */
+  voice: string;
+  /** How many stale rendered artifacts were dropped. */
+  droppedArtifacts: number;
+  /** One-line activity message for the toast. */
+  activity: string;
+}
+
+/** Swap the narrator for the WHOLE video in one server update — the studio's
+ * voice pick. Row, per-scene WAVs, doc windows and the merged voiceover all
+ * move together (the same lockstep contract as the clip ops).
+ *
+ * Guards (each surfaces as a readable 400 at the route):
+ *   • story format — the narrator is a Timeline Studio concept;
+ *   • tts voice source — custom audio cannot be re-read by a studio voice;
+ *   • hasVoiceover — the studio re-voices EXISTING reads, it does not run
+ *     the voiceover stage (that job owns hasVoiceover);
+ *   • a timeline doc must exist (assemble first);
+ *   • the new voice must differ from the row's.
+ * renderMode "slides" is ALLOWED — unlike split/delete a swap restructures
+ * nothing: the same scenes, the same deck, fresh reads under them.
+ *
+ * Cost: the same one-TTS-call-per-chunk posture as the voiceover stage
+ * (aiCall-metered, 1 s pacing between scenes). */
+export async function performVoiceSwap(
+  video: Video,
+  newVoice: string
+): Promise<VoiceSwapResult> {
+  if (video.format !== "story")
+    throw new Error("The narrator is picked in the Timeline Studio — scene-format videos only");
+  if (video.voiceSource !== "tts")
+    throw new Error("Re-voicing reads with a studio voice — re-attach the per-scene voiceover first (this video uses custom audio)");
+  if (!video.hasVoiceover)
+    throw new Error("Generate the voiceover first — the studio re-voices existing reads");
+  if (newVoice === video.voice)
+    throw new Error("That's the current narrator — pick a different voice");
+  const doc = parseTimeline(video.timeline);
+  if (!doc) throw new Error("Assemble the timeline first");
+  const rowScenes = parseScenes(video.scenes);
+  if (rowScenes.length === 0) throw new Error("No scenes — generate the script first");
+
+  const dir = videoDir(video.id);
+
+  // 1. Drop the rendered artifacts keyed to the OLD reads (fail-soft: a
+  //    missing prefix just means nothing to drop).
+  let droppedArtifacts = 0;
+  try {
+    const keys = await storage.list(video.id);
+    const stale = keys.filter(isVoiceSwapStale);
+    await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));
+    droppedArtifacts = stale.length;
+  } catch {
+    /* prefix may not exist yet — non-fatal */
+  }
+
+  // 2. Re-read every scene with the new voice, folding the doc as we go:
+  //    each window re-derives from its fresh read, every creative field on
+  //    the scene survives (applyRevoiceToDoc spreads the old entry).
+  let nextDoc = doc;
+  for (const [i, scene] of rowScenes.entries()) {
+    if (i > 0) await sleep(1000); // pace scenes like the voiceover stage
+    const wavDur = await synthSceneWav(
+      dir,
+      scene.index,
+      scene.narration,
+      newVoice,
+      video.ttsSpeed
+    );
+    nextDoc = applyRevoiceToDoc(
+      nextDoc,
+      scene.index,
+      scene.narration,
+      sceneSegmentSec(wavDur)
+    );
+  }
+
+  // 3. Rebuild the merged voiceover.wav from the fresh reads.
+  const merged = await syncVoiceover(video.id, dir, rowScenes);
+  const activity =
+    `Narrator swapped to ${newVoice} — ${rowScenes.length} scenes re-read, ` +
+    `${nextDoc.totalDurationSec.toFixed(1)}s total` +
+    (merged === null ? "; voiceover.wav not rebuilt (a scene WAV is missing)" : "") +
+    (droppedArtifacts > 0
+      ? `; ${droppedArtifacts} stale render${droppedArtifacts === 1 ? "" : "s"} dropped`
+      : "");
+
+  return {
+    rowScenes,
+    timeline: nextDoc,
+    sceneOrder: rowScenes.map((s) => s.index),
+    audioDuration: merged,
+    voice: newVoice,
+    droppedArtifacts,
+    activity,
+  };
+}
