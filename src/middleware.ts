@@ -64,15 +64,6 @@ function warnNoSecret(): void {
 }
 
 export async function middleware(req: NextRequest) {
-  // TEMP authdiag — login-loop investigation; remove before the next commit.
-  const __raw = req.headers.get("cookie") ?? "";
-  const __parts = __raw.split(/;\s*/).filter((c) => c.startsWith("tf_session="));
-  console.log(
-    `[authdiag] ${req.method} ${req.nextUrl.pathname} n=${__parts.length} ` +
-      __parts.map((c) => c.slice(11, 19)).join(",") +
-      ` ua=…${(req.headers.get("user-agent") ?? "").slice(-16)}`
-  );
-
   const secret = getAuthSecret();
   const { pathname } = req.nextUrl;
   const isProd = process.env.NODE_ENV === "production";
@@ -115,7 +106,6 @@ export async function middleware(req: NextRequest) {
 
   const payload = await verifyToken(token, secret);
   if (!payload || payload.s === "state") {
-    console.log(`[authdiag] 401 ${pathname}`);
     return NextResponse.json(
       { error: "Authentication required — sign in to use TubeForge" },
       { status: 401 }
