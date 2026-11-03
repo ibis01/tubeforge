@@ -453,13 +453,242 @@ export const EXPORT_PRESETS: ExportPreset[] = [
 
 /** Render preferences persisted on the timeline doc's root. Aspect / fps /
  * burnCaptions live on the video row (renderDefaultsSchema); the quality
- * tier lives here because the row has no column for it. */
+ * tier + the caption-style pick live here because the row has no column
+ * for them. */
 export interface RenderPrefs {
   quality: ExportQuality;
+  /** S6 — the caption look the render burns (null/absent = "classic"). */
+  captionStyle?: string | null;
 }
 
 export function sanitizeRenderPrefs(v: unknown): RenderPrefs | null {
   if (!v || typeof v !== "object" || Array.isArray(v)) return null;
-  const q = (v as Record<string, unknown>).quality;
-  return q === "draft" || q === "standard" || q === "high" ? { quality: q } : null;
+  const rec = v as Record<string, unknown>;
+  const q = rec.quality;
+  if (q !== "draft" && q !== "standard" && q !== "high") return null;
+  // S6 — the caption pick re-sanitizes at the same choke point; absent or
+  // junk reads as no pick (the classic look) and the key is omitted so a
+  // legacy doc serializes byte-stable.
+  const cs = sanitizeCaptionStyle(rec.captionStyle);
+  return cs ? { quality: q, captionStyle: cs } : { quality: q };
+}
+
+// ---------- S6: caption styles — the words' face ----------
+//
+// Until now the burned captions had ONE look: two hardcoded ASS force_style
+// constants in render.ts (16:9 + the slides-mode vertical variant). S6 makes
+// the caption look a studio pick: the doc's renderPrefs carries a style id,
+// the render maps it onto the SAME ASS params through this module, and the
+// live preview mirrors the geometry. One vocabulary, both sides (the S2/S3
+// choke-point doctrine) — the classic entry below reproduces the legacy
+// constants BYTE-FOR-BYTE, so "no pick" is visually identical to pre-S6.
+//
+// PURE on purpose: no imports, no fs — the client component, the job layer
+// and the render all pull this file.
+
+/** ASS font metrics for ONE orientation (the render canvas is 1344x768
+ *  wide / 768x1344 vertical). */
+export interface CaptionStyleVariant {
+  /** ASS FontSize (px at the render canvas). */
+  face: number;
+  bold: 0 | 1;
+  /** Outline (px). BorderStyle 3 reuses it as the box padding. */
+  outline: number;
+  shadow: number;
+  /** ASS colour &HAABBGGRR (alpha 00 = opaque): stroke / box face. */
+  outlineColour: string;
+  /** Bottom (Alignment 2) or top (Alignment 8) margin in px. */
+  marginV: number;
+}
+
+export interface CaptionStyle {
+  id: string;
+  label: string;
+  note: string;
+  /** ASS colour &HAABBGGRR (alpha 00 = opaque): the caption fill. */
+  primary: string;
+  /** 1 = outline + shadow, 3 = opaque box behind the text. */
+  borderStyle: 1 | 3;
+  /** 2 = bottom-center, 8 = top-center. */
+  alignment: 2 | 8;
+  /** Preview-only: render the text uppercase. */
+  uppercase?: boolean;
+  wide: CaptionStyleVariant;
+  vertical: CaptionStyleVariant;
+}
+
+const ASS_FONT = "FontName=Noto Sans SC";
+
+/** The catalog. "classic" is the pre-S6 look pinned byte-for-byte (pinned
+ *  by the S6 probe); everything else is a creator-facing variation. */
+export const CAPTION_STYLES: readonly CaptionStyle[] = [
+  {
+    id: "classic",
+    label: "Classic",
+    note: "The studio default — white face, near-black outline, bottom-center",
+    primary: "&H00FFFFFF",
+    borderStyle: 1,
+    alignment: 2,
+    wide: { face: 22, bold: 0, outline: 2.4, shadow: 1.1, outlineColour: "&H20000000", marginV: 36 },
+    vertical: { face: 19, bold: 1, outline: 2.2, shadow: 0, outlineColour: "&H8C000000", marginV: 190 },
+  },
+  {
+    id: "bold-pop",
+    label: "Bold pop",
+    note: "Bigger bold face with a heavy outline — hooks and hard reads",
+    primary: "&H00FFFFFF",
+    borderStyle: 1,
+    alignment: 2,
+    wide: { face: 27, bold: 1, outline: 3.4, shadow: 1.5, outlineColour: "&H0A000000", marginV: 40 },
+    vertical: { face: 24, bold: 1, outline: 3.0, shadow: 1.2, outlineColour: "&H0A000000", marginV: 200 },
+  },
+  {
+    id: "clean-box",
+    label: "Clean box",
+    note: "Minimal face on a semi-opaque box — documentaries, interviews",
+    primary: "&H00FFFFFF",
+    borderStyle: 3,
+    alignment: 2,
+    wide: { face: 20, bold: 1, outline: 9, shadow: 0, outlineColour: "&H8C000000", marginV: 34 },
+    vertical: { face: 18, bold: 1, outline: 8, shadow: 0, outlineColour: "&H8C000000", marginV: 184 },
+  },
+  {
+    id: "top-line",
+    label: "Top line",
+    note: "Top-center banner — keeps the lower third clear for footage UI",
+    primary: "&H00FFFFFF",
+    borderStyle: 1,
+    alignment: 8,
+    wide: { face: 20, bold: 0, outline: 2.2, shadow: 0.8, outlineColour: "&H32000000", marginV: 40 },
+    vertical: { face: 18, bold: 1, outline: 2.0, shadow: 0.6, outlineColour: "&H32000000", marginV: 44 },
+  },
+  {
+    id: "amber-warm",
+    label: "Amber warm",
+    note: "Warm amber fill — lifestyle, food and golden-hour looks",
+    primary: "&H0043C8FF",
+    borderStyle: 1,
+    alignment: 2,
+    wide: { face: 23, bold: 1, outline: 2.8, shadow: 1.2, outlineColour: "&H14000000", marginV: 38 },
+    vertical: { face: 20, bold: 1, outline: 2.4, shadow: 1.0, outlineColour: "&H14000000", marginV: 196 },
+  },
+] as const;
+
+/** The catalog entry for a persisted pick (null = unknown / junk). */
+export function captionStyle(id: unknown): CaptionStyle | null {
+  if (typeof id !== "string") return null;
+  return CAPTION_STYLES.find((s) => s.id === id) ?? null;
+}
+
+/**
+ * S6 — the doc boundary: accept anything a persisted doc may carry and
+ * return a clean catalog id or null (null + "classic" + "none" + junk all
+ * read as "no pick" — the classic look). Case and whitespace normalized.
+ */
+export function sanitizeCaptionStyle(id: unknown): string | null {
+  if (typeof id !== "string") return null;
+  const v = id.trim().toLowerCase();
+  if (!v || v === "none" || v === "off" || v === "classic") return null;
+  return captionStyle(v) ? v : null;
+}
+
+/** The doc's pick, already sanitized (the render + preview read this). */
+export function docCaptionStyle(
+  prefs: RenderPrefs | null | undefined
+): string | null {
+  return sanitizeCaptionStyle(prefs?.captionStyle);
+}
+
+/**
+ * The ONE ASS force_style mapping the render burns. Unknown/junk picks fall
+ * back to classic, so the string is NEVER null and NEVER hostile — a hostile
+ * doc can only ever select a catalog look. `classic` wide reproduces the
+ * pre-S6 constant exactly (Bold is omitted when 0 — ASS defaults it).
+ */
+export function captionAssStyle(id: unknown, vertical: boolean): string {
+  const s = captionStyle(id) ?? CAPTION_STYLES[0];
+  const v = vertical ? s.vertical : s.wide;
+  return [
+    ASS_FONT,
+    `FontSize=${v.face}`,
+    ...(v.bold ? [`Bold=${v.bold}`] : []),
+    `PrimaryColour=${s.primary}`,
+    `OutlineColour=${v.outlineColour}`,
+    `BorderStyle=${s.borderStyle}`,
+    `Outline=${v.outline}`,
+    `Shadow=${v.shadow}`,
+    `Alignment=${s.alignment}`,
+    `MarginV=${v.marginV}`,
+  ].join(",");
+}
+
+/** ASS &HAABBGGRR → css color for the preview canvas (alpha inverted to
+ *  opacity; opaque-only). Junk in, black out — the preview never crashes. */
+function assColourToCss(hex: string): string {
+  const m = /^&H([0-9A-Fa-f]{2})([0-9A-Fa-f]{6})$/.exec(hex.trim());
+  if (!m) return "#000000";
+  const alpha = parseInt(m[1], 16) / 255; // 00 = opaque → 0 transparency
+  const b = parseInt(m[2].slice(0, 2), 16);
+  const g = parseInt(m[2].slice(2, 4), 16);
+  const r = parseInt(m[2].slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${(1 - alpha).toFixed(3)})`;
+}
+
+/** Preview geometry for one pick — mirrors the render's ASS params through
+ *  the canvas grammar (face sizes stay RELATIVE to the classic look, whose
+ *  draw the preview already had right). Pure, unit-pinned. */
+export interface CaptionPreview {
+  /** Face size relative to the classic look (1 = the pre-S6 preview draw). */
+  faceMul: number;
+  /** css font weight. */
+  weight: number;
+  /** Caption fill (css). */
+  fill: string;
+  /** Stroke color (css) — unused when `box` is set. */
+  stroke: string;
+  /** Stroke width relative to the face size (classic ≈ 0.18). */
+  strokeRatio: number;
+  /** Box fill behind the text (BorderStyle 3), else null. */
+  box: string | null;
+  align: "bottom" | "top";
+  /** Margin fraction of frame height (bottom for Alignment 2, top for 8). */
+  marginRatio: number;
+  uppercase: boolean;
+}
+
+export function captionPreview(id: unknown, vertical: boolean): CaptionPreview {
+  const s = captionStyle(id) ?? CAPTION_STYLES[0];
+  const classic = CAPTION_STYLES[0];
+  // The classic look PINS the preview draw that existed before S6 — a user
+  // without a pick sees a pixel-identical canvas. Other styles derive.
+  if (s.id === "classic") {
+    return {
+      faceMul: 1,
+      weight: 600,
+      fill: "#ffffff",
+      stroke: "rgba(0,0,0,0.72)",
+      strokeRatio: 0.18,
+      box: null,
+      align: "bottom",
+      marginRatio: vertical ? 0.075 : 0.032,
+      uppercase: false,
+    };
+  }
+  const v = vertical ? s.vertical : s.wide;
+  const cv = vertical ? classic.vertical : classic.wide;
+  return {
+    faceMul: v.face / cv.face,
+    weight: v.bold ? 800 : 600,
+    fill: assColourToCss(s.primary),
+    stroke: assColourToCss(v.outlineColour),
+    strokeRatio: Math.max(0.14, v.outline / v.face),
+    box: s.borderStyle === 3 ? assColourToCss(v.outlineColour) : null,
+    align: s.alignment === 8 ? "top" : "bottom",
+    // Scale the ASS margin against the classic margin (clamped to safe zones).
+    marginRatio: Math.min(
+      0.16,
+      Math.max(0.02, (v.marginV / cv.marginV) * (vertical ? 0.075 : 0.032))
+    ),
+    uppercase: s.uppercase === true,
+  };
 }

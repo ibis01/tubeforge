@@ -509,7 +509,7 @@ export interface AssembledTimelineDTO {
   totalDurationSec: number;
   generatedAt: string;
   /** S3 — render preferences riding the doc root (quality tier). */
-  renderPrefs?: { quality: "draft" | "standard" | "high" } | null;
+  renderPrefs?: { quality: "draft" | "standard" | "high"; captionStyle?: string | null } | null;
 }
 
 export type QcStatusDTO = "pass" | "fail" | "unmeasured";

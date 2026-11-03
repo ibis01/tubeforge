@@ -192,6 +192,9 @@ export const assembleSaveSchema = z.object({
   renderPrefs: z
     .object({
       quality: z.enum(["draft", "standard", "high"]),
+      /** S6 — the caption-style pick (sanitized against the catalog at the
+       *  parse choke point; junk never reaches the render). */
+      captionStyle: z.string().max(40).optional(),
     })
     .optional(),
 });

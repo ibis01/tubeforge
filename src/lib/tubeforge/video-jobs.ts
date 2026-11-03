@@ -512,6 +512,10 @@ export async function runRenderJob(
   // timeline doc's renderPrefs (the export-preset card saves there) is the
   // fallback; standard otherwise.
   let docQuality: ExportQuality | undefined;
+  // S6 — the doc's caption-style pick (the studio's caption look). Resolved
+  // with the SAME aligned-doc condition as the durations: a doc that is not
+  // trusted for timing is not trusted for looks either.
+  let docCaptionStyle: string | null = null;
   if (Array.isArray(opts.sceneDurationsSec)) {
     sceneDurationsSec = opts.sceneDurationsSec;
   } else {
@@ -526,6 +530,7 @@ export async function runRenderJob(
       }
       docScenes = docSceneSettings(timeline, scenes.length);
       docQuality = timeline.renderPrefs?.quality ?? undefined;
+      docCaptionStyle = timeline.renderPrefs?.captionStyle ?? null;
     }
   }
 
@@ -578,6 +583,7 @@ export async function runRenderJob(
       aspectRatio: aspect,
       frameRate,
       quality: opts.quality ?? docQuality,
+      captionStyleId: docCaptionStyle,
       sceneDurationsSec,
       docScenes,
       motion: {

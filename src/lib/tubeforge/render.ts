@@ -67,6 +67,7 @@ import {
   chromaFilterChain,
   pipOverlayFilter,
   QUALITY_ENCODING,
+  captionAssStyle,
   type SceneGrade,
   type SceneTitle,
   type SceneCameraKeys,
@@ -98,18 +99,10 @@ const FPS = 30;
 export const LEAD_SEC = 0.35; // silence before narration starts in each scene
 export const TAIL_SEC = 0.85; // breathing room after narration ends
 export const MIN_SEG_SEC = 2.0;
-// Readability first: white text on a near-opaque black outline + soft drop
-// shadow keeps captions legible over both bright skies and dark interiors.
-// Face size tuned for PHONE playback (the 2.7-min review's "captions are
-// relatively small" note): measured on a 1080p test frame, FontSize 22
-// renders ~58 px of glyph height ≈ 5.4% of frame height — the Netflix-style
-// comfort zone — while the 138 px bottom margin stays far inside the
-// action-safe edge.
-const SUBTITLE_STYLE =
-  "FontName=Noto Sans SC,FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H20000000,BorderStyle=1,Outline=2.4,Shadow=1.1,Alignment=2,MarginV=36";
-/** Vertical-frame caption style (slides mode opt-in) — inside the Shorts safe zone. */
-const SUBTITLE_STYLE_VERTICAL =
-  "FontName=Noto Sans SC,FontSize=19,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H8C000000,BorderStyle=1,Outline=2.2,Shadow=0,Alignment=2,MarginV=190";
+// S6 — the caption looks moved to studio-doc.ts's CAPTION_STYLES catalog
+// (one vocabulary for the studio pick, the render burn and the preview).
+// captionAssStyle(null, false/true) reproduces the pre-S6 constants
+// byte-for-byte; a hostile pick can only ever select a catalog look.
 // The classic finishing grade moved to studio-doc.ts's gradeFilter (null →
 // "eq=contrast=1.05:saturation=1.08,vignette=PI/5") — ONE function owns the
 // default so the doc override and the fallback can never drift.
@@ -182,6 +175,10 @@ export interface RenderOptions {
    *  default standard). Rides the segments, the blend masters and the
    *  subtitle-burn pass. */
   quality?: ExportQuality;
+  /** S6 — the timeline doc's caption-style pick (a CAPTION_STYLES id, already
+   *  sanitized by the doc parse). null/absent = the classic look. Slides
+   *  mode burns the pick's vertical variant. */
+  captionStyleId?: string | null;
   onProgress?: (current: number, total: number, label: string) => void;
 }
 
@@ -1124,7 +1121,7 @@ async function finalize(opts: {
   const stageC = burn
     ? ([
         "-filter_complex",
-        `[0:v]subtitles=f='${opts.srtPath}':force_style='${opts.subtitleStyle ?? SUBTITLE_STYLE}'[v];[1:a]${normalizationFilter(measured)}[a]`,
+        `[0:v]subtitles=f='${opts.srtPath}':force_style='${opts.subtitleStyle ?? captionAssStyle(null, false)}'[v];[1:a]${normalizationFilter(measured)}[a]`,
         "-map", "[v]", "-map", "[a]",
         "-c:v", "libx264", "-preset", q.preset, "-crf", q.crf, "-pix_fmt", "yuv420p",
       ] as string[])
@@ -1580,7 +1577,10 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       srtPath,
       scenes,
       segments,
-      subtitleStyle: opts.mode === "slides" ? SUBTITLE_STYLE_VERTICAL : undefined,
+      // S6 — the doc's caption-style pick, mapped to ASS for this
+      // orientation (slides mode forces the vertical variant of the SAME
+      // pick; no pick = the classic look, byte-identical to pre-S6).
+      subtitleStyle: captionAssStyle(opts.captionStyleId, opts.mode === "slides"),
       musicAutomation,
       quality: QUALITY_ENCODING[opts.quality ?? "standard"],
     });

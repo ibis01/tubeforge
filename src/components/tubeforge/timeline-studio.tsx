@@ -59,6 +59,11 @@
 //     (whoosh/boom/riser/sting) and ambience bed (room/city/rain/wind/waves/
 //     crowd/nature) — the doc's kinds outrank the plan's at the render; the
 //     audition button plays the exact synthesized wav the render will mix.
+//   • CAPTION STYLE → S6: the studio picks the look the render burns when
+//     captions are on (classic/bold pop/clean box/top line/amber warm) —
+//     doc-level (the burn is one global pass), mapped to the SAME ASS params
+//     the render uses; the preview mirrors the geometry. Junk can only ever
+//     select a catalog look.
 //
 // The preview is an approximation by design: the render (ffmpeg) stays the
 // source of truth. Everything the preview needs is deterministic and lives
@@ -102,6 +107,7 @@ import {
   Square,
   Subtitles,
   Trash2,
+  Type,
   Undo2,
   Volume2,
   VolumeX,
@@ -149,6 +155,9 @@ import {
   sanitizeChroma,
   sanitizePip,
   CHROMA_PRESETS,
+  CAPTION_STYLES,
+  captionPreview,
+  sanitizeCaptionStyle,
   type SceneGrade,
   type SceneTitle,
   type SceneCameraKeys,
@@ -269,6 +278,15 @@ function normalizeTimelineDoc(t: AssembledTimelineDTO | null): AssembledTimeline
   return {
     ...t,
     totalDurationSec: num(t.totalDurationSec, 0, 0, Number.MAX_SAFE_INTEGER),
+    // S6 — the caption pick re-sanitizes at the load choke point (the same
+    // studio-doc function the render side reads, so a hostile persisted
+    // pick can only ever be a catalog look or nothing).
+    renderPrefs: t.renderPrefs
+      ? {
+          quality: t.renderPrefs.quality ?? "standard",
+          captionStyle: sanitizeCaptionStyle(t.renderPrefs.captionStyle),
+        }
+      : t.renderPrefs,
     scenes: t.scenes.map((s) => {
       const a = s.audio;
       return {
@@ -688,6 +706,21 @@ export function TimelineStudio({
           level: kind ? (track.level > 0 ? track.level : (choice?.defaultLevel ?? 0.35)) : 0,
         },
       };
+      applyEdit(next);
+    },
+    [timeline, applyEdit]
+  );
+
+  /** S6 — the caption look: one doc-level pick riding renderPrefs (the burn
+   *  is one global subtitles pass, so the style is per-VIDEO, not per-scene).
+   *  null = the classic look. One pick = one undo step; the autosave
+   *  persists it with every other doc field. */
+  const setCaptionStyle = useCallback(
+    (id: string | null) => {
+      if (!timeline) return;
+      const next = cloneTimeline(timeline);
+      const prefs = next.renderPrefs ?? { quality: "standard" as const };
+      next.renderPrefs = { ...prefs, captionStyle: id };
       applyEdit(next);
     },
     [timeline, applyEdit]
@@ -1411,16 +1444,19 @@ export function TimelineStudio({
       ctx.globalAlpha = 1;
     }
 
-    // Burned captions — mirrors the render's subtitle geometry (phone-first
-    // face size, high-contrast outline, inside the safe zone).
+    // Burned captions — S6: the picked caption style's geometry, mirrored
+    // from the render's ASS params (face sizes stay RELATIVE to the classic
+    // look the preview always drew; box/top/uppercase variants included).
     if (f.caption) {
       const vertical = settings.aspectRatio !== "16:9";
-      const fs = Math.max(11, Math.round(H * (vertical ? 0.042 : 0.055)));
-      ctx.font = `600 ${fs}px "Noto Sans SC", system-ui, sans-serif`;
+      const cp = captionPreview(timeline?.renderPrefs?.captionStyle, vertical);
+      const raw = cp.uppercase ? f.caption.toUpperCase() : f.caption;
+      const fs = Math.max(11, Math.round(H * (vertical ? 0.042 : 0.055) * cp.faceMul));
+      ctx.font = `${cp.weight} ${fs}px "Noto Sans SC", system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "alphabetic";
       const maxW = W * 0.86;
-      const words = f.caption.split(/\s+/);
+      const words = raw.split(/\s+/);
       const lines: string[] = [];
       let line = "";
       for (const w of words) {
@@ -1435,14 +1471,24 @@ export function TimelineStudio({
       }
       if (line && lines.length < 3) lines.push(line);
       const lh = fs * 1.25;
-      const bottom = H - Math.round(H * (vertical ? 0.075 : 0.032));
+      const shown = Math.min(3, lines.length);
+      const margin = Math.round(H * cp.marginRatio);
       ctx.lineJoin = "round";
-      for (let i = 0; i < Math.min(3, lines.length); i++) {
-        const y = bottom - (Math.min(3, lines.length) - 1 - i) * lh;
-        ctx.lineWidth = Math.max(2, fs * 0.18);
-        ctx.strokeStyle = "rgba(0,0,0,0.72)";
-        ctx.strokeText(lines[i], W / 2, y);
-        ctx.fillStyle = "#ffffff";
+      for (let i = 0; i < shown; i++) {
+        const y =
+          cp.align === "top"
+            ? margin + fs + i * lh
+            : H - margin - (shown - 1 - i) * lh;
+        if (cp.box) {
+          const wpx = ctx.measureText(lines[i]).width;
+          ctx.fillStyle = cp.box;
+          ctx.fillRect(W / 2 - wpx / 2 - fs * 0.45, y - fs, wpx + fs * 0.9, fs * 1.38);
+        } else {
+          ctx.lineWidth = Math.max(2, fs * cp.strokeRatio);
+          ctx.strokeStyle = cp.stroke;
+          ctx.strokeText(lines[i], W / 2, y);
+        }
+        ctx.fillStyle = cp.fill;
         ctx.fillText(lines[i], W / 2, y);
       }
     }
@@ -1625,6 +1671,32 @@ export function TimelineStudio({
           ) : null}
         </div>
         <div className="ml-auto flex items-center gap-1">
+          {/* S6 — the caption look: doc-level, burned by the render whenever
+              captions are on; the preview mirrors it. Junk can only ever
+              select a catalog look (sanitizeCaptionStyle at both ends). */}
+          <div className="flex items-center gap-1.5 mr-1">
+            <Type className="h-3.5 w-3.5 text-muted-foreground" />
+            <Select
+              value={timeline?.renderPrefs?.captionStyle ?? "classic"}
+              onValueChange={(v) => setCaptionStyle(v === "classic" ? null : v)}
+              disabled={saving || loading || renderInFlight}
+            >
+              <SelectTrigger
+                className="h-7 w-[126px] text-[11px]"
+                title="The caption look the render burns when captions are on — the preview mirrors it"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CAPTION_STYLES.map((s) => (
+                  <SelectItem key={s.id} value={s.id} className="text-[11px]">
+                    {s.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <span className="h-5 w-px bg-white/10" aria-hidden />
           <Button size="sm" variant="ghost" onClick={undo} disabled={!canUndo || saving || loading} title="Undo (⌘Z)">
             <Undo2 className="h-3.5 w-3.5" />
           </Button>
