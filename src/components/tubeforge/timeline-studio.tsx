@@ -46,7 +46,10 @@
 //   • per-scene TITLE overlay → S2 wave 2: drawtext on the segment, animated.
 //   • per-scene CAMERA KEYS → S2 wave 2: a two-key zoompan plan that
 //     outranks the Director's auto camera for that scene (Ken Burns only).
-//   • per-scene SPEED + voice fades → S2 wave 2 (wired in the voice/pace wave).
+//   • per-scene SPEED → S2 wave 2: narration atempo'd at render (no words
+//     lost), footage setpts'd, the duration floor shrinks by the rate.
+//   • per-scene voice fades → S2 wave 2: afade on the narration WAV, anchored
+//     to its measured (compressed) end; drag the voice clip's edge handles.
 //
 // The preview is an approximation by design: the render (ffmpeg) stays the
 // source of truth. Everything the preview needs is deterministic and lives
@@ -545,6 +548,29 @@ export function TimelineStudio({
     [timeline, applyEdit]
   );
 
+  /** S2 wave 2 — narration fades (drag gestures on the voice clip's edges;
+   *  one drag = one undo step via the mode the row signals). */
+  const setVoiceFade = useCallback(
+    (index: number, which: "in" | "out", sec: number, mode: "push" | "replace") => {
+      if (!timeline) return;
+      const next = cloneTimeline(timeline);
+      const i = next.scenes.findIndex((s) => s.index === index);
+      if (i === -1) return;
+      next.scenes[i] = {
+        ...next.scenes[i],
+        audio: {
+          ...next.scenes[i].audio,
+          voice: {
+            ...next.scenes[i].audio.voice,
+            [which === "in" ? "fadeInSec" : "fadeOutSec"]: sec,
+          },
+        },
+      };
+      applyEdit(next, mode);
+    },
+    [timeline, applyEdit]
+  );
+
   const setAudioLevel = useCallback(
     (index: number, track: "voice" | "music" | "sfx" | "ambient", level: number) => {
       if (!timeline) return;
@@ -665,6 +691,9 @@ export function TimelineStudio({
   // ---------- preview audio pool (per-scene voiceover WAVs) ----------
 
   const voPool = useRef(new Map<number, HTMLAudioElement>());
+  /** Bumped by clip ops (which re-voice/re-copy WAVs on disk) so the
+   *  waveform cache refetches — the pool reset alone covers playback. */
+  const [wavVersion, setWavVersion] = useState(0);
 
   // Sync the active scene's narration to the playhead. One Audio element per
   // scene, created lazily on first play; a 404 marks the scene silent for the
@@ -697,7 +726,21 @@ export function TimelineStudio({
       pool.set(scene.index, el);
     }
     if (brokenVo.has(scene.index)) return;
-    el.volume = Math.min(1, Math.max(0, level));
+    // S2 wave 2 — the doc's playback rate rides the preview element too.
+    el.playbackRate = Math.min(2, Math.max(0.5, scene.speed ?? 1));
+    // Fade-aware gain: the render fades the WAV itself (in from 0, out
+    // before its measured end, compressed by any speed) — mirror the ramps
+    // approximately from the doc's fields + the server's measured lengths.
+    let gain = Math.min(1, Math.max(0, level));
+    const t = el.currentTime; // wav-local seconds
+    const fin = scene.audio.voice.fadeInSec ?? 0;
+    const fout = scene.audio.voice.fadeOutSec ?? 0;
+    const wavLen = wavDurations[scene.index];
+    const compressed = wavLen && scene.speed ? wavLen / scene.speed : wavLen;
+    if (fin > 0.02 && t < fin) gain *= Math.max(0, t / fin);
+    if (fout > 0.02 && compressed && t > compressed - fout)
+      gain *= Math.max(0, (compressed - t) / fout);
+    el.volume = Math.min(1, Math.max(0, gain));
     const want = f.localSec;
     if (Number.isFinite(want) && Math.abs(el.currentTime - want) > 0.25) {
       try {
@@ -708,7 +751,7 @@ export function TimelineStudio({
     }
     if (playing && el.paused) void el.play().catch(() => {});
     if (!playing && !el.paused) el.pause();
-  }, [playhead, playing, timeline, settings, videoId, brokenVo]);
+  }, [playhead, playing, timeline, settings, videoId, brokenVo, wavDurations]);
 
   // ---------- clip operations (server row edits: split / duplicate / delete) ----------
 
@@ -795,6 +838,7 @@ export function TimelineStudio({
         for (const el of voPool.current.values()) el.pause();
         voPool.current.clear();
         setBrokenVo(new Set());
+        setWavVersion((v) => v + 1); // the waveform cache refetches too
         if (data.newIndex != null) {
           setSelected(data.newIndex);
           const fresh = data.timeline.scenes.find((s) => s.index === data.newIndex);
@@ -1514,6 +1558,7 @@ export function TimelineStudio({
                 onGrade={(g) => patchScene(selectedScene.index, { grade: g }, { key: `grade:${selectedScene.index}` })}
                 onTitle={(t) => patchScene(selectedScene.index, { titleOverlay: t }, { key: `title:${selectedScene.index}` })}
                 onCamera={(c) => patchScene(selectedScene.index, { cameraKeys: c }, { key: `cam:${selectedScene.index}` })}
+                onSpeed={(v) => patchScene(selectedScene.index, { speed: v }, { key: `speed:${selectedScene.index}` })}
               />
             ) : (
               <div className="hidden lg:flex rounded-lg border border-dashed border-white/10 items-center justify-center p-6 text-center text-xs text-muted-foreground">
@@ -1551,12 +1596,15 @@ export function TimelineStudio({
                           scene.durationSec,
                           wavDurations[scene.index]
                         )}
+                        videoId={videoId}
+                        wavVersion={wavVersion}
                         onSelect={() => {
                           setSelected(scene.index);
                           setPlaying(false);
                           seek(scene.startSec + 0.001);
                         }}
                         onTrim={(dur, mode) => trimScene(scene.index, dur, mode)}
+                        onFade={(index, which, sec, mode) => setVoiceFade(index, which, sec, mode)}
                       />
                     ))}
                   </div>
@@ -1698,16 +1746,23 @@ interface SceneClipRowProps {
   /** Where the spoken read lives inside this window — the razor's legal
    *  cut range, shown as the bright band on the voice clip. */
   narration: SpeakableSpan | null;
+  videoId: string;
+  /** Bumped on every row-mutating clip op — the waveform cache refetches. */
+  wavVersion: number;
   onSelect: () => void;
   onTrim: (durationSec: number, mode: "push" | "replace") => void;
+  /** S2 wave 2 — narration fade handles on the voice clip's edges. */
+  onFade: (index: number, which: "in" | "out", sec: number, mode: "push" | "replace") => void;
 }
 
-function SceneClipRow({ scene, meta, density, selected, disabled, narration, onSelect, onTrim }: SceneClipRowProps) {
+function SceneClipRow({ scene, meta, density, selected, disabled, narration, videoId, wavVersion, onSelect, onTrim, onFade }: SceneClipRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: String(scene.index),
   });
   const [trimming, setTrimming] = useState(false);
   const trimGesture = useRef(false); // first move pushes history; the rest replace
+  const [fadeWhich, setFadeWhich] = useState<"in" | "out" | null>(null);
+  const fadeGesture = useRef(false);
 
   const startTrim = (e: React.PointerEvent) => {
     if (disabled) return;
@@ -1733,6 +1788,31 @@ function SceneClipRow({ scene, meta, density, selected, disabled, narration, onS
   const endTrim = () => {
     setTrimming(false);
     trimGesture.current = false;
+  };
+
+  // S2 wave 2 — narration fade handles: drag the clip's edge triangles to
+  // shape the read's head/tail (the render afades the WAV at these seconds).
+  const startFade = (which: "in" | "out") => (e: React.PointerEvent) => {
+    if (disabled) return;
+    e.stopPropagation();
+    e.preventDefault();
+    setFadeWhich(which);
+    fadeGesture.current = false;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const moveFade = (which: "in" | "out") => (e: React.PointerEvent) => {
+    if (fadeWhich !== which || disabled) return;
+    const cur = (which === "in" ? scene.audio.voice.fadeInSec : scene.audio.voice.fadeOutSec) ?? 0;
+    const next = Math.min(3, Math.max(0, Math.round((cur + e.movementX / density) * 10) / 10));
+    if (next !== cur) {
+      const mode: "push" | "replace" = fadeGesture.current ? "replace" : "push";
+      fadeGesture.current = true;
+      onFade(scene.index, which, next, mode);
+    }
+  };
+  const endFade = () => {
+    setFadeWhich(null);
+    fadeGesture.current = false;
   };
 
   const style = {
@@ -1834,7 +1914,43 @@ function SceneClipRow({ scene, meta, density, selected, disabled, narration, onS
         ) : (
           <VolumeX className="h-2.5 w-2.5 shrink-0" />
         )}
-        <span className="truncate">{scene.audio.voice.enabled ? `vo ${Math.round(scene.audio.voice.level * 100)}%` : "muted"}</span>
+        <span className="truncate">
+          {scene.audio.voice.enabled ? `vo ${Math.round(scene.audio.voice.level * 100)}%` : "muted"}
+          {(scene.audio.voice.fadeInSec ?? 0) >= 0.1 || (scene.audio.voice.fadeOutSec ?? 0) >= 0.1
+            ? ` · fade ${((scene.audio.voice.fadeInSec ?? 0) || 0).toFixed(1)}/${((scene.audio.voice.fadeOutSec ?? 0) || 0).toFixed(1)}`
+            : ""}
+          {scene.speed ? ` · ${scene.speed.toFixed(2)}×` : ""}
+        </span>
+        {/* S2 wave 2 — the narration's real shape, drawn from the WAV. */}
+        <VoiceWaveform
+          videoId={videoId}
+          sceneIndex={scene.index}
+          version={wavVersion}
+          width={Math.max(10, w - 8)}
+          height={LANE_H_AUDIO - 8}
+          dim={!(scene.audio.voice.enabled && scene.audio.voice.level > 0)}
+        />
+        {/* fade ramps — the shaded wedges the handles control. */}
+        {(scene.audio.voice.fadeInSec ?? 0) >= 0.1 && (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute left-0 top-0 h-full"
+            style={{
+              width: (scene.audio.voice.fadeInSec ?? 0) * density,
+              background: "linear-gradient(90deg, rgba(2,6,23,0.85), rgba(2,6,23,0))",
+            }}
+          />
+        )}
+        {(scene.audio.voice.fadeOutSec ?? 0) >= 0.1 && (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute right-0 top-0 h-full"
+            style={{
+              width: (scene.audio.voice.fadeOutSec ?? 0) * density,
+              background: "linear-gradient(270deg, rgba(2,6,23,0.85), rgba(2,6,23,0))",
+            }}
+          />
+        )}
         {/* the spoken read — the razor's legal cut range. Lead silence and
             tail breathing room stay dim; the band is where words are. */}
         {narration && (
@@ -1847,6 +1963,35 @@ function SceneClipRow({ scene, meta, density, selected, disabled, narration, onS
             }}
           />
         )}
+        {/* fade handles — drag the clip's edges to shape the read's head/tail. */}
+        <button
+          type="button"
+          aria-label="Narration fade in — drag right to add"
+          title="Drag → fade the read in (0–3s)"
+          disabled={disabled}
+          onPointerDown={startFade("in")}
+          onPointerMove={moveFade("in")}
+          onPointerUp={endFade}
+          onPointerCancel={endFade}
+          className={clsx(
+            "absolute left-0 top-0 z-10 h-full w-2 cursor-ew-resize touch-none",
+            fadeWhich === "in" ? "bg-sky-300/40" : "opacity-0 hover:opacity-100 bg-sky-300/20"
+          )}
+        />
+        <button
+          type="button"
+          aria-label="Narration fade out — drag left to add"
+          title="Drag ← fade the read out (0–3s)"
+          disabled={disabled}
+          onPointerDown={startFade("out")}
+          onPointerMove={moveFade("out")}
+          onPointerUp={endFade}
+          onPointerCancel={endFade}
+          className={clsx(
+            "absolute right-0 top-0 z-10 h-full w-2 cursor-ew-resize touch-none",
+            fadeWhich === "out" ? "bg-sky-300/40" : "opacity-0 hover:opacity-100 bg-sky-300/20"
+          )}
+        />
       </div>
       {/* caption clip */}
       {scene.caption?.text && (
@@ -1859,6 +2004,114 @@ function SceneClipRow({ scene, meta, density, selected, disabled, narration, onS
         </div>
       )}
     </div>
+  );
+}
+
+// ---------- voice waveform (S2 wave 2) ----------
+
+// Module-level cache: one decoded peak array per (video, scene, wavVersion).
+// Clip ops bump wavVersion — the new key refetches, the old entry ages out.
+const waveCache = new Map<string, Float32Array>();
+
+async function loadPeaks(videoId: string, index: number, version: number): Promise<Float32Array | null> {
+  const key = `${videoId}:${index}:${version}`;
+  const hit = waveCache.get(key);
+  if (hit) return hit;
+  try {
+    const res = await fetch(`/api/videos/${videoId}/vo/${index}`);
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    const AC: typeof AudioContext | undefined =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AC) return null;
+    const ctx = new AC();
+    const audio = await ctx.decodeAudioData(buf);
+    const ch = audio.getChannelData(0);
+    const buckets = 240;
+    const peaks = new Float32Array(buckets);
+    const per = Math.floor(ch.length / buckets) || 1;
+    for (let b = 0; b < buckets; b++) {
+      let max = 0;
+      const start = b * per;
+      // Stride sampling — 240 buckets over a multi-minute read is already
+      // 60× below the sample count; striding keeps the decode cheap.
+      for (let i = start; i < Math.min(start + per, ch.length); i += 16) {
+        const v = Math.abs(ch[i]);
+        if (v > max) max = v;
+      }
+      peaks[b] = max;
+    }
+    void ctx.close();
+    waveCache.set(key, peaks);
+    if (waveCache.size > 60) {
+      const oldest = waveCache.keys().next().value;
+      if (oldest) waveCache.delete(oldest);
+    }
+    return peaks;
+  } catch {
+    return null; // undecodable/missing — the lane stays text-only
+  }
+}
+
+/** The narration's real shape inside the voice clip — the honest version of
+ *  the bright band: where the words ARE, drawn from the WAV itself. */
+function VoiceWaveform({
+  videoId,
+  sceneIndex,
+  version,
+  width,
+  height,
+  dim,
+}: {
+  videoId: string;
+  sceneIndex: number;
+  version: number;
+  width: number;
+  height: number;
+  dim: boolean;
+}) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  const [peaks, setPeaks] = useState<Float32Array | null>(
+    () => waveCache.get(`${videoId}:${sceneIndex}:${version}`) ?? null
+  );
+  useEffect(() => {
+    let alive = true;
+    void loadPeaks(videoId, sceneIndex, version).then((p) => {
+      if (alive) setPeaks(p);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [videoId, sceneIndex, version]);
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas || !peaks || width < 8) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const W = Math.round(width * dpr);
+    const H = Math.round(height * dpr);
+    if (canvas.width !== W || canvas.height !== H) {
+      canvas.width = W;
+      canvas.height = H;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = dim ? "rgba(125,211,252,0.25)" : "rgba(125,211,252,0.7)";
+    const n = peaks.length;
+    const bw = width / n;
+    for (let i = 0; i < n; i++) {
+      const h = Math.max(1, peaks[i] * (height - 2));
+      ctx.fillRect(i * bw, (height - h) / 2, Math.max(bw - 0.5, 0.75), h);
+    }
+  }, [peaks, width, height, dim]);
+  return (
+    <canvas
+      ref={ref}
+      aria-hidden
+      className="pointer-events-none absolute inset-x-0 bottom-0"
+      style={{ width, height: height }}
+    />
   );
 }
 
@@ -1877,6 +2130,7 @@ interface InspectorProps {
   onGrade: (g: SceneGrade | null) => void;
   onTitle: (t: SceneTitle | null) => void;
   onCamera: (c: SceneCameraKeys | null) => void;
+  onSpeed: (v: number | null) => void;
 }
 
 const RENDER_HONORS = (
@@ -1889,7 +2143,7 @@ const RENDER_HONORS = (
   </Badge>
 );
 
-function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCaption, onAudio, onSeekScene, onGrade, onTitle, onCamera }: InspectorProps) {
+function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCaption, onAudio, onSeekScene, onGrade, onTitle, onCamera, onSpeed }: InspectorProps) {
   const shot = scene.shot;
   const grade = scene.grade ?? null;
   const ti = scene.titleOverlay ?? null;
@@ -2209,6 +2463,34 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
         </div>
         <p className="text-[10px] leading-snug text-muted-foreground">
           Two keyframes, start → end framing with easing — overrides the Director's auto camera for this AI-art scene.
+        </p>
+      </section>
+
+      {/* speed — S2 wave 2 */}
+      <section className="space-y-1.5">
+        <header className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+          <Clock className="h-3 w-3" /> Speed {RENDER_HONORS}
+        </header>
+        <div className="flex items-center gap-2">
+          <Slider
+            className="h-1.5 flex-1"
+            value={[Math.round((scene.speed ?? 1) * 100)]}
+            min={50}
+            max={200}
+            step={5}
+            disabled={disabled}
+            onValueChange={(v) => onSpeed((v[0] ?? 100) / 100)}
+          />
+          <span className="w-10 text-right font-mono text-[10px] text-muted-foreground">
+            {(scene.speed ?? 1).toFixed(2)}×
+          </span>
+          <Button size="sm" variant="ghost" disabled={disabled || !scene.speed} onClick={() => onSpeed(null)} className="h-7 px-2 text-xs">
+            1×
+          </Button>
+        </div>
+        <p className="text-[10px] leading-snug text-muted-foreground">
+          The narration is time-stretched (no words lost) and footage plays at the rate;
+          the scene's floor shrinks to match a faster read. AI-art stills pace by their read.
         </p>
       </section>
 

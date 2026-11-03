@@ -449,6 +449,10 @@ async function buildSegment(opts: {
   docTitle?: SceneTitle | null;
   docCamera?: SceneCameraKeys | null;
   docSpeed?: number | null;
+  /** S2 wave 2 — narration fades (sanitized) + the measured WAV length the
+   *  fade-out anchors to. */
+  docFades?: { inSec: number; outSec: number } | null;
+  wavDur?: number;
   /** M2: the approved Director shot list for this scene — when present, the
    * scene renders through the multi-image shot graph instead of the single-
    * image Smart Motion graph (docs/director-m1-m2-spec.md §1.7). */
@@ -496,7 +500,16 @@ async function buildSegment(opts: {
     opts.ambiencePath ?? null,
     leadMs,
     dur,
-    opts.docLevels ?? null
+    opts.docLevels ?? null,
+    // S2 wave 2 — narration pace: the doc's playback rate + voice fades,
+    // anchored to the measured WAV length (probed once per render).
+    opts.docSpeed || opts.docFades
+      ? {
+          speed: speed,
+          wavDur: opts.wavDur ?? 0,
+          fades: opts.docFades ?? null,
+        }
+      : undefined
   );
 
   const common = [
@@ -680,7 +693,18 @@ async function sceneAudio(
   ambiencePath: string | null,
   leadMs: number,
   totalSec: number,
-  levels?: SceneAudioLevels | null
+  levels?: SceneAudioLevels | null,
+  pace?: {
+    /** S2 wave 2 — per-scene playback rate (0.5..2, null = normal). Applied
+     *  to the narration as atempo BEFORE the fades (a compressed read ends
+     *  earlier; the fade-out must chase the compressed end). */
+    speed: number | null;
+    /** The scene WAV's measured length — the fade-out anchors to the
+     *  narration's real end (compressed), never the padded window. */
+    wavDur: number;
+    /** Narration fade in/out (seconds), sanitized by studio-doc. */
+    fades: { inSec: number; outSec: number } | null;
+  }
 ): Promise<{ inputs: string[]; graph: string }> {
   const lv = levels
     ? {
@@ -690,7 +714,22 @@ async function sceneAudio(
       }
     : SCENE_AUDIO_DEFAULTS;
   const voiceGain = Math.abs(lv.voice - 1) < 0.001 ? "" : `,volume=${lv.voice.toFixed(3)}`;
-  const voice = `[1:a]adelay=${leadMs}:all=1,apad=whole_dur=${totalSec.toFixed(3)}${voiceGain}[voice]`;
+  // S2 wave 2 — pace the narration: atempo compresses/stretches the read
+  // (pitch-preserving, no words lost), afade shapes its head/tail. The fade
+  // out anchors to the COMPRESSED end (wavDur/speed) so a sped-up read fades
+  // where it actually stops, not where the original would have.
+  let voiceHead = "[1:a]";
+  if (pace?.speed) voiceHead += `atempo=${pace.speed.toFixed(4)},`;
+  if (pace?.fades) {
+    const { inSec, outSec } = pace.fades;
+    const compressed = pace.wavDur / (pace.speed ?? 1);
+    if (inSec >= 0.02) voiceHead += `afade=t=in:st=0:d=${Math.min(inSec, compressed).toFixed(3)},`;
+    if (outSec >= 0.02) {
+      const st = Math.max(0, compressed - outSec).toFixed(3);
+      voiceHead += `afade=t=out:st=${st}:d=${outSec.toFixed(3)},`;
+    }
+  }
+  const voice = `${voiceHead}adelay=${leadMs}:all=1,apad=whole_dur=${totalSec.toFixed(3)}${voiceGain}[voice]`;
   // SFX lands 40 ms after the cut so the impact sits with the first frame,
   // not in the file's leading edge; the doc's per-scene level is the mix
   // weight (0.35 classic default; the assembly seeds boom=0.55, riser=0.4,
@@ -1121,12 +1160,19 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     // The floor keeps narration + lead-in + a slim 0.3 s tail; the full
     // 0.85 s breathing tail may be trimmed by an editor.
     const timelineDurations = opts.sceneDurationsSec ?? [];
+    const docSpeedOf = (i: number) => {
+      const s = docScenes?.[i]?.speed;
+      return typeof s === "number" && s >= 0.5 && s <= 2 && Math.abs(s - 1) > 0.02 ? s : 1;
+    };
     const durations = wavDurations.map((d, i) => {
       const t = timelineDurations[i];
       if (typeof t !== "number" || !Number.isFinite(t)) return d;
       if (t < MIN_SEG_SEC) return d;
       // Floor: the narration must always fit (wav minus most of its tail).
-      const narrationFloor = Math.max(d - TAIL_SEC + 0.3, MIN_SEG_SEC);
+      // S2 wave 2 — a doc playback rate COMPRESSES the read (atempo), so the
+      // floor shrinks by the same factor: a 2× scene may be half as long.
+      const sp = docSpeedOf(i);
+      const narrationFloor = Math.max((d - TAIL_SEC) / sp + LEAD_SEC + 0.3, MIN_SEG_SEC);
       // Cap at 3× the measured narration so a stale timeline can't silently
       // extend a scene to minutes of dead air.
       return Math.min(Math.max(t, narrationFloor), d * 3);
@@ -1328,6 +1374,9 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         docGrade: doc?.grade ?? null,
         docTitle: doc?.titleOverlay ?? null,
         docCamera: doc?.cameraKeys ?? null,
+        docSpeed: doc?.speed ?? null,
+        docFades: doc?.voiceFades ?? null,
+        wavDur: wavs[i],
         outPath: segPath,
         aspect: motionAspect,
         fps: motionFps,
