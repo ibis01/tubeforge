@@ -6,8 +6,10 @@
 // of recomputing inline (T-6.10 — a later task in this stage).
 //
 // The timeline is the user-editable preview of what the render will produce:
-//   * per-scene start/end times derived from the voiceover length (when
-//     measured) or the narration word count + TTS speed (estimate);
+//   * per-scene start/end times from the scene's MEASURED read length when
+//     the per-scene WAV exists (wavDurations — the exact segment the render
+//     will build: wav + lead + tail, MIN_SEG floor), falling back to the
+//     narration word count + TTS speed estimate for scenes not yet voiced;
 //   * per-scene transition in/out from the video override or the approved
 //     shot plan (so the user sees what the AI Director picked);
 //   * per-scene audio levels (voice / music / SFX / ambient) from the video
@@ -21,15 +23,18 @@
 //     row (scenes, shotList, music*) is. Saving a user-edited timeline
 //     writes the edited fields back to the row; the timeline column just
 //     caches the assembled form for the render job.
-//  2. Durations here are estimates the user can override in the Editing
-//     Studio. The render job re-times against the actual voiceover WAVs
-//     (it must — a user might re-record narration after assembling); the
-//     timeline's job is to give the editor a starting point.
+//  2. Estimated durations silently TRIM at render time (the render honors
+//     doc windows positionally — T-6.10): a scene whose real read runs
+//     longer than its word-count share would lose its last words without
+//     anyone editing anything. That is why measured WAV lengths win whenever
+//     they exist — the assembled doc starts honest, and the user's explicit
+//     trims (shorter windows) are the only cuts the render makes.
 
 import type { Scene } from "./types";
 import type { DirectorPlan } from "./director-plan";
 import { planSceneDuration, planTransitionIn } from "./director-plan";
 import { sanitizeTransition } from "./transitions";
+import { R_LEAD_SEC, R_TAIL_SEC, R_MIN_SEG_SEC } from "./preview-lanes";
 
 export type SceneSource = "ai" | "stock" | "slides";
 
@@ -137,6 +142,12 @@ export interface AssembleOptions {
   musicEnabled?: boolean | null;
   musicVolume?: number | null;
   musicDucking?: boolean | null;
+  /** Measured per-scene read lengths (sceneIndex → seconds) — the same map
+ *  the assemble GET returns from disk. When present for a scene, its window
+ *  is the render's exact segment (wav + lead + tail, MIN_SEG floor) instead
+ *  of a word-count estimate, so an assembled doc never silently trims a
+ *  long read. */
+  wavDurations?: Record<number, number> | null;
 }
 
 /** Build the preview timeline from scenes + the per-video/per-plan options. */
@@ -172,7 +183,14 @@ export function assembleTimeline(scenes: Scene[], opts: AssembleOptions = {}): A
     // measured voiceover (Battle Yamuk: 111 s plan vs 143 s narration)
     // otherwise ships a timeline that cuts words at render time.
     const planDuration = plan ? planSceneDuration(plan, scene.index) : 0;
-    const narrationSec = Math.max(0.5, durations[i] ?? 1.5);
+    // Measured read wins over the estimate (see design note 2 above): the
+    // render builds this scene's segment as wav + lead + tail (MIN_SEG
+    // floor) — mirror it exactly, the way clip-ops' sceneSegmentSec does.
+    const realWav = opts.wavDurations?.[scene.index] ?? null;
+    const narrationSec =
+      realWav && realWav > 0
+        ? Math.max(R_MIN_SEG_SEC, realWav + R_LEAD_SEC + R_TAIL_SEC)
+        : Math.max(0.5, durations[i] ?? 1.5);
     const durationSec = planDuration > 0 ? Math.max(planDuration, narrationSec) : narrationSec;
     const startSec = cursor;
     const endSec = cursor + durationSec;

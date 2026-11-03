@@ -110,7 +110,9 @@ import {
   resolveFrame,
   snapToBoundaries,
   seamBoundaries,
+  speakableSpan,
   type PreviewSettings,
+  type SpeakableSpan,
 } from "@/lib/tubeforge/preview-lanes";
 
 const HISTORY_CAP = 50;
@@ -139,6 +141,8 @@ interface ClipOpResponse {
   sceneOrder: number[];
   newIndex: number | null;
   activity: string;
+  /** Fresh per-scene read lengths after the op (a split re-voices). */
+  wavDurations?: Record<number, number>;
 }
 
 type ClipAction = "split" | "duplicate" | "delete";
@@ -257,6 +261,10 @@ export function TimelineStudio({
   const [brokenVo, setBrokenVo] = useState<Set<number>>(new Set());
   const [clipBusy, setClipBusy] = useState<ClipAction | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
+  /** Per-scene read lengths from the server (assemble GET/POST, clip ops) —
+   *  makes the razor's speakable-span guard exact instead of estimated.
+   *  Missing entries fall back to the doc-duration estimate. */
+  const [wavDurations, setWavDurations] = useState<Record<number, number>>({});
 
   const timeline = history.present;
   const canUndo = history.past.length > 0;
@@ -288,8 +296,12 @@ export function TimelineStudio({
     try {
       const res = await fetch(`/api/videos/${videoId}/assemble`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { timeline: AssembledTimelineDTO | null };
+      const data = (await res.json()) as {
+        timeline: AssembledTimelineDTO | null;
+        wavDurations?: Record<number, number>;
+      };
       setHistory({ past: [], present: normalizeTimelineDoc(data.timeline), future: [] });
+      setWavDurations(data.wavDurations ?? {});
       setDirty(false);
       setPlayhead(0);
       setPlaying(false);
@@ -321,8 +333,12 @@ export function TimelineStudio({
         const err = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(err.error ?? `HTTP ${res.status}`);
       }
-      const data = (await res.json()) as { timeline: AssembledTimelineDTO };
+      const data = (await res.json()) as {
+        timeline: AssembledTimelineDTO;
+        wavDurations?: Record<number, number>;
+      };
       setHistory({ past: [], present: normalizeTimelineDoc(data.timeline), future: [] });
+      setWavDurations(data.wavDurations ?? {});
       setDirty(false);
       setPlayhead(0);
       setPlaying(false);
@@ -693,6 +709,27 @@ export function TimelineStudio({
         });
         return;
       }
+      // The razor needs the playhead inside the SPOKEN READ, not just the
+      // clip: every scene window carries lead silence + tail breathing room
+      // the server refuses to cut. Mirror splitNarrationAt's window here so
+      // the refusal is local, precise and instant — the server's 400 stays
+      // the backstop when the estimate drifts (trimmed durations).
+      const span =
+        action === "split"
+          ? speakableSpan(target.startSec, target.durationSec, wavDurations[target.index])
+          : null;
+      if (action === "split" && (!span || playhead < span.startSec || playhead > span.endSec)) {
+        toast({
+          title: span ? "Park the playhead inside the narration" : "This scene is too short to split",
+          description: span
+            ? `The read runs ${formatTimecode(span.startSec, settings.frameRate)}–${formatTimecode(
+                span.endSec,
+                settings.frameRate
+              )} — the bright band on the voice clip. Lead-in and tail are padding; the razor needs words on both sides of the cut.`
+            : "The narration inside this scene is too short (or not synthesized yet) for both halves to carry words.",
+        });
+        return;
+      }
       setDeleteArmed(false);
       setClipBusy(action);
       try {
@@ -715,6 +752,7 @@ export function TimelineStudio({
         // A row mutation is not doc-undoable — history resets with the new doc.
         setHistory({ past: [], present: normalizeTimelineDoc(data.timeline), future: [] });
         setDirty(false);
+        if (data.wavDurations) setWavDurations(data.wavDurations);
         // The per-scene WAVs changed on disk (split re-voices; duplicate adds a
         // file) — drop every cached Audio so the pool re-fetches lazily.
         for (const el of voPool.current.values()) el.pause();
@@ -761,6 +799,8 @@ export function TimelineStudio({
       save,
       videoId,
       playhead,
+      wavDurations,
+      settings.frameRate,
       seek,
       bump,
       onSaved,
@@ -1388,6 +1428,11 @@ export function TimelineStudio({
                         density={density}
                         selected={selected === scene.index}
                         disabled={saving || loading || renderInFlight}
+                        narration={speakableSpan(
+                          scene.startSec,
+                          scene.durationSec,
+                          wavDurations[scene.index]
+                        )}
                         onSelect={() => {
                           setSelected(scene.index);
                           setPlaying(false);
@@ -1532,11 +1577,14 @@ interface SceneClipRowProps {
   density: number;
   selected: boolean;
   disabled: boolean;
+  /** Where the spoken read lives inside this window — the razor's legal
+   *  cut range, shown as the bright band on the voice clip. */
+  narration: SpeakableSpan | null;
   onSelect: () => void;
   onTrim: (durationSec: number, mode: "push" | "replace") => void;
 }
 
-function SceneClipRow({ scene, meta, density, selected, disabled, onSelect, onTrim }: SceneClipRowProps) {
+function SceneClipRow({ scene, meta, density, selected, disabled, narration, onSelect, onTrim }: SceneClipRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: String(scene.index),
   });
@@ -1655,6 +1703,13 @@ function SceneClipRow({ scene, meta, density, selected, disabled, onSelect, onTr
         )}
         style={{ left: 0, top: LANE_H_VIDEO + 6, width: w, height: LANE_H_AUDIO - 4 }}
         onClick={onSelect}
+        title={
+          narration
+            ? `Narration runs ${narration.startSec.toFixed(1)}–${narration.endSec.toFixed(
+                1
+              )}s — the razor (S) cuts inside this band`
+            : "No speakable narration in this scene — the razor refuses"
+        }
       >
         {scene.audio.voice.enabled && scene.audio.voice.level > 0 ? (
           <Volume2 className="h-2.5 w-2.5 shrink-0" />
@@ -1662,6 +1717,18 @@ function SceneClipRow({ scene, meta, density, selected, disabled, onSelect, onTr
           <VolumeX className="h-2.5 w-2.5 shrink-0" />
         )}
         <span className="truncate">{scene.audio.voice.enabled ? `vo ${Math.round(scene.audio.voice.level * 100)}%` : "muted"}</span>
+        {/* the spoken read — the razor's legal cut range. Lead silence and
+            tail breathing room stay dim; the band is where words are. */}
+        {narration && (
+          <span
+            aria-hidden
+            className="absolute bottom-0 left-0 h-[3px] rounded-b-sm bg-sky-300/80"
+            style={{
+              marginLeft: (narration.startSec - scene.startSec) * density,
+              width: Math.max(2, (narration.endSec - narration.startSec) * density),
+            }}
+          />
+        )}
       </div>
       {/* caption clip */}
       {scene.caption?.text && (

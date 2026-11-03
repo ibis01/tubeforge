@@ -42,6 +42,31 @@ export function parseWav(buf: Buffer): WavInfo {
   return { ...fmt, pcm: Buffer.concat(pcmParts) };
 }
 
+/** Duration of a RIFF/WAVE buffer from its chunk headers alone — no PCM copy,
+ *  no format validation beyond RIFF/WAVE (unparseable input → 0). Used by the
+ *  assemble GET to publish per-scene read durations for the timeline studio's
+ *  razor guard; parseWav/mergeWavs stay the strict paths for synthesis. */
+export function wavDurationSec(buf: Buffer): number {
+  if (buf.length < 44) return 0;
+  if (buf.toString("ascii", 0, 4) !== "RIFF") return 0;
+  if (buf.toString("ascii", 8, 12) !== "WAVE") return 0;
+  let offset = 12;
+  let byteRate = 0;
+  let dataBytes = 0;
+  while (offset + 8 <= buf.length) {
+    const chunkId = buf.toString("ascii", offset, offset + 4);
+    const chunkSize = buf.readUInt32LE(offset + 4);
+    const dataStart = offset + 8;
+    if (chunkId === "fmt ") {
+      byteRate = buf.readUInt32LE(dataStart + 8);
+    } else if (chunkId === "data") {
+      dataBytes = chunkSize;
+    }
+    offset = dataStart + chunkSize + (chunkSize % 2); // word-aligned chunks
+  }
+  return byteRate > 0 ? dataBytes / byteRate : 0;
+}
+
 /** Wrap raw PCM bytes in a canonical 44-byte RIFF/WAVE container.
  *  This is the format every TubeForge TTS adapter normalizes to
  *  (24 kHz mono PCM-16 unless stated otherwise). */

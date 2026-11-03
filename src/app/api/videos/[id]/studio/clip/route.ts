@@ -9,16 +9,19 @@
 // The client flushes pending timeline edits (PUT /assemble) BEFORE calling
 // this — the op reads the SAVED doc and the SAVED row, never a half-edit.
 //
-// Response: { timeline, sceneOrder, newIndex, activity } — the studio swaps
-// its doc in whole (history resets: a row mutation is not doc-undoable),
-// selects newIndex, and refreshes its preview pools.
+// Response: { timeline, sceneOrder, newIndex, activity, wavDurations } — the
+// studio swaps its doc in whole (history resets: a row mutation is not
+// doc-undoable), selects newIndex, and refreshes its preview pools.
+// wavDurations re-reads the per-scene WAVs AFTER the op (a split re-voices
+// both halves; a duplicate adds a file) so the razor guard stays exact.
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseJson, clipOpSchema, ApiValidationError } from "@/lib/tubeforge/validation";
-import { performClipOp } from "@/lib/tubeforge/clip-ops";
+import { performClipOp, sceneWavDurations } from "@/lib/tubeforge/clip-ops";
 import { serializeTimeline } from "@/lib/tubeforge/timeline";
+import { videoDir } from "@/lib/tubeforge/ai";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -67,5 +70,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     sceneOrder: result.sceneOrder,
     newIndex: result.newIndex,
     activity: result.activity,
+    wavDurations: sceneWavDurations(
+      videoDir(id),
+      result.rowScenes.map((s) => s.index)
+    ),
   });
 }

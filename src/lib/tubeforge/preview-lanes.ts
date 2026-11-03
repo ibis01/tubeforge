@@ -75,6 +75,56 @@ export function previewSettingsFrom(partial: {
   };
 }
 
+// ---------- razor: where narration actually lives ----------
+//
+// The razor (split) cuts a scene at the playhead, but the server only accepts
+// cuts INSIDE the spoken read: render.ts pads every scene window with LEAD
+// silence + TAIL breathing room, and clip-ops.ts guards 0.25s on each side
+// of the WAV itself. render.ts can't be imported here (it drags ffmpeg/fs
+// into the client bundle), so the three numbers below mirror its exports —
+// scripts/test-unit.mts cross-checks them against the real thing.
+export const R_LEAD_SEC = 0.35;
+export const R_TAIL_SEC = 0.85;
+export const R_MIN_SEG_SEC = 2.0;
+export const SPLIT_EDGE_GUARD_SEC = 0.25;
+
+export interface SpeakableSpan {
+  /** Global timeline seconds where a razor cut is legal (inclusive). */
+  startSec: number;
+  endSec: number;
+}
+
+/** The span a razor can cut, in GLOBAL seconds.
+ *
+ * `wavDurSec` — the scene WAV's real duration when known (the assemble GET
+ * and clip-op responses carry per-scene WAV durations) — makes the span an
+ * exact mirror of clip-ops.ts's splitNarrationAt window, even for scenes
+ * whose doc duration was trimmed away from the natural segment.
+ *
+ * Without it the span is ESTIMATED as durationSec − lead − tail, which is
+ * exact for freshly assembled docs but drifts on trims; a duration at/below
+ * the MIN_SEG floor cannot be estimated at all (the real read is unknowable
+ * from the doc) and returns null. The server remains the authority either
+ * way — its 400 is the backstop for estimates that drift. */
+export function speakableSpan(
+  startSec: number,
+  durationSec: number,
+  wavDurSec?: number
+): SpeakableSpan | null {
+  // An explicitly provided wav (even 0/NaN — no read, unparseable) is the
+  // TRUTH: never silently replaced by an estimate. Only an absent value
+  // estimates from the doc duration.
+  const hasWav = typeof wavDurSec === "number" && Number.isFinite(wavDurSec);
+  const wav = hasWav
+    ? (wavDurSec as number)
+    : durationSec > R_MIN_SEG_SEC
+      ? durationSec - R_LEAD_SEC - R_TAIL_SEC
+      : 0;
+  const start = startSec + R_LEAD_SEC + SPLIT_EDGE_GUARD_SEC;
+  const end = startSec + R_LEAD_SEC + wav - SPLIT_EDGE_GUARD_SEC;
+  return end > start ? { startSec: start, endSec: end } : null;
+}
+
 // ---------- lanes ----------
 
 export interface VideoLaneClip {

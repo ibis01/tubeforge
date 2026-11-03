@@ -12,6 +12,10 @@
 // PUT  — save a user-edited timeline body (assembleSaveSchema validates
 //        structure; deep content stays the video row's responsibility).
 // DELETE — clear the persisted timeline (the render falls back to recomputing).
+//
+// GET/POST also return `wavDurations` — per-scene read lengths off disk — so
+// the Timeline Studio's razor guard mirrors clip-ops' splitNarrationAt
+// exactly instead of estimating from doc durations (which drift on trims).
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
@@ -25,6 +29,8 @@ import {
   type AssembledTimeline,
 } from "@/lib/tubeforge/timeline";
 import { parseJson, assembleSaveSchema, ApiValidationError } from "@/lib/tubeforge/validation";
+import { sceneWavDurations } from "@/lib/tubeforge/clip-ops";
+import { videoDir } from "@/lib/tubeforge/ai";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -43,7 +49,13 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
-  return NextResponse.json({ timeline: parseTimeline(video.timeline) });
+  return NextResponse.json({
+    timeline: parseTimeline(video.timeline),
+    wavDurations: sceneWavDurations(
+      videoDir(id),
+      parseScenes(video.scenes).map((s) => s.index)
+    ),
+  });
 }
 
 /** POST — compute fresh from current state and persist (idempotent). */
@@ -70,6 +82,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   const approvedPlan = video.directorState === "approved" ? parsePlan(video.shotList) : null;
 
+  // Measured read lengths (a few ms of local disk): the assembled doc uses
+  // the render's EXACT per-scene segments instead of word-count estimates,
+  // so an assembly never silently trims a long read (see timeline.ts note 2).
+  const wavDurations = sceneWavDurations(
+    videoDir(id),
+    scenes.map((s) => s.index)
+  );
+
   const timeline: AssembledTimeline = assembleTimeline(scenes, {
     shotPlan: approvedPlan,
     transitionStyle: video.transitionStyle,
@@ -80,6 +100,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     musicEnabled: video.musicEnabled,
     musicVolume: video.musicVolume,
     musicDucking: video.musicDucking,
+    wavDurations,
   });
 
   await db.video.update({
@@ -87,7 +108,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     data: { timeline: serializeTimeline(timeline) },
   });
 
-  return NextResponse.json({ timeline });
+  return NextResponse.json({ timeline, wavDurations });
 }
 
 /** PUT — save a user-edited timeline body (assembleSaveSchema). The route is

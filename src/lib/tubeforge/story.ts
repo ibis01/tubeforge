@@ -11,7 +11,7 @@ import { parseJsonLoose, videoDir, splitForTts, researchBriefBlock, type Researc
 import { aiCall } from "./budget";
 import { runQualityGate } from "./quality";
 import { closestPriorDistance, imageHash, sceneImageHashes } from "./arthash";
-import { mergeWavs } from "./wav";
+import { mergeWavs, wavDurationSec } from "./wav";
 import { CAMERAS, SCENE_COUNTS, SFX_KINDS, sanitizeSceneStyle, sceneStylePrompt, type Scene, type StockRef } from "./types";
 import { normalizeFocalToken } from "./motion";
 import { characterSceneFragment, readPortrait } from "./characters";
@@ -944,6 +944,24 @@ export async function generateSceneVoiceovers(opts: {
   const sceneDurations: number[] = [];
 
   for (const [i, scene] of opts.scenes.entries()) {
+    // Resume semantics: a scene WAV already on disk is this scene's truth —
+    // keep its original read (and pacing). Stale WAVs are removed by the
+    // routes that change what a read is keyed off (narration edits drop the
+    // edited scene's WAV; voice/speed changes drop them all) BEFORE the
+    // voiceover stage re-runs, so presence here means "current". This is
+    // what lets a crash-recovered job — or a one-scene narration edit —
+    // re-read ONLY the missing scenes instead of the whole script.
+    const wavPath = path.join(dir, sceneWavFile(scene.index));
+    if (fs.existsSync(wavPath)) {
+      const existing = fs.readFileSync(wavPath);
+      const existingDur = wavDurationSec(existing);
+      if (existing.length >= 44 && existingDur > 0) {
+        allBuffers.push(existing);
+        sceneDurations.push(existingDur);
+        continue;
+      }
+    }
+
     if (i > 0) await sleep(2000); // pace TTS across scenes
 
     // Narration is short, but split anyway for safety on long scenes.
@@ -969,7 +987,7 @@ export async function generateSceneVoiceovers(opts: {
     }
 
     const merged = mergeWavs(buffers);
-    fs.writeFileSync(path.join(dir, sceneWavFile(scene.index)), merged.buffer);
+    fs.writeFileSync(wavPath, merged.buffer);
     allBuffers.push(merged.buffer);
     sceneDurations.push(merged.durationSec);
   }

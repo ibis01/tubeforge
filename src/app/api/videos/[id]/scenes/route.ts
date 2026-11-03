@@ -9,15 +9,31 @@ type Ctx = { params: Promise<{ id: string }> };
 
 /** Artifacts keyed off the OLD narration (Stage 4a, T-4.4 — same semantics as
  *  the script-edit PATCH): the spoken audio no longer matches the text, so
- *  the voiceover, renders, short and per-scene voice clips die. Scene art
- *  PNGs, stock clips and thumbnails survive (they track the visuals). */
+ *  the voiceover, renders, short and the EDITED scene's voice clip die.
+ *  Scene art PNGs, stock clips, thumbnails — and every OTHER scene's WAV
+ *  (its text did not change, its read is still current) — survive. */
 const NARRATION_STALE =
-  /\/(voiceover\.wav|voice-source\.\w+|final\.mp4|preview\.mp4|subtitles\.srt|short\.mp4|short-thumb\.png|scene-\d{2}\.(wav|mp4))$/;
+  /\/(voiceover\.wav|voice-source\.\w+|final\.mp4|preview\.mp4|subtitles\.srt|short\.mp4|short-thumb\.png)$/;
 
-async function invalidateNarrationArtifacts(videoId: string): Promise<boolean> {
+/** The edited scene's own artifacts: its read (scene-XX.wav) and its render
+ *  intermediate (scene-XX.mp4). Other scenes' files are NOT stale — wiping
+ *  them forced the voiceover stage to re-read the whole script (12× the TTS
+ *  cost for a one-scene text edit). */
+function editedSceneStaleKeys(sceneIndex: number): string[] {
+  const nn = String(sceneIndex).padStart(2, "0");
+  return [`scene-${nn}.wav`, `scene-${nn}.mp4`];
+}
+
+async function invalidateNarrationArtifacts(
+  videoId: string,
+  sceneIndex: number
+): Promise<boolean> {
+  const perScene = new Set(editedSceneStaleKeys(sceneIndex));
   try {
     const keys = await storage.list(videoId);
-    const stale = keys.filter((k) => NARRATION_STALE.test(k));
+    const stale = keys.filter(
+      (k) => NARRATION_STALE.test(k) || perScene.has(k.split("/").pop() ?? "")
+    );
     await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));
     return stale.length > 0;
   } catch {
@@ -115,7 +131,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   // renders the same way the classic script edit does (T-4.4).
   let invalidated = false;
   if (narrationChanged && video.hasVoiceover) {
-    invalidated = await invalidateNarrationArtifacts(id);
+    invalidated = await invalidateNarrationArtifacts(id, index);
     await db.video.update({
       where: { id },
       data: {

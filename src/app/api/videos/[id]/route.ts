@@ -12,6 +12,38 @@ import * as storage from "@/lib/tubeforge/storage";
 
 const TRANSITION_IDS = new Set(TRANSITIONS.map((t) => t.id));
 
+/** Every artifact keyed off the voice/narration — used when the SCRIPT or
+ *  the VOICE/SPEED changes, i.e. when EVERY scene's read is stale. (A
+ *  single-scene narration edit invalidates surgically in /scenes.) */
+const VOICE_STALE =
+  /\/(voiceover\.wav|voice-source\.\w+|final\.mp4|preview\.mp4|subtitles\.srt|short\.mp4|short-thumb\.png|scene-\d{2}\.(wav|mp4))$/;
+
+/** Drop every voice-keyed artifact + reset the stage flags. Returns whether
+ *  anything was removed (the client surfaces `invalidated` for a refresh). */
+async function invalidateVoiceArtifacts(
+  videoId: string,
+  data: Record<string, unknown>
+): Promise<boolean> {
+  let removed = false;
+  try {
+    const keys = await storage.list(videoId);
+    const stale = keys.filter((k) => VOICE_STALE.test(k));
+    await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));
+    removed = stale.length > 0;
+  } catch {
+    /* prefix may not exist yet — non-fatal */
+  }
+  data.hasVoiceover = false;
+  data.audioDuration = null;
+  data.voiceSource = "tts";
+  data.voiceLabel = null;
+  data.hasVideo = false;
+  data.hasShort = false;
+  data.shortDuration = null;
+  data.shortScene = null;
+  return removed;
+}
+
 // Next.js 16: params is a Promise
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -81,23 +113,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       // final/preview/scene-NN clips, under s3 it removed nothing at all.
       // Artifacts keyed off the OLD narration die; scene art PNGs, stock
       // clips and thumbnails stay (they depend on visuals, not narration).
-      try {
-        const keys = await storage.list(id);
-        const stale = keys.filter((k) =>
-          /\/(voiceover\.wav|voice-source\.\w+|final\.mp4|preview\.mp4|subtitles\.srt|short\.mp4|short-thumb\.png|scene-\d{2}\.(wav|mp4))$/.test(k)
-        );
-        await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));
-      } catch {
-        /* prefix may not exist yet — non-fatal */
-      }
-      data.hasVoiceover = false;
-      data.audioDuration = null;
-      data.voiceSource = "tts";
-      data.voiceLabel = null;
-      data.hasVideo = false;
-      data.hasShort = false;
-      data.shortDuration = null;
-      data.shortScene = null;
+      await invalidateVoiceArtifacts(id, data);
     }
   }
   if (typeof body.description === "string")
@@ -106,6 +122,18 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   if (typeof body.voice === "string") data.voice = body.voice;
   if (typeof body.ttsSpeed === "number")
     data.ttsSpeed = Math.min(Math.max(body.ttsSpeed, 0.5), 2.0);
+
+  // A voice or speed change makes EVERY scene's read stale — and the
+  // voiceover stage now KEEPS existing per-scene WAVs (resume semantics in
+  // story.ts), so they must be dropped here or the next voiceover job would
+  // silently keep the old voice for every scene it skips.
+  const voiceChanged =
+    (typeof body.voice === "string" && body.voice !== video.voice) ||
+    (typeof body.ttsSpeed === "number" &&
+      Math.min(Math.max(body.ttsSpeed, 0.5), 2.0) !== video.ttsSpeed);
+  if (voiceChanged && video.hasVoiceover) {
+    await invalidateVoiceArtifacts(id, data);
+  }
   if (typeof body.channelId === "string" || body.channelId === null)
     data.channelId = body.channelId;
   if (typeof body.characterId === "string" || body.characterId === null) {

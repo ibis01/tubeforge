@@ -47,7 +47,7 @@ import path from "path";
 import type { Video } from "@prisma/client";
 import { videoDir, splitForTts } from "./ai";
 import { aiCall } from "./budget";
-import { mergeWavs } from "./wav";
+import { mergeWavs, wavDurationSec } from "./wav";
 import { ttsSynthesize } from "./providers/tts";
 import { sceneImageFile, sceneWavFile, parseScenes } from "./story";
 import {
@@ -189,6 +189,25 @@ function readSceneWav(dir: string, index: number): { buf: Buffer; durSec: number
   const p = path.join(dir, sceneWavFile(index));
   const buf = fs.readFileSync(p);
   return { buf, durSec: wavDurationOf(buf) };
+}
+
+/** Per-scene read durations for the timeline studio's razor guard — the
+ *  client's speakableSpan becomes an EXACT mirror of splitNarrationAt when it
+ *  knows the real WAV length (trims make doc-based estimates drift). Missing
+ *  or unparseable WAVs are simply absent from the map; the client falls back
+ *  to its estimate for those scenes. Reads local files only — a few ms. */
+export function sceneWavDurations(dir: string, indices: number[]): Record<number, number> {
+  const out: Record<number, number> = {};
+  for (const index of indices) {
+    try {
+      const p = path.join(dir, sceneWavFile(index));
+      const dur = wavDurationSec(fs.readFileSync(p));
+      if (dur > 0) out[index] = Math.round(dur * 100) / 100;
+    } catch {
+      /* absent — not an error: scenes without a read yet are not razor targets */
+    }
+  }
+  return out;
 }
 
 /** One scene's narration → scene-XX.wav (mirror of generateSceneVoiceovers'

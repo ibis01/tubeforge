@@ -2006,6 +2006,37 @@ await test("timeline: plan duration can only EXTEND a scene, never cut narration
   ok(held.scenes[0].durationSec >= 25, `dramatic hold preserved (got ${held.scenes[0].durationSec})`);
 });
 
+await test("timeline: measured WAV lengths win over word-count estimates (S1 honesty)", async () => {
+  const { assembleTimeline } = await import("../src/lib/tubeforge/timeline.ts");
+  // Same word count, wildly different real reads — the estimate path would
+  // give both scenes the same share and silently trim the slow one.
+  const scenes = [
+    { index: 1, title: "Fast", narration: "word ".repeat(20).trim(), visual: "v", camera: "c", mood: "m", caption: "", hostInScene: false, rehook: false, sfx: "none" },
+    { index: 2, title: "Slow", narration: "word ".repeat(20).trim(), visual: "v", camera: "c", mood: "m", caption: "", hostInScene: false, rehook: false, sfx: "none" },
+    { index: 3, title: "Unvoiced", narration: "word ".repeat(20).trim(), visual: "v", camera: "c", mood: "m", caption: "", hostInScene: false, rehook: false, sfx: "none" },
+  ] as never[];
+  const timeline = assembleTimeline(scenes, {
+    ttsSpeed: 1,
+    renderMode: "kenburns",
+    audioDurationSec: 40,
+    wavDurations: { 1: 5, 2: 25 }, // scene 3 not yet voiced → estimate
+  });
+  // Scene 1: exactly the render's segment (5 + 1.2 lead/tail).
+  approx(timeline.scenes[0].durationSec, 6.2, 0.011, "measured scene 1 window = wav + lead + tail");
+  // Scene 2: 25 + 1.2 — NOT its ~1/3 share of 40s (which would trim ~11s
+  // of the read at render time).
+  approx(timeline.scenes[1].durationSec, 26.2, 0.011, "measured scene 2 window = wav + lead + tail");
+  // Scene 3 has no WAV → estimate share of the measured total.
+  ok(timeline.scenes[2].durationSec > 2, `unvoiced scene keeps a positive estimate (got ${timeline.scenes[2].durationSec})`);
+  // Contiguity survives the mixed sources.
+  eq(timeline.scenes[0].endSec, timeline.scenes[1].startSec, "contiguous after scene 1");
+  eq(timeline.scenes[1].endSec, timeline.scenes[2].startSec, "contiguous after scene 2");
+  approx(timeline.totalDurationSec, timeline.scenes.reduce((a, s) => a + s.durationSec, 0), 0.05, "total = sum of windows");
+  // A floor-clamped short read still gets MIN_SEG (2.0s).
+  const tiny = assembleTimeline(scenes.slice(0, 1), { ttsSpeed: 1, renderMode: "kenburns", wavDurations: { 1: 0.3 } });
+  approx(tiny.scenes[0].durationSec, 2.0, 0.011, "MIN_SEG floor holds for sub-floor reads");
+});
+
 await test("timeline: parseTimeline degrades bad/legacy payloads to null", async () => {
   const { parseTimeline, serializeTimeline, assembleTimeline } =
     await import("../src/lib/tubeforge/timeline.ts");
@@ -2954,6 +2985,81 @@ suiteStart("clip ops: narration split + doc surgery");
     eq(sceneSegmentSec(3), 4.2, "wav + 0.35 lead + 0.85 tail");
     eq(sceneSegmentSec(0.5), 2.0, "never below MIN_SEG_SEC");
     eq(sceneSegmentSec(0), 2.0, "degenerate wav still gets a legal window");
+  });
+}
+
+// ---------- razor guard (speakableSpan mirrors splitNarrationAt) ----------
+
+suiteStart("razor guard: speakableSpan");
+
+{
+  const { LEAD_SEC, TAIL_SEC, MIN_SEG_SEC } = await import("../src/lib/tubeforge/render");
+  const {
+    speakableSpan,
+    R_LEAD_SEC,
+    R_TAIL_SEC,
+    R_MIN_SEG_SEC,
+    SPLIT_EDGE_GUARD_SEC,
+  } = await import("../src/lib/tubeforge/preview-lanes");
+  const { pcmToWav, wavDurationSec } = await import("../src/lib/tubeforge/wav");
+
+  await test("mirror constants match the real render exports", () => {
+    eq(R_LEAD_SEC, LEAD_SEC, "lead");
+    eq(R_TAIL_SEC, TAIL_SEC, "tail");
+    eq(R_MIN_SEG_SEC, MIN_SEG_SEC, "min segment");
+    eq(SPLIT_EDGE_GUARD_SEC, 0.25, "clip-ops edge guard");
+  });
+
+  await test("exact path: boundaries agree with splitNarrationAt", () => {
+    // Scene 2 of the S1 fixture: window [22.7, 32.64], wav 8.74s.
+    const start = 22.7;
+    const dur = 9.94;
+    const wav = 8.74;
+    const span = speakableSpan(start, dur, wav)!;
+    ok(span, "span exists");
+    // lo = LEAD + 0.25 = 0.6; hi = LEAD + wav - 0.25 = 8.84 (both global).
+    approx(span.startSec, start + 0.6, 1e-9, "span start = lead + edge guard");
+    approx(span.endSec, start + 8.84, 1e-9, "span end = lead + wav - edge guard");
+    // The server refuses exactly where the span excludes — the 400 the S1
+    // smoke hit (playhead local 8.85, one hundredth past the end).
+    ok(splitNarrationAt("a b c d e f g h", wav, 8.83), "server accepts just inside the end");
+    eq(splitNarrationAt("a b c d e f g h", wav, 8.85), null, "server refuses just past");
+    ok(8.83 >= span.startSec - start && 8.83 <= span.endSec - start, "client agrees: inside");
+    ok(8.85 > span.endSec - start, "client agrees: outside");
+    // Same dance at the head.
+    ok(splitNarrationAt("a b c d e f g h", wav, 0.61), "server accepts just past the lead");
+    eq(splitNarrationAt("a b c d e f g h", wav, 0.59), null, "server refuses inside the lead");
+    ok(0.59 < span.startSec - start, "client agrees: in the lead padding");
+  });
+
+  await test("estimate path: fresh-assembly durations, floor refusal", () => {
+    // No wavDurSec: estimate = dur - lead - tail, exact for fresh docs.
+    const span = speakableSpan(100, 10, undefined)!;
+    approx(span.startSec, 100.6, 1e-9, "estimated start");
+    approx(span.endSec, 108.9, 1e-9, "estimated end = 100 + 10 - 1.1");
+    // At/below the MIN_SEG floor the real read is unknowable → refuse.
+    eq(speakableSpan(0, 2.0, undefined), null, "floor duration cannot be estimated");
+    eq(speakableSpan(0, 1.5, undefined), null, "trimmed below the floor");
+    // Real wav rescues floor-clamped windows when known.
+    const rescued = speakableSpan(0, 2.0, 0.8)!;
+    approx(rescued.startSec, 0.6, 1e-9, "real wav start");
+    approx(rescued.endSec, 0.9, 1e-9, "real wav end");
+  });
+
+  await test("degenerate wavs have no speakable interior", () => {
+    eq(speakableSpan(0, 9.94, 0.4), null, "wav shorter than the guards");
+    eq(speakableSpan(0, 9.94, 0), null, "zero wav is a real empty read — never estimated");
+    ok(speakableSpan(0, 9.94, Number.NaN), "NaN is garbage, treated as absent — estimate path");
+  });
+
+  await test("wavDurationSec reads durations off the headers alone", () => {
+    // 1s of silence at 24kHz mono PCM-16 = 48000 bytes of PCM.
+    const pcm = Buffer.alloc(48000);
+    const wav = pcmToWav(pcm, 24000, 1, 16);
+    approx(wavDurationSec(wav), 1, 1e-6, "1s read");
+    approx(wavDurationSec(pcmToWav(Buffer.alloc(12000), 24000, 1, 16)), 0.25, 1e-6, "0.25s read");
+    eq(wavDurationSec(Buffer.alloc(10)), 0, "not a RIFF buffer → 0");
+    eq(wavDurationSec(pcm), 0, "raw PCM without a header → 0");
   });
 }
 
