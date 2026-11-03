@@ -61,7 +61,9 @@ import {
   type VerifyReportDTO,
   type CommentsKitDTO,
   type YouTubeStatusDTO,
+  type AssembledTimelineDTO,
 } from "@/lib/tubeforge/types";
+import { EXPORT_PRESETS, type ExportPreset } from "@/lib/tubeforge/studio-doc";
 import {
   Mic,
   ImageIcon,
@@ -96,6 +98,7 @@ import {
   Wand2,
   Play,
   Square,
+  Package,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -154,6 +157,9 @@ export function VideoDetailDialog({
   const [renderMode, setRenderMode] = useState<string>("kenburns");
   const [subtitles, setSubtitles] = useState(true);
   const [smartCaps, setSmartCaps] = useState(true); // ASR-synced caption cues (Phase 4)
+  // S3 — delivery encode tier for the next render (the export-preset picker
+  // owns it; persisted on the timeline doc's renderPrefs between sessions).
+  const [exportQuality, setExportQuality] = useState<"draft" | "standard" | "high">("standard");
   // Per-video music overrides (null = follow Settings defaults) — PATCHed with a
   // debounce so slider drags don't spam the API.
   const [musicDraft, setMusicDraft] = useState<MusicPickerValue>({
@@ -318,6 +324,7 @@ export function VideoDetailDialog({
     setCopiedKey(null);
     setShortScenePick("auto");
     setShortRunning(false);
+    setExportQuality(video.timeline?.renderPrefs?.quality ?? "standard");
     fetch(`/api/videos/${video.id}/verify`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -1178,6 +1185,56 @@ export function VideoDetailDialog({
     }
   };
 
+  // S3 — one chip, one delivery target: the preset sets the row's geometry
+  // (aspect/fps/burnCaptions — the render's own fallbacks), the local caption
+  // switches, and persists the quality tier on the timeline doc's root so it
+  // survives dialog closes and crash resumes.
+  const applyExportPreset = async (p: ExportPreset) => {
+    if (busy) return;
+    setSubtitles(p.burnSubtitles);
+    setExportQuality(p.quality);
+    try {
+      await fetch(`/api/videos/${video.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          aspectRatio: p.aspect,
+          frameRate: p.fps,
+          burnCaptions: p.burnSubtitles,
+        }),
+      });
+      // Persist the quality tier with the saved doc (GET → PUT; the studio's
+      // own working copy is untouched — it only re-syncs on its next load).
+      const res = await fetch(`/api/videos/${video.id}/assemble`, { cache: "no-store" });
+      if (res.ok) {
+        const data = (await res.json()) as { timeline?: AssembledTimelineDTO | null };
+        if (data.timeline && data.timeline.scenes?.length) {
+          await fetch(`/api/videos/${video.id}/assemble`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              scenes: data.timeline.scenes,
+              totalDurationSec: data.timeline.totalDurationSec,
+              generatedAt: data.timeline.generatedAt,
+              renderPrefs: { quality: p.quality },
+            }),
+          });
+        }
+      }
+      await refreshVideo(video.id);
+      toast({
+        title: `Export preset: ${p.label}`,
+        description: `${p.aspect} · ${p.fps} fps · ${p.quality} quality${p.burnSubtitles ? " · captions burned" : ""}`,
+      });
+    } catch (e) {
+      toast({
+        title: "Preset failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
+
   const startRender = async (mode: string, sceneLimit?: number) => {
     if (busy) return;
     setBusy(sceneLimit ? "preview" : "render");
@@ -1192,6 +1249,8 @@ export function VideoDetailDialog({
           smartCaptions: smartCaps,
           music: musicDraft.enabled !== false, // null = follow defaults → music on
           sceneLimit,
+          // S3 — the delivery encode tier (segments + blend masters + burn pass).
+          quality: exportQuality,
         }),
       });
       await pollRender(
@@ -1649,6 +1708,44 @@ export function VideoDetailDialog({
               <Captions className="h-3 w-3" />
               ASR-synced cues
             </label>
+          </div>
+        </div>
+
+        {/* S3 — export presets: one chip configures the delivery target
+            (aspect + fps on the row, captions + quality for this render). */}
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+            <Package className="h-3 w-3" /> Export preset
+            <span className="rounded bg-emerald-500/15 px-1.5 py-px text-[9px] normal-case tracking-normal text-emerald-200">
+              render honors
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {EXPORT_PRESETS.map((p) => {
+              const active =
+                (video.aspectRatio ?? "16:9") === p.aspect &&
+                (video.frameRate ?? 30) === p.fps &&
+                exportQuality === p.quality &&
+                subtitles === p.burnSubtitles;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  disabled={Boolean(busy)}
+                  onClick={() => void applyExportPreset(p)}
+                  title={p.note}
+                  className={clsx(
+                    "rounded-lg border px-2.5 py-1.5 text-left transition-all",
+                    active
+                      ? "border-primary/50 bg-primary/10"
+                      : "border-white/10 bg-white/[0.03] hover:border-white/25"
+                  )}
+                >
+                  <div className="text-xs font-medium">{p.label}</div>
+                  <div className="text-[10px] text-muted-foreground">{p.note}</div>
+                </button>
+              );
+            })}
           </div>
         </div>
 

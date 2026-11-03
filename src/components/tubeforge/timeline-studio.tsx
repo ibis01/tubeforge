@@ -98,10 +98,13 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize2,
+  Layers,
+  PictureInPicture2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -126,9 +129,14 @@ import {
   sanitizeTitle,
   sanitizeCamera,
   sanitizeSpeed,
+  sanitizeChroma,
+  sanitizePip,
+  CHROMA_PRESETS,
   type SceneGrade,
   type SceneTitle,
   type SceneCameraKeys,
+  type SceneChroma,
+  type ScenePip,
 } from "@/lib/tubeforge/studio-doc";
 import {
   formatTimecode,
@@ -202,6 +210,9 @@ function cloneTimeline(t: AssembledTimelineDTO): AssembledTimelineDTO {
         ? { from: { ...s.cameraKeys.from }, to: { ...s.cameraKeys.to }, ease: s.cameraKeys.ease }
         : s.cameraKeys,
       speed: s.speed,
+      // S3 — keying + overlay deep-copy with the rest of the creative layer.
+      chroma: s.chroma ? { ...s.chroma } : s.chroma,
+      pip: s.pip ? { ...s.pip } : s.pip,
     })),
     sceneCount: t.sceneCount,
     totalDurationSec: t.totalDurationSec,
@@ -255,6 +266,9 @@ function normalizeTimelineDoc(t: AssembledTimelineDTO | null): AssembledTimeline
         titleOverlay: sanitizeTitle(s.titleOverlay),
         cameraKeys: sanitizeCamera(s.cameraKeys),
         speed: sanitizeSpeed(s.speed),
+        // S3 — keying + overlay, same choke point.
+        chroma: sanitizeChroma(s.chroma),
+        pip: sanitizePip(s.pip),
       };
     }),
   };
@@ -664,6 +678,9 @@ export function TimelineStudio({
 
   const imagePool = useRef(new Map<number, HTMLImageElement>());
   const stockPool = useRef(new Map<number, HTMLVideoElement>());
+  // S3 — per-scene keyed-art cache (chroma) + the brand logo for PIP.
+  const keyedArtPool = useRef(new Map<string, HTMLCanvasElement>());
+  const logoImg = useRef<HTMLImageElement | null>(null);
   const bump = useCallback(() => setMediaVersion((v) => v + 1), []);
 
   useEffect(() => {
@@ -687,6 +704,18 @@ export function TimelineStudio({
       }
     }
   }, [scenes, bump]);
+
+  // S3 — the brand logo streams from /brand once any scene asks for a PIP
+  // overlay (per-video object; one load, cached for the session).
+  useEffect(() => {
+    const wantsPip = timeline?.scenes.some((s) => s.pip != null) ?? false;
+    if (!wantsPip || !video.brandHasLogo || logoImg.current) return;
+    const img = new Image();
+    img.onload = bump;
+    img.onerror = bump;
+    img.src = `/api/videos/${videoId}/brand`;
+    logoImg.current = img;
+  }, [timeline, video.brandHasLogo, videoId, bump]);
 
   // ---------- preview audio pool (per-scene voiceover WAVs) ----------
 
@@ -965,6 +994,42 @@ export function TimelineStudio({
     // the RENDER stays the source of truth; this is the honest rough cut.
     const gradeOf = (idx: number): SceneGrade | null | undefined =>
       timeline.scenes.find((s) => s.index === idx)?.grade;
+    // S3 — the scene's chroma settings (approximated in the preview: still
+    // art is keyed per-pixel into a cached offscreen canvas; stock footage
+    // draws unkeyed — the render stays the source of truth).
+    const chromaOf = (idx: number): SceneChroma | null | undefined =>
+      timeline.scenes.find((s) => s.index === idx)?.chroma;
+    const keyedArt = (idx: number, c: SceneChroma, src: HTMLImageElement): HTMLCanvasElement => {
+      const key = `${idx}|${c.color}|${c.similarity.toFixed(3)}|${c.blend.toFixed(3)}|${mediaVersion}`;
+      const hit = keyedArtPool.current.get(key);
+      if (hit) return hit;
+      const cv = document.createElement("canvas");
+      cv.width = src.naturalWidth;
+      cv.height = src.naturalHeight;
+      const cctx = cv.getContext("2d");
+      if (!cctx || cv.width < 1 || cv.height < 1) return cv;
+      cctx.drawImage(src, 0, 0);
+      try {
+        const data = cctx.getImageData(0, 0, cv.width, cv.height);
+        const kr = parseInt(c.color.slice(1, 3), 16);
+        const kg = parseInt(c.color.slice(3, 5), 16);
+        const kb = parseInt(c.color.slice(5, 7), 16);
+        // Euclidean RGB distance ≈ the render's chroma distance for preview.
+        const thr = c.similarity * 441.7;
+        const soft = Math.max(1, c.blend * 441.7);
+        const px = data.data;
+        for (let i = 0; i < px.length; i += 4) {
+          const d = Math.hypot(px[i] - kr, px[i + 1] - kg, px[i + 2] - kb);
+          if (d < thr) px[i + 3] = 0;
+          else if (d < thr + soft) px[i + 3] = Math.round((255 * (d - thr)) / soft);
+        }
+        cctx.putImageData(data, 0, 0);
+      } catch {
+        /* tainted canvas — fall back to the unkeyed image */
+      }
+      keyedArtPool.current.set(key, cv);
+      return cv;
+    };
     const applyGradeFilter = (g: SceneGrade | null | undefined) => {
       if (!g) return;
       ctx.filter = `brightness(${g.brightness}) contrast(${g.contrast}) saturate(${g.saturation})`;
@@ -1020,6 +1085,23 @@ export function TimelineStudio({
       const sw = "naturalWidth" in src ? src.naturalWidth : src.videoWidth;
       const sh = "naturalHeight" in src ? src.naturalHeight : src.videoHeight;
       if (!sw || !sh) return;
+      // S3 — chroma key on still art: background fill, then the keyed cache.
+      const chroma = chromaOf(idx);
+      if (chroma && src instanceof HTMLImageElement) {
+        const keyed = keyedArt(idx, chroma, src);
+        if (keyed.width > 1) {
+          ctx.fillStyle = chroma.background;
+          ctx.fillRect(0, 0, W, H);
+          const kcover = Math.max(W / keyed.width, H / keyed.height) * cam.scale;
+          const kw = keyed.width * kcover;
+          const kh = keyed.height * kcover;
+          const g = gradeOf(idx);
+          applyGradeFilter(g);
+          ctx.drawImage(keyed, (W - kw) / 2 + cam.dx * W, (H - kh) / 2 + cam.dy * H, kw, kh);
+          applyGradeOverlays(g);
+          return;
+        }
+      }
       // Video elements follow the playhead coarsely (a seek per ~0.5s of
       // drift) — exact frame sync during playback is not worth the seeks.
       if (src instanceof HTMLVideoElement) {
@@ -1164,10 +1246,30 @@ export function TimelineStudio({
       if (layer) drawLayer(layer.sceneIndex, layer.localSec, layer.camera);
     }
 
+    // S3 — the active scene's corner logo overlay, mirroring
+    // pipOverlayFilter's geometry (drawn under the title, like the render).
+    const activeScene = timeline.scenes.find((s) => s.index === f.activeIndex);
+    const pip = activeScene?.pip;
+    const logo = logoImg.current;
+    if (pip && activeScene && logo && logo.complete && logo.naturalWidth > 0) {
+      const lw = Math.max(24, Math.round(W * pip.size));
+      const lh = Math.round((lw * logo.naturalHeight) / logo.naturalWidth);
+      const m = Math.round(W * pip.margin);
+      const x = pip.pos.endsWith("l") ? m : pip.pos.endsWith("r") ? W - lw - m : (W - lw) / 2;
+      const y = pip.pos.startsWith("t") ? m : pip.pos.startsWith("b") ? H - lh - m : (H - lh) / 2;
+      ctx.globalAlpha = pip.opacity;
+      ctx.drawImage(logo, x, y, lw, lh);
+      if (pip.border) {
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.lineWidth = Math.max(1, Math.round(W * 0.002));
+        ctx.strokeRect(x + 0.5, y + 0.5, lw - 1, lh - 1);
+      }
+      ctx.globalAlpha = 1;
+    }
+
     // S2 wave 2 — the scene's title overlay, mirroring titleDrawtextFilter's
     // geometry (face relative to frame height, safe-zone margins) and the
     // animation curves (fade 0.4s in / 0.5s out, rise & slide ease-out).
-    const activeScene = timeline.scenes.find((s) => s.index === f.activeIndex);
     const ti = activeScene?.titleOverlay;
     if (ti && activeScene) {
       const D = Math.max(activeScene.durationSec, 0.5);
@@ -1559,6 +1661,10 @@ export function TimelineStudio({
                 onTitle={(t) => patchScene(selectedScene.index, { titleOverlay: t }, { key: `title:${selectedScene.index}` })}
                 onCamera={(c) => patchScene(selectedScene.index, { cameraKeys: c }, { key: `cam:${selectedScene.index}` })}
                 onSpeed={(v) => patchScene(selectedScene.index, { speed: v }, { key: `speed:${selectedScene.index}` })}
+                onChroma={(c) => patchScene(selectedScene.index, { chroma: c }, { key: `chroma:${selectedScene.index}` })}
+                onPip={(p) => patchScene(selectedScene.index, { pip: p }, { key: `pip:${selectedScene.index}` })}
+                hasLogo={video.brandHasLogo}
+                slidesMode={video.renderMode === "slides"}
               />
             ) : (
               <div className="hidden lg:flex rounded-lg border border-dashed border-white/10 items-center justify-center p-6 text-center text-xs text-muted-foreground">
@@ -2131,6 +2237,13 @@ interface InspectorProps {
   onTitle: (t: SceneTitle | null) => void;
   onCamera: (c: SceneCameraKeys | null) => void;
   onSpeed: (v: number | null) => void;
+  /** S3 — keying + overlay. */
+  onChroma: (c: SceneChroma | null) => void;
+  onPip: (p: ScenePip | null) => void;
+  /** The video has a brand logo (PIP source). */
+  hasLogo: boolean;
+  /** Slides mode: the designed deck owns its look — chroma/PIP hidden. */
+  slidesMode: boolean;
 }
 
 const RENDER_HONORS = (
@@ -2143,11 +2256,13 @@ const RENDER_HONORS = (
   </Badge>
 );
 
-function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCaption, onAudio, onSeekScene, onGrade, onTitle, onCamera, onSpeed }: InspectorProps) {
+function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCaption, onAudio, onSeekScene, onGrade, onTitle, onCamera, onSpeed, onChroma, onPip, hasLogo, slidesMode }: InspectorProps) {
   const shot = scene.shot;
   const grade = scene.grade ?? null;
   const ti = scene.titleOverlay ?? null;
   const cam = scene.cameraKeys ?? null;
+  const chroma = scene.chroma ?? null;
+  const pip = scene.pip ?? null;
   return (
     <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.02] p-3">
       <div className="flex items-center gap-2">
@@ -2493,6 +2608,184 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
           the scene's floor shrinks to match a faster read. AI-art stills pace by their read.
         </p>
       </section>
+
+      {/* chroma key — S3 */}
+      {!slidesMode && (
+        <section className="space-y-1.5">
+          <header className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+            <Layers className="h-3 w-3" /> Chroma key {RENDER_HONORS}
+          </header>
+          <div className="flex items-center gap-2">
+            <Switch
+              checked={chroma != null}
+              disabled={disabled}
+              onCheckedChange={(v) =>
+                onChroma(v ? { color: "#00FF00", similarity: 0.12, blend: 0.02, background: "#000000" } : null)
+              }
+              aria-label="Toggle chroma key"
+            />
+            <span className="text-xs text-muted-foreground">{chroma ? "Keyed" : "Off"}</span>
+            {chroma && (
+              <div className="ml-auto flex gap-1">
+                {CHROMA_PRESETS.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => onChroma({ ...chroma, color: p.color })}
+                    title={`${p.label} screen`}
+                    className={clsx(
+                      "h-5 w-5 rounded-md border transition-all",
+                      chroma.color.toUpperCase() === p.color
+                        ? "border-white/70 ring-1 ring-white/40"
+                        : "border-white/20 hover:border-white/40"
+                    )}
+                    style={{ background: p.color }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+          {chroma && (
+            <>
+              <div className="flex items-center gap-2">
+                <span className="w-16 shrink-0 text-[10px] text-muted-foreground">Similarity</span>
+                <Slider
+                  className="h-1.5 flex-1"
+                  value={[Math.round(chroma.similarity * 100)]}
+                  min={1}
+                  max={35}
+                  step={1}
+                  disabled={disabled}
+                  onValueChange={(v) => onChroma({ ...chroma, similarity: (v[0] ?? 12) / 100 })}
+                />
+                <span className="w-8 text-right font-mono text-[10px] text-muted-foreground">
+                  {chroma.similarity.toFixed(2)}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-16 shrink-0 text-[10px] text-muted-foreground">Edge soft</span>
+                <Slider
+                  className="h-1.5 flex-1"
+                  value={[Math.round(chroma.blend * 100)]}
+                  min={0}
+                  max={20}
+                  step={1}
+                  disabled={disabled}
+                  onValueChange={(v) => onChroma({ ...chroma, blend: (v[0] ?? 2) / 100 })}
+                />
+                <span className="w-8 text-right font-mono text-[10px] text-muted-foreground">
+                  {chroma.blend.toFixed(2)}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-16 shrink-0 text-[10px] text-muted-foreground">Backdrop</span>
+                <input
+                  type="color"
+                  disabled={disabled}
+                  value={chroma.background}
+                  onChange={(e) => onChroma({ ...chroma, background: e.target.value.toUpperCase() })}
+                  className="h-6 w-10 cursor-pointer rounded border border-white/15 bg-transparent p-0.5"
+                  aria-label="Backdrop color"
+                />
+                <span className="font-mono text-[10px] text-muted-foreground">{chroma.background}</span>
+              </div>
+            </>
+          )}
+          <p className="text-[10px] leading-snug text-muted-foreground">
+            Keys this scene's art off a green/blue/magenta screen onto the backdrop —
+            the render keys before grading so the key color stays honest.
+          </p>
+        </section>
+      )}
+
+      {/* logo overlay / PIP — S3 */}
+      {!slidesMode && (
+        <section className="space-y-1.5">
+          <header className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+            <PictureInPicture2 className="h-3 w-3" /> Logo overlay {RENDER_HONORS}
+          </header>
+          {!hasLogo ? (
+            <p className="text-[10px] leading-snug text-muted-foreground">
+              Upload a brand logo (Brand kit) to pin it into a corner of this scene.
+            </p>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={pip != null}
+                  disabled={disabled}
+                  onCheckedChange={(v) =>
+                    onPip(v ? { pos: "br", size: 0.18, opacity: 1, border: true, margin: 0.03 } : null)
+                  }
+                  aria-label="Toggle logo overlay"
+                />
+                <span className="text-xs text-muted-foreground">{pip ? "Pinned" : "Off"}</span>
+              </div>
+              {pip && (
+                <>
+                  <div className="grid w-[84px] grid-cols-3 gap-1">
+                    {(["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br"] as const).map((pos) => (
+                      <button
+                        key={pos}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => onPip({ ...pip, pos })}
+                        title={`Position ${pos}`}
+                        className={clsx(
+                          "h-5 rounded border transition-all",
+                          pip.pos === pos
+                            ? "border-primary/60 bg-primary/20"
+                            : "border-white/15 bg-white/[0.03] hover:border-white/35"
+                        )}
+                      />
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-14 shrink-0 text-[10px] text-muted-foreground">Size</span>
+                    <Slider
+                      className="h-1.5 flex-1"
+                      value={[Math.round(pip.size * 100)]}
+                      min={6}
+                      max={40}
+                      step={1}
+                      disabled={disabled}
+                      onValueChange={(v) => onPip({ ...pip, size: (v[0] ?? 18) / 100 })}
+                    />
+                    <span className="w-8 text-right font-mono text-[10px] text-muted-foreground">
+                      {Math.round(pip.size * 100)}%
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-14 shrink-0 text-[10px] text-muted-foreground">Opacity</span>
+                    <Slider
+                      className="h-1.5 flex-1"
+                      value={[Math.round(pip.opacity * 100)]}
+                      min={10}
+                      max={100}
+                      step={5}
+                      disabled={disabled}
+                      onValueChange={(v) => onPip({ ...pip, opacity: (v[0] ?? 100) / 100 })}
+                    />
+                    <span className="w-8 text-right font-mono text-[10px] text-muted-foreground">
+                      {Math.round(pip.opacity * 100)}%
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      checked={pip.border}
+                      disabled={disabled}
+                      onCheckedChange={(v) => onPip({ ...pip, border: v })}
+                      aria-label="Logo border"
+                    />
+                    <span className="text-xs text-muted-foreground">White hairline</span>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </section>
+      )}
 
       {/* audio */}
       <section className="space-y-2">

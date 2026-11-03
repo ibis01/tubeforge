@@ -486,6 +486,21 @@ export interface TimelineSceneDTO {
   } | null;
   /** Per-scene playback rate (0.5..2); null/undefined = normal. */
   speed?: number | null;
+  /** S3 — chroma key (null/undefined = none). Sanitized in studio-doc.ts. */
+  chroma?: {
+    color: string; // #RRGGBB key color
+    similarity: number; // 0.01..0.35
+    blend: number; // 0..0.2 edge softness
+    background: string; // #RRGGBB fill behind keyed pixels
+  } | null;
+  /** S3 — corner logo overlay (requires a video brand logo). */
+  pip?: {
+    pos: "tl" | "tc" | "tr" | "ml" | "mc" | "mr" | "bl" | "bc" | "br";
+    size: number; // width fraction of the frame, 0.06..0.4
+    opacity: number; // 0.1..1
+    border: boolean;
+    margin: number; // edge distance fraction, 0.01..0.08
+  } | null;
 }
 
 export interface AssembledTimelineDTO {
@@ -493,6 +508,8 @@ export interface AssembledTimelineDTO {
   sceneCount: number;
   totalDurationSec: number;
   generatedAt: string;
+  /** S3 — render preferences riding the doc root (quality tier). */
+  renderPrefs?: { quality: "draft" | "standard" | "high" } | null;
 }
 
 export type QcStatusDTO = "pass" | "fail" | "unmeasured";
