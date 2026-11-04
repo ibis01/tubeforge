@@ -12,9 +12,14 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { broadcastGateState } from "@/components/tubeforge/auth-gate";
-import { Eye, EyeOff, KeyRound, Lock, Loader2, ShieldCheck, ShieldOff, TerminalSquare } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Lock, Loader2, Mail, MailCheck, ShieldCheck, ShieldOff, TerminalSquare } from "lucide-react";
 
-type Status = { configured: boolean; authenticated: boolean; gateEnabled: boolean };
+type Status = {
+  configured: boolean;
+  authenticated: boolean;
+  gateEnabled: boolean;
+  user?: { email: string; emailVerified: boolean } | null;
+};
 
 // S20 — a registry row's public shape (GET /api/auth/token). The secret is
 // never stored server-side, so it can never appear here.
@@ -66,6 +71,24 @@ export function SecurityAccessCard() {
     return () => window.removeEventListener("tf-gate", onGate);
   }, [load]);
 
+  // S21 — a signed-in browser that just clicked an emailed verification link
+  // lands on /?verified=… with the gate transparent; the card turns it into
+  // a toast and scrubs the URL.
+  useEffect(() => {
+    const verified = new URLSearchParams(window.location.search).get("verified");
+    if (!verified) return;
+    window.history.replaceState(null, "", "/");
+    if (verified === "ok")
+      toast({ title: "Email confirmed", description: "This address is now trusted for account recovery." });
+    else
+      toast({
+        title: "Verification link dead",
+        description: "It expired or was already used — send a fresh one below.",
+        variant: "destructive",
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const post = async (body: Record<string, unknown>): Promise<boolean> => {
     setBusy(true);
     try {
@@ -113,6 +136,39 @@ export function SecurityAccessCard() {
 
   const on = Boolean(status?.gateEnabled);
   const hasPassword = Boolean(status?.configured);
+
+  // S21 — email verification: the card shows the address's confirmation
+  // state and mints a fresh link for an unverified account (the route's own
+  // error used to promise "request a new one" with nothing to request from).
+  const [verifyBusy, setVerifyBusy] = useState(false);
+
+  const resendVerification = async () => {
+    setVerifyBusy(true);
+    try {
+      const res = await fetch("/api/auth/verify-email", { method: "POST" });
+      const d = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        verification?: { url?: string };
+      };
+      if (!res.ok) {
+        toast({ title: "Email verification", description: d.error ?? "Something went wrong", variant: "destructive" });
+        return;
+      }
+      if (d.verification?.url) {
+        // Console email mode: the link comes straight back — consume it now
+        // (awaited: a fire-and-forget dies to the next navigation).
+        await fetch(d.verification.url, { cache: "no-store" }).catch(() => {});
+        toast({ title: "Email confirmed", description: "The address is verified." });
+      } else {
+        toast({ title: "Link sent", description: "Check the inbox — the link expires in 24 hours." });
+      }
+      await load();
+    } catch {
+      toast({ title: "Email verification", description: "Network error — try again", variant: "destructive" });
+    } finally {
+      setVerifyBusy(false);
+    }
+  };
 
   const changePassword = async () => {
     if (cpNew.length < 8) {
@@ -324,6 +380,38 @@ export function SecurityAccessCard() {
             >
               Cancel
             </Button>
+          </div>
+        </div>
+      )}
+
+      {/* S21 — the address's confirmation state. Unverified accounts get a
+          one-click fresh link (console mode consumes it on the spot; smtp
+          mode sends for real). The register flow auto-verifies in console
+          mode, so most installs only ever see the green row. */}
+      {status?.authenticated && status?.user?.email && (
+        <div className="mt-5 pt-5 border-t border-white/10">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-start gap-3 min-w-0">
+              {status.user.emailVerified ? (
+                <MailCheck className="h-4.5 w-4.5 mt-0.5 shrink-0 text-emerald-400" />
+              ) : (
+                <Mail className="h-4.5 w-4.5 mt-0.5 shrink-0 text-amber-400" />
+              )}
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">{status.user.email}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {status.user.emailVerified
+                    ? "Confirmed — this address can receive recovery links."
+                    : "Not confirmed yet — recovery links need a confirmed address."}
+                </p>
+              </div>
+            </div>
+            {!status.user.emailVerified && (
+              <Button size="sm" variant="outline" onClick={() => void resendVerification()} disabled={verifyBusy}>
+                {verifyBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                Send link
+              </Button>
+            )}
           </div>
         </div>
       )}

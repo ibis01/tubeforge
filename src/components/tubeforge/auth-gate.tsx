@@ -61,6 +61,11 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [recoverDone, setRecoverDone] = useState(false);
   const [recoverBusy, setRecoverBusy] = useState(false);
 
+  // S21 — the emailed verification link lands as /?verified=ok|expired|missing
+  // (the route's GET redirects here instead of answering raw JSON). The gate
+  // translates the outcome into a plain-language note and scrubs the URL.
+  const [verifiedNote, setVerifiedNote] = useState<null | "ok" | "expired" | "missing">(null);
+
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
@@ -96,6 +101,13 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
           setRecoverStep(2);
           setRecoverToken(token);
         }
+      }
+      // S21 — the verification landing: same pattern as the reset token.
+      const verified = new URLSearchParams(window.location.search).get("verified");
+      if (verified === "ok" || verified === "expired" || verified === "missing") {
+        window.history.replaceState(null, "", "/");
+        if (s === "signedOut") setVerifiedNote(verified);
+        // a signed-in browser sees its verification state on the security card
       }
     });
   }, [refresh]);
@@ -139,9 +151,10 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         return;
       }
       if (d.verification?.url) {
-        // Console email mode: verify in the background so the account is
-        // fully activated (no SMTP until Stage 3).
-        void fetch(d.verification.url, { cache: "no-store" }).catch(() => {});
+        // Console email mode: verify BEFORE the reload. Fire-and-forget gets
+        // aborted by the navigation right below — the account would stay
+        // unverified forever (S21: the confirmed address).
+        await fetch(d.verification.url, { cache: "no-store" }).catch(() => {});
       }
       setPassword("");
       setConfirm("");
@@ -284,6 +297,24 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                 : "Sign in to reach your pipeline, library and settings."}
           </p>
         </div>
+
+        {/* S21 — the verification landing note (a clicked email link ends here) */}
+        {verifiedNote && (
+          <div
+            className={
+              verifiedNote === "ok"
+                ? "rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs text-emerald-300 mb-4"
+                : "rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-300 mb-4"
+            }
+            role="status"
+          >
+            {verifiedNote === "ok"
+              ? "Email confirmed — this address is now trusted for account recovery."
+              : verifiedNote === "expired"
+                ? "That verification link expired or was already used — sign in and send a fresh one from Settings → Security."
+                : "That verification link was malformed — sign in and send a fresh one from Settings → Security."}
+          </div>
+        )}
 
         {/* S18 — the recovery flow replaces the card (only from LOGIN mode:
             a register-mode gate has no accounts, nothing to recover). */}
