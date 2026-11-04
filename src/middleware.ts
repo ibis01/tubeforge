@@ -25,6 +25,10 @@ import {
   clientIpFrom,
   hitBucket,
 } from "@/lib/tubeforge/rate-limit";
+import {
+  originHostTrusted,
+  parseAllowedOrigins,
+} from "@/lib/tubeforge/origin-trust";
 
 // Reachable without a token. /api/auth/token is deliberately NOT here —
 // minting an API token requires an authenticated session. /api/auth/status
@@ -113,42 +117,39 @@ export async function middleware(req: NextRequest) {
   }
 
   // CSRF guard for cookie-authenticated mutations: if an Origin is present it
-  // must match a trusted origin. Trust is decided in this order:
-  //   1. TUBEFORGE_ALLOWED_ORIGINS — explicit allow-list (comma-separated,
-  //      host only or full origin), for deployments behind a proxy that
-  //      rewrites the Host header (preview environments, load balancers).
-  //   2. The request's own Host header (direct connections, no proxy).
+  // must match a trusted origin. Trust is decided by origin-trust.ts (S30):
+  //   1. TUBEFORGE_ALLOWED_ORIGINS — explicit allow-list; SUFFIX entries
+  //      (".space-z.ai" / "*.space-z.ai") cover the domain and every
+  //      subdomain under it — the preview deployment's proxy rewrites the
+  //      Host header, so the Stage-2 Host comparison alone rejected every
+  //      mutation from the signed-in preview browser (the phone screenshots'
+  //      "AI Script + Metadata failed / Cross-origin request rejected").
+  //   2. X-Forwarded-Host — only when TUBEFORGE_TRUST_FORWARDED_HOST=1 and
+  //      the proxy provably overwrites the header.
+  //   3. The request's own Host header (direct connections, no proxy).
   // A Bearer-token client (curl/scripts) sends no Origin and is allowed by
   // default; the cookie-session case is the only one this guard polices.
   if (payload.s === "session" && MUTATING.has(req.method)) {
     const origin = req.headers.get("origin");
     if (origin) {
-      let ok = false;
-      try {
-        const originHost = new URL(origin).host;
-        const allowed = (process.env.TUBEFORGE_ALLOWED_ORIGINS ?? "")
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-        if (allowed.length > 0) {
-          ok = allowed.some((entry) => {
-            try {
-              // entries may be "host:port" or a full "https://…/"; compare
-              // both as a host and as an origin URL for convenience.
-              if (entry.includes("://")) return new URL(entry).host === originHost;
-              return entry === originHost;
-            } catch {
-              return entry === originHost;
-            }
-          });
-        } else if (originHost === req.headers.get("host")) {
-          ok = true;
-        }
-      } catch {
-        ok = false;
-      }
-      if (!ok)
+      const decision = originHostTrusted({
+        origin,
+        host: req.headers.get("host"),
+        forwardedHost: req.headers.get("x-forwarded-host"),
+        allowedOrigins: parseAllowedOrigins(process.env.TUBEFORGE_ALLOWED_ORIGINS),
+        trustForwardedHost: process.env.TUBEFORGE_TRUST_FORWARDED_HOST === "1",
+      });
+      if (!decision.ok) {
+        // The operator-facing diagnostic: everything needed to configure the
+        // allow-list precisely, and nothing secret.
+        console.warn(
+          `[TubeForge] CSRF guard rejected ${req.method} ${pathname}: ` +
+            `origin=${origin} host=${req.headers.get("host") ?? "?"} ` +
+            `x-forwarded-host=${req.headers.get("x-forwarded-host") ?? "?"} — ` +
+            `add the origin to TUBEFORGE_ALLOWED_ORIGINS (a suffix entry like ".space-z.ai" covers every subdomain).`
+        );
         return NextResponse.json({ error: "Cross-origin request rejected" }, { status: 403 });
+      }
     }
   }
 

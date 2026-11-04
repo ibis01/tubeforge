@@ -55,8 +55,15 @@ console.log("\n§1/§2/§3 the cookie law");
   `;
   const tmp = `/tmp/s28-cookie-${process.pid}.mts`;
   writeFileSync(tmp, script);
+  // The deployment's .env legitimately carries the preview knob (S28's
+  // daemon fix), and @prisma/client's runtime injects EVERY .env var into
+  // any subprocess that imports the DB — so a "no knob" run from this repo
+  // would silently inherit the knob. Prisma never overwrites vars that are
+  // already set, so the default-law runs pin the knob to a benign sentinel:
+  // any value but "none" IS the default law (check 3.2 pins that too).
+  const NEUTRAL_KNOB = { TUBEFORGE_COOKIE_SAMESITE: "off" };
   const run = (env: NodeJS.ProcessEnv): Record<string, unknown> =>
-    JSON.parse(execFileSync("node", ["--import", "tsx", tmp], { env: { ...process.env, ...env } }).toString().trim());
+    JSON.parse(execFileSync("node", ["--import", "tsx", tmp], { env: { ...process.env, ...NEUTRAL_KNOB, ...env } }).toString().trim());
 
   const def = run({ NODE_ENV: "test" });
   check("1.1  default (no knob): tenant cookie stays SameSite=Lax", def.tenant.sameSite === "lax", def.tenant);
