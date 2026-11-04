@@ -10,6 +10,7 @@ import {
   Wand2,
   Library,
   Users,
+  Globe,
   AudioLines,
   CalendarDays,
   Radio,
@@ -44,6 +45,12 @@ export const NAV_ITEMS: {
   { id: "create", label: "Create", icon: Wand2, hint: "Auto-pilot studio" },
   { id: "library", label: "Library", icon: Library, hint: "Video queue" },
   { id: "cast", label: "Cast", icon: Users, hint: "Recurring characters" },
+  {
+    id: "world",
+    label: "World",
+    icon: Globe,
+    hint: "Recurring places & things",
+  },
   {
     id: "voice",
     label: "Voice Studio",

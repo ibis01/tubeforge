@@ -14,6 +14,7 @@ import { ResearchView } from "@/components/tubeforge/views/research-view";
 import { CreateView } from "@/components/tubeforge/views/create-view";
 import { LibraryView } from "@/components/tubeforge/views/library-view";
 import { CastView } from "@/components/tubeforge/views/cast-view";
+import { WorldView } from "@/components/tubeforge/views/world-view";
 import { VoiceView } from "@/components/tubeforge/views/voice-view";
 import { CalendarView } from "@/components/tubeforge/views/calendar-view";
 import { ChannelsView } from "@/components/tubeforge/views/channels-view";
@@ -53,6 +54,10 @@ const VIEW_META: Record<ViewId, { title: string; subtitle: string }> = {
   cast: {
     title: "Cast",
     subtitle: "Recurring characters with locked-in visual identity",
+  },
+  world: {
+    title: "World",
+    subtitle: "Recurring places & things for set continuity",
   },
   voice: {
     title: "Voice Studio",
@@ -180,6 +185,7 @@ export default function Home() {
             {view === "create" && <CreateView />}
             {view === "library" && <LibraryView />}
             {view === "cast" && <CastView />}
+            {view === "world" && <WorldView />}
             {view === "voice" && <VoiceView />}
             {view === "calendar" && <CalendarView />}
             {view === "channels" && <ChannelsView />}

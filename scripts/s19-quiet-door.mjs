@@ -83,5 +83,24 @@ ok(reauthed.status === 200, "status after re-login -> 200");
 const after = screams();
 ok(after === before, `zero new screams (${before} -> ${after})`);
 
+// ---- 6. cleanup — the end-state law: the battery leaves NOTHING ----
+import { PrismaClient } from "@prisma/client";
+const db = new PrismaClient();
+const u = await db.user.findUnique({
+  where: { email },
+  include: { memberships: { select: { organizationId: true } } },
+});
+if (u) {
+  const orgIds = u.memberships.map((m) => m.organizationId);
+  await db.session.deleteMany({ where: { userId: u.id } });
+  await db.apiToken.deleteMany({ where: { userId: u.id } });
+  await db.membership.deleteMany({ where: { userId: u.id } });
+  await db.user.delete({ where: { id: u.id } });
+  for (const orgId of orgIds) await db.organization.deleteMany({ where: { id: orgId } });
+}
+const leftover = await db.user.count();
+ok(leftover === 0, `cleanup — zero users remain (got ${leftover})`);
+await db.$disconnect();
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -188,8 +188,13 @@ if (FIXTURE) {
 try {
   if (FIXTURE) await db.video.delete({ where: { id: FIXTURE } }).catch(() => {});
   for (const email of [emailA, emailB]) {
-    const u = await db.user.findUnique({ where: { email }, select: { id: true } });
-    if (u) await db.user.delete({ where: { id: u.id } }).catch(() => {});
+    const u = await db.user.findUnique({ where: { email }, include: { memberships: { select: { organizationId: true } } } });
+    if (u) {
+      // orgs too — the end-state law: the battery leaves NOTHING
+      for (const orgId of u.memberships.map((m) => m.organizationId))
+        await db.organization.deleteMany({ where: { id: orgId } }).catch(() => {});
+      await db.user.delete({ where: { id: u.id } }).catch(() => {});
+    }
   }
   console.log("PASS  probe rows cleaned up (videos + accounts)");
 } catch (err) {
