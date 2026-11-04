@@ -16,8 +16,9 @@ import { errorText } from "@/lib/tubeforge/redact";
 // allow-list — unknown keys are dropped server-side, so a future preference
 // key can never leak by default. Secrets never live here: OAuth client
 // secrets/tokens and provider API keys are stored in ProviderCredential
-// (encrypted at rest) and exposed ONLY masked, via /api/settings/ai,
-// /api/settings/tts and /api/youtube/status.
+// (encrypted at rest) and exposed ONLY masked, via /api/settings/ai
+// (which also owns the voice-engine config since S25 buried /api/settings/tts)
+// and /api/youtube/status.
 
 /** Stored preference rows restricted to the public allow-list (defaults merged). */
 async function readPublicSettings(): Promise<Record<string, string>> {

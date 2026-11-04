@@ -19,7 +19,14 @@
 //   ai.chat/tts/image/video JSON blobs           -> UserSetting (minus apiKey)
 //                                                   + ProviderCredential (key, encrypted)
 //   aiProvider/aiBaseUrl/aiModel + aiApiKey      -> UserSetting + ProviderCredential("chat")
-//   ttsProvider/ttsBaseUrl/ttsModel/ttsVoice …   -> UserSetting + ProviderCredential("tts")
+//   ttsApiKey                                    -> ProviderCredential("tts")
+//                                                  (the old ttsProvider/ttsBaseUrl/
+//                                                   ttsModel/ttsVoice preference rows
+//                                                   are consumed, NOT migrated — their
+//                                                   only reader was the legacy tts
+//                                                   module S25 buried; the live voice
+//                                                   engine config is the registry-driven
+//                                                   /api/settings/ai surface)
 //   stock.pexelsKey / stock.pixabayKey           -> ProviderCredential("stock", …)
 //   zai.* (platform SDK continuity)              -> UserSetting verbatim
 //   every other row (music.*, sfx.*, quality*, budgets, defaults, …)
@@ -185,6 +192,14 @@ export async function claimLegacyForOwner(userId: string): Promise<ClaimResult> 
       "ttsApiKey",
       "stock.pexelsKey",
       "stock.pixabayKey",
+      // S25: the legacy custom-TTS preference rows — their only reader was
+      // src/lib/tubeforge/tts.ts, buried with /api/settings/tts. Migrating
+      // them would write UserSetting rows nobody reads. The API KEY half
+      // above still migrates: providers/tts.ts reads the credential.
+      "ttsProvider",
+      "ttsBaseUrl",
+      "ttsModel",
+      "ttsVoice",
       ...CAPABILITY_BLOB_KEYS,
     ]);
     for (const [key, value] of map) {

@@ -34,6 +34,7 @@ import {
 import { MusicLibrarySection } from "@/components/tubeforge/settings-music";
 import { SecurityAccessCard } from "@/components/tubeforge/security-card";
 import { AccountDataCard } from "@/components/tubeforge/account-card";
+import { InstallAppButton, ManualInstallHint } from "@/components/tubeforge/pwa";
 import { PlanCard } from "@/components/tubeforge/plan-card";
 import {
   Save,
@@ -757,6 +758,27 @@ export function SettingsView() {
 
       {/* Account & data — usage, the GDPR export, the irreversible delete */}
       <AccountDataCard />
+
+      {/* The app on this device — S25 raised the PWA from its component
+          drawer: the pieces existed since day one (sw.js, manifest, icons,
+          the components themselves) with nothing mounting them. */}
+      <Card className="glass rounded-2xl p-5 sm:p-6">
+        <div className="flex items-center gap-2.5 mb-4">
+          <div className="h-9 w-9 rounded-xl bg-emerald-500/90 flex items-center justify-center shrink-0 shadow-[0_0_18px_rgba(16,185,129,0.25)]">
+            <Smartphone className="h-4.5 w-4.5 text-white" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="font-semibold leading-tight">App on this device</h3>
+            <p className="text-xs text-muted-foreground">
+              Install TubeForge as an app — its own window, no browser bar
+            </p>
+          </div>
+        </div>
+        <InstallAppButton />
+        <div className="mt-4">
+          <ManualInstallHint />
+        </div>
+      </Card>
 
       {/* AI providers — mix and match: one provider per task, Z.ai creds shared */}
       <Card className="glass rounded-2xl p-5 sm:p-6">
