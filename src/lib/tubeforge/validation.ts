@@ -216,6 +216,16 @@ export const assembleSaveSchema = z.object({
           sceneIndex: z.number().int().min(1).max(999).optional(),
         })
         .optional(),
+      /** S10 — the short pick: which scene the vertical cut centers on. Mode
+       *  is the enum, sceneIndex a small positive integer. Scene EXISTENCE is
+       *  validated one layer out at shortSceneIndexFor — a hostile index
+       *  falls back to the hook heuristic, never selects a path or crashes. */
+      short: z
+        .object({
+          mode: z.enum(["auto", "scene"]),
+          sceneIndex: z.number().int().min(1).max(999).optional(),
+        })
+        .optional(),
     })
     .optional(),
 });

@@ -60,8 +60,8 @@ import {
 import { qcForVideo } from "./qc";
 import { parsePlan, getApprovedAudioMap } from "./director-plan";
 import { parseTimeline, docSceneSettings, type DocSceneSettings } from "./timeline";
-import type { ExportQuality, MusicPick, PosterPick } from "./studio-doc";
-import { docMusicPick, docPosterPick } from "./studio-doc";
+import type { ExportQuality, MusicPick, PosterPick, ShortPick } from "./studio-doc";
+import { docMusicPick, docPosterPick, docShortPick } from "./studio-doc";
 import { sanitizeTransition, transitionSummary } from "./transitions";
 import {
   loadSlideDeck,
@@ -733,7 +733,37 @@ export async function runRenderJob(
 // ---------------------------------------------------------------------------
 // short / convert / verify / comments
 
-/** Cut the 9:16 vertical Short. sceneIndex omitted/null → auto-pick. */
+/** S10 — the short's moment: the doc's standing pick as a scene index the
+ * cut centers on; null = the hook heuristic (pickBestScene) decides, the
+ * pre-S10 behavior. PURE (doc pick + row scenes in, index-or-null out) so
+ * the short job and the probe read the same truth:
+ *   • doc pick {mode:"scene", sceneIndex} → that index, WHEN the scene
+ *     exists;
+ *   • junk, out-of-range, absent or "auto" → null — a hostile index can
+ *     only ever fall back to the heuristic, never select a path or crash;
+ *   • non-story format → null (the route already refuses those).
+ */
+export function shortSceneIndexFor(video: {
+  format: string;
+  scenes: string | null;
+  timeline: string | null;
+}): number | null {
+  if (video.format !== "story") return null;
+  const pick: ShortPick | null = docShortPick(
+    parseTimeline(video.timeline)?.renderPrefs ?? null
+  );
+  if (pick?.mode === "scene" && typeof pick.sceneIndex === "number") {
+    const exists = parseScenes(video.scenes).some((s) => s.index === pick.sceneIndex);
+    if (exists) return pick.sceneIndex;
+    // an index the doc can't back falls down to the heuristic — never a crash
+  }
+  return null;
+}
+
+/** Cut the 9:16 vertical Short. The moment resolves body > doc > hook:
+ * opts.sceneIndex (an explicit this-request override, the detail dialog's
+ * channel) > the doc's standing pick (shortSceneIndexFor) > the hook
+ * heuristic inside renderShort. */
 export async function runShortJob(
   videoId: string,
   opts: { sceneIndex?: number | null } = {}
@@ -754,7 +784,13 @@ export async function runShortJob(
   const sceneIndex =
     Number.isInteger(opts.sceneIndex) && (opts.sceneIndex as number) >= 1
       ? (opts.sceneIndex as number)
-      : null;
+      : shortSceneIndexFor(video);
+  const source: "body" | "doc" | "auto" =
+    sceneIndex != null && opts.sceneIndex === sceneIndex
+      ? "body"
+      : sceneIndex != null
+        ? "doc"
+        : "auto";
 
   try {
     const result = await renderShort({
@@ -787,7 +823,15 @@ export async function runShortJob(
         userId: ctx.userId,
         videoId,
         stage: "short",
-        message: `Vertical Short cut from scene ${result.sceneIndex}${result.autoPicked ? " (auto-picked)" : ""} — ${result.durationSec.toFixed(1)}s 9:16`,
+        message: `Vertical Short cut from scene ${result.sceneIndex}${
+          source === "body"
+            ? " (picked this run)"
+            : source === "doc"
+              ? " (the studio's pick)"
+              : result.autoPicked
+                ? " (auto-picked)"
+                : ""
+        } — ${result.durationSec.toFixed(1)}s 9:16`,
       },
     });
   } catch (err) {

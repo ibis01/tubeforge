@@ -137,6 +137,7 @@ import {
   ImagePlus,
   Film,
   Sparkles,
+  Smartphone,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -179,8 +180,11 @@ import {
   sanitizeMusicPick,
   docPosterPick,
   sanitizePosterPick,
+  docShortPick,
+  sanitizeShortPick,
   type MusicPick,
   type PosterPick,
+  type ShortPick,
   type SceneGrade,
   type SceneTitle,
   type SceneCameraKeys,
@@ -319,12 +323,15 @@ function normalizeTimelineDoc(t: AssembledTimelineDTO | null): AssembledTimeline
     // S7 — the music pick rides the same choke point.
     // S9 — the poster pick rides it too (junk reads as "no opinion" — the
     // cover depicts the opening scene, the pre-S9 behavior).
+    // S10 — the short pick rides it too (junk reads as "no opinion" — the
+    // hook heuristic picks the moment, the pre-S10 behavior).
     renderPrefs: t.renderPrefs
       ? {
           quality: t.renderPrefs.quality ?? "standard",
           captionStyle: sanitizeCaptionStyle(t.renderPrefs.captionStyle),
           music: sanitizeMusicPick(t.renderPrefs.music),
           poster: sanitizePosterPick(t.renderPrefs.poster),
+          short: sanitizeShortPick(t.renderPrefs.short),
         }
       : t.renderPrefs,
     scenes: t.scenes.map((s) => {
@@ -1424,6 +1431,82 @@ export function TimelineStudio({
     [posterBusy, saving, loading, renderInFlight, dirty, save, videoId, timeline, toast]
   );
 
+  // ---------- S10: the short — the moment the vertical cut frames ----------
+  // The 9:16 cut's moment was a pipeline default: a hook regex scored the
+  // scenes and the highest scorer got framed, always — the studio had no
+  // say in the vertical derivative. The pick is doc-level (one short per
+  // video, like the poster and the score): which scene the cut centers on.
+  // The PICK rides the autosave; the CUT is an ffmpeg slice of the ALREADY
+  // RENDERED master — no generation pass, no cost disclosure, so the arm
+  // is single-step (unlike the poster's two-step CogView disclosure); it
+  // only needs the master to exist.
+  const setShortPick = useCallback(
+    (pick: ShortPick | null) => {
+      if (!timeline) return;
+      const next = cloneTimeline(timeline);
+      const prefs = next.renderPrefs ?? { quality: "standard" as const };
+      next.renderPrefs = { ...prefs, short: pick };
+      applyEdit(next);
+    },
+    [timeline, applyEdit]
+  );
+  const [shortBusy, setShortBusy] = useState(false);
+
+  // The apply: flush the doc (a just-made pick must be on disk before the
+  // job reads it), POST the short job with NO body (the standing pick
+  // resolves server-side — body > doc > hook), then poll the job state
+  // until it settles. A pick without a cut still rides the doc — the next
+  // cut (studio arm or dialog) honors it.
+  const cutShort = useCallback(
+    async () => {
+      if (shortBusy || saving || loading || renderInFlight || !video.hasVideo) return;
+      setShortBusy(true);
+      try {
+        if (dirty) await save();
+        const res = await fetch(`/api/videos/${videoId}/short`, { method: "POST" });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        // Poll the background job until it settles (the same state the
+        // detail dialog polls). Only an error that SETTLES without a file
+        // fails the arm.
+        let settled: { sceneIndex?: number | null; durationSec?: number | null } | null = null;
+        for (let i = 0; i < 80 && !settled; i++) {
+          await new Promise((r) => setTimeout(r, 1500));
+          const s = await fetch(`/api/videos/${videoId}/short`, { cache: "no-store" });
+          if (!s.ok) continue;
+          const st = (await s.json()) as {
+            generating?: boolean; hasShort?: boolean; error?: string | null;
+            sceneIndex?: number | null; durationSec?: number | null;
+          };
+          if (st.generating) continue;
+          if (st.error && !st.hasShort) throw new Error(st.error);
+          settled = st;
+        }
+        onSaved?.(); // refresh the parent row — hasShort/shortScene/shortDuration
+        const pick = docShortPick(timeline?.renderPrefs);
+        toast({
+          title: settled ? "Vertical Short ready" : "Short still cutting",
+          description: settled
+            ? `The cut frames scene ${settled.sceneIndex} — ${settled.durationSec?.toFixed(1)}s 9:16 with punch-in zoom and big captions.`
+            : `The cut is taking longer than expected — ${
+                pick?.mode === "scene" ? `scene ${pick.sceneIndex}` : "the best hook"
+              } will land on the video page.`,
+        });
+      } catch (err) {
+        toast({
+          title: "Short cut failed",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setShortBusy(false);
+      }
+    },
+    [shortBusy, saving, loading, renderInFlight, dirty, save, videoId, video, timeline, onSaved, toast]
+  );
+
   // ---------- the preview canvas ----------
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -2305,6 +2388,80 @@ export function TimelineStudio({
               )}
               <span className="ml-1.5 text-xs">
                 {posterBusy ? "Painting…" : posterArmed ? "Regenerate?" : "Regenerate"}
+              </span>
+            </Button>
+          </div>
+          <span className="h-5 w-px bg-white/10" aria-hidden />
+          {/* S10 — the short: doc-level moment pick. The vertical cut
+              centers on the PICKED scene (junk or an out-of-range index
+              falls back to the hook heuristic); the arm cuts the 9:16 Short
+              from the rendered master — an ffmpeg slice, no generation
+              pass, so it is single-step (no cost disclosure needed). */}
+          <div className="flex items-center gap-1.5 mr-1">
+            <Smartphone className="h-3.5 w-3.5 text-muted-foreground" />
+            <Select
+              value={(() => {
+                const p = docShortPick(timeline?.renderPrefs);
+                return p?.mode === "scene" ? `scene:${p.sceneIndex}` : "auto";
+              })()}
+              onValueChange={(v) =>
+                v === "auto"
+                  ? setShortPick(null) // absent = the pre-S10 chain (hook heuristic)
+                  : setShortPick({ mode: "scene", sceneIndex: Number(v.slice(6)) })
+              }
+              disabled={saving || loading || renderInFlight}
+            >
+              <SelectTrigger
+                className="h-7 w-[150px] text-[11px]"
+                title="Which scene the vertical Short centers on — the cut frames the picked scene; Auto lets the retention-hook heuristic decide"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px]">Short moment</SelectLabel>
+                  <SelectItem value="auto" className="text-[11px]">
+                    Auto — best hook
+                  </SelectItem>
+                  {timeline?.scenes.map((s) => (
+                    <SelectItem key={s.index} value={`scene:${s.index}`} className="text-[11px]">
+                      Scene {s.index} — {s.title}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            {/* the current cut — what exists on disk; opens the Short */}
+            {video.hasShort && video.shortUrl && video.shortScene != null && (
+              <a
+                href={video.shortUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="shrink-0 rounded-[3px] border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-white/80 hover:bg-white/10"
+                title={`Open the current Short — scene ${video.shortScene}, ${(video.shortDuration ?? 0).toFixed(1)}s 9:16`}
+              >
+                S{video.shortScene} · {(video.shortDuration ?? 0).toFixed(1)}s
+              </a>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2"
+              onClick={() => void cutShort()}
+              disabled={saving || loading || renderInFlight || shortBusy || !video.hasVideo}
+              title={
+                video.hasVideo
+                  ? "Cut the 9:16 vertical Short from the picked scene — an ffmpeg slice of the rendered master (no generation pass)"
+                  : "Render the final video first — the Short is cut from the rendered master"
+              }
+            >
+              {shortBusy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Smartphone className="h-3.5 w-3.5" />
+              )}
+              <span className="ml-1.5 text-xs">
+                {shortBusy ? "Cutting…" : video.hasShort ? "Re-cut" : "Cut Short"}
               </span>
             </Button>
           </div>

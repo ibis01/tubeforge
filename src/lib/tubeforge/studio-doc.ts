@@ -465,6 +465,9 @@ export interface RenderPrefs {
   /** S9 — the poster pick: which scene the cover art depicts (absent =
    *  scene 1, exactly as before S9). */
   poster?: PosterPick | null;
+  /** S10 — the short pick: which scene the vertical cut centers on (absent
+   *  = the hook heuristic, exactly as before S10). */
+  short?: ShortPick | null;
 }
 
 export function sanitizeRenderPrefs(v: unknown): RenderPrefs | null {
@@ -483,11 +486,16 @@ export function sanitizeRenderPrefs(v: unknown): RenderPrefs | null {
   // (the cover depicts scene 1, the pre-S9 behavior) and the key is omitted
   // for byte-stability.
   const pp = sanitizePosterPick(rec.poster);
+  // S10 — the short pick: same doctrine, absent/junk reads as "no opinion"
+  // (the hook heuristic picks the moment, the pre-S10 behavior) and the key
+  // is omitted for byte-stability.
+  const sp = sanitizeShortPick(rec.short);
   return {
     quality: q,
     ...(cs ? { captionStyle: cs } : {}),
     ...(mp ? { music: mp } : {}),
     ...(pp ? { poster: pp } : {}),
+    ...(sp ? { short: sp } : {}),
   };
 }
 
@@ -609,6 +617,60 @@ export function docPosterPick(
   prefs: RenderPrefs | null | undefined
 ): PosterPick | null {
   return sanitizePosterPick(prefs?.poster);
+}
+
+// ---------- S10: the short — the moment the cut frames ----------
+//
+// The vertical cut's MOMENT was decided outside the studio: a hook regex
+// (pickBestScene) scored the scenes and the highest scorer got framed,
+// always — unless someone knew about the detail dialog's per-request body
+// override. The studio, where every other creative pick now lives (the
+// cue, the bed, the words' face, the score, the narrator, the cover's
+// subject), had no say in the 9:16 derivative at all. S10 makes the moment
+// a doc-level pick: which scene the Short centers on. "auto" keeps the
+// pre-S10 behavior — the hook heuristic decides.
+//
+// PURE on purpose (this module imports nothing): shape validation only.
+// RANGE validation (the scene actually exists) happens one layer out at
+// shortSceneIndexFor — a hostile/absent sceneIndex can only ever fall back
+// to the heuristic, never select a path or crash.
+
+export type ShortPickMode = "auto" | "scene";
+
+export interface ShortPick {
+  mode: ShortPickMode;
+  /** mode "scene" — the ROW scene's index (the stable identity the doc's
+   *  scenes also carry); validated against the scene list at the
+   *  resolution, junk falls back to the hook heuristic. */
+  sceneIndex?: number;
+}
+
+/** The doc boundary: accept anything a persisted doc may carry and return a
+ * clean pick or null (null + junk = "no opinion" — the hook heuristic picks
+ * the moment). Fields irrelevant to the mode are dropped so a pick is
+ * always self-consistent ("scene" carries sceneIndex). */
+export function sanitizeShortPick(v: unknown): ShortPick | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const rec = v as Record<string, unknown>;
+  const mode = rec.mode;
+  if (typeof mode !== "string") return null;
+  const m = mode.trim().toLowerCase();
+  if (m === "auto") return { mode: "auto" };
+  if (m !== "scene") return null;
+  // A scene index is a small positive integer — floats, strings, huge
+  // numbers and NaN are junk before they ever reach the scene list.
+  const raw = rec.sceneIndex;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > 999)
+    return null;
+  return { mode: "scene", sceneIndex: raw };
+}
+
+/** The doc's pick, already sanitized (the short job + the studio picker read
+ *  this). Absent or junk → null ("no opinion" — the heuristic decides). */
+export function docShortPick(
+  prefs: RenderPrefs | null | undefined
+): ShortPick | null {
+  return sanitizeShortPick(prefs?.short);
 }
 
 // ---------- S6: caption styles — the words' face ----------

@@ -13,9 +13,12 @@ type Ctx = { params: Promise<{ id: string }> };
 
 /**
  * POST — cut a 9:16 vertical Short out of the rendered final video as a
- * background job (202). Body: { sceneIndex?: number } — omit for auto-pick.
- * The job body is runShortJob (video-jobs.ts) — shared with the crash-
- * recovery handler, so a restart resumes the cut.
+ * background job (202). Body: { sceneIndex?: number } — an explicit
+ * this-request override (the detail dialog's channel); omit and the job
+ * follows the doc's standing pick (S10, renderPrefs.short) or, absent
+ * that, the auto-pick heuristic. The job body is runShortJob
+ * (video-jobs.ts) — shared with the crash-recovery handler, so a restart
+ * resumes the cut.
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
