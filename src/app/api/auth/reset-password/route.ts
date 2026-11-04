@@ -24,6 +24,27 @@ const confirmSchema = z.object({
   password: z.string().min(MIN_PASSWORD_LEN).max(200),
 });
 
+/**
+ * GET ?token=… — the EMAILED link's landing (S18). A reset link points HERE;
+ * before S18 clicking it met a 405 (the route was POST-only) — the link was
+ * dead on arrival in a browser. Now it 302s into the studio with the token
+ * on the query string (/?reset=…), where the AuthGate picks it up and opens
+ * the set-new-password form pre-filled. The token itself is validated only
+ * at the confirm POST — this handler just carries it (a bad token lands on
+ * the form and dies there with a clear error, no information leak).
+ */
+export async function GET(req: NextRequest) {
+  const token = req.nextUrl.searchParams.get("token");
+  if (!token || token.length < 10 || token.length > 200)
+    return NextResponse.json(
+      { error: "This reset link is malformed — request a new one from the sign-in screen" },
+      { status: 400 }
+    );
+  const dest = new URL("/", req.nextUrl.origin);
+  dest.searchParams.set("reset", token);
+  return NextResponse.redirect(dest);
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();

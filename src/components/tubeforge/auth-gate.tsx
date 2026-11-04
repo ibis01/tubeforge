@@ -16,9 +16,17 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TubeForgeLogo } from "@/components/tubeforge/logo";
-import { Loader2, LogOut, ShieldCheck, Eye, EyeOff, UserPlus, KeyRound } from "lucide-react";
+import { Loader2, LogOut, ShieldCheck, Eye, EyeOff, UserPlus, KeyRound, ArrowLeft, MailCheck } from "lucide-react";
 
 type GateState = "checking" | "signedOut" | "register" | "open" | "error";
+
+// S18 — the recovery. The two-step reset route (/api/auth/reset-password)
+// existed since Stage 2 with NO caller: a user who forgot the password had
+// only the offline script. The login screen now carries the whole flow:
+// request by email → (console mode hands the link straight back — the
+// single-owner house pattern; smtp: “check your inbox” + paste field) →
+// set the new password → every session dies, sign in with the new one.
+type Flow = "signin" | "recover";
 
 interface StatusResponse {
   configured: boolean;
@@ -40,6 +48,18 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [reveal, setReveal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // S18 — the recovery flow's state (only reachable from LOGIN mode: a
+  // register-mode gate has no accounts, nothing to recover).
+  const [flow, setFlow] = useState<Flow>("signin");
+  const [recoverStep, setRecoverStep] = useState<1 | 2>(1);
+  const [recoverEmail, setRecoverEmail] = useState("");
+  const [recoverToken, setRecoverToken] = useState(""); // a pasted LINK or the bare token
+  const [recoverPw, setRecoverPw] = useState("");
+  const [recoverPw2, setRecoverPw2] = useState("");
+  const [recoverLink, setRecoverLink] = useState<string | null>(null); // console mode shows it
+  const [recoverDone, setRecoverDone] = useState(false);
+  const [recoverBusy, setRecoverBusy] = useState(false);
 
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
@@ -64,6 +84,19 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     void refresh().then((s) => {
       setState(s);
       broadcastGateState(s !== "error");
+      // S18 — an EMAILED reset link lands as /?reset=<token> (the route's GET
+      // redirects here). A signed-out browser opens the confirm form
+      // pre-filled; a signed-in one ignores it (that user has S16's change-
+      // password surface) — either way the token leaves the URL.
+      const token = new URLSearchParams(window.location.search).get("reset");
+      if (token) {
+        window.history.replaceState(null, "", "/");
+        if (s === "signedOut") {
+          setFlow("recover");
+          setRecoverStep(2);
+          setRecoverToken(token);
+        }
+      }
     });
   }, [refresh]);
 
@@ -130,6 +163,86 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     window.location.reload();
   };
 
+  // ---- S18: the recovery submit handlers ----
+  /** A pasted reset LINK or a bare token — extract the token either way. */
+  const tokenFrom = (raw: string): string => {
+    const t = raw.trim();
+    if (t.includes("token=")) {
+      try {
+        return new URL(t).searchParams.get("token") ?? t;
+      } catch {
+        return new URLSearchParams(t.split("?")[1] ?? "").get("token") ?? t;
+      }
+    }
+    return t;
+  };
+
+  // Step 1 — request the link by email. Unknown addresses answer 200 with
+  // no link (enumeration stays blind); console mode returns the link for a
+  // real account — the gate jumps straight to step 2 with the token in hand.
+  const requestReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setRecoverBusy(true);
+    try {
+      const res = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: recoverEmail.trim() }),
+      });
+      const d = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        reset?: { url?: string; expiresHours?: number };
+      };
+      if (!res.ok) throw new Error(d.error ?? "Could not request the reset");
+      setRecoverLink(d.reset?.url ?? null);
+      if (d.reset?.url) {
+        setRecoverToken(tokenFrom(d.reset.url));
+        setRecoverStep(2);
+      } else {
+        // smtp mode (or an unknown address — indistinguishable by design):
+        // the link went to the inbox; the paste field below takes it.
+        setRecoverToken("");
+        setRecoverStep(2);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error — try again.");
+    } finally {
+      setRecoverBusy(false);
+    }
+  };
+
+  // Step 2 — prove the token, set the new password. On success every live
+  // session of the account dies (the route revokes them all); the gate
+  // flips back to sign-in with the email kept.
+  const confirmReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (recoverPw.length < 8) return setError("The new password needs at least 8 characters.");
+    if (recoverPw !== recoverPw2) return setError("The two new passwords do not match.");
+    const token = tokenFrom(recoverToken);
+    if (token.length < 10) return setError("Paste the reset link (or its token) first.");
+    setRecoverBusy(true);
+    try {
+      const res = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, password: recoverPw }),
+      });
+      const d = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(d.error ?? "Could not set the new password");
+      setRecoverDone(true);
+      setRecoverPw("");
+      setRecoverPw2("");
+      setRecoverToken("");
+      setRecoverLink(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error — try again.");
+    } finally {
+      setRecoverBusy(false);
+    }
+  };
+
   if (state === "checking") {
     // Brief splash while the session state resolves.
     return (
@@ -164,12 +277,159 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
             Tube<span className="text-gradient">Forge</span>
           </h1>
           <p className="text-sm text-muted-foreground max-w-xs">
-            {mode === "register"
-              ? "Create your account — your own studio, pipeline and settings, isolated from every other user."
-              : "Sign in to reach your pipeline, library and settings."}
+            {flow === "recover"
+              ? "Recover the account — request a reset link, then set a new password. Every device gets signed out."
+              : mode === "register"
+                ? "Create your account — your own studio, pipeline and settings, isolated from every other user."
+                : "Sign in to reach your pipeline, library and settings."}
           </p>
         </div>
 
+        {/* S18 — the recovery flow replaces the card (only from LOGIN mode:
+            a register-mode gate has no accounts, nothing to recover). */}
+        {flow === "recover" && recoverStep === 1 && (
+          <form onSubmit={requestReset} className="glass rounded-2xl border border-white/10 p-6 space-y-4">
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Enter the account's email — the recovery link is sent there. Single-owner
+              installs without a mail relay get the link right here instead.
+            </p>
+            <Input
+              type="email"
+              value={recoverEmail}
+              onChange={(e) => setRecoverEmail(e.target.value)}
+              placeholder="you@studio.com"
+              autoComplete="email"
+              required
+              aria-label="Account email"
+            />
+            {error && (
+              <p role="alert" className="text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">
+                {error}
+              </p>
+            )}
+            <Button
+              type="submit"
+              disabled={recoverBusy || !recoverEmail.trim()}
+              className="w-full bg-brand-gradient hover:opacity-90 text-white font-semibold"
+            >
+              {recoverBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4 mr-1.5" />}
+              Send the recovery link
+            </Button>
+            <button
+              type="button"
+              onClick={() => {
+                setFlow("signin");
+                setError(null);
+              }}
+              className="w-full text-center text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <ArrowLeft className="inline h-3 w-3 mr-1 -mt-0.5" />
+              Back to sign in
+            </button>
+          </form>
+        )}
+
+        {flow === "recover" && recoverStep === 2 && recoverDone && (
+          <div className="glass rounded-2xl border border-white/10 p-6 space-y-4 text-center">
+            <MailCheck className="h-8 w-8 mx-auto text-emerald-400" />
+            <p className="text-sm font-medium">Password changed</p>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Every device was signed out — sign in with the new password.
+            </p>
+            <Button
+              onClick={() => {
+                setEmail(recoverEmail); // keep the address for the sign-in form
+                setFlow("signin");
+                setRecoverDone(false);
+                setError(null);
+              }}
+              className="w-full bg-brand-gradient hover:opacity-90 text-white font-semibold"
+            >
+              Back to sign in
+            </Button>
+          </div>
+        )}
+
+        {flow === "recover" && recoverStep === 2 && !recoverDone && (
+          <form onSubmit={confirmReset} className="glass rounded-2xl border border-white/10 p-6 space-y-4">
+            {recoverLink ? (
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Single-owner mode — the link is{" "}
+                <a href={recoverLink} className="text-foreground/85 underline underline-offset-2 hover:text-foreground">
+                  right here
+                </a>{" "}
+                (already filled in below).
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Check the inbox for the reset link, then paste it (or its token) below.
+              </p>
+            )}
+            <Input
+              type="text"
+              value={recoverToken}
+              onChange={(e) => setRecoverToken(e.target.value)}
+              placeholder="The reset link, or its token"
+              required
+              aria-label="Reset link or token"
+            />
+            <Input
+              type={reveal ? "text" : "password"}
+              value={recoverPw}
+              onChange={(e) => setRecoverPw(e.target.value)}
+              placeholder="New password (8+ characters)"
+              autoComplete="new-password"
+              required
+              aria-label="New password"
+            />
+            <Input
+              type={reveal ? "text" : "password"}
+              value={recoverPw2}
+              onChange={(e) => setRecoverPw2(e.target.value)}
+              placeholder="Repeat the new password"
+              autoComplete="new-password"
+              required
+              aria-label="Repeat the new password"
+            />
+            {error && (
+              <p role="alert" className="text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">
+                {error}
+              </p>
+            )}
+            <Button
+              type="submit"
+              disabled={recoverBusy || !recoverToken.trim() || !recoverPw || !recoverPw2}
+              className="w-full bg-brand-gradient hover:opacity-90 text-white font-semibold"
+            >
+              {recoverBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4 mr-1.5" />}
+              Set the new password
+            </Button>
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <button
+                type="button"
+                onClick={() => {
+                  setRecoverStep(1);
+                  setError(null);
+                }}
+                className="hover:text-foreground transition-colors"
+              >
+                Request a new link
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFlow("signin");
+                  setError(null);
+                }}
+                className="hover:text-foreground transition-colors"
+              >
+                Back to sign in
+              </button>
+            </div>
+          </form>
+        )}
+
+        {flow === "signin" && (
         <form
           onSubmit={submit}
           className="glass rounded-2xl border border-white/10 p-6 space-y-4"
@@ -248,6 +508,21 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
             </div>
           )}
 
+          {mode === "login" && (
+            <button
+              type="button"
+              onClick={() => {
+                setFlow("recover");
+                setRecoverStep(1);
+                setRecoverDone(false);
+                setError(null);
+              }}
+              className="w-full text-right text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Forgot the password?
+            </button>
+          )}
+
           {error && (
             <p role="alert" className="text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">
               {error}
@@ -288,6 +563,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
             Sessions are HttpOnly + signed; every API route is tenant-scoped.
           </p>
         </form>
+        )}
       </div>
     </div>
   );
