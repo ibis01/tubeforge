@@ -4,13 +4,23 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { db, rawDatabase as rawDb } from "@/lib/tubeforge/tenant-db";
-import { requireUser } from "@/lib/tubeforge/tenant";
+import { requireUser, sessionIdFromRequest } from "@/lib/tubeforge/tenant";
 
 export async function GET(req: NextRequest) {
   const auth = await requireUser(req);
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
   auth.enter(); // tenant scope: handler + spawned job closures
   const { userId, organizationId } = auth.ctx;
+
+  // The bundle carries the account's shape (settings, credential presence,
+  // everything) — a privacy surface, so the S16/S20/S21 law applies: signed
+  // browser sessions only. A leaked bearer must not read the whole studio.
+  const sid = await sessionIdFromRequest(req);
+  if (!sid)
+    return NextResponse.json(
+      { error: "Data export is managed from a signed-in browser session only" },
+      { status: 403 }
+    );
 
   const user = await rawDb.user.findUnique({
     where: { id: userId },

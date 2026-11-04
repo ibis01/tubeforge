@@ -11,14 +11,23 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import { db, rawDatabase as rawDb } from "@/lib/tubeforge/tenant-db";
-import { requireUser } from "@/lib/tubeforge/tenant";
-import { clearedSessionCookie } from "@/lib/tubeforge/tenant";
+import { requireUser, sessionIdFromRequest, clearedSessionCookie } from "@/lib/tubeforge/tenant";
 
 export async function POST(req: NextRequest) {
   const auth = await requireUser(req);
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
   auth.enter(); // tenant scope: handler + spawned job closures
   const { userId, organizationId } = auth.ctx;
+
+  // Account management is a browser-session affair — the S16/S20/S21 law,
+  // applied to the most destructive account action there is: a leaked
+  // bearer must never be one POST away from wiping the studio.
+  const sid = await sessionIdFromRequest(req);
+  if (!sid)
+    return NextResponse.json(
+      { error: "Account deletion is managed from a signed-in browser session only" },
+      { status: 403 }
+    );
 
   let confirm = "";
   try {

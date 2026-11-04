@@ -33,6 +33,7 @@ import {
 } from "@/lib/tubeforge/types";
 import { MusicLibrarySection } from "@/components/tubeforge/settings-music";
 import { SecurityAccessCard } from "@/components/tubeforge/security-card";
+import { AccountDataCard } from "@/components/tubeforge/account-card";
 import { PlanCard } from "@/components/tubeforge/plan-card";
 import {
   Save,
@@ -753,6 +754,9 @@ export function SettingsView() {
 
       {/* Studio access — opt-in password lock for the whole app */}
       <SecurityAccessCard />
+
+      {/* Account & data — usage, the GDPR export, the irreversible delete */}
+      <AccountDataCard />
 
       {/* AI providers — mix and match: one provider per task, Z.ai creds shared */}
       <Card className="glass rounded-2xl p-5 sm:p-6">
