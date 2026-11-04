@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { resolveUserPlan, microToCredits } from "@/lib/tubeforge/billing";
+import { stripeGate, CHECKOUT_TIERS } from "@/lib/tubeforge/stripe";
 
 export async function GET(req: NextRequest) {
   const auth = await requireUser(req);
@@ -18,6 +19,12 @@ export async function GET(req: NextRequest) {
   // Display unit = UI credits (the plan's monthlyCredits unit). The ledger's
   // canonical microCredits stay internal; creditBalanceMicro carries the
   // exact remainder for anything that needs sub-credit precision.
+  //
+  // S24: the stripe block tells the plan card which doors exist on THIS
+  // deployment — checkout only where the key + that tier's price env are
+  // set, portal wherever the key is set. The card renders honest buttons
+  // (or an "operator hasn't wired Stripe" hint) from this, never guessing.
+  const gate = stripeGate();
   return NextResponse.json({
     plan: {
       tier: resolved.plan.tier,
@@ -34,5 +41,11 @@ export async function GET(req: NextRequest) {
     access: resolved.access,
     creditBalance: microToCredits(resolved.creditBalance),
     creditBalanceMicro: resolved.creditBalance,
+    stripe: {
+      configured: Boolean(gate.secret),
+      checkoutTiers: CHECKOUT_TIERS.filter((t) =>
+        Boolean(gate.secret && gate.prices[t])
+      ),
+    },
   });
 }
