@@ -45,7 +45,6 @@ import {
   pollSlide,
   pollVerify,
   pollComments,
-  pollUpload,
   pollShort,
   pollConvert,
   pollScript,
@@ -202,9 +201,28 @@ export function VideoDetailDialog({
   const [kitRunning, setKitRunning] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  // YouTube upload state (Phase 4 — OAuth upload)
+  // YouTube ship state (S17 — the real publish flow). The old surface was a
+  // fossil: "Upload to YouTube" fired /upload (a route that never existed —
+  // a guaranteed 404) and "Publish" PATCHed status:"published" while a toast
+  // claimed "added to the upload queue" — no queue, no upload. The real
+  // machinery (POST /publish → runUploadJob) now gets a review-then-post
+  // panel: channel, title, description, tags, privacy and schedule are
+  // REVIEWED, one click ships, the job's progress drives the wait.
   const [ytStatus, setYtStatus] = useState<YouTubeStatusDTO | null>(null);
-  const [uploading, setUploading] = useState(false);
+  const [pubOpen, setPubOpen] = useState(false);
+  const [pubDefaults, setPubDefaults] = useState<{ privacyStatus: string } | null>(null);
+  const [pubTitle, setPubTitle] = useState("");
+  const [pubDesc, setPubDesc] = useState("");
+  const [pubTags, setPubTags] = useState("");
+  const [pubPrivacy, setPubPrivacy] = useState("unlisted");
+  const [pubAt, setPubAt] = useState(""); // datetime-local string; empty = immediate
+  const [pubBusy, setPubBusy] = useState(false);
+  const [pubProgress, setPubProgress] = useState<string | null>(null);
+
+  // QC re-run state (S17 — the pre-flight gate): the /qc route re-measures
+  // the standing render WITHOUT paying for a re-render; the scorecard shows
+  // the fresh report when the job lands.
+  const [qcRerunning, setQcRerunning] = useState(false);
 
   // Bring-your-own-voice state — swap TTS voices for uploaded / internet audio
   const [voicePanelOpen, setVoicePanelOpen] = useState(false);
@@ -320,7 +338,11 @@ export function VideoDetailDialog({
     setVerifyRunning(false);
     setCommentsKit(null);
     setKitRunning(false);
-    setUploading(false);
+    setPubOpen(false); // fresh ship surface per video (S17 — replaces the dead setUploading)
+    setPubBusy(false);
+    setPubProgress(null);
+    setPubDefaults(null);
+    setQcRerunning(false);
     setCopiedKey(null);
     setShortScenePick("auto");
     setShortRunning(false);
@@ -728,64 +750,115 @@ export function VideoDetailDialog({
     }
   };
 
-  // ---------- Phase 4: YouTube upload ----------
-  const uploadVideo = async () => {
-    if (uploading || !video?.hasVideo) return;
-    setUploading(true);
+  // ---------- S17: the ship — the REAL publish flow ----------
+  // The review panel opens pre-filled from the video row (the same defaults
+  // the route re-resolves server-side); the GET /publish surface supplies
+  // the account's privacy default. One click = ONE authorized POST; the
+  // job's progress (GET /publish) drives the wait, the row's youtubeUrl
+  // marks the landing.
+  const openPublishPanel = async () => {
+    setPubTitle(video.title ?? "");
+    setPubDesc(video.description ?? "");
+    setPubTags(video.tags ?? "");
+    setPubAt("");
+    setPubProgress(null);
+    setPubOpen(true);
+    if (!pubDefaults) {
+      const res = await fetch(`/api/videos/${video.id}/publish`, { cache: "no-store" }).catch(() => null);
+      if (res?.ok) {
+        const d = (await res.json()) as { defaults?: { privacyStatus?: string } };
+        setPubDefaults({ privacyStatus: d.defaults?.privacyStatus ?? "unlisted" });
+        setPubPrivacy(d.defaults?.privacyStatus ?? "unlisted");
+      }
+    }
+  };
+
+  const publishVideo = async () => {
+    if (pubBusy || !video?.hasVideo) return;
+    const title = pubTitle.trim();
+    if (!title) {
+      toast({ title: "Publish", description: "A title is required — YouTube caps it at 100 characters", variant: "destructive" });
+      return;
+    }
+    setPubBusy(true);
+    setPubProgress("Handing to the upload job…");
     try {
-      const res = await fetch(`/api/videos/${video.id}/upload`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Could not start the upload");
-      const done = await pollUpload(video.id);
-      onChanged(done);
-      toast({
-        title: "Live on YouTube",
-        description: done.youtubeUrl ?? "Uploaded successfully.",
+      const tags = pubTags.split(",").map((t) => t.trim()).filter(Boolean).slice(0, 30);
+      const res = await fetch(`/api/videos/${video.id}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          description: pubDesc.trim(),
+          tags,
+          privacyStatus: pubPrivacy,
+          publishAt: pubAt ? new Date(pubAt).toISOString() : null,
+        }),
       });
-      bumpRefresh();
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Could not start the upload");
+
+      // Poll the purpose-built surface: publishing + progress until the job
+      // lands (youtubeUrl set / status flips / error recorded).
+      const deadline = Date.now() + 20 * 60 * 1000;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const st = await fetch(`/api/videos/${video.id}/publish`, { cache: "no-store" });
+        const s = (await st.json().catch(() => ({}))) as {
+          publishing?: boolean; progress?: { percent?: number; label?: string } | null;
+          youtubeUrl?: string | null; error?: string | null;
+        };
+        if (!st.ok) throw new Error(`Lost the upload status — HTTP ${st.status}`);
+        if (s.publishing) {
+          setPubProgress(
+            s.progress?.percent != null
+              ? `Uploading… ${Math.round(s.progress.percent)}%${s.progress.label ? ` — ${s.progress.label}` : ""}`
+              : "Uploading…"
+          );
+        } else if (s.youtubeUrl) {
+          await refreshVideo(video.id); // onChanged fires inside — the row now carries youtubeUrl
+          toast({ title: "Live on YouTube", description: s.youtubeUrl });
+          setPubOpen(false);
+          bumpRefresh();
+          return;
+        } else {
+          throw new Error(s.error ?? "The upload ended without a YouTube URL");
+        }
+        if (Date.now() > deadline)
+          throw new Error("The upload is taking unusually long — it may still be running; check the video row in a few minutes.");
+      }
     } catch (e) {
       toast({
-        title: "Upload failed",
+        title: "Publish failed",
         description: e instanceof Error ? e.message : "Unknown error",
         variant: "destructive",
       });
       await refreshVideo(video.id);
     } finally {
-      setUploading(false);
+      setPubBusy(false);
+      setPubProgress(null);
     }
   };
 
-  const runStage = async (stage: "voiceover" | "thumbnail" | "publish") => {
+  const runStage = async (stage: "voiceover" | "thumbnail") => {
     if (busy) return;
     setBusy(stage);
     try {
-      if (stage === "publish") {
-        const res = await fetch(`/api/videos/${video.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: "published" }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "Publish failed");
-        onChanged(data.video);
-        toast({ title: "Marked as published", description: `${data.video.title} added to the upload queue.` });
-      } else {
-        await fetch(`/api/videos/${video.id}/${stage}`, { method: "POST" });
-        const done =
+      await fetch(`/api/videos/${video.id}/${stage}`, { method: "POST" });
+      const done =
+        stage === "voiceover"
+          ? await pollVoiceover(video.id, {
+              timeoutMs: isStory ? 15 * 60 * 1000 : 6 * 60 * 1000,
+            })
+          : await pollThumbnail(video.id);
+      onChanged(done);
+      toast({
+        title: stage === "voiceover" ? "Voiceover regenerated" : "Thumbnail regenerated",
+        description:
           stage === "voiceover"
-            ? await pollVoiceover(video.id, {
-                timeoutMs: isStory ? 15 * 60 * 1000 : 6 * 60 * 1000,
-              })
-            : await pollThumbnail(video.id);
-        onChanged(done);
-        toast({
-          title: stage === "voiceover" ? "Voiceover regenerated" : "Thumbnail regenerated",
-          description:
-            stage === "voiceover"
-              ? `${formatDuration(done.audioDuration)} of audio${isStory ? " — re-render the video to match the new timing." : "."}`
-              : "New artwork is ready.",
-        });
-      }
+            ? `${formatDuration(done.audioDuration)} of audio${isStory ? " — re-render the video to match the new timing." : "."}`
+            : "New artwork is ready.",
+      });
       bumpRefresh();
     } catch (e) {
       toast({
@@ -796,6 +869,45 @@ export function VideoDetailDialog({
       await refreshVideo(video.id);
     } finally {
       setBusy(null);
+    }
+  };
+
+  // ---------- S17: the pre-flight gate — re-run the QC battery against the
+  // STANDING render (the after-edit case: trimmed narration, edited caption,
+  // replaced stock clip). The full render still QC's on completion; this is
+  // the cheap re-measure for "I changed something, check it again".
+  const rerunQc = async () => {
+    if (qcRerunning || !video?.hasVideo) return;
+    setQcRerunning(true);
+    try {
+      const res = await fetch(`/api/videos/${video.id}/qc`, { method: "POST" });
+      const data = (await res.json().catch(() => ({}))) as { accepted?: boolean; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Could not start the QC re-run");
+      // Poll the route's own surface until the job stops running, then the
+      // refreshed row carries the fresh qcReport for the scorecard.
+      const deadline = Date.now() + 10 * 60 * 1000;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 2500));
+        const st = await fetch(`/api/videos/${video.id}/qc`, { cache: "no-store" });
+        if (!st.ok) throw new Error(`HTTP ${st.status}`);
+        const s = (await st.json()) as { running?: boolean; error?: string | null };
+        if (!s.running) {
+          if (s.error) throw new Error(s.error);
+          break;
+        }
+        if (Date.now() > deadline) throw new Error("The QC re-run is taking unusually long — check back shortly.");
+      }
+      await refreshVideo(video.id); // the refreshed row carries the fresh qcReport
+      toast({ title: "QC re-run complete", description: "The scorecard reflects the standing render." });
+      bumpRefresh();
+    } catch (e) {
+      toast({
+        title: "QC re-run failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setQcRerunning(false);
     }
   };
 
@@ -1864,6 +1976,25 @@ export function VideoDetailDialog({
             <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
               Quality check · {new Date(video.qc.checkedAt).toLocaleString()}
             </p>
+            {/* S17 — the pre-flight gate: the /qc route re-measures the
+                STANDING render without paying for a re-render (the route ran
+                Stage-6-complete but had NO caller). For the after-edit case:
+                trimmed narration, edited caption, replaced stock clip. */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 text-[10px] px-2 border-white/15 bg-white/4"
+              disabled={qcRerunning || Boolean(busy) || pubBusy || !video.hasVideo}
+              onClick={() => void rerunQc()}
+              title={
+                video.hasVideo
+                  ? "Re-run the QC battery against the standing render — no re-render needed"
+                  : "Render the video first — QC measures final.mp4"
+              }
+            >
+              {qcRerunning ? <Loader2 className="h-3 w-3 animate-spin" /> : <CircleCheck className="h-3 w-3" />}
+              {qcRerunning ? "Re-checking…" : "Re-run QC"}
+            </Button>
             <Badge
               variant="outline"
               className={
@@ -3199,8 +3330,17 @@ export function VideoDetailDialog({
           </a>
         </Button>
       </div>
+      {/* S17 — the ship. The two fossil buttons are gone: "Upload to YouTube"
+          fired /upload (a route that never existed — a guaranteed 404) and
+          "Publish" PATCHed status:"published" while a toast claimed "added to
+          the upload queue" (no queue, no upload — the PATCH gate now refuses
+          the write). The REAL machinery — POST /publish → the durable upload
+          job — gets a review-then-post panel below: the house law is that
+          publishing is a SINGLE POST the user clicks after reviewing channel,
+          title, description, tags, privacy and schedule. Applies to BOTH
+          formats (any render that produced final.mp4 can ship). */}
       <div className="flex flex-wrap gap-2">
-        {isStory && video.hasVideo && video.youtubeUrl ? (
+        {video.youtubeUrl ? (
           <Button
             size="sm"
             variant="outline"
@@ -3214,43 +3354,34 @@ export function VideoDetailDialog({
               <ExternalLink className="h-3 w-3 opacity-60" />
             </a>
           </Button>
-        ) : isStory && video.hasVideo && ytStatus?.connected && video.status !== "published" ? (
+        ) : (
           <Button
             size="sm"
-            disabled={Boolean(busy) || uploading}
-            onClick={uploadVideo}
+            disabled={Boolean(busy) || pubBusy || !video.hasVideo || !ytStatus?.connected}
+            onClick={() => void openPublishPanel()}
             className="bg-brand-gradient hover:opacity-90 font-medium"
-            title={`Upload final.mp4 to "${ytStatus.channelTitle ?? "your channel"}" (${ytStatus.privacyStatus}) with title, description, tags and thumbnail`}
+            title={
+              !video.hasVideo
+                ? "Render the video first — the upload ships final.mp4"
+                : !ytStatus?.connected
+                  ? "Connect a YouTube channel in Settings → Channel first"
+                  : "Review title, description, tags, privacy and schedule — then ship final.mp4 to your channel"
+            }
           >
-            {uploading ? (
+            {pubBusy ? (
               <>
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Uploading…
+                {pubProgress ?? "Uploading…"}
               </>
             ) : (
               <>
                 <Youtube className="h-3.5 w-3.5" />
-                Upload to YouTube
+                Publish to YouTube
               </>
             )}
           </Button>
-        ) : null}
-        {video.status !== "published" ? (
-          <Button
-            size="sm"
-            disabled={Boolean(busy) || !video.hasVoiceover}
-            onClick={() => runStage("publish")}
-            className="bg-brand-gradient hover:opacity-90 font-medium"
-            title={video.hasVoiceover ? "" : "Generate a voiceover first"}
-          >
-            {busy === "publish" ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Rocket className="h-3.5 w-3.5" />
-            )}
-            Publish
-          </Button>
-        ) : (
+        )}
+        {video.status === "published" && (
           <Badge className="bg-primary/15 text-red-300 border border-primary/25 hover:bg-primary/15">
             Published
           </Badge>
@@ -3270,6 +3401,81 @@ export function VideoDetailDialog({
           Delete
         </Button>
       </div>
+      {/* S17 — the review-then-post panel. Every field is REVIEWED here; the
+          single POST carries exactly what this panel showed. The thumbnail
+          note states what the job ships (the promoted primary, or nothing). */}
+      {pubOpen && (
+        <div className="mb-1 rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
+          <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Youtube className="h-3.5 w-3.5 shrink-0 text-red-400" />
+            Shipping to{" "}
+            <span className="text-foreground/85 font-medium">{ytStatus?.channelTitle ?? "your channel"}</span>
+            {video.hasThumbnail ? " — the promoted thumbnail ships with it" : " — no thumbnail generated yet, YouTube picks a frame"}
+          </p>
+          <Input
+            value={pubTitle}
+            onChange={(e) => setPubTitle(e.target.value)}
+            placeholder="Video title (required, up to 100 characters)"
+            maxLength={100}
+            disabled={pubBusy}
+            aria-label="Video title"
+          />
+          <Textarea
+            value={pubDesc}
+            onChange={(e) => setPubDesc(e.target.value)}
+            placeholder="YouTube description (up to ~5000 characters)"
+            maxLength={4900}
+            rows={3}
+            disabled={pubBusy}
+            aria-label="YouTube description"
+          />
+          <Input
+            value={pubTags}
+            onChange={(e) => setPubTags(e.target.value)}
+            placeholder="Tags, comma, separated (up to 30)"
+            disabled={pubBusy}
+            aria-label="Tags"
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={pubPrivacy} onValueChange={setPubPrivacy} disabled={pubBusy}>
+              <SelectTrigger className="h-8 w-[150px] text-xs" aria-label="Privacy">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="public">Public</SelectItem>
+                <SelectItem value="unlisted">Unlisted</SelectItem>
+                <SelectItem value="private">Private</SelectItem>
+              </SelectContent>
+            </Select>
+            <Input
+              type="datetime-local"
+              value={pubAt}
+              onChange={(e) => setPubAt(e.target.value)}
+              disabled={pubBusy}
+              className="h-8 w-[230px] text-xs"
+              aria-label="Schedule (optional)"
+              title="Leave empty to publish immediately — pick a time to schedule the release on YouTube"
+            />
+          </div>
+          <div className="flex items-center gap-2 pt-1">
+            <Button
+              size="sm"
+              onClick={() => void publishVideo()}
+              disabled={pubBusy || !pubTitle.trim()}
+              className="bg-brand-gradient hover:opacity-90 text-white font-semibold"
+            >
+              {pubBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
+              {pubAt ? "Schedule the upload" : "Publish now"}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setPubOpen(false)} disabled={pubBusy}>
+              Cancel
+            </Button>
+            {pubBusy && pubProgress && (
+              <span className="text-[11px] text-muted-foreground">{pubProgress}</span>
+            )}
+          </div>
+        </div>
+      )}
     </DialogFooter>
   );
 

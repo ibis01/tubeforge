@@ -407,24 +407,26 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     }
   }
 
-  // Status transitions (publish / mark ready / retry)
+  // Status transitions (mark ready / retry). "published" is deliberately NOT
+  // client-writable (S17): the ship machine lives in /publish + the upload
+  // job — the route flips "publishing" on acceptance, the job flips
+  // "published" / "publish-failed" on the real outcome. The old client write
+  // was a fossil: it PATCHed the string and logged a "Published to YouTube
+  // queue" activity while nothing queued, nothing uploaded.
   if (typeof body.status === "string") {
-    const allowed = ["draft", "scripted", "voiced", "ready", "published", "failed"];
+    const allowed = ["draft", "scripted", "voiced", "ready", "failed"];
     if (!allowed.includes(body.status))
-      return NextResponse.json({ error: "Invalid status" }, { status: 400 });
+      return NextResponse.json(
+        {
+          error:
+            body.status === "published"
+              ? "Publishing is not a status write — use the publish flow (POST /api/videos/[id]/publish)"
+              : "Invalid status",
+        },
+        { status: 400 }
+      );
     data.status = body.status;
 
-    if (body.status === "published") {
-      await db.activity.create({
-        data: {
-          organizationId: auth.ctx.organizationId,
-          userId: auth.ctx.userId,
-          videoId: id,
-          stage: "publish",
-          message: `Published to YouTube queue — "${video.title ?? video.topic}"`,
-        },
-      });
-    }
     if (body.status === "ready") {
       await db.activity.create({
         data: {
