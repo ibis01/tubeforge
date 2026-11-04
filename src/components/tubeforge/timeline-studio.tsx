@@ -177,7 +177,10 @@ import {
   sanitizeCaptionStyle,
   docMusicPick,
   sanitizeMusicPick,
+  docPosterPick,
+  sanitizePosterPick,
   type MusicPick,
+  type PosterPick,
   type SceneGrade,
   type SceneTitle,
   type SceneCameraKeys,
@@ -314,11 +317,14 @@ function normalizeTimelineDoc(t: AssembledTimelineDTO | null): AssembledTimeline
     // studio-doc function the render side reads, so a hostile persisted
     // pick can only ever be a catalog look or nothing).
     // S7 — the music pick rides the same choke point.
+    // S9 — the poster pick rides it too (junk reads as "no opinion" — the
+    // cover depicts the opening scene, the pre-S9 behavior).
     renderPrefs: t.renderPrefs
       ? {
           quality: t.renderPrefs.quality ?? "standard",
           captionStyle: sanitizeCaptionStyle(t.renderPrefs.captionStyle),
           music: sanitizeMusicPick(t.renderPrefs.music),
+          poster: sanitizePosterPick(t.renderPrefs.poster),
         }
       : t.renderPrefs,
     scenes: t.scenes.map((s) => {
@@ -1336,6 +1342,88 @@ export function TimelineStudio({
     setVoiceArmed(false);
   }, [voicePick]);
 
+  // ---------- S9: the poster — the scene the cover depicts ----------
+  // The cover art's SUBJECT was a pipeline default: the concept derived
+  // from the opening scene, always, and wanting the poster to tease a
+  // different moment meant rewriting the script's opening. The pick is
+  // doc-level (one poster per video, like the caption style and the score):
+  // which scene's visual + mood the CogView concept derives from. The PICK
+  // rides the autosave; the ARTWORK is a generation — the two-step
+  // Regenerate arm is the cost disclosure (a real concept → CogView → VLM
+  // gate pass), and the thumb beside the picker shows what the world
+  // currently sees (cache-busted per regeneration).
+  const setPosterPick = useCallback(
+    (pick: PosterPick | null) => {
+      if (!timeline) return;
+      const next = cloneTimeline(timeline);
+      const prefs = next.renderPrefs ?? { quality: "standard" as const };
+      next.renderPrefs = { ...prefs, poster: pick };
+      applyEdit(next);
+    },
+    [timeline, applyEdit]
+  );
+  /** Two-step commit, like the delete arm — a regeneration paints real art. */
+  const [posterArmed, setPosterArmed] = useState(false);
+  const [posterBusy, setPosterBusy] = useState(false);
+  const [posterEpoch, setPosterEpoch] = useState(0); // thumb cache-buster per regen
+  useEffect(() => {
+    if (!posterArmed) return;
+    const t = setTimeout(() => setPosterArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [posterArmed]);
+
+  // The apply: flush the doc, POST the thumbnail job (the concept
+  // re-derives from the PICKED scene server-side — the same
+  // posterSceneFor truth the A/B variants ride), then poll the job state
+  // until it settles and bust the thumb's cache. A pick without a
+  // regeneration still rides the doc — the next thumbnail pass honors it.
+  const regeneratePoster = useCallback(
+    async () => {
+      if (posterBusy || saving || loading || renderInFlight) return;
+      setPosterArmed(false);
+      setPosterBusy(true);
+      try {
+        if (dirty) await save();
+        const res = await fetch(`/api/videos/${videoId}/thumbnail`, { method: "POST" });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        // Poll the background job (the same state the variants route
+        // exposes). Only an error that SETTLES with the job fails the arm.
+        let settled = false;
+        for (let i = 0; i < 120 && !settled; i++) {
+          await new Promise((r) => setTimeout(r, 2500));
+          const s = await fetch(`/api/videos/${videoId}/thumbnail?status=1`, { cache: "no-store" });
+          if (!s.ok) continue;
+          const st = (await s.json()) as { generating?: boolean; error?: string | null };
+          if (st.generating) continue;
+          settled = true;
+          if (st.error) throw new Error(st.error);
+        }
+        setPosterEpoch((e) => e + 1);
+        const pick = docPosterPick(timeline?.renderPrefs);
+        toast({
+          title: settled ? "Poster regenerated" : "Poster still painting",
+          description: settled
+            ? pick?.mode === "scene"
+              ? `The cover now depicts scene ${pick.sceneIndex}.`
+              : "The cover depicts the opening scene."
+            : "The generation is taking longer than expected — it will land on the video page.",
+        });
+      } catch (err) {
+        toast({
+          title: "Poster regeneration failed",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setPosterBusy(false);
+      }
+    },
+    [posterBusy, saving, loading, renderInFlight, dirty, save, videoId, timeline, toast]
+  );
+
   // ---------- the preview canvas ----------
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -2149,6 +2237,74 @@ export function TimelineStudio({
                   : voiceArmed
                     ? `Re-voice ${timeline?.sceneCount ?? ""} scenes?`
                     : "Re-voice"}
+              </span>
+            </Button>
+          </div>
+          <span className="h-5 w-px bg-white/10" aria-hidden />
+          {/* S9 — the poster: doc-level scene pick. The cover art's concept
+              derives from the PICKED scene's visual + mood (junk or an
+              out-of-range index falls back to the opening scene); the thumb
+              shows what the world sees, the two-step Regenerate runs the
+              CogView pass (the cost disclosure). */}
+          <div className="flex items-center gap-1.5 mr-1">
+            <ImagePlus className="h-3.5 w-3.5 text-muted-foreground" />
+            <Select
+              value={(() => {
+                const p = docPosterPick(timeline?.renderPrefs);
+                return p?.mode === "scene" ? `scene:${p.sceneIndex}` : "auto";
+              })()}
+              onValueChange={(v) =>
+                v === "auto"
+                  ? setPosterPick(null) // absent = the pre-S9 chain (opening scene)
+                  : setPosterPick({ mode: "scene", sceneIndex: Number(v.slice(6)) })
+              }
+              disabled={saving || loading || renderInFlight}
+            >
+              <SelectTrigger
+                className="h-7 w-[158px] text-[11px]"
+                title="Which scene the cover art depicts — the concept (and the CogView art) derives from the picked scene's visual + mood; Auto keeps the opening scene"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px]">Poster subject</SelectLabel>
+                  <SelectItem value="auto" className="text-[11px]">
+                    Auto — opening scene
+                  </SelectItem>
+                  {timeline?.scenes.map((s) => (
+                    <SelectItem key={s.index} value={`scene:${s.index}`} className="text-[11px]">
+                      Scene {s.index} — {s.title}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            {/* the world's view — the current cover, cache-busted per regen;
+                hidden until one exists (the onError arm) */}
+            <img
+              src={`/api/videos/${videoId}/thumbnail?v=${posterEpoch}`}
+              alt="Current poster"
+              className="h-7 w-12 rounded-[3px] object-cover border border-white/10 bg-white/5"
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.visibility = "hidden";
+              }}
+            />
+            <Button
+              size="sm"
+              variant={posterArmed ? "destructive" : "ghost"}
+              className="h-7 px-2"
+              onClick={() => (posterArmed ? void regeneratePoster() : setPosterArmed(true))}
+              disabled={saving || loading || renderInFlight || posterBusy}
+              title="Regenerate the cover from the picked scene — a real image-generation pass (concept → art → quality gate)"
+            >
+              {posterBusy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <ImagePlus className="h-3.5 w-3.5" />
+              )}
+              <span className="ml-1.5 text-xs">
+                {posterBusy ? "Painting…" : posterArmed ? "Regenerate?" : "Regenerate"}
               </span>
             </Button>
           </div>

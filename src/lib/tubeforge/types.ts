@@ -514,6 +514,8 @@ export interface AssembledTimelineDTO {
     captionStyle?: string | null;
     /** S7 — the studio's music pick (absent = follow the Settings chain). */
     music?: { mode: "auto" | "mood" | "track" | "off"; moodId?: string; trackId?: string } | null;
+    /** S9 — the studio's poster pick (absent = the cover depicts scene 1). */
+    poster?: { mode: "auto" | "scene"; sceneIndex?: number } | null;
   } | null;
 }
 

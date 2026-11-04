@@ -206,6 +206,16 @@ export const assembleSaveSchema = z.object({
           trackId: z.string().max(64).optional(),
         })
         .optional(),
+      /** S9 — the poster pick: which scene the cover art depicts. Mode is
+       *  the enum, sceneIndex a small positive integer. Scene EXISTENCE is
+       *  validated one layer out at the concept derivation — a hostile index
+       *  falls back to scene 1, never selects a path or crashes. */
+      poster: z
+        .object({
+          mode: z.enum(["auto", "scene"]),
+          sceneIndex: z.number().int().min(1).max(999).optional(),
+        })
+        .optional(),
     })
     .optional(),
 });

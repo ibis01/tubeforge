@@ -60,8 +60,8 @@ import {
 import { qcForVideo } from "./qc";
 import { parsePlan, getApprovedAudioMap } from "./director-plan";
 import { parseTimeline, docSceneSettings, type DocSceneSettings } from "./timeline";
-import type { ExportQuality, MusicPick } from "./studio-doc";
-import { docMusicPick } from "./studio-doc";
+import type { ExportQuality, MusicPick, PosterPick } from "./studio-doc";
+import { docMusicPick, docPosterPick } from "./studio-doc";
 import { sanitizeTransition, transitionSummary } from "./transitions";
 import {
   loadSlideDeck,
@@ -965,17 +965,47 @@ export async function runContinuityJob(videoId: string): Promise<void> {
 // ---------------------------------------------------------------------------
 // thumbnail + variants
 
-/** Concept for the cover art, derived from the CONTENT (scene 1 / script). */
+/** S9 — the poster's subject: the ONE scene the cover art derives from.
+ * PURE (doc pick + row scenes in, scene out) so the thumbnail job, the
+ * variants job and the probe all read the same truth:
+ *   • doc pick {mode:"scene", sceneIndex} → that row scene, WHEN it exists;
+ *   • junk, out-of-range, absent or "auto" → scene 1 (the pre-S9 hook-first
+ *     doctrine) — a hostile index can only ever fall back, never select a
+ *     path or crash;
+ *   • non-story format → null (the concept derives from topic/script).
+ */
+export function posterSceneFor(video: {
+  format: string;
+  scenes: string | null;
+  timeline: string | null;
+}): Scene | null {
+  if (video.format !== "story") return null;
+  const scenes = parseScenes(video.scenes);
+  if (scenes.length === 0) return null;
+  const pick: PosterPick | null = docPosterPick(
+    parseTimeline(video.timeline)?.renderPrefs ?? null
+  );
+  if (pick?.mode === "scene" && typeof pick.sceneIndex === "number") {
+    const picked = scenes.find((s) => s.index === pick.sceneIndex);
+    if (picked) return picked;
+    // an index the doc can't back falls down to scene 1 — never a crash
+  }
+  return scenes[0];
+}
+
+/** Concept for the cover art, derived from the CONTENT — S9: the scene the
+ * studio PICKS (doc pick > scene 1), or the topic/script for classic
+ * videos. */
 export async function thumbnailConceptFor(video: {
   format: string;
   scenes: string | null;
   script: string | null;
   topic: string;
+  timeline: string | null;
 }): Promise<string> {
-  if (video.format === "story") {
-    const first = parseScenes(video.scenes)[0];
-    if (first) return `${first.visual}. Mood: ${first.mood || "cinematic"}`;
-  }
+  const posterScene = posterSceneFor(video);
+  if (posterScene)
+    return `${posterScene.visual}. Mood: ${posterScene.mood || "cinematic"}`;
   return deriveThumbnailConcept({ topic: video.topic, script: video.script });
 }
 
@@ -1031,7 +1061,12 @@ export async function runThumbnailJob(videoId: string): Promise<void> {
         userId: ctx.userId,
         videoId,
         stage: "thumbnail",
-        message: `Thumbnail generated from the script content (${video.thumbStyle} style)${
+        message: `Thumbnail generated from the script content (${video.thumbStyle} style${
+          (() => {
+            const ps = posterSceneFor(video);
+            return ps && ps.index !== 1 ? `, scene ${ps.index} “${ps.title}”` : "";
+          })()
+        })${
           video.character ? ` featuring ${video.character.name}` : ""
         } for "${video.title}"`,
       },
@@ -1069,10 +1104,12 @@ export async function runVariantsJob(videoId: string): Promise<void> {
     const styles = pickVariantStyles(video.thumbStyle, 3);
 
     // One concept per set — every variant paints the SAME story moment in a
-    // different style, so A/B testing compares style, not subject.
-    const firstScene = video.format === "story" ? parseScenes(video.scenes)[0] : null;
-    const concept = firstScene
-      ? `${firstScene.visual}. Mood: ${firstScene.mood || "cinematic"}`
+    // different style, so A/B testing compares style, not subject. S9: the
+    // moment is the one the studio PICKS (doc pick > scene 1) — the same
+    // posterSceneFor truth the primary thumbnail job reads.
+    const posterScene = posterSceneFor(video);
+    const concept = posterScene
+      ? `${posterScene.visual}. Mood: ${posterScene.mood || "cinematic"}`
       : await deriveThumbnailConcept({ topic: video.topic, script: video.script });
 
     for (const style of styles) {
@@ -1102,7 +1139,12 @@ export async function runVariantsJob(videoId: string): Promise<void> {
         userId: ctx.userId,
         videoId,
         stage: "thumbnail",
-        message: `A/B thumbnail set generated for "${video.title}" (${styles.length} styles)`,
+        message: `A/B thumbnail set generated for "${video.title}" (${styles.length} styles${
+          (() => {
+            const ps = posterSceneFor(video);
+            return ps && ps.index !== 1 ? `, from scene ${ps.index} “${ps.title}”` : "";
+          })()
+        })`,
       },
     });
   } catch (err) {

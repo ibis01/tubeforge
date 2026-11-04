@@ -462,6 +462,9 @@ export interface RenderPrefs {
   /** S7 — the music pick the render lays under the voice (absent = follow
    *  the per-video Settings exactly as before S7). */
   music?: MusicPick | null;
+  /** S9 — the poster pick: which scene the cover art depicts (absent =
+   *  scene 1, exactly as before S9). */
+  poster?: PosterPick | null;
 }
 
 export function sanitizeRenderPrefs(v: unknown): RenderPrefs | null {
@@ -476,10 +479,15 @@ export function sanitizeRenderPrefs(v: unknown): RenderPrefs | null {
   // S7 — the music pick: same doctrine, absent/junk reads as "no opinion"
   // (follow the Settings chain) and the key is omitted for byte-stability.
   const mp = sanitizeMusicPick(rec.music);
+  // S9 — the poster pick: same doctrine, absent/junk reads as "no opinion"
+  // (the cover depicts scene 1, the pre-S9 behavior) and the key is omitted
+  // for byte-stability.
+  const pp = sanitizePosterPick(rec.poster);
   return {
     quality: q,
     ...(cs ? { captionStyle: cs } : {}),
     ...(mp ? { music: mp } : {}),
+    ...(pp ? { poster: pp } : {}),
   };
 }
 
@@ -549,6 +557,58 @@ export function docMusicPick(
   prefs: RenderPrefs | null | undefined
 ): MusicPick | null {
   return sanitizeMusicPick(prefs?.music);
+}
+
+// ---------- S9: the poster — the scene the cover depicts ----------
+//
+// The cover art's SUBJECT was decided outside the studio: the thumbnail
+// concept derives from scene 1's visual, always, and wanting the poster to
+// tease a different moment meant regenerating the script's opening. S9
+// makes the subject a doc-level pick: which scene's visual + mood the
+// concept (and therefore the CogView art) derives from. "auto" keeps the
+// pre-S9 behavior — scene 1, the hook-first doctrine.
+//
+// PURE on purpose (this module imports nothing): shape validation only.
+// RANGE validation (the scene actually exists) happens one layer out at
+// the concept derivation — a hostile/absent sceneIndex can only ever fall
+// back to scene 1, never select a path or crash.
+
+export type PosterPickMode = "auto" | "scene";
+
+export interface PosterPick {
+  mode: PosterPickMode;
+  /** mode "scene" — the ROW scene's index (the stable identity the doc's
+   *  scenes also carry); validated against the scene list at the
+   *  derivation, junk falls back to scene 1. */
+  sceneIndex?: number;
+}
+
+/** The doc boundary: accept anything a persisted doc may carry and return a
+ * clean pick or null (null + junk = "no opinion" — the cover depicts scene
+ * 1). Fields irrelevant to the mode are dropped so a pick is always
+ * self-consistent ("scene" carries sceneIndex). */
+export function sanitizePosterPick(v: unknown): PosterPick | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const rec = v as Record<string, unknown>;
+  const mode = rec.mode;
+  if (typeof mode !== "string") return null;
+  const m = mode.trim().toLowerCase();
+  if (m === "auto") return { mode: "auto" };
+  if (m !== "scene") return null;
+  // A scene index is a small positive integer — floats, strings, huge
+  // numbers and NaN are junk before they ever reach the scene list.
+  const raw = rec.sceneIndex;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > 999)
+    return null;
+  return { mode: "scene", sceneIndex: raw };
+}
+
+/** The doc's pick, already sanitized (the thumbnail + variants jobs read
+ *  this). Absent or junk → null ("no opinion" — scene 1 decides). */
+export function docPosterPick(
+  prefs: RenderPrefs | null | undefined
+): PosterPick | null {
+  return sanitizePosterPick(prefs?.poster);
 }
 
 // ---------- S6: caption styles — the words' face ----------
