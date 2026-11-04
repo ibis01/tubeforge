@@ -16,6 +16,15 @@
 //  law is the point)
 
 const BASE = "http://localhost:3000";
+// S28 — baseline-relative end state, captured BEFORE the suite creates
+// anything (the owner's real account lives in this DB now).
+const { PrismaClient: __PC24 } = await import("@prisma/client");
+const BASELINE = {
+  users: await new __PC24().user.count(),
+  orgs: await new __PC24().organization.count(),
+  tokens: await new __PC24().apiToken.count(),
+  subs: await new __PC24().subscription.count(),
+};
 let failures = 0;
 const check = (name, ok, detail) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok || detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
@@ -136,8 +145,9 @@ const prisma = new PrismaClient();
   const subs = await prisma.subscription.count();
   const users = await prisma.user.count();
   const orgs = await prisma.organization.count();
-  check("7.4  end state: 0 users / orgs / tokens / subscriptions",
-    users === 0 && orgs === 0 && tokens === 0 && subs === 0, { users, orgs, tokens, subs });
+  check("7.4  end state: nothing behind (users/orgs/tokens/subs back to baseline)",
+    users === BASELINE.users && orgs === BASELINE.orgs && tokens === BASELINE.tokens && subs === BASELINE.subs,
+    { users, orgs, tokens, subs, BASELINE });
 }
 await prisma.$disconnect();
 

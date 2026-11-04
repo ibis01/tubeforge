@@ -9,6 +9,12 @@
 // Run after a daemon restart: node scripts/s23-route-e2e.mjs
 
 import { PrismaClient } from "@prisma/client";
+// S28 — baseline-relative end state, captured BEFORE the suite creates
+// anything (the owner's real account lives in this DB now).
+const BASELINE = {
+  users: await new PrismaClient().user.count(),
+  orgs: await new PrismaClient().organization.count(),
+};
 
 const BASE = "http://localhost:3000";
 const jar = [];
@@ -121,7 +127,9 @@ if (u) {
   for (const orgId of orgIds) await db.organization.deleteMany({ where: { id: orgId } });
 }
 const [leftUsers, leftOrgs] = [await db.user.count(), await db.organization.count()];
-check("6.1  cleanup — zero users / orgs remain", leftUsers === 0 && leftOrgs === 0, { leftUsers, leftOrgs });
+check("6.1  cleanup — nothing behind (users/orgs back to baseline)",
+  leftUsers === BASELINE.users && leftOrgs === BASELINE.orgs,
+  { leftUsers, leftOrgs, BASELINE });
 await db.$disconnect();
 
 console.log(`\n${pass} passed, ${fail} failed`);

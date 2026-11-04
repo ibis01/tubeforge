@@ -39,8 +39,8 @@ const req = (method: "GET" | "POST", url: string, body?: unknown) =>
   const res = await GET(req("GET", `/api/auth/reset-password?token=${encodeURIComponent(token)}`));
   const loc = res.headers.get("location");
   check("1.1  a well-formed token redirects into the studio", res.status === 302 || res.status === 307, res.status);
-  check("1.2  the Location carries /?reset=<token> for the gate to pick up",
-    loc === `http://probe.local/?reset=${token}`, loc);
+  check("1.2  the Location carries /?reset=<token> for the gate to pick up (S28: relative)",
+    loc === `/?reset=${token}`, loc);
 
   const noToken = await GET(req("GET", "/api/auth/reset-password"));
   check("1.3  no token → 400 (not a redirect)", noToken.status === 400, noToken.status);

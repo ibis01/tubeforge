@@ -33,6 +33,9 @@ import {
 } from "../src/lib/tubeforge/tenant";
 
 const prisma = new PrismaClient();
+// S28 — the studio has a REAL tenant now (the owner's account lives in
+// this DB): teardown asserts NOTHING-BEHIND against the starting baseline.
+const __BASELINE = { tokens: await prisma.apiToken.count() };
 let failures = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok || detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
@@ -181,7 +184,7 @@ let liveToken: string | null = null;
 await prisma.user.delete({ where: { id: user.id } }).catch(() => {});
 await prisma.organization.delete({ where: { id: org.id } }).catch(() => {});
 const leftovers = await prisma.apiToken.count();
-check("teardown  cascade wiped every registry row", leftovers === 0, leftovers);
+check("teardown  cascade wiped the suite's registry rows (back to baseline)", leftovers === __BASELINE.tokens, { leftovers, baseline: __BASELINE.tokens });
 
 console.log(`\n${failures === 0 ? "ALL CHECKS PASS" : failures + " FAILURES"}`);
 await prisma.$disconnect();

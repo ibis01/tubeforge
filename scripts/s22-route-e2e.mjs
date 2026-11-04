@@ -9,6 +9,14 @@
 // Run after a daemon restart: node scripts/s22-route-e2e.mjs
 
 import { PrismaClient } from "@prisma/client";
+// S28 — baseline-relative end state, captured BEFORE the suite creates
+// anything (the owner's real account lives in this DB now).
+const BASELINE = {
+  users: await new PrismaClient().user.count(),
+  orgs: await new PrismaClient().organization.count(),
+  locations: await new PrismaClient().location.count(),
+  props: await new PrismaClient().prop.count(),
+};
 
 const BASE = "http://localhost:3000";
 const jar = [];
@@ -174,9 +182,10 @@ const [leftUsers, leftOrgs, leftLocs, leftProps] = [
   await db.location.count(),
   await db.prop.count(),
 ];
-check("6.1  cleanup — zero users / orgs / locations / props remain",
-  leftUsers === 0 && leftOrgs === 0 && leftLocs === 0 && leftProps === 0,
-  { leftUsers, leftOrgs, leftLocs, leftProps });
+check("6.1  cleanup — nothing behind (users/orgs/locations/props back to baseline)",
+  leftUsers === BASELINE.users && leftOrgs === BASELINE.orgs &&
+  leftLocs === BASELINE.locations && leftProps === BASELINE.props,
+  { leftUsers, leftOrgs, leftLocs, leftProps, BASELINE });
 await db.$disconnect();
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -172,7 +172,14 @@ export async function POST(req: NextRequest) {
         verification: {
           required: true,
           // Console mode hands the link straight back; smtp sent it for real.
-          url: linkInResponse() ? verifyUrl.toString() : undefined,
+          // S28 — RELATIVE on the wire: the gate fetches it against the page's
+          // own origin, which behind the preview proxy is the only origin the
+          // browser can reach (req.nextUrl.origin here is the internal one —
+          // an absolute link made the auto-verify fetch fail silently and the
+          // account stayed unverified forever).
+          url: linkInResponse()
+            ? `/api/auth/verify-email?token=${encodeURIComponent(verifyToken)}`
+            : undefined,
           expiresHours: VERIFY_TTL_H,
         },
       },

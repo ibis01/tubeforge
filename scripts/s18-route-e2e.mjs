@@ -19,6 +19,9 @@
 import { PrismaClient } from "@prisma/client";
 
 const db = new PrismaClient();
+// S28 — baseline-relative end state, captured BEFORE the suite creates
+// anything (the owner's real account lives in this DB now).
+const BASELINE_USERS = await db.user.count();
 const BASE = "http://localhost:3000";
 let cookie = "";
 
@@ -67,7 +70,9 @@ let body = await res.json().catch(() => ({}));
 check("3.1  the request succeeds for a real account", res.status === 200, res.status);
 check("3.2  console mode hands the link straight back", typeof body.reset?.url === "string" && body.reset.url.includes("token="), body.reset);
 const resetUrl = body.reset?.url ?? "";
-const rawToken = resetUrl ? new URL(resetUrl).searchParams.get("token") : null;
+// S28 — the link is RELATIVE on the wire now (the register law); resolve it
+// the way a browser resolves it against the page origin.
+const rawToken = resetUrl ? new URL(resetUrl, BASE).searchParams.get("token") : null;
 check("3.3  the token extracts from the link", typeof rawToken === "string" && rawToken.length >= 10, rawToken?.length);
 
 res = await call("POST", "/api/auth/reset-password", { email: `no-such-user-${stamp}@example.com` });
@@ -76,7 +81,7 @@ check("3.4  an UNKNOWN address answers the same 200 (blind)", res.status === 200
 check("3.5  with NO link", body.reset?.url === undefined, body);
 
 // ---- 4. the EMAILED link's landing ----
-const landing = await fetch(resetUrl, { redirect: "manual" });
+const landing = await fetch(`${BASE}${resetUrl}`, { redirect: "manual" });
 check("4.1  GET the emailed link → 307 (a redirect, not a 405)", landing.status === 302 || landing.status === 307, landing.status);
 const loc = landing.headers.get("location") ?? "";
 check("4.2  the Location lands in the studio with /?reset=<token>",
@@ -125,7 +130,7 @@ if (user) {
   for (const orgId of orgIds) await db.organization.deleteMany({ where: { id: orgId } });
 }
 const leftover = await db.user.count();
-check("7.1  cleanup — zero users remain (the register screen stands)", leftover === 0, leftover);
+check("7.1  cleanup — nothing behind (user count back to the baseline)", leftover === BASELINE_USERS, { leftover, BASELINE_USERS });
 
 await db.$disconnect();
 console.log(failures === 0 ? "\nS18 route e2e: ALL PASS" : `\nS18 route e2e: ${failures} FAILURE(S)`);

@@ -58,6 +58,9 @@ import {
 } from "../src/lib/tubeforge/spend";
 
 const prisma = new PrismaClient();
+// S28 — the studio has a REAL tenant now (the owner's account lives in
+// this DB): teardown asserts NOTHING-BEHIND against the starting baseline.
+const __BASELINE = { users: await prisma.user.count(), orphanOrgs: await prisma.organization.count({ where: { memberships: { none: {} } } }) };
 let failures = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok || detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
@@ -345,7 +348,7 @@ try {
   if (userId) await prisma.user.delete({ where: { id: userId } }).catch(() => {});
   const leftoverUsers = await prisma.user.count();
   const leftoverOrgs = await prisma.organization.count({ where: { memberships: { none: {} } } });
-  check("teardown: 0 users / 0 orphan orgs", leftoverUsers === 0 && leftoverOrgs === 0, { leftoverUsers, leftoverOrgs });
+  check("teardown: nothing behind (users/orphan-orgs back to baseline)", leftoverUsers === __BASELINE.users && leftoverOrgs === __BASELINE.orphanOrgs, { leftoverUsers, leftoverOrgs, __BASELINE });
   await prisma.$disconnect();
 }
 

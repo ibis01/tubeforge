@@ -16,6 +16,13 @@
 // Run after a daemon restart: node scripts/s27-route-e2e.mjs
 
 import { PrismaClient } from "@prisma/client";
+// S28 — baseline-relative end state, captured BEFORE the suite creates
+// anything (the owner's real account lives in this DB now).
+const BASELINE = {
+  users: await new PrismaClient().user.count(),
+  orgs: await new PrismaClient().organization.count({ where: { memberships: { none: {} } } }),
+  usageRows: await new PrismaClient().usageRecord.count(),
+};
 
 const BASE = "http://localhost:3000";
 const jar = [];
@@ -121,8 +128,9 @@ await new Promise((r) => setTimeout(r, 500));
 const users = await prisma.user.count();
 const orgs = await prisma.organization.count({ where: { memberships: { none: {} } } });
 const usageRows = await prisma.usageRecord.count();
-check("5.2  end state: 0 users / 0 orphan orgs / 0 usage rows",
-  users === 0 && orgs === 0 && usageRows === 0, { users, orgs, usageRows });
+check("5.2  end state: nothing behind (users/orphan-orgs/usage back to baseline)",
+  users === BASELINE.users && orgs === BASELINE.orgs && usageRows === BASELINE.usageRows,
+  { users, orgs, usageRows, BASELINE });
 
 console.log(`\n${fail === 0 ? "ALL CHECKS PASS" : `${fail} FAILURE(S)`} (${pass} passed)`);
 await prisma.$disconnect();

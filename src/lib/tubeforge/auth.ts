@@ -162,13 +162,23 @@ export async function createApiToken(): Promise<string | null> {
   return createSignedToken("api", API_TOKEN_MAX_AGE_SEC, getAuthSecret());
 }
 
+// S28 — the embedded-preview law. The studio renders inside cross-site
+// preview iframes (chat.z.ai serves the app through one), and browsers
+// refuse SameSite=Lax cookies in third-party contexts: a sign-in that
+// SUCCEEDED server-side bounced straight back to an empty form because the
+// session cookie never came back. Behind such a proxy set
+// TUBEFORGE_COOKIE_SAMESITE=none — the session ships SameSite=None; Secure
+// (browsers reject None without Secure, so secure is forced on). Direct
+// deploys keep the Lax default.
+const EMBEDDED_COOKIES = process.env.TUBEFORGE_COOKIE_SAMESITE === "none";
+
 export function sessionCookie(token: string) {
   return {
     name: SESSION_COOKIE,
     value: token,
     httpOnly: true,
-    sameSite: "lax" as const,
-    secure: process.env.NODE_ENV === "production",
+    sameSite: EMBEDDED_COOKIES ? ("none" as const) : ("lax" as const),
+    secure: EMBEDDED_COOKIES || process.env.NODE_ENV === "production",
     path: "/",
     maxAge: SESSION_MAX_AGE_SEC,
   };

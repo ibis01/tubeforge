@@ -47,6 +47,9 @@ import {
 } from "../src/app/api/props/[id]/route";
 
 const prisma = new PrismaClient();
+// S28 — the studio has a REAL tenant now (the owner's account lives in
+// this DB): teardown asserts NOTHING-BEHIND against the starting baseline.
+const __BASELINE = { users: await prisma.user.count(), orgs: await prisma.organization.count(), locations: await prisma.location.count(), props: await prisma.prop.count() };
 let failures = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok || detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
@@ -213,7 +216,7 @@ await prisma.user.delete({ where: { id: B.user.id } }).catch(() => {});
 await prisma.organization.delete({ where: { id: B.org.id } }).catch(() => {});
 
 const [u, o, l, p] = [await prisma.user.count(), await prisma.organization.count(), await prisma.location.count(), await prisma.prop.count()];
-check("teardown  zero users / orgs / locations / props remain", u === 0 && o === 0 && l === 0 && p === 0, { u, o, l, p });
+check("teardown  nothing behind (users/orgs/locations/props back to baseline)", u === __BASELINE.users && o === __BASELINE.orgs && l === __BASELINE.locations && p === __BASELINE.props, { u, o, l, p, __BASELINE });
 
 console.log(`\n${failures === 0 ? "ALL CHECKS PASS" : failures + " FAILURES"}`);
 await prisma.$disconnect();

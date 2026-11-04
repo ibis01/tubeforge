@@ -122,7 +122,7 @@ res = await call("D", "POST", "/api/auth/reset-password", { email });
 body = await res.json().catch(() => ({}));
 const resetUrl = body.reset?.url;
 check("8.1  a reset link is issued (console mode returns the URL)", typeof resetUrl === "string" && resetUrl.includes("token="), body.reset);
-const rawToken = resetUrl ? new URL(resetUrl).searchParams.get("token") : null;
+const rawToken = resetUrl ? new URL(resetUrl, "http://localhost:3000").searchParams.get("token") : null; // S28: the link is relative on the wire now
 
 res = await call("C", "POST", "/api/auth/change-password", { currentPassword: password2, newPassword: "S16RouteE2e!0004" });
 check("8.2  a rotation after the reset request succeeds", res.status === 200, res.status);

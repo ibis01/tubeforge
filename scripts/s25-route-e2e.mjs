@@ -11,6 +11,14 @@
 // Run: node scripts/s25-route-e2e.mjs   (daemon on :3000, S25 build)
 
 const BASE = "http://localhost:3000";
+// S28 — baseline-relative end state, captured BEFORE the suite creates
+// anything (the owner's real account lives in this DB now).
+const { PrismaClient: __PC25 } = await import("@prisma/client");
+const BASELINE = {
+  users: await new __PC25().user.count(),
+  orgs: await new __PC25().organization.count(),
+  settings: await new __PC25().userSetting.count(),
+};
 let failures = 0;
 const check = (name, ok, detail) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok || detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
@@ -90,7 +98,9 @@ const prisma = new PrismaClient();
   const u = await prisma.user.findUnique({ where: { email } });
   check("5.2  the user row is gone", u === null);
   const [users, orgs, settings2] = [await prisma.user.count(), await prisma.organization.count(), await prisma.userSetting.count()];
-  check("5.3  end state: 0 users / orgs / settings rows", users === 0 && orgs === 0 && settings2 === 0, { users, orgs, settings2 });
+  check("5.3  end state: nothing behind (users/orgs/settings back to baseline)",
+    users === BASELINE.users && orgs === BASELINE.orgs && settings2 === BASELINE.settings,
+    { users, orgs, settings2, BASELINE });
 }
 await prisma.$disconnect();
 

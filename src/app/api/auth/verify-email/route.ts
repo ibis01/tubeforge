@@ -25,22 +25,27 @@ import { sendMail, linkInResponse } from "@/lib/tubeforge/email";
 
 const VERIFY_TTL_H = 24;
 
-function landing(req: NextRequest, outcome: "ok" | "expired" | "missing") {
-  const url = new URL("/", req.nextUrl.origin);
-  url.searchParams.set("verified", outcome);
-  return NextResponse.redirect(url, 307);
+function landing(outcome: "ok" | "expired" | "missing") {
+  // S28 — a RELATIVE Location. Behind the preview proxy the request's own
+  // origin is the only one the browser can reach (req.nextUrl.origin is the
+  // internal one); a relative location is legal (RFC 7231) in both worlds —
+  // the browser resolves it against whatever origin served the page.
+  return new NextResponse(null, {
+    status: 307,
+    headers: { location: `/?verified=${outcome}` },
+  });
 }
 
 export async function GET(req: NextRequest) {
   const token = req.nextUrl.searchParams.get("token");
-  if (!token) return landing(req, "missing");
+  if (!token) return landing("missing");
 
   const user = await rawDb.user.findUnique({
     where: { emailVerifyTokenHash: sha256Hex(token) },
   });
 
   if (!user || !user.emailVerifyExpiresAt || user.emailVerifyExpiresAt.getTime() < Date.now()) {
-    return landing(req, "expired");
+    return landing("expired");
   }
 
   await rawDb.user.update({
@@ -52,7 +57,7 @@ export async function GET(req: NextRequest) {
     },
   });
 
-  return landing(req, "ok");
+  return landing("ok");
 }
 
 export async function POST(req: NextRequest) {
@@ -104,9 +109,11 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     // Console mode hands the link straight back (the register pattern); smtp
-    // sent it for real.
+    // sent it for real. S28 — relative on the wire (the register law).
     verification: {
-      url: linkInResponse() ? verifyUrl.toString() : undefined,
+      url: linkInResponse()
+        ? `/api/auth/verify-email?token=${encodeURIComponent(verifyToken)}`
+        : undefined,
       expiresHours: VERIFY_TTL_H,
     },
   });

@@ -29,6 +29,9 @@ import { decryptSecret } from "../src/lib/tubeforge/crypto";
 import { hashPassword } from "../src/lib/tubeforge/tenant";
 
 const prisma = new PrismaClient();
+// S28 — the studio has a REAL tenant now (the owner's account lives in
+// this DB): teardown asserts NOTHING-BEHIND against the starting baseline.
+const __BASELINE = { users: await prisma.user.count(), orgs: await prisma.organization.count() };
 let failures = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok || detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
@@ -164,7 +167,7 @@ const suffix = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 // =====================================================================
 await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "LegacySetting"`).catch(() => {});
 const [ul, ol] = [await prisma.user.count(), await prisma.organization.count()];
-check("teardown  zero users / orgs remain", ul === 0 && ol === 0, { ul, ol });
+check("teardown  nothing behind (users/orgs back to baseline)", ul === __BASELINE.users && ol === __BASELINE.orgs, { ul, ol, __BASELINE });
 
 console.log(`\n${failures === 0 ? "ALL CHECKS PASS" : failures + " FAILURES"}`);
 await prisma.$disconnect();

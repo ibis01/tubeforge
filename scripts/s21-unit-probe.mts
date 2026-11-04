@@ -122,7 +122,9 @@ await prisma.user.update({
     { stored: oldRow?.emailVerifyTokenHash?.slice(0, 8) });
 
   const freshUrl = body.verification!.url!;
-  const consume = await verifyGet(new NextRequest(freshUrl));
+  // S28 — the link is RELATIVE on the wire now (the register law): resolve it
+  // against the probe origin the way a browser resolves it against the page.
+  const consume = await verifyGet(new NextRequest(new URL(freshUrl, URL_).toString()));
   check("2.7  the fresh link consumes -> ok landing",
     consume.status === 307 && consume.headers.get("location")?.includes("verified=ok"));
 

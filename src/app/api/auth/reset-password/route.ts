@@ -40,9 +40,13 @@ export async function GET(req: NextRequest) {
       { error: "This reset link is malformed — request a new one from the sign-in screen" },
       { status: 400 }
     );
-  const dest = new URL("/", req.nextUrl.origin);
-  dest.searchParams.set("reset", token);
-  return NextResponse.redirect(dest);
+  // S28 — a RELATIVE Location (the verify-email law): behind the preview
+  // proxy the internal origin is unreachable from the browser, and a
+  // relative location resolves against whatever origin served the link.
+  return new NextResponse(null, {
+    status: 307,
+    headers: { location: `/?reset=${encodeURIComponent(token)}` },
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -88,7 +92,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         ok: true,
         reset: {
-          url: linkInResponse() ? url.toString() : undefined,
+          // S28 — relative on the wire (the register law): the gate extracts
+          // the token from it and renders it against the page's own origin.
+          url: linkInResponse()
+            ? `/api/auth/reset-password?token=${encodeURIComponent(token)}`
+            : undefined,
           expiresHours: RESET_TTL_H,
         },
       });

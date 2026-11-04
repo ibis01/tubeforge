@@ -11,6 +11,10 @@
 //   node scripts/s20-route-e2e.mjs
 
 import { PrismaClient } from "@prisma/client";
+// S28 — baseline-relative end state, captured BEFORE the suite creates
+// anything (the owner's real account lives in this DB now).
+const BASELINE_USERS = await new PrismaClient().user.count();
+const BASELINE_TOKENS = await new PrismaClient().apiToken.count();
 
 const BASE = "http://localhost:3000";
 const jarOf = () => [];
@@ -197,9 +201,9 @@ for (const email of [`${tag}-a@e2e.local`, `${tag}-b@e2e.local`]) {
   }
 }
 const leftover = await db.user.count();
-check("12.1 cleanup — zero users remain (the register screen stands)", leftover === 0, leftover);
+check("12.1 cleanup — nothing behind (user count back to the baseline)", leftover === BASELINE_USERS, { leftover, BASELINE_USERS });
 const leftoverTokens = await db.apiToken.count();
-check("12.2 cleanup — the registry is empty (cascade held)", leftoverTokens === 0, leftoverTokens);
+check("12.2 cleanup — the registry is back to the baseline (cascade held)", leftoverTokens === BASELINE_TOKENS, { leftoverTokens, BASELINE_TOKENS });
 await db.$disconnect();
 
 console.log(`\n${pass} passed, ${fail} failed`);

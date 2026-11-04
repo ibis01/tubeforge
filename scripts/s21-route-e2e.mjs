@@ -9,6 +9,9 @@
 // Run after a daemon restart: node scripts/s21-route-e2e.mjs
 
 import { PrismaClient } from "@prisma/client";
+// S28 — baseline-relative end state, captured BEFORE the suite creates
+// anything (the owner's real account lives in this DB now).
+const BASELINE_USERS = await new PrismaClient().user.count();
 
 const BASE = "http://localhost:3000";
 const jar = [];
@@ -67,13 +70,13 @@ const freshUrl = resendBody.verification?.url;
 check("3.2  console mode returns the fresh link", typeof freshUrl === "string");
 
 // the register-time link is now VOID (one live token at a time)
-const oldLanding = await fetch(regBody.verification.url, { redirect: "manual" });
+const oldLanding = await fetch(`${BASE}${regBody.verification.url}`, { redirect: "manual" });
 check("3.3  the register-time link is voided by the fresh mint -> expired",
   oldLanding.status === 307 && oldLanding.headers.get("location")?.includes("verified=expired"),
   oldLanding.headers.get("location"));
 
 // ---- 4. the landing: a 307 for humans, consumable by the gate ----
-const landing = await fetch(freshUrl, { redirect: "manual" });
+const landing = await fetch(`${BASE}${freshUrl}`, { redirect: "manual" });
 check("4.1  the fresh link's GET -> 307", landing.status === 307, landing.status);
 check("4.2  the landing is /?verified=ok",
   landing.headers.get("location")?.includes("verified=ok"), landing.headers.get("location"));
@@ -81,7 +84,7 @@ check("4.2  the landing is /?verified=ok",
 const status2 = await json(await fetch(`${BASE}/api/auth/status`, { headers: H() }));
 check("4.3  the account is VERIFIED now", status2.user?.emailVerified === true, status2.user?.emailVerified);
 
-const replay = await fetch(freshUrl, { redirect: "manual" });
+const replay = await fetch(`${BASE}${freshUrl}`, { redirect: "manual" });
 check("4.4  the spent link replays -> expired landing",
   replay.status === 307 && replay.headers.get("location")?.includes("verified=expired"));
 
@@ -108,7 +111,7 @@ if (u) {
   for (const orgId of orgIds) await db.organization.deleteMany({ where: { id: orgId } });
 }
 const leftover = await db.user.count();
-check("7.1  cleanup — zero users remain (the register screen stands)", leftover === 0, leftover);
+check("7.1  cleanup — nothing behind (user count back to the baseline)", leftover === BASELINE_USERS, { leftover, BASELINE_USERS });
 await db.$disconnect();
 
 console.log(`\n${pass} passed, ${fail} failed`);
