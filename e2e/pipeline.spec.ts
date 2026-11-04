@@ -30,11 +30,13 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 
 const RUN = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 const PASSWORD = "stage7-pipeline-123";
+const accounts: string[] = []; // every email this suite creates — cleaned in afterAll
 
 async function register(
   request: APIRequestContext,
   email: string
 ): Promise<{ cookie: string; verificationUrl?: string }> {
+  accounts.push(email);
   const res = await request.post("/api/auth/register", {
     data: { name: "Stage 7 Probe", email, password: PASSWORD },
   });
@@ -59,6 +61,21 @@ async function login(request: APIRequestContext, email: string, password: string
 }
 
 test.describe("Stage 7 — full production pipeline (deterministic subset)", () => {
+  // The end-state law: the suite deletes every account it created through
+  // the account's own front door (login → POST /api/account/delete).
+  test.afterAll(async ({ request }) => {
+    for (const email of accounts) {
+      const login = await request.post("/api/auth/login", { data: { email, password: PASSWORD } });
+      if (!login.ok()) continue;
+      const cookie = ((login.headers()["set-cookie"] as string | undefined) ?? "").split(";")[0];
+      if (!cookie) continue;
+      await request.post("/api/account/delete", {
+        headers: { cookie, "Content-Type": "application/json" },
+        data: { confirm: "DELETE" },
+      });
+    }
+  });
+
   test("auth → create → patch → Stage 6 surfaces → export → GDPR → logout", async ({ request }) => {
     // 1. Authentication + email verification
     const email = `s7-${RUN}@tubeforge.test`;

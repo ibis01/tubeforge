@@ -22,9 +22,11 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 
 const RUN = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 const PASSWORD = "stage7-mobile-123";
+const accounts: string[] = []; // every email this suite creates — cleaned in afterAll
 
 async function register(request: APIRequestContext): Promise<string> {
   const email = `s7m-${RUN}-${Math.random().toString(36).slice(2, 6)}@tubeforge.test`;
+  accounts.push(email);
   const res = await request.post("/api/auth/register", {
     data: { name: "Stage 7 Mobile", email, password: PASSWORD },
   });
@@ -35,7 +37,25 @@ async function register(request: APIRequestContext): Promise<string> {
   return (Array.isArray(setCookie) ? setCookie[0] : setCookie)?.split(";")[0] ?? "";
 }
 
+/** The end-state law: the suite deletes every account it created, through
+ *  the account's own front door (login → POST /api/account/delete), so a
+ *  Playwright run leaves the install exactly as it found it. */
+async function deleteAccount(request: APIRequestContext, email: string): Promise<void> {
+  const login = await request.post("/api/auth/login", { data: { email, password: PASSWORD } });
+  if (!login.ok()) return; // account never landed — nothing to clean
+  const cookie = ((login.headers()["set-cookie"] as string | undefined) ?? "").split(";")[0];
+  if (!cookie) return;
+  await request.post("/api/account/delete", {
+    headers: { cookie, "Content-Type": "application/json" },
+    data: { confirm: "DELETE" },
+  });
+}
+
 test.describe("Stage 7 — mobile responsiveness (390px sweep)", () => {
+  test.afterAll(async ({ request }) => {
+    for (const email of accounts) await deleteAccount(request, email);
+  });
+
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 }); // iPhone 12/13/14
   });
@@ -72,9 +92,11 @@ test.describe("Stage 7 — mobile responsiveness (390px sweep)", () => {
     const createBody = (await create.json()) as { video: { id: string } };
     const videoId = createBody.video.id;
 
-    // Open the Library + click the video to open the detail dialog.
+    // Open the Library — at 390px the desktop sidebar is HIDDEN (the shell
+    // collapses to a Sheet; the spec's own first test pins that), so the
+    // way in is the mobile nav: tap the hamburger, then the sheet's nav.
     await page.goto("/");
-    await page.waitForSelector("nav[aria-label='Main navigation']");
+    await page.getByRole("button", { name: "Open navigation menu" }).click();
     await page.getByRole("navigation", { name: "Main navigation" }).getByText("Library").click();
     await page.getByText(`Stage 7 mobile ${RUN}`).first().click();
     await expect(page.getByRole("dialog")).toBeVisible();

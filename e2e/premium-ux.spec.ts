@@ -12,10 +12,12 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 const RUN = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 const PASSWORD = "premium-ux-123";
 let seq = 0;
+const accounts: string[] = []; // every email this suite creates — cleaned in afterAll
 
 async function register(request: APIRequestContext): Promise<string> {
   seq += 1;
   const email = `ux-${RUN}-${seq}@tubeforge.test`;
+  accounts.push(email);
   const res = await request.post("/api/auth/register", {
     data: { name: "UX Probe", email, password: PASSWORD },
   });
@@ -27,6 +29,22 @@ async function register(request: APIRequestContext): Promise<string> {
   expect(cookie.startsWith("tf_session=")).toBe(true);
   return cookie;
 }
+
+// The end-state law: both describes register accounts through the shared
+// helper, so ONE sweep here deletes them through the account's own front
+// door (login → POST /api/account/delete).
+test.afterAll(async ({ request }) => {
+  for (const email of accounts) {
+    const login = await request.post("/api/auth/login", { data: { email, password: PASSWORD } });
+    if (!login.ok()) continue; // account never landed — nothing to clean
+    const cookie = ((login.headers()["set-cookie"] as string | undefined) ?? "").split(";")[0];
+    if (!cookie) continue;
+    await request.post("/api/account/delete", {
+      headers: { cookie, "Content-Type": "application/json" },
+      data: { confirm: "DELETE" },
+    });
+  }
+});
 
 test.describe("Stage 4a premium UX", () => {
   test("⌘K palette: open, filter, navigate (T-4.1)", async ({ page }) => {

@@ -17,6 +17,7 @@ const RUN = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)
 const EMAIL_A = `iso-a-${RUN}@tubeforge.test`;
 const EMAIL_B = `iso-b-${RUN}@tubeforge.test`;
 const PASSWORD = "isolated-pairs-123";
+const accounts: string[] = []; // every email this suite creates — cleaned in afterAll
 
 interface Registered {
   email: string;
@@ -28,6 +29,7 @@ async function register(
   request: APIRequestContext,
   email: string
 ): Promise<{ cookie: string; verificationUrl?: string }> {
+  accounts.push(email);
   const res = await request.post("/api/auth/register", {
     data: { name: "Isolation Probe", email, password: PASSWORD },
   });
@@ -74,6 +76,24 @@ async function probe(request: APIRequestContext, cookie: string, videoId: string
   };
   return results;
 }
+
+// The end-state law: the suite deletes every account it created through the
+// account's own front door (login → POST /api/account/delete), so the
+// isolation proof never poisons the install it ran against. FILE-level
+// (not describe-level) on purpose — the T-4.14 describe below registers
+// accounts AFTER the first describe's hooks have already run.
+test.afterAll(async ({ request }) => {
+  for (const email of accounts) {
+    const login = await request.post("/api/auth/login", { data: { email, password: PASSWORD } });
+    if (!login.ok()) continue; // account never landed — nothing to clean
+    const cookie = ((login.headers()["set-cookie"] as string | undefined) ?? "").split(";")[0];
+    if (!cookie) continue;
+    await request.post("/api/account/delete", {
+      headers: { cookie, "Content-Type": "application/json" },
+      data: { confirm: "DELETE" },
+    });
+  }
+});
 
 test.describe.serial("cross-tenant isolation (Stage 2 completion gate)", () => {
   let a: Registered;
