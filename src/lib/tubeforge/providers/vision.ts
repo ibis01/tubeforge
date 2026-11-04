@@ -7,6 +7,13 @@ import { zaiClientFor } from "../zai-client";
 import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta } from "./registry";
 import { joinUrl, providerFetchJson, withTimeout } from "./http";
+import {
+  admitDispatch,
+  emitUsage,
+  estimateDispatchMicroUsd,
+  MAX_OUTPUT_TOKENS,
+  usageFromBody,
+} from "../spend";
 
 export interface VisionRequest {
   system: string;
@@ -21,17 +28,55 @@ export async function visionComplete(
 ): Promise<string> {
   const config = await getCapability("chat", overrides);
 
-  switch (config.provider) {
-    case "openai":
-      return openaiVision(req, config);
-    case "anthropic":
-      return anthropicVision(req, config);
-    case "gemini":
-      return geminiVision(req, config);
-    case "zai":
-    default:
-      return zaiVision(req, config);
+  // S27 — the $5 door on the vision line ($1 of the experiment budget):
+  // same reserve-before/settle-after law as chat. The image counts as an
+  // explicit 4000-token floor in the estimate (its base64 never rides in
+  // the texts).
+  const model = visionModelFor(config);
+  const hold = await admitDispatch({
+    provider: config.provider,
+    model,
+    estimatedMicro: estimateDispatchMicroUsd(
+      model,
+      [req.system, req.user],
+      1
+    ),
+  });
+  try {
+    let content: string;
+    switch (config.provider) {
+      case "openai":
+        content = await openaiVision(req, config);
+        break;
+      case "anthropic":
+        content = await anthropicVision(req, config);
+        break;
+      case "gemini":
+        content = await geminiVision(req, config);
+        break;
+      case "zai":
+      default:
+        content = await zaiVision(req, config);
+    }
+    if (hold) await hold.settleFromSink();
+    return content;
+  } catch (err) {
+    if (hold) await hold.settleUncertain();
+    throw err;
   }
+}
+
+/** The model id a vision dispatch will actually use — mirrors the
+ *  per-provider fns' own resolution. */
+function visionModelFor(config: CapabilityConfig): string {
+  if (config.provider === "zai") return config.visionModel?.trim() ?? "";
+  const meta = providerMeta("chat", config.provider);
+  return (
+    config.visionModel?.trim() ||
+    config.model?.trim() ||
+    meta?.models[0]?.id ||
+    "gpt-4o-mini"
+  );
 }
 
 // ---------- Z.ai (SDK — unchanged legacy shape) ----------
@@ -61,6 +106,9 @@ async function zaiVision(req: VisionRequest, config: CapabilityConfig): Promise<
       thinking: { type: "disabled" },
     } as Parameters<typeof zai.chat.completions.createVision>[0])
   );
+  // S27 — ungated (platform gateway), but reported tokens reach the meter.
+  const usage = usageFromBody(completion);
+  if (usage) emitUsage(usage);
   return completion.choices[0]?.message?.content ?? "";
 }
 
@@ -94,9 +142,14 @@ async function openaiVision(req: VisionRequest, config: CapabilityConfig): Promi
             ],
           },
         ],
+        // S27 — output clamp (same law as chat).
+        max_tokens: MAX_OUTPUT_TOKENS,
       }),
     }
   );
+  // S27 — reported usage (openai wire shape) into the metering sink.
+  const usage = usageFromBody(data);
+  if (usage) emitUsage(usage);
   return data.choices?.[0]?.message?.content ?? "";
 }
 
@@ -147,6 +200,9 @@ async function anthropicVision(req: VisionRequest, config: CapabilityConfig): Pr
       }),
     }
   );
+  // S27 — anthropic wire shape: usage { input_tokens, output_tokens }.
+  const usage = usageFromBody(data);
+  if (usage) emitUsage(usage);
   return (data.content ?? [])
     .filter((block) => block.type === "text")
     .map((block) => block.text ?? "")
@@ -183,6 +239,9 @@ async function geminiVision(req: VisionRequest, config: CapabilityConfig): Promi
       generationConfig: { responseMimeType: "application/json" },
     }),
   });
+  // S27 — gemini wire shape: usageMetadata { promptTokenCount, candidatesTokenCount }.
+  const usage = usageFromBody(data);
+  if (usage) emitUsage(usage);
   return (data.candidates?.[0]?.content?.parts ?? [])
     .map((part) => part.text ?? "")
     .join("")

@@ -3,6 +3,13 @@ import { DEFAULT_CHAT_MODEL } from "../types";
 import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta } from "./registry";
 import { joinUrl, providerFetchJson } from "./http";
+import {
+  admitDispatch,
+  emitUsage,
+  estimateDispatchMicroUsd,
+  MAX_OUTPUT_TOKENS,
+  usageFromBody,
+} from "../spend";
 
 export interface ChatRequest {
   system: string;
@@ -46,16 +53,54 @@ export async function chatComplete(
   const config = await getCapability("chat", overrides);
   const provider = config.provider;
 
-  if (OPENAI_COMPATIBLE.has(provider)) return openaiChat(req, config);
+  // S27 — the $5 door: paid dispatches reserve their worst-case estimate
+  // BEFORE the request leaves and settle after (actual usage when the
+  // provider reported one, else the estimate; a thrown dispatch settles
+  // uncertain). Zai gateway + local servers are ungated (null hold) but
+  // still emit usage at the transport for the metering row.
+  const model = modelFor(provider, config);
+  const hold = await admitDispatch({
+    provider,
+    model,
+    estimatedMicro: estimateDispatchMicroUsd(model, [req.system, req.user]),
+  });
+  try {
+    let content: string;
+    if (OPENAI_COMPATIBLE.has(provider)) content = await openaiChat(req, config);
+    else
+      switch (provider) {
+        case "anthropic":
+          content = await anthropicChat(req, config);
+          break;
+        case "gemini":
+          content = await geminiChat(req, config);
+          break;
+        case "zai":
+        default:
+          content = await zaiChat(req, config);
+      }
+    if (hold) await hold.settleFromSink();
+    return content;
+  } catch (err) {
+    if (hold) await hold.settleUncertain();
+    throw err;
+  }
+}
 
+/** The model id a dispatch will actually use — mirrors each per-provider
+ *  fn's own resolution (the gate prices THIS id). */
+function modelFor(provider: string, config: CapabilityConfig): string {
+  if (OPENAI_COMPATIBLE.has(provider)) {
+    const meta = providerMeta("chat", provider);
+    return config.model?.trim() || meta?.models[0]?.id || "gpt-4o-mini";
+  }
   switch (provider) {
     case "anthropic":
-      return anthropicChat(req, config);
+      return config.model?.trim() || "claude-sonnet-4-5";
     case "gemini":
-      return geminiChat(req, config);
-    case "zai":
+      return config.model?.trim() || "gemini-2.5-flash";
     default:
-      return zaiChat(req, config);
+      return config.model?.trim() || DEFAULT_CHAT_MODEL;
   }
 }
 
@@ -77,6 +122,9 @@ async function zaiChat(
       ? { type: "enabled" }
       : { type: "disabled" },
   });
+  // S27 — ungated (platform gateway), but reported tokens reach the meter.
+  const usage = usageFromBody(completion);
+  if (usage) emitUsage(usage);
   return completion.choices[0]?.message?.content ?? "";
 }
 
@@ -122,9 +170,15 @@ async function openaiChat(
           { role: "system", content: req.system },
           { role: "user", content: req.user },
         ],
+        // S27 — the output clamp: the spend estimate prices MAX_OUTPUT_TOKENS
+        // in full, so the response can never blow past the reserved cost.
+        max_tokens: MAX_OUTPUT_TOKENS,
       }),
     },
   );
+  // S27 — reported usage (openai wire shape) into the metering sink.
+  const usage = usageFromBody(data);
+  if (usage) emitUsage(usage);
   return data.choices?.[0]?.message?.content ?? "";
 }
 
@@ -160,6 +214,9 @@ async function anthropicChat(
       messages: [{ role: "user", content: req.user }],
     }),
   });
+  // S27 — anthropic wire shape: usage { input_tokens, output_tokens }.
+  const usage = usageFromBody(data);
+  if (usage) emitUsage(usage);
   return (data.content ?? [])
     .filter((block) => block.type === "text")
     .map((block) => block.text ?? "")
@@ -200,6 +257,9 @@ async function geminiChat(
       },
     }),
   });
+  // S27 — gemini wire shape: usageMetadata { promptTokenCount, candidatesTokenCount }.
+  const usage = usageFromBody(data);
+  if (usage) emitUsage(usage);
   return (data.candidates?.[0]?.content?.parts ?? [])
     .map((part) => part.text ?? "")
     .join("")

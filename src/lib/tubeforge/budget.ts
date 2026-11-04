@@ -25,6 +25,12 @@
 import { currentCtx } from "./tenant";
 import { getUserSettings } from "./settings";
 import type { CreditHold } from "./billing";
+import {
+  computeCostMicroUsd,
+  drainUsage,
+  isPaidProvider,
+  type LLMUsage,
+} from "./spend";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -269,14 +275,21 @@ export async function aiCall<T>(
           if (/429|too many requests/i.test(msg)) noteRateLimit(service);
         },
       });
+      // S27 — the provider's reported usage: the request-scoped sink first
+      // (emitted at the transports, summed across retry attempts), then the
+      // result duck as fallback. Written into the UsageRecord row below.
+      const usage = drainUsage() ?? usageOf(result);
       if (hold.mode === "held")
-        await recordAiUsage(service, label, Date.now() - startedAt, true, retryOpts.attempts ?? 3, hold);
-      else void recordAiUsage(service, label, Date.now() - startedAt, true, retryOpts.attempts ?? 3, hold);
+        await recordAiUsage(service, label, Date.now() - startedAt, true, retryOpts.attempts ?? 3, hold, usage);
+      else void recordAiUsage(service, label, Date.now() - startedAt, true, retryOpts.attempts ?? 3, hold, usage);
       return result;
     } catch (err) {
+      // A failed chain may still have partial reported usage (an attempt
+      // that got a billed response before a later one threw) — record it.
+      const usage = drainUsage();
       if (hold.mode === "held")
-        await recordAiUsage(service, label, Date.now() - startedAt, false, retryOpts.attempts ?? 3, hold);
-      else void recordAiUsage(service, label, Date.now() - startedAt, false, retryOpts.attempts ?? 3, hold);
+        await recordAiUsage(service, label, Date.now() - startedAt, false, retryOpts.attempts ?? 3, hold, usage);
+      else void recordAiUsage(service, label, Date.now() - startedAt, false, retryOpts.attempts ?? 3, hold, usage);
       throw err;
     }
   } finally {
@@ -297,11 +310,35 @@ const CAPABILITY_OF: Record<AiService, "chat" | "tts" | "image" | "video"> = {
   search: "chat",
 };
 
+/** S27 — duck-read usage off a result object (a completion that carries the
+ *  normalized `usage` but came through a path that never emitted to the
+ *  sink). Fallback only — the sink drain is the primary source. */
+export function usageOf(result: unknown): LLMUsage | null {
+  if (!result || typeof result !== "object") return null;
+  const u = (result as { usage?: unknown }).usage;
+  if (!u || typeof u !== "object") return null;
+  const i = (u as { inputTokens?: unknown }).inputTokens;
+  const o = (u as { outputTokens?: unknown }).outputTokens;
+  if (typeof i !== "number" || typeof o !== "number") return null;
+  if (!Number.isFinite(i) || !Number.isFinite(o) || i < 0 || o < 0) return null;
+  return {
+    inputTokens: Math.round(i),
+    outputTokens: Math.round(o),
+  };
+}
+
 /**
  * Persist one UsageRecord for the acting user. Fire-and-forget: metering
  * problems must never surface inside a creative pipeline. Resolves the
  * provider/model from the user's capability settings (cached read) so the
  * row can answer "what did this user spend on, where".
+ *
+ * S27 — `usage` carries the provider's REPORTED token usage when the
+ * transport saw one; the row now writes REAL inputTokens/outputTokens and
+ * a priced costMicroUsd (the versioned registry in spend.ts) instead of
+ * the Stage-3 zeros. A failed call with no usage still records zeros —
+ * the operator's conservative USD settle lives in spend.ts, not here
+ * (the user-facing row is attribution, the $5 gate is enforcement).
  */
 async function recordAiUsage(
   service: AiService,
@@ -309,7 +346,8 @@ async function recordAiUsage(
   latencyMs: number,
   ok: boolean,
   attempts: number,
-  hold: CreditHold
+  hold: CreditHold,
+  usage?: LLMUsage | null
 ): Promise<string | null> {
   const ctx = currentCtx();
   if (!ctx) return null; // platform path (boot recovery) — no user to attribute
@@ -328,7 +366,17 @@ async function recordAiUsage(
     } catch {
       /* defaults are fine — the row still counts the call */
     }
-    const usage = await rawDatabase.usageRecord.create({
+    const inputTokens = usage?.inputTokens ?? 0;
+    const outputTokens = usage?.outputTokens ?? 0;
+    // Priced only on PAID providers — the zai gateway and local servers
+    // record real tokens with a $0 cost (not the experiment's spend; an
+    // unknown model on a PAID provider falls back to the priciest
+    // standard-mode flagship — conservative by construction).
+    const costMicroUsd =
+      usage && model && isPaidProvider(provider)
+        ? computeCostMicroUsd(model, usage)
+        : 0;
+    const usageRecord = await rawDatabase.usageRecord.create({
       data: {
         organizationId: ctx.organizationId,
         userId: ctx.userId,
@@ -337,11 +385,9 @@ async function recordAiUsage(
         model,
         latencyMs: Math.min(latencyMs, 2 ** 31 - 1),
         ok,
-        // Cost arrives with provider-level token reporting (Stage 3 part 2);
-        // the call-count + latency baseline is what billing pivots on today.
-        inputTokens: 0,
-        outputTokens: 0,
-        costMicroUsd: 0,
+        inputTokens,
+        outputTokens,
+        costMicroUsd,
       },
     });
 
@@ -357,7 +403,7 @@ async function recordAiUsage(
         const settled = await billing.settleCreditHold({
           holdId: hold.holdId,
           ok,
-          usageRecordId: usage.id,
+          usageRecordId: usageRecord.id,
           note: ok ? undefined : `${capability} call failed — hold released — ${label.slice(0, 60)}`,
         });
         if (!settled.settled) {
@@ -373,7 +419,7 @@ async function recordAiUsage(
       if (!ok) {
         console.warn(`[usage] ${service} call failed after ${attempts} attempt(s): ${label.slice(0, 80)}`);
       }
-      return usage.id;
+      return usageRecord.id;
     }
 
     // Stage 7 (T-7.5 wiring) — the credit ledger for UNMETERED callers
@@ -393,7 +439,7 @@ async function recordAiUsage(
         userId: ctx.userId,
         kind: "ai_call",
         microCredits: billing.getEstimatedCostMicro(capability),
-        usageRecordId: usage.id,
+        usageRecordId: usageRecord.id,
         note: `${capability} ${ok ? "ok" : "FAILED"} via ${provider} — ${label.slice(0, 60)}`,
       });
       if (!result.recorded) {
@@ -409,7 +455,7 @@ async function recordAiUsage(
     if (!ok) {
       console.warn(`[usage] ${service} call failed after ${attempts} attempt(s): ${label.slice(0, 80)}`);
     }
-    return usage.id;
+    return usageRecord.id;
   } catch (err) {
     // Never let metering break the pipeline.
     console.warn("[usage] record failed (non-fatal):", err instanceof Error ? err.message : err);

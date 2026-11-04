@@ -27,6 +27,16 @@ import { allowPrivateProviderHosts } from "./providers/http";
 import { getCapability } from "./providers/settings";
 import { currentCtx } from "./tenant";
 import { getProviderCredential, getUserSettings } from "./settings";
+import {
+  admitDispatch,
+  emitUsage,
+  estimateDispatchMicroUsd,
+  MAX_OUTPUT_TOKENS,
+  usageFromBody,
+  type LLMUsage,
+} from "./spend";
+
+export type { LLMUsage };
 
 export type LLMProvider = "zai" | "openai";
 
@@ -144,6 +154,10 @@ export interface LLMChatBody {
 
 export interface LLMCompletion {
   choices: { message: { content?: string; reasoning_content?: string } }[];
+  /** S27 — the provider's reported token usage, normalized off the wire
+   *  (openai/anthropic/gemini/zai shapes) when the provider sent one.
+   *  budget.ts records it into UsageRecord and prices it. */
+  usage?: LLMUsage;
 }
 
 async function openaiFetch(
@@ -172,6 +186,15 @@ async function openaiFetch(
     );
   const completion = (await res.json()) as LLMCompletion;
 
+  // S27 — capture the provider's reported token usage (openai shape; the
+  // normalizer also accepts anthropic/gemini keys for compatibility) and
+  // emit it into the request-scoped sink for the metering layer.
+  const usage = usageFromBody(completion);
+  if (usage) {
+    completion.usage = usage;
+    emitUsage(usage);
+  }
+
   // Reasoner-style models (e.g. deepseek-reasoner) answer in reasoning_content.
   const msg = completion?.choices?.[0]?.message as
     | { content?: string; reasoning_content?: string }
@@ -180,31 +203,88 @@ async function openaiFetch(
   return completion;
 }
 
+/** Flatten one message's content for the spend estimator — multimodal
+ *  parts JSON-stringify so the estimator's data-URI/base64 rules see them. */
+function contentText(content: unknown): string {
+  return typeof content === "string" ? content : JSON.stringify(content ?? "");
+}
+
+/** S27 — the $5 door on the legacy layer: a paid dispatch reserves its
+ *  worst-case USD estimate BEFORE the request leaves and settles after —
+ *  at the reported usage when one arrived, else conservatively at the
+ *  estimate; a thrown dispatch settles uncertain (the provider may have
+ *  billed an accepted request). Zai/local dispatches are ungated (null
+ *  hold) but still emit usage for the metering row. */
+async function gated<T>(
+  s: LLMSettings,
+  texts: string[],
+  dispatch: () => Promise<T>
+): Promise<T> {
+  const hold = await admitDispatch({
+    provider: s.provider,
+    model: s.model,
+    estimatedMicro: estimateDispatchMicroUsd(s.model || "gpt-4o", texts),
+  });
+  try {
+    const result = await dispatch();
+    if (hold) await hold.settleFromSink();
+    return result;
+  } catch (err) {
+    if (hold) await hold.settleUncertain();
+    throw err;
+  }
+}
+
 /** Chat against explicit settings. `thinking` is dropped for OpenAI-compatible providers. */
 async function chatWith(s: LLMSettings, body: LLMChatBody, timeoutMs = 300_000): Promise<LLMCompletion> {
   if (s.provider === "openai") {
-    const payload: Record<string, unknown> = { messages: body.messages };
+    // MAX_OUTPUT_TOKENS clamps the output half of the cost bound — the
+    // estimate prices all 8192, so reported usage can never exceed it.
+    const payload: Record<string, unknown> = {
+      messages: body.messages,
+      max_tokens: MAX_OUTPUT_TOKENS,
+    };
     if (s.model) payload.model = s.model;
     if (typeof body.temperature === "number") payload.temperature = body.temperature;
-    return openaiFetch(s, "/chat/completions", payload, timeoutMs);
+    return gated(s, body.messages.map((m) => contentText(m.content)), () =>
+      openaiFetch(s, "/chat/completions", payload, timeoutMs)
+    );
   }
   const zai = await getZai();
   // An explicit chat-model pick (Settings → AI Providers) rides to the
   // gateway; absent = the gateway's own default, exactly as before.
-  return zai.chat.completions.create(
+  const completion = (await zai.chat.completions.create(
     (s.model ? { ...body, model: s.model } : body) as never
-  ) as Promise<LLMCompletion>;
+  )) as LLMCompletion;
+  // Ungated (platform gateway) — but the tokens still reach the meter.
+  const usage = usageFromBody(completion);
+  if (usage) {
+    completion.usage = usage;
+    emitUsage(usage);
+  }
+  return completion;
 }
 
 /** Vision against explicit settings (OpenAI-style multimodal content parts). */
 async function visionWith(s: LLMSettings, body: LLMChatBody, timeoutMs = 300_000): Promise<LLMCompletion> {
   if (s.provider === "openai") {
-    const payload: Record<string, unknown> = { messages: body.messages };
+    const payload: Record<string, unknown> = {
+      messages: body.messages,
+      max_tokens: MAX_OUTPUT_TOKENS,
+    };
     if (s.model) payload.model = s.model;
-    return openaiFetch(s, "/chat/completions", payload, timeoutMs);
+    return gated(s, body.messages.map((m) => contentText(m.content)), () =>
+      openaiFetch(s, "/chat/completions", payload, timeoutMs)
+    );
   }
   const zai = await getZai();
-  return zai.chat.completions.createVision(body as never) as Promise<LLMCompletion>;
+  const completion = (await zai.chat.completions.createVision(body as never)) as LLMCompletion;
+  const usage = usageFromBody(completion);
+  if (usage) {
+    completion.usage = usage;
+    emitUsage(usage);
+  }
+  return completion;
 }
 
 // ---------- public API used by the pipeline ----------
