@@ -5,7 +5,7 @@ import { parseScenes } from "@/lib/tubeforge/story";
 import { isJobRunning, lastJobError, jobProgress, startJob } from "@/lib/tubeforge/jobs";
 import { runRenderJob, type RenderJobOptions } from "@/lib/tubeforge/video-jobs";
 import { resolveMusicForVideo, isMusicEnabledForVideo, musicBedActive } from "@/lib/tubeforge/music";
-import { docMusicPick } from "@/lib/tubeforge/studio-doc";
+import { docMusicPick, resolveDeliveryQuality, resolveBurnSubtitles } from "@/lib/tubeforge/studio-doc";
 import { parseTimeline } from "@/lib/tubeforge/timeline";
 import { getApprovedAudioMap } from "@/lib/tubeforge/director-plan";
 import { sanitizeTransition } from "@/lib/tubeforge/transitions";
@@ -129,7 +129,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   // Keynote slides: captions duplicate the slide headlines — default OFF.
   const mode = ["animated", "stock", "slides"].includes(body?.mode) ? body.mode : "kenburns";
-  const subtitles = body?.subtitles ?? mode !== "slides"; // slides default: no burned captions
+  // S14 — the delivery: the caption's shipping form resolves through the
+  // ONE chain (a per-render body override > the row's standing pick > the
+  // format default) so a bare render honors the studio's pick. Before S14
+  // the row's burnCaptions was written by the dialog's presets and read by
+  // NOBODY — the route fell straight to `mode !== "slides"`.
+  const subtitles = resolveBurnSubtitles(body?.subtitles, video.burnCaptions, mode);
   const smartCaptions = body?.smartCaptions !== false; // default: ASR-synced cues (Phase 4)
   const music = body?.music !== false; // default: ambient bed
   const sceneLimitRaw = Number(body?.sceneLimit);
@@ -151,12 +156,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     body?.frameRate === 24 || body?.frameRate === 30 || body?.frameRate === 60
       ? body.frameRate
       : undefined;
-  // S3 — delivery encode tier (the export-preset picker sends it; absent =
-  // the timeline doc's renderPrefs, then standard).
-  const quality: "draft" | "standard" | "high" | undefined =
-    body?.quality === "draft" || body?.quality === "standard" || body?.quality === "high"
-      ? body.quality
-      : undefined;
+  // S3 — the delivery encode tier, resolved through the ONE chain (S14): a
+  // per-render body override (the export-preset picker) > the timeline
+  // doc's standing renderPrefs.quality pick > standard. Before S14 this
+  // route passed the body tier through verbatim and let the JOB resolve
+  // the doc fallback one layer down (its own comment promised a chain its
+  // code never ran) — now the chain runs here, and the response echoes
+  // what the job will honor.
+  const quality = resolveDeliveryQuality(body?.quality, parseTimeline(video.timeline)?.renderPrefs ?? null);
 
   // Stage 6 (T-6.10) — when the user explicitly clicks "render without
   // timeline" (the route body carries `ignoreTimeline: true`), pass an empty
@@ -179,7 +186,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     quality,
     sceneDurationsSec,
   };
-
   // Response-time music resolution (the job re-resolves for itself) — the
   // SAME flag truth the job applies (musicBedActive): the doc pick re-tops
   // the chain and a disabled bed is silence, so the response never promises
@@ -223,6 +229,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         : musicOn
           ? "synthesized-fallback"
           : false,
+      // S14 — the resolved delivery, echoed so the response never promises
+      // a grade or a caption form the job will not honor (the S7 doctrine,
+      // now covering the whole export contract).
+      quality,
+      subtitles,
     },
     { status: accepted ? 202 : 200 }
   );

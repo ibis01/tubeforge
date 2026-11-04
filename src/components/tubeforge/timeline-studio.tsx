@@ -155,6 +155,7 @@ import {
   Gauge,
   Palette,
   Frame,
+  FileDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -199,6 +200,7 @@ import {
   sanitizePosterPick,
   docShortPick,
   sanitizeShortPick,
+  type ExportQuality,
   type MusicPick,
   type PosterPick,
   type ShortPick,
@@ -1793,6 +1795,69 @@ export function TimelineStudio({
     [frameSaving, videoId, onSaved, toast]
   );
 
+  // ---------- S14 — the delivery: the grade + the captions' shipping form ----------
+  // The last two export decisions held captive by the dialog's preset row —
+  // and the studio displayed a file it couldn't spec: the render job read
+  // the doc's grade (aligned doc), but only a dialog preset click could
+  // WRITE it; the row's burn pick was written by the presets and honored
+  // by NOBODY through HTTP (the route's pre-resolution shadowed the job's
+  // row fallback). S14 wires one chain for each (body > pick > default, a
+  // shared resolver the render route calls) and gives the studio the picks:
+  //   · the GRADE is doc-level (rides renderPrefs like the caption style —
+  //     one undo step, the autosave persists it; the render route resolves
+  //     body > doc > standard);
+  //   · the BURN is row-level and CHEAP (a flip invalidates nothing — the
+  //     next render ships captions the picked way; the dialog's per-render
+  //     override still wins), so it PATCHes immediately like S13's frame.
+  const setQualityPick = useCallback(
+    (q: ExportQuality) => {
+      if (!timeline) return;
+      const next = cloneTimeline(timeline);
+      const prefs = next.renderPrefs ?? { quality: "standard" as const };
+      next.renderPrefs = { ...prefs, quality: q };
+      applyEdit(next);
+    },
+    [timeline, applyEdit]
+  );
+  const [burnSaving, setBurnSaving] = useState(false);
+  // The RESOLVED truth the toggle shows — the same expression the render
+  // route's chain lands on when no per-render override rides the body:
+  // row pick > format default (burned for video modes, off for slides).
+  const resolvedBurn = video.burnCaptions ?? video.renderMode !== "slides";
+  const pickBurn = useCallback(
+    async (burn: boolean) => {
+      if (burnSaving || burn === resolvedBurn) return;
+      setBurnSaving(true);
+      try {
+        const res = await fetch(`/api/videos/${videoId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ burnCaptions: burn }),
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        onSaved?.(); // the parent re-fetches the row — the toggle shows the pick
+        toast({
+          title: "Caption delivery picked",
+          description: burn
+            ? "The next render burns the captions into the frame (the style pick applies)."
+            : "The next render ships a sidecar SRT beside the frame — clean plate, portable captions.",
+        });
+      } catch (err) {
+        toast({
+          title: "Caption delivery pick failed",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setBurnSaving(false);
+      }
+    },
+    [burnSaving, resolvedBurn, videoId, onSaved, toast]
+  );
+
   // ---------- the preview canvas ----------
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -2942,6 +3007,55 @@ export function TimelineStudio({
                 </SelectGroup>
               </SelectContent>
             </Select>
+          </div>
+          <span className="h-5 w-px bg-white/10" aria-hidden />
+          {/* S14 — the delivery: the encode grade + where captions ship.
+              Both were dialog-only AND unread (a bare render ignored every
+              standing pick); the chains are wired now (body > pick >
+              default). The grade is a doc pick (autosave persists); the
+              burn is a row pick (PATCH immediate, the standing render
+              stays — the next render ships captions the picked way). */}
+          <div className="flex items-center gap-1.5 mr-1">
+            <FileDown className="h-3.5 w-3.5 text-muted-foreground" />
+            <Select
+              value={timeline?.renderPrefs?.quality ?? "standard"}
+              onValueChange={(v) => {
+                if (v === (timeline?.renderPrefs?.quality ?? "standard")) return; // a resolved no-op is not a pick
+                setQualityPick(v as ExportQuality);
+              }}
+              disabled={saving || loading || renderInFlight}
+            >
+              <SelectTrigger
+                className="h-7 w-[104px] text-[11px]"
+                title="The encode tier the next render masters at — a doc pick, saved with the timeline; the dialog's per-render preset still overrides for one render"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px]">Export grade</SelectLabel>
+                  <SelectItem value="draft" className="text-[11px]">
+                    Draft — fast
+                  </SelectItem>
+                  <SelectItem value="standard" className="text-[11px]">
+                    Standard
+                  </SelectItem>
+                  <SelectItem value="high" className="text-[11px]">
+                    High — master
+                  </SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Switch
+              checked={resolvedBurn}
+              onCheckedChange={(b) => void pickBurn(b)}
+              disabled={saving || loading || renderInFlight || burnSaving}
+              className="scale-90"
+              title="Where captions ship — burned into the frame (the style pick applies) or beside it as a sidecar SRT. The next render honors the pick; the dialog's per-render override still wins."
+            />
+            <span className="w-[64px] shrink-0 text-[10px] leading-tight text-muted-foreground" title="The resolved truth the next render applies when no per-render override rides the body">
+              {burnSaving ? "saving…" : resolvedBurn ? "burned in" : "sidecar SRT"}
+            </span>
           </div>
           <Button size="sm" variant="ghost" onClick={undo} disabled={!canUndo || saving || loading} title="Undo (⌘Z)">
             <Undo2 className="h-3.5 w-3.5" />

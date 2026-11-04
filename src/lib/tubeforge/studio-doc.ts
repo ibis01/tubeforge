@@ -567,6 +567,67 @@ export function docMusicPick(
   return sanitizeMusicPick(prefs?.music);
 }
 
+// ---------- S14: the delivery — the grade the render encodes, the captions'
+// shipping form ----------
+//
+// The last two export decisions held captive by the detail dialog's preset
+// row. Their fates differed, and the difference matters:
+//   · the GRADE (draft/standard/high) rode the doc's renderPrefs and the
+//     render JOB read it (aligned doc only) — but only the dialog could
+//     WRITE it (a preset click), and the route's own comment promised a
+//     chain its code never ran: the route passed the body tier through
+//     verbatim and left the doc fallback to the job, one layer down, so
+//     nothing resolved the chain in one place and the response echoed
+//     nothing.
+//   · the BURN (captions into the frame vs a sidecar SRT) was written by
+//     the presets onto the row and honored by NOBODY through HTTP: the
+//     route pre-resolved `body?.subtitles ?? mode !== "slides"` into a
+//     DEFINITE boolean, and the job's own row fallback
+//     (`opts.subtitles ?? projectBurn ?? mode default`) was unreachable
+//     behind it — a bare render ignored every standing burn pick.
+// S14 gives both decisions ONE shared resolution law (here, so the render
+// route, the probes and any future caller share a single truth), a studio
+// pick each, and a response that echoes what the job will actually honor.
+//
+// PURE on purpose (this module imports nothing): shape validation only.
+
+/**
+ * The delivery grade the render encodes at. The chain, now run in ONE
+ * place: a per-render body override (the dialog's preset picker) > the
+ * doc's standing pick (renderPrefs.quality — the ONE required renderPrefs
+ * key, so a doc that passed sanitize always carries it) > the standard
+ * tier (the pre-S14 default). Junk in either slot is simply not a pick —
+ * it falls through. (The job keeps its own aligned-doc read as the
+ * crash-resume path; the route's resolved value is the same answer.)
+ */
+export function resolveDeliveryQuality(
+  bodyQuality: unknown,
+  doc: RenderPrefs | null | undefined
+): ExportQuality {
+  if (bodyQuality === "draft" || bodyQuality === "standard" || bodyQuality === "high")
+    return bodyQuality;
+  const docQ = doc?.quality;
+  if (docQ === "draft" || docQ === "standard" || docQ === "high") return docQ;
+  return "standard";
+}
+
+/**
+ * Where captions ship. The chain: a per-render body override (the dialog's
+ * preset picker) > the row's standing pick (burnCaptions) > the format
+ * default (burned for video modes, off for slides — the deck's headlines
+ * already carry the words). A boolean body wins even when false: an
+ * explicit "no burn" is a decision, not an absence.
+ */
+export function resolveBurnSubtitles(
+  bodySubtitles: unknown,
+  rowBurn: boolean | null | undefined,
+  mode: string
+): boolean {
+  if (typeof bodySubtitles === "boolean") return bodySubtitles;
+  if (typeof rowBurn === "boolean") return rowBurn;
+  return mode !== "slides";
+}
+
 // ---------- S9: the poster — the scene the cover depicts ----------
 //
 // The cover art's SUBJECT was decided outside the studio: the thumbnail

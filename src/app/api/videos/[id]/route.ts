@@ -274,8 +274,27 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       );
     }
   }
-  if (typeof body.burnCaptions === "boolean") data.burnCaptions = body.burnCaptions;
-  if (body.burnCaptions === null) data.burnCaptions = null;
+  // S14 — the delivery's gate (the S12/S13 catalog-gate law): a PRESENT but
+  // non-boolean burnCaptions dies with a readable 400 before any write —
+  // numbers, strings, type confusion. null clears to the default (burned
+  // for video modes, off for slides); an absent key stays untouched. The
+  // row's pick is what a bare render honors (the render route resolves
+  // body > row > format default through the shared S14 chain).
+  if (body.burnCaptions !== undefined) {
+    if (body.burnCaptions === null) {
+      data.burnCaptions = null;
+    } else if (typeof body.burnCaptions === "boolean") {
+      data.burnCaptions = body.burnCaptions;
+    } else {
+      return NextResponse.json(
+        {
+          error:
+            "Invalid burnCaptions — true burns captions into the frame, false ships a sidecar SRT, null returns to the default",
+        },
+        { status: 400 }
+      );
+    }
+  }
 
   // Status transitions (publish / mark ready / retry)
   if (typeof body.status === "string") {
