@@ -154,6 +154,7 @@ import {
   Smartphone,
   Gauge,
   Palette,
+  Frame,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -179,7 +180,7 @@ import type {
   TimelineSceneDTO,
 } from "@/lib/tubeforge/types";
 import { TRANSITIONS } from "@/lib/tubeforge/transitions";
-import { MUSIC_MOODS as MUSIC_MOOD_PRESETS, THUMB_STYLES } from "@/lib/tubeforge/types";
+import { MUSIC_MOODS as MUSIC_MOOD_PRESETS, THUMB_STYLES, RENDER_ASPECTS, RENDER_FRAME_RATES } from "@/lib/tubeforge/types";
 import {
   GRADE_PRESETS,
   sanitizeGrade,
@@ -1739,6 +1740,59 @@ export function TimelineStudio({
     [shortBusy, saving, loading, renderInFlight, dirty, save, videoId, video, timeline, onSaved, toast]
   );
 
+  // ---------- S13 — the frame: the picture's shape + smoothness ----------
+  // The last render-frame decisions that lived outside the studio: the
+  // aspect and frame rate were set once on the detail dialog's export
+  // presets (or never — the row defaults, 16:9 / 30), while the studio's
+  // OWN preview geometry and timecodes already followed them. The pick is
+  // row-level and CHEAP — a frame flip invalidates nothing (the standing
+  // render stays; the NEXT render draws the picked frame) — so like S12's
+  // style it PATCHes immediately: no staged pick, no arm, no disclosure.
+  // The preview + timecodes re-derive on the parent's re-fetch, and slides
+  // mode locks the aspect vertical (the deck's PNG is the frame — 9:16 is
+  // the only geometry the render will ever draw there).
+  const [frameSaving, setFrameSaving] = useState(false);
+  // The RESOLVED truth the pickers show (the same expression the preview's
+  // settings derive): slides forces 9:16, null falls back to the defaults
+  // (16:9 / 30) — the dropdown never shows a value the render won't draw.
+  const resolvedAspect =
+    video.renderMode === "slides" ? "9:16" : (video.aspectRatio ?? "16:9");
+  const resolvedFps = video.frameRate ?? 30;
+  const pickFrame = useCallback(
+    async (patch: { aspectRatio?: string; frameRate?: number }) => {
+      if (frameSaving) return;
+      setFrameSaving(true);
+      try {
+        const res = await fetch(`/api/videos/${videoId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        onSaved?.(); // the parent re-fetches the row — preview + timecodes re-derive
+        toast({
+          title: "Frame picked",
+          description:
+            patch.aspectRatio != null
+              ? `${RENDER_ASPECTS.find((a) => a.id === patch.aspectRatio)?.label ?? patch.aspectRatio} (${patch.aspectRatio}) — the preview wears it now; the next render draws it.`
+              : `${patch.frameRate} fps — timecodes re-count now; the next render runs at it.`,
+        });
+      } catch (err) {
+        toast({
+          title: "Frame pick failed",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setFrameSaving(false);
+      }
+    },
+    [frameSaving, videoId, onSaved, toast]
+  );
+
   // ---------- the preview canvas ----------
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -2820,6 +2874,74 @@ export function TimelineStudio({
                 {shortBusy ? "Cutting…" : video.hasShort ? "Re-cut" : "Cut Short"}
               </span>
             </Button>
+          </div>
+          <span className="h-5 w-px bg-white/10" aria-hidden />
+          {/* S13 — the frame: the picture's shape + smoothness. The studio's
+              preview geometry and timecodes ALWAYS followed the row's aspect
+              + fps, but the pick lived only on the dialog's export presets —
+              the studio displayed a frame it couldn't shape. Cheap row picks
+              (PATCH immediate, the standing render stays; the next render
+              draws the picked frame). Slides locks the aspect vertical — the
+              deck's PNG IS the frame, the render only ever draws 9:16 there. */}
+          <div className="flex items-center gap-1.5 mr-1">
+            <Frame className="h-3.5 w-3.5 text-muted-foreground" />
+            <Select
+              value={resolvedAspect}
+              onValueChange={(v) => {
+                if (v === resolvedAspect) return; // a resolved no-op is not a pick
+                void pickFrame({ aspectRatio: v });
+              }}
+              disabled={
+                saving || loading || renderInFlight || frameSaving || video.renderMode === "slides"
+              }
+            >
+              <SelectTrigger
+                className="h-7 w-[132px] text-[11px]"
+                title={
+                  video.renderMode === "slides"
+                    ? "Slides are always 9:16 — the deck's designed PNG is the frame; the render never draws another shape for it"
+                    : "The picture's shape — the preview re-shapes immediately; the next render draws it (the standing render stays until then)"
+                }
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px]">Frame</SelectLabel>
+                  {RENDER_ASPECTS.map((a) => (
+                    <SelectItem key={a.id} value={a.id} className="text-[11px]">
+                      {a.id} — {a.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select
+              value={String(resolvedFps)}
+              onValueChange={(v) => {
+                const n = Number(v);
+                if (n === resolvedFps) return; // a resolved no-op is not a pick
+                void pickFrame({ frameRate: n });
+              }}
+              disabled={saving || loading || renderInFlight || frameSaving}
+            >
+              <SelectTrigger
+                className="h-7 w-[104px] text-[11px]"
+                title="How smoothly motion plays — timecodes re-count immediately (the frames column); the next render runs at it"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px]">Frame rate</SelectLabel>
+                  {RENDER_FRAME_RATES.map((r) => (
+                    <SelectItem key={r.fps} value={String(r.fps)} className="text-[11px]">
+                      {r.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
           </div>
           <Button size="sm" variant="ghost" onClick={undo} disabled={!canUndo || saving || loading} title="Undo (⌘Z)">
             <Undo2 className="h-3.5 w-3.5" />

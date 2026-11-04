@@ -62,6 +62,31 @@ export const THUMB_STYLES = [
   },
 ] as const;
 
+// S13 — the frame: the picture's shape and its smoothness. The render job's
+// geometry law: null row values fall back to 16:9 / 30 fps (render.ts's
+// `opts.aspectRatio ?? "16:9"` / `opts.frameRate ?? FPS`), and slides mode
+// is ALWAYS 9:16 (the deck's designed PNG is a 1080x1920 frame — the row's
+// aspect is inert there, so the studio's picker locks vertical for slides).
+// Labels follow the export presets' vocabulary (studio-doc.ts) so the two
+// surfaces speak one language. The PATCH gate and the studio picker both
+// import THESE members — the catalog is the single source of the law.
+export const RENDER_ASPECTS = [
+  { id: "16:9", label: "Landscape", note: "YouTube / widescreen" },
+  { id: "9:16", label: "Vertical", note: "Shorts / Reels / TikTok" },
+  { id: "1:1", label: "Square", note: "feed posts" },
+] as const;
+
+export const RENDER_FRAME_RATES = [
+  { fps: 24, label: "24 fps — cinema", note: "filmic motion" },
+  { fps: 30, label: "30 fps — standard", note: "the default" },
+  { fps: 60, label: "60 fps — smooth", note: "extra-smooth motion" },
+] as const;
+
+/** The gate's membership lists (the route validates PATCH bodies against
+ *  these; junk dies with a readable 400 before any write). */
+export const RENDER_ASPECT_IDS = RENDER_ASPECTS.map((a) => a.id);
+export const RENDER_FPS = RENDER_FRAME_RATES.map((r) => r.fps);
+
 // ---------- Story engine (Phase 2) ----------
 
 export const FORMATS = [

@@ -4,7 +4,12 @@ import { requireUser } from "@/lib/tubeforge/tenant";
 import { latestStatsFor } from "@/lib/tubeforge/analytics";
 import { jobSnapshot } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
-import { RENDER_MODES, THUMB_STYLES } from "@/lib/tubeforge/types";
+import {
+  RENDER_MODES,
+  THUMB_STYLES,
+  RENDER_ASPECT_IDS,
+  RENDER_FPS,
+} from "@/lib/tubeforge/types";
 import { TRANSITIONS, sanitizeTransitionDuration } from "@/lib/tubeforge/transitions";
 import { isDuckIntensity } from "@/lib/tubeforge/audiomix";
 import { isMusicMoodId } from "@/lib/tubeforge/music";
@@ -219,12 +224,56 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   // burn-in (T-6.7/T-6.8). These ride alongside the existing overrides; the
   // render job reads them from the video row when no per-render override
   // is supplied in the POST /render body. null = "16:9" / 30 fps / sidecar SRT.
-  if (typeof body.aspectRatio === "string" && ["16:9", "9:16", "1:1"].includes(body.aspectRatio))
-    data.aspectRatio = body.aspectRatio;
-  if (body.aspectRatio === null) data.aspectRatio = null;
-  if (typeof body.frameRate === "number" && [24, 30, 60].includes(body.frameRate))
-    data.frameRate = body.frameRate;
-  if (body.frameRate === null) data.frameRate = null;
+  //
+  // S13 — the frame's gate (the S12 catalog-gate law): a PRESENT but
+  // illegal value dies with a readable 400 before any write — junk
+  // strings, off-catalog numbers, type confusion — instead of the old
+  // silent drop (a hostile PATCH must not look like it worked). null
+  // clears to the default; an absent key stays untouched. The membership
+  // lists are the SHARED catalog (types.ts) the studio picker shows, so
+  // the gate and the dropdown can never disagree. Slides rows keep the
+  // permissive write (the export presets PATCH blindly; the render job
+  // forces 9:16 there — the row value is inert, the studio's picker is
+  // what stays honest by locking vertical for slides).
+  if (body.aspectRatio !== undefined) {
+    if (body.aspectRatio === null) {
+      data.aspectRatio = null;
+    } else if (
+      typeof body.aspectRatio === "string" &&
+      (RENDER_ASPECT_IDS as readonly string[]).includes(body.aspectRatio)
+    ) {
+      data.aspectRatio = body.aspectRatio;
+    } else {
+      return NextResponse.json(
+        {
+          error: `Invalid aspectRatio — pick one of ${RENDER_ASPECT_IDS.join(
+            ", "
+          )}, or null for the 16:9 default`,
+        },
+        { status: 400 }
+      );
+    }
+  }
+  if (body.frameRate !== undefined) {
+    if (body.frameRate === null) {
+      data.frameRate = null;
+    } else if (
+      typeof body.frameRate === "number" &&
+      Number.isInteger(body.frameRate) &&
+      (RENDER_FPS as readonly number[]).includes(body.frameRate)
+    ) {
+      data.frameRate = body.frameRate;
+    } else {
+      return NextResponse.json(
+        {
+          error: `Invalid frameRate — pick one of ${RENDER_FPS.join(
+            ", "
+          )}, or null for the 30 fps default`,
+        },
+        { status: 400 }
+      );
+    }
+  }
   if (typeof body.burnCaptions === "boolean") data.burnCaptions = body.burnCaptions;
   if (body.burnCaptions === null) data.burnCaptions = null;
 
