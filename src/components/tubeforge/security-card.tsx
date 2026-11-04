@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { broadcastGateState } from "@/components/tubeforge/auth-gate";
-import { Eye, EyeOff, Lock, Loader2, ShieldCheck, ShieldOff, TerminalSquare } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Lock, Loader2, ShieldCheck, ShieldOff, TerminalSquare } from "lucide-react";
 
 type Status = { configured: boolean; authenticated: boolean; gateEnabled: boolean };
 
@@ -24,6 +24,16 @@ export function SecurityAccessCard() {
   const [pw2, setPw2] = useState("");
   const [reveal, setReveal] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  // S16 — the rotation form. The card has said "you can change it later from
+  // here" since the lock shipped; now it tells the truth. Only for a signed-in
+  // caller whose account HAS a password (the route needs a browser session).
+  const [cpOpen, setCpOpen] = useState(false);
+  const [cpCurrent, setCpCurrent] = useState("");
+  const [cpNew, setCpNew] = useState("");
+  const [cpNew2, setCpNew2] = useState("");
+  const [cpReveal, setCpReveal] = useState(false);
+  const [cpBusy, setCpBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -92,6 +102,47 @@ export function SecurityAccessCard() {
 
   const on = Boolean(status?.gateEnabled);
   const hasPassword = Boolean(status?.configured);
+
+  const changePassword = async () => {
+    if (cpNew.length < 8) {
+      toast({ title: "Password", description: "The new password needs at least 8 characters", variant: "destructive" });
+      return;
+    }
+    if (cpNew !== cpNew2) {
+      toast({ title: "Password", description: "The two new passwords do not match", variant: "destructive" });
+      return;
+    }
+    if (cpNew === cpCurrent) {
+      toast({ title: "Password", description: "The new password is the same as the current one", variant: "destructive" });
+      return;
+    }
+    setCpBusy(true);
+    try {
+      const res = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword: cpCurrent, newPassword: cpNew }),
+      });
+      const d = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        toast({ title: "Password", description: d.error ?? "Something went wrong", variant: "destructive" });
+        return;
+      }
+      setCpOpen(false);
+      setCpCurrent("");
+      setCpNew("");
+      setCpNew2("");
+      toast({
+        title: "Password changed",
+        description: "Every other device was signed out — this browser stays signed in.",
+      });
+      await load(); // the cookie rotated in place; status re-reads the fresh session
+    } catch {
+      toast({ title: "Password", description: "Network error — try again", variant: "destructive" });
+    } finally {
+      setCpBusy(false);
+    }
+  };
 
   return (
     <Card className="glass rounded-2xl p-5 sm:p-6">
@@ -188,6 +239,111 @@ export function SecurityAccessCard() {
               Cancel
             </Button>
           </div>
+        </div>
+      )}
+
+      {/* S16 — the rotation surface. The copy above promised "you can change
+          it later from here"; this is "here". Requires a signed-in browser
+          (the route re-signs this tab on a fresh session and signs out every
+          other device). */}
+      {hasPassword && status?.authenticated && (
+        <div className="mt-5 pt-5 border-t border-white/10">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <KeyRound className="h-4.5 w-4.5 mt-0.5 shrink-0 text-muted-foreground" />
+              <div>
+                <p className="text-sm font-medium">Access password</p>
+                <p className="text-xs text-muted-foreground mt-0.5 max-w-md">
+                  Rotate the password you sign in with. Every other device is signed out — this browser stays signed in.
+                </p>
+              </div>
+            </div>
+            {!cpOpen && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                onClick={() => {
+                  setCpOpen(true);
+                  setCpCurrent("");
+                  setCpNew("");
+                  setCpNew2("");
+                }}
+                disabled={cpBusy}
+              >
+                Change
+              </Button>
+            )}
+          </div>
+
+          {cpOpen && (
+            <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Prove the current password, then pick the new one (at least 8 characters, different from the current).
+              </p>
+              <div className="relative">
+                <Input
+                  type={cpReveal ? "text" : "password"}
+                  value={cpCurrent}
+                  onChange={(e) => setCpCurrent(e.target.value)}
+                  placeholder="Current password"
+                  autoFocus
+                  autoComplete="current-password"
+                  className="pr-10"
+                  aria-label="Current password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setCpReveal((r) => !r)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-muted-foreground hover:text-foreground rounded-md"
+                  aria-label={cpReveal ? "Hide passwords" : "Show passwords"}
+                >
+                  {cpReveal ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <Input
+                type={cpReveal ? "text" : "password"}
+                value={cpNew}
+                onChange={(e) => setCpNew(e.target.value)}
+                placeholder="New password"
+                autoComplete="new-password"
+                aria-label="New password"
+              />
+              <Input
+                type={cpReveal ? "text" : "password"}
+                value={cpNew2}
+                onChange={(e) => setCpNew2(e.target.value)}
+                placeholder="Repeat the new password"
+                autoComplete="new-password"
+                aria-label="Repeat the new password"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !cpBusy && cpCurrent && cpNew && cpNew2) void changePassword();
+                }}
+              />
+              <div className="flex items-center gap-2 pt-1">
+                <Button
+                  onClick={() => void changePassword()}
+                  disabled={cpBusy || !cpCurrent || !cpNew || !cpNew2}
+                  className="bg-brand-gradient hover:opacity-90 text-white font-semibold"
+                >
+                  {cpBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+                  Change the password
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setCpOpen(false);
+                    setCpCurrent("");
+                    setCpNew("");
+                    setCpNew2("");
+                  }}
+                  disabled={cpBusy}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

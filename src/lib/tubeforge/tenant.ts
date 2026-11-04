@@ -207,6 +207,27 @@ export async function resolveRequestUser(req: NextRequest): Promise<TenantCtx | 
   return payload.uid ? resolveApiCtx(payload.uid) : null;
 }
 
+/**
+ * The caller's CURRENT Session row id (the token's jti), or null when the
+ * caller rode an API bearer token, a state marker or no token at all.
+ *
+ * S16 (change-password): the rotation revokes every live session — including
+ * the acting one — and re-signs the browser on a FRESH row, so the route
+ * needs the sid to know which session it is rotating FROM. API tokens are
+ * deliberately null: a leaked 90-day bearer must never be able to rotate the
+ * password (the route 403s those callers — only a browser session may).
+ */
+export async function sessionIdFromRequest(req: NextRequest): Promise<string | null> {
+  const secret = getAuthSecret();
+  if (!secret) return null;
+  const bearer = req.headers.get("authorization");
+  const token = bearer?.startsWith("Bearer ")
+    ? bearer.slice(7).trim()
+    : req.cookies.get(SESSION_COOKIE)?.value;
+  const payload = await verifyToken(token, secret);
+  return payload?.s === "session" ? payload.jti : null;
+}
+
 // ---------------------------------------------------------------------------
 // requireUser / requireRole — every protected endpoint starts with one of these.
 
