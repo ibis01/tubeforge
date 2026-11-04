@@ -60,8 +60,11 @@ const reqWith = (opts: RequestInit) => new NextRequest(URL_, { method: "POST", .
   const uid = "probe-user-s16";
   const sid = "probe-sid-0123456789";
   const sessionToken = await createSessionToken(uid, sid);
-  const apiToken = await createApiToken(uid);
-  const stateToken = await createSignedToken("state", 60, process.env.TUBEFORGE_AUTH_SECRET, { uid });
+  // S20: createApiToken now persists a registry row (real users only), but
+  // the SID law never touches the DB — sign the api-scope token directly so
+  // this layer stays pure.
+  const apiToken = await createSignedToken("api", 3600, process.env.TUBEFORGE_AUTH_SECRET!, { uid });
+  const stateToken = await createSignedToken("state", 60, process.env.TUBEFORGE_AUTH_SECRET!, { uid });
 
   check("1.1  a browser session token yields its sid", sessionToken !== null && (await sessionIdFromRequest(
     reqWith({ headers: { cookie: `${SESSION_COOKIE}=${sessionToken}` } })

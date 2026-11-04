@@ -11,12 +11,15 @@
 // Tokens: HMAC-signed (auth-token.ts). Session-scope tokens carry uid + sid
 // (the Session row id); requireUser resolves the Session row so revocation
 // takes effect instantly. API-scope tokens (90-day bearer, for scripts) carry
-// uid only — they expire with the token; rotating TUBEFORGE_AUTH_SECRET kills
-// them all.
+// uid + jti — S20 persists the jti in the ApiToken registry so they get the
+// same instant revocation; a revoked/unknown jti is dead on arrival. (The
+// stateless fallback died with the registry: deny-by-default is the posture.)
+// Rotating TUBEFORGE_AUTH_SECRET still kills everything at once.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { NextRequest } from "next/server";
 import { db as rawDb } from "@/lib/db";
+import { randomToken } from "./crypto";
 import {
   API_TOKEN_MAX_AGE_SEC,
   SESSION_COOKIE,
@@ -183,8 +186,24 @@ async function resolveSessionCtx(sid: string): Promise<TenantCtx | null> {
   };
 }
 
-/** Resolve an api-token uid into a context (no Session row — bearer semantics). */
-async function resolveApiCtx(uid: string): Promise<TenantCtx | null> {
+/** Resolve an api-token into a context — registry-gated since S20.
+ *  The signed payload alone is no longer enough: the jti must map to a live
+ *  ApiToken row (not revoked, not expired, not swept), exactly like a session
+ *  cookie resolving its Session row. Also stamps lastUsedAt — at most once a
+ *  minute per token, so a hot script loop doesn't turn every request into a
+ *  write. */
+async function resolveApiCtx(uid: string, jti: string): Promise<TenantCtx | null> {
+  const row = await rawDb.apiToken.findUnique({ where: { jti } });
+  if (!row || row.userId !== uid || row.revokedAt || row.expiresAt.getTime() < Date.now())
+    return null;
+
+  // lastUsedAt throttle: one write per token per minute, never blocking auth.
+  const stale = !row.lastUsedAt || Date.now() - row.lastUsedAt.getTime() > 60_000;
+  if (stale)
+    void rawDb.apiToken
+      .update({ where: { id: row.id }, data: { lastUsedAt: new Date() } })
+      .catch(() => {});
+
   const membership = await primaryMembership(uid);
   if (!membership) return null;
   return { userId: uid, organizationId: membership.organizationId, role: membership.role };
@@ -204,7 +223,7 @@ export async function resolveRequestUser(req: NextRequest): Promise<TenantCtx | 
   const payload = await verifyToken(token, secret);
   if (!payload || payload.s === "state") return null;
   if (payload.s === "session") return resolveSessionCtx(payload.jti);
-  return payload.uid ? resolveApiCtx(payload.uid) : null;
+  return payload.uid ? resolveApiCtx(payload.uid, payload.jti) : null;
 }
 
 /**
@@ -259,7 +278,7 @@ export async function requireUser(req: NextRequest): Promise<AuthResult> {
     payload.s === "session"
       ? await resolveSessionCtx(payload.jti) // jti doubles as the Session row id
       : payload.uid
-        ? await resolveApiCtx(payload.uid)
+        ? await resolveApiCtx(payload.uid, payload.jti)
         : null;
   if (!ctx) return { ok: false, status: 401, error: AUTH_REQUIRED };
 
@@ -305,8 +324,53 @@ export async function createSessionToken(uid: string, sid: string): Promise<stri
   });
 }
 
-export function createApiToken(uid: string): Promise<string | null> {
-  return createSignedToken("api", API_TOKEN_MAX_AGE_SEC, getAuthSecret(), { uid });
+export function createApiToken(uid: string, name?: string): Promise<string | null> {
+  return withCtxNull(async () => {
+    const secret = getAuthSecret();
+    if (!secret) return null;
+    // The jti is chosen here (not inside createSignedToken) so the registry
+    // row can be keyed by it before the token ever leaves the building.
+    const jti = randomToken();
+    await rawDb.apiToken.create({
+      data: {
+        userId: uid,
+        jti,
+        name: name?.trim() || null,
+        expiresAt: new Date(Date.now() + API_TOKEN_MAX_AGE_SEC * 1000),
+      },
+    });
+    return createSignedToken("api", API_TOKEN_MAX_AGE_SEC, secret, { uid, jti });
+  });
+}
+
+/** The caller's token rows, newest first — metadata only, never the secret. */
+export async function listApiTokens(userId: string) {
+  return withCtxNull(async () =>
+    rawDb.apiToken.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        name: true,
+        createdAt: true,
+        lastUsedAt: true,
+        expiresAt: true,
+        revokedAt: true,
+      },
+    })
+  );
+}
+
+/** Revoke one of the caller's tokens (id-scoped to the owner — a foreign
+ *  row simply matches nothing and reports not-found). Returns true when a
+ *  live row was revoked. */
+export async function revokeApiToken(userId: string, id: string): Promise<boolean> {
+  return withCtxNull(async () => {
+    const row = await rawDb.apiToken.findFirst({ where: { id, userId } });
+    if (!row || row.revokedAt) return false;
+    await rawDb.apiToken.update({ where: { id: row.id }, data: { revokedAt: new Date() } });
+    return true;
+  });
 }
 
 export function sessionCookie(token: string) {

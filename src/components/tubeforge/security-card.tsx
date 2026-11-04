@@ -16,6 +16,17 @@ import { Eye, EyeOff, KeyRound, Lock, Loader2, ShieldCheck, ShieldOff, TerminalS
 
 type Status = { configured: boolean; authenticated: boolean; gateEnabled: boolean };
 
+// S20 — a registry row's public shape (GET /api/auth/token). The secret is
+// never stored server-side, so it can never appear here.
+type ApiTokenRow = {
+  id: string;
+  name: string | null;
+  createdAt: string;
+  lastUsedAt: string | null;
+  expiresAt: string;
+  revokedAt: string | null;
+};
+
 export function SecurityAccessCard() {
   const { toast } = useToast();
   const [status, setStatus] = useState<Status | null>(null);
@@ -141,6 +152,81 @@ export function SecurityAccessCard() {
       toast({ title: "Password", description: "Network error — try again", variant: "destructive" });
     } finally {
       setCpBusy(false);
+    }
+  };
+
+  // S20 — the API token console. POST /api/auth/token has existed since
+  // Stage 2 with no caller and no revocation; this is its surface: mint with
+  // a label (one-time reveal), list (created / last used / expires), revoke
+  // (kills the bearer on its next request).
+  const [tokens, setTokens] = useState<ApiTokenRow[] | null>(null);
+  const [tkName, setTkName] = useState("");
+  const [tkBusy, setTkBusy] = useState(false);
+  const [tkFresh, setTkFresh] = useState<{ token: string; name: string | null } | null>(null);
+
+  const loadTokens = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth/token", { cache: "no-store" });
+      if (!res.ok) {
+        setTokens(null);
+        return;
+      }
+      const d = (await res.json()) as { tokens: ApiTokenRow[] };
+      setTokens(d.tokens ?? []);
+    } catch {
+      /* non-critical */
+    }
+  }, []);
+
+  // S20 — the token console loads its rows when a signed-in account exists
+  // (the routes 403 otherwise; the section is not rendered for them anyway).
+  useEffect(() => {
+    if (status?.configured && status?.authenticated) void loadTokens();
+  }, [status?.configured, status?.authenticated, loadTokens]);
+
+  const mintToken = async () => {
+    setTkBusy(true);
+    try {
+      const res = await fetch("/api/auth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(tkName.trim() ? { name: tkName.trim() } : {}),
+      });
+      const d = (await res.json().catch(() => ({}))) as { token?: string; name?: string | null; error?: string };
+      if (!res.ok || !d.token) {
+        toast({ title: "API token", description: d.error ?? "Something went wrong", variant: "destructive" });
+        return;
+      }
+      setTkFresh({ token: d.token, name: d.name ?? null });
+      setTkName("");
+      await loadTokens();
+      toast({ title: "Token minted", description: "Copy it now — it will not be shown again." });
+    } catch {
+      toast({ title: "API token", description: "Network error — try again", variant: "destructive" });
+    } finally {
+      setTkBusy(false);
+    }
+  };
+
+  const revokeToken = async (id: string, label: string) => {
+    setTkBusy(true);
+    try {
+      const res = await fetch("/api/auth/token", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const d = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        toast({ title: "API token", description: d.error ?? "Something went wrong", variant: "destructive" });
+        return;
+      }
+      toast({ title: "Token revoked", description: `${label} is dead on its next request.` });
+      await loadTokens();
+    } catch {
+      toast({ title: "API token", description: "Network error — try again", variant: "destructive" });
+    } finally {
+      setTkBusy(false);
     }
   };
 
@@ -344,6 +430,108 @@ export function SecurityAccessCard() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* S20 — the API token console. The mint route was a Stage-2 fossil
+          (no caller, no revocation); now each mint is a registry row and
+          this is the manager. Only a browser session manages tokens — the
+          routes 403 bearer callers, so a leaked key can't clone itself. */}
+      {hasPassword && status?.authenticated && (
+        <div className="mt-5 pt-5 border-t border-white/10">
+          <div className="flex items-start gap-3">
+            <TerminalSquare className="h-4.5 w-4.5 mt-0.5 shrink-0 text-muted-foreground" />
+            <div className="flex-1">
+              <p className="text-sm font-medium">API tokens (script access)</p>
+              <p className="text-xs text-muted-foreground mt-0.5 max-w-md">
+                90-day bearer keys for curl and scripts. Revoking one kills it on its next request — rotating the
+                studio secret is no longer the only way.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex gap-2 mt-3">
+            <Input
+              value={tkName}
+              onChange={(e) => setTkName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && !tkBusy && void mintToken()}
+              placeholder="Label (e.g. render farm script)"
+              className="text-xs"
+              maxLength={80}
+            />
+            <Button size="sm" variant="outline" onClick={() => void mintToken()} disabled={tkBusy}>
+              {tkBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Mint token
+            </Button>
+          </div>
+
+          {tkFresh && (
+            <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+              <p className="text-[11px] text-amber-300 mb-1.5">
+                {tkFresh.name ? `“${tkFresh.name}”` : "New token"} — shown once, store it now:
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 min-w-0 truncate font-mono text-[11px] text-amber-200">
+                  {tkFresh.token}
+                </code>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(tkFresh.token);
+                    toast({ title: "Copied", description: "The token is on your clipboard." });
+                  }}
+                >
+                  Copy
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setTkFresh(null)}>
+                  Done
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <div className="mt-3 space-y-2">
+            {tokens === null ? (
+              <p className="text-[11px] text-muted-foreground">Loading tokens…</p>
+            ) : tokens.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground">No tokens yet — mint one for CLI or script access.</p>
+            ) : (
+              tokens.map((t) => (
+                <div
+                  key={t.id}
+                  className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/4 px-3 py-2"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium truncate">{t.name || "Unnamed token"}</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      created {new Date(t.createdAt).toLocaleDateString()}
+                      {" · "}
+                      {t.revokedAt
+                        ? "revoked"
+                        : t.lastUsedAt
+                          ? `last used ${new Date(t.lastUsedAt).toLocaleDateString()}`
+                          : "never used"}
+                      {" · "}
+                      expires {new Date(t.expiresAt).toLocaleDateString()}
+                    </p>
+                  </div>
+                  {t.revokedAt ? (
+                    <span className="text-[10px] text-muted-foreground shrink-0">revoked</span>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={tkBusy}
+                      onClick={() => void revokeToken(t.id, t.name || "Unnamed token")}
+                    >
+                      Revoke
+                    </Button>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
         </div>
       )}
 

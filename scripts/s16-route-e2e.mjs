@@ -109,7 +109,9 @@ check("6.4  the NEW password logs in (a third browser, C)", res.status === 200, 
 // ---- 7. an API bearer may mint but never rotate ----
 res = await call("C", "POST", "/api/auth/token");
 body = await res.json().catch(() => ({}));
-check("7.1  an API token mints for a signed-in session", res.status === 200 && typeof body.token === "string", res.status);
+check("7.1  an API token mints for a signed-in session",
+  // S20: the mint is a CREATE — 201 (and it now persists a registry row).
+  res.status === 201 && typeof body.token === "string", res.status);
 res = await call("D", "POST", "/api/auth/change-password",
   { currentPassword: password2, newPassword: "S16RouteE2e!0003" },
   { Authorization: `Bearer ${body.token}` });

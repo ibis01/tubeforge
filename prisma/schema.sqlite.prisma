@@ -46,6 +46,7 @@ model User {
   youtubeAccounts     YouTubeAccount[]
   providerCredentials ProviderCredential[]
   sessions            Session[]
+  apiTokens           ApiToken[]
   activities          Activity[]
   jobs                Job[]
   usageRecords        UsageRecord[]
@@ -109,6 +110,33 @@ model Session {
   expiresAt      DateTime
   revokedAt      DateTime?
   user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// S20 — the API token registry. Bearer tokens used to be purely stateless
+// (HMAC payload, uid + exp + random jti): nothing listed them, nothing
+// revoked them — a leaked token was live for 90 days and the only defense
+// was rotating TUBEFORGE_AUTH_SECRET (which kills every session too).
+// Sessions got the DB treatment in Stage 2 (jti = Session row id, instant
+// revoke); tokens now get the same: every mint persists a row keyed by the
+// token's jti, resolveApiCtx refuses revoked/unknown jtis, and the security
+// card lists + revokes them. The signed payload is unchanged — only the
+// registry gates it now.
+model ApiToken {
+  id          String    @id @default(cuid())
+  userId      String
+  // The signed token's jti — resolveApiCtx looks the row up by it.
+  jti         String    @unique
+  // User-chosen label ("render farm script", "laptop CLI").
+  name        String?
+  createdAt   DateTime  @default(now())
+  // Refreshed at most once a minute per token (not one write per request).
+  lastUsedAt  DateTime?
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([expiresAt])
