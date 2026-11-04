@@ -33,12 +33,14 @@ const MEMORY_MAX = 32;
 const memoryCache = new Map<string, Buffer>();
 
 /** Cache key — everything that can change what the sample sounds like:
- *  provider + endpoint + key fingerprint + model + voice. Switching any of
- *  them regenerates instead of serving a stale sample. */
-function cacheKey(config: { provider: string; model: string; baseUrl?: string; apiKey?: string }, voice: string) {
+ *  provider + endpoint + key fingerprint + model + voice (+ pace, S11 —
+ *  the cached default-line sample is per-speed). Switching any of them
+ *  regenerates instead of serving a stale sample. */
+function cacheKey(config: { provider: string; model: string; baseUrl?: string; apiKey?: string }, voice: string, speed = 1) {
   const keyFp = config.apiKey ? createHash("sha1").update(config.apiKey).digest("hex").slice(0, 8) : "-";
   const base = config.baseUrl?.trim() || "-";
-  return `${config.provider}|${base}|${keyFp}|${config.model}|${voice}`;
+  const pace = Number.isFinite(speed) && speed > 0 ? speed : 1;
+  return `${config.provider}|${base}|${keyFp}|${config.model}|${voice}|${pace}`;
 }
 
 function diskPath(key: string) {
@@ -72,18 +74,22 @@ export async function resolvePreviewVoice(voice: string) {
 
 /** Get (or synthesize+cache) the preview WAV for a voice of the ACTIVE provider.
  *  `text` (T-4.11) runs a one-off synthesis with that exact line — used by the
- *  Voice Studio's pronunciation test row; never cached, never written to disk. */
-export async function getVoicePreview(voice: string, text?: string): Promise<Buffer> {
+ *  Voice Studio's pronunciation test row; never cached, never written to disk.
+ *  `speed` (S11) is the pace audition — the studio's pacing control lets the
+ *  user HEAR the narrator at the staged tempo on their own opening line
+ *  before committing a full re-read. */
+export async function getVoicePreview(voice: string, text?: string, speed = 1): Promise<Buffer> {
+  const pace = Number.isFinite(speed) && speed > 0 ? speed : 1;
   const custom = text?.trim().slice(0, 200);
   if (custom) {
     const { config, voice: safe } = await resolvePreviewVoice(voice);
     return aiCall("tts", `voice-preview-test(${safe})`, () =>
-      ttsSynthesize({ input: custom, voice: safe, speed: 1 }, config)
+      ttsSynthesize({ input: custom, voice: safe, speed: pace }, config)
     );
   }
 
   const { config, model, voice: safe } = await resolvePreviewVoice(voice);
-  const key = cacheKey({ ...config, model }, safe);
+  const key = cacheKey({ ...config, model }, safe, pace);
 
   const hot = memoryCache.get(key);
   if (hot) return hot;
@@ -107,7 +113,7 @@ export async function getVoicePreview(voice: string, text?: string): Promise<Buf
       ? SELFHOST_PREVIEW_TEXT
       : VOICE_PREVIEW_TEXT;
   const buffer = await aiCall("tts", `voice-preview(${safe})`, () =>
-    ttsSynthesize({ input: previewText, voice: safe, speed: 1 }, config)
+    ttsSynthesize({ input: previewText, voice: safe, speed: pace }, config)
   );
 
   touchMemory(key, buffer);

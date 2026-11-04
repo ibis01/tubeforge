@@ -78,6 +78,14 @@
 //     window (creative fields carried across), rebuilds voiceover.wav and
 //     drops only the stale renders. History resets — a row mutation is not
 //     doc-undoable (the same doctrine as the clip ops).
+//   • PACE → S11: the narrator's sibling axis — HOW FAST the read goes.
+//     ttsSpeed was frozen at the create form's slider until S11; the studio
+//     pick is the same deliberate server ACTION one axis over: stage the
+//     tempo in the picker, audition the CURRENT narrator at that tempo on
+//     the video's own opening line, commit with the two-step Re-read. The
+//     server re-reads EVERY scene with the same voice at the new speed
+//     (windows re-derive, creative fields survive, voiceover.wav rebuilds,
+//     only the stale renders die — the narrator swap's machinery).
 //
 // The preview is an approximation by design: the render (ffmpeg) stays the
 // source of truth. Everything the preview needs is deterministic and lives
@@ -138,6 +146,7 @@ import {
   Film,
   Sparkles,
   Smartphone,
+  Gauge,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -217,6 +226,10 @@ const LANE_H_VIDEO = 64;
 const LANE_H_AUDIO = 30;
 const SNAP_PX = 8; // playhead snap radius in pixels
 
+/** S11 — the pacing ladder the studio picker offers (create-slider
+ *  granularity, curated to the tempos a narrator actually reads at). */
+const PACE_LADDER = [0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+
 export interface TimelineStudioProps {
   videoId: string;
   video: VideoDTO;
@@ -248,6 +261,18 @@ interface VoiceSwapResponse {
   /** The narrator now baked into every scene WAV. */
   voice: string;
   /** Fresh per-scene read lengths after the swap (every scene re-read). */
+  wavDurations?: Record<number, number>;
+}
+
+/** POST /studio/pace — S11: the pacing change (server contract). A row
+ * mutation like the narrator swap — the studio swaps its doc in whole. */
+interface PaceChangeResponse {
+  timeline: AssembledTimelineDTO;
+  sceneOrder: number[];
+  activity: string;
+  /** The pace now baked into every scene WAV. */
+  ttsSpeed: number;
+  /** Fresh per-scene read lengths after the change (every scene re-read). */
   wavDurations?: Record<number, number>;
 }
 
@@ -1349,6 +1374,160 @@ export function TimelineStudio({
     setVoiceArmed(false);
   }, [voicePick]);
 
+  // ---------- S11 — the pacing pick ----------
+  // The narrator's sibling axis: HOW FAST the read goes. ttsSpeed is set
+  // once at the create form and until S11 was frozen — the only override
+  // was the settings-style PATCH, whose invalidation burns every read-
+  // keyed artifact down. Like the narrator this pick is a server ACTION
+  // (a row mutation + real TTS re-read of every scene), never a casual
+  // dropdown flip: the picker STAGES a pending pace, the audition plays
+  // the CURRENT narrator at the staged tempo on the video's own opening
+  // line, and the two-step Re-read commits — same voice, new speed,
+  // windows re-derive, creative edits survive.
+  /** The ladder the picker offers lives at module scope (PACE_LADDER). */
+  /** Staged pace (null = keep the current tempo). */
+  const [pacePick, setPacePick] = useState<number | null>(null);
+  const [paceBusy, setPaceBusy] = useState<"audition" | "change" | null>(null);
+  /** Two-step commit, like the narrator arm — a re-read of every scene. */
+  const [paceArmed, setPaceArmed] = useState(false);
+
+  // The pace's ears — the audition synthesizes the CURRENT narrator at the
+  // STAGED tempo on the video's own opening line (the preview route's
+  // one-off text), so what you hear is the tempo the re-read will use.
+  // One element, stopped on unmount.
+  const paceAuditionRef = useRef<HTMLAudioElement | null>(null);
+  const stopPaceAudition = useCallback(() => {
+    paceAuditionRef.current?.pause();
+    paceAuditionRef.current = null;
+    setPaceBusy((b) => (b === "audition" ? null : b));
+  }, []);
+  useEffect(() => stopPaceAudition, [stopPaceAudition]);
+
+  const auditionPace = useCallback(
+    async (speed: number) => {
+      stopPaceAudition();
+      if (!speed) return;
+      setPaceBusy("audition");
+      try {
+        const line =
+          timeline?.scenes.find((s) => (s.narration ?? "").trim())?.narration ?? "";
+        const res = await fetch("/api/settings/voices/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            voice: video.voice,
+            speed,
+            ...(line ? { text: line.slice(0, 200) } : {}),
+          }),
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const el = new Audio(url);
+        el.addEventListener("ended", () => {
+          URL.revokeObjectURL(url);
+          stopPaceAudition();
+        });
+        el.addEventListener("error", () => {
+          URL.revokeObjectURL(url);
+          stopPaceAudition();
+        });
+        paceAuditionRef.current = el;
+        await el.play();
+      } catch (err) {
+        stopPaceAudition();
+        toast({
+          title: "Audition failed",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      }
+    },
+    [video.voice, timeline, stopPaceAudition, toast]
+  );
+
+  // The commit: flush the doc, POST the pace change, hot-swap the doc in
+  // whole (history resets — a row mutation is not doc-undoable), drop
+  // every cached per-scene WAV so the voice lane + preview re-fetch
+  // lazily. The machinery mirrors the narrator swap one axis over.
+  const paceChange = useCallback(
+    async () => {
+      if (pacePick == null || !timeline || paceBusy || voiceBusy || clipBusy || saving || loading || renderInFlight)
+        return;
+      setPaceArmed(false);
+      stopPaceAudition();
+      setPaceBusy("change");
+      try {
+        // Flush pending edits first — the re-read works on the SAVED row + doc.
+        if (dirty) await save();
+        const res = await fetch(`/api/videos/${videoId}/studio/pace`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ speed: pacePick }),
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        const data = (await res.json()) as PaceChangeResponse;
+        setHistory({ past: [], present: normalizeTimelineDoc(data.timeline), future: [] });
+        setDirty(false);
+        if (data.wavDurations) setWavDurations(data.wavDurations);
+        for (const el of voPool.current.values()) el.pause();
+        voPool.current.clear();
+        setBrokenVo(new Set());
+        setWavVersion((v) => v + 1);
+        setPlaying(false);
+        seek(Math.min(playhead, Math.max(0, data.timeline.totalDurationSec - 0.001)));
+        setPacePick(null);
+        bump();
+        onSaved?.(); // the parent re-fetches the row (every ttsSpeed reader shows the new pace)
+        toast({ title: "Pacing changed", description: data.activity });
+      } catch (err) {
+        toast({
+          title: "Pace change failed",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setPaceBusy(null);
+      }
+    },
+    [
+      pacePick,
+      timeline,
+      paceBusy,
+      voiceBusy,
+      clipBusy,
+      saving,
+      loading,
+      renderInFlight,
+      dirty,
+      save,
+      videoId,
+      playhead,
+      seek,
+      bump,
+      onSaved,
+      toast,
+      stopPaceAudition,
+    ]
+  );
+
+  // Two-step commit: the first press arms (4 s window), the second
+  // executes; re-picking a pace disarms.
+  useEffect(() => {
+    if (!paceArmed) return;
+    const t = setTimeout(() => setPaceArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [paceArmed]);
+  useEffect(() => {
+    setPaceArmed(false);
+  }, [pacePick]);
+
   // ---------- S9: the poster — the scene the cover depicts ----------
   // The cover art's SUBJECT was a pipeline default: the concept derived
   // from the opening scene, always, and wanting the poster to tease a
@@ -2233,7 +2412,7 @@ export function TimelineStudio({
                 stopVoiceAudition();
                 setVoicePick(v === video.voice ? null : v);
               }}
-              disabled={saving || loading || renderInFlight || clipBusy != null || voiceBusy != null}
+              disabled={saving || loading || renderInFlight || clipBusy != null || voiceBusy != null || paceBusy != null}
             >
               <SelectTrigger
                 className="h-7 w-[150px] text-[11px]"
@@ -2284,7 +2463,7 @@ export function TimelineStudio({
                   ? stopVoiceAudition()
                   : void auditionVoice(voicePick ?? video.voice)
               }
-              disabled={saving || loading || renderInFlight || voiceBusy === "swap" || clipBusy != null}
+              disabled={saving || loading || renderInFlight || voiceBusy === "swap" || clipBusy != null || paceBusy != null}
               title="Audition this voice reading your own opening line"
             >
               {voiceBusy === "audition" ? (
@@ -2305,7 +2484,8 @@ export function TimelineStudio({
                 loading ||
                 renderInFlight ||
                 clipBusy != null ||
-                voiceBusy != null
+                voiceBusy != null ||
+                paceBusy != null
               }
               title="Re-voice the whole video — every scene is re-read with the picked voice (a real TTS pass), windows re-derive, creative edits survive"
             >
@@ -2320,6 +2500,102 @@ export function TimelineStudio({
                   : voiceArmed
                     ? `Re-voice ${timeline?.sceneCount ?? ""} scenes?`
                     : "Re-voice"}
+              </span>
+            </Button>
+          </div>
+          <span className="h-5 w-px bg-white/10" aria-hidden />
+          {/* S11 — the pacing: the narrator's sibling axis, staged the same
+              way (a real TTS re-read of every scene, so a two-step commit —
+              the pause is the cost disclosure), with its own ears: the
+              audition plays the CURRENT narrator at the staged tempo on
+              the video's own opening line. */}
+          <div className="flex items-center gap-1.5 mr-1">
+            <Gauge className="h-3.5 w-3.5 text-muted-foreground" />
+            <Select
+              value={(() => {
+                const p = pacePick ?? video.ttsSpeed;
+                return `pace:${p}`;
+              })()}
+              onValueChange={(v) => {
+                stopPaceAudition();
+                const n = Number(v.slice(5));
+                setPacePick(Math.abs(n - video.ttsSpeed) < 1e-9 ? null : n);
+              }}
+              disabled={saving || loading || renderInFlight || clipBusy != null || paceBusy != null || voiceBusy != null}
+            >
+              <SelectTrigger
+                className="h-7 w-[92px] text-[11px]"
+                title="How fast the narrator reads — pick to stage the tempo, audition to hear it on your own opening line, Re-read to commit (a real TTS pass; windows re-derive, creative edits survive)"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px]">Narrator pace</SelectLabel>
+                  {/* degraded mode: a standing speed off the ladder (the
+                      create slider is continuous) still shows itself so the
+                      control never lies about the current tempo */}
+                  {PACE_LADDER.every((p) => Math.abs(p - (pacePick ?? video.ttsSpeed)) > 1e-9) ? (
+                    <SelectItem
+                      value={`pace:${pacePick ?? video.ttsSpeed}`}
+                      className="text-[11px]"
+                    >
+                      {(pacePick ?? video.ttsSpeed).toFixed(2).replace(/\.?0+$/, "")}× (current)
+                    </SelectItem>
+                  ) : null}
+                  {PACE_LADDER.map((p) => (
+                    <SelectItem key={p} value={`pace:${p}`} className="text-[11px]">
+                      {p === 1 ? "1× — normal" : `${p.toString().replace(/\.0$/, "")}×`}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0"
+              onClick={() =>
+                paceBusy === "audition"
+                  ? stopPaceAudition()
+                  : void auditionPace(pacePick ?? video.ttsSpeed)
+              }
+              disabled={saving || loading || renderInFlight || paceBusy === "change" || clipBusy != null || voiceBusy != null}
+              title="Hear the narrator at this tempo on your own opening line"
+            >
+              {paceBusy === "audition" ? (
+                <Square className="h-3.5 w-3.5" />
+              ) : (
+                <Volume2 className="h-3.5 w-3.5" />
+              )}
+            </Button>
+            <Button
+              size="sm"
+              variant={paceArmed ? "destructive" : "ghost"}
+              className="h-7 px-2"
+              onClick={() => (paceArmed ? void paceChange() : setPaceArmed(true))}
+              disabled={
+                pacePick == null ||
+                saving ||
+                loading ||
+                renderInFlight ||
+                clipBusy != null ||
+                paceBusy != null ||
+                voiceBusy != null
+              }
+              title="Re-read the whole video at the picked pace — every scene is re-read with the same voice (a real TTS pass), windows re-derive, creative edits survive"
+            >
+              {paceBusy === "change" ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Gauge className="h-3.5 w-3.5" />
+              )}
+              <span className="ml-1.5 text-xs">
+                {paceBusy === "change"
+                  ? `Re-reading at ${pacePick}×…`
+                  : paceArmed
+                    ? `Re-read at ${pacePick}×?`
+                    : "Re-read"}
               </span>
             </Button>
           </div>

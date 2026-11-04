@@ -1,11 +1,15 @@
 // POST /api/settings/voices/preview — "hear it before you pick it".
 //
-// Body: { voice: "jam" | "alloy" | … }  (id from the ACTIVE tts provider catalog)
+// Body: { voice: "jam" | "alloy" | …,  (id from the ACTIVE tts provider catalog)
+//        text?: "your own line",    (T-4.11 — one-off, never cached)
+//        speed?: 1.3 }              (S11 — the pace audition: hear the
+//                                    narrator at the staged tempo) }
 // 200: the short preview WAV (Content-Type: audio/wav) — cached per
-//      provider/model/voice, so repeat clicks are free.
-// 400: unknown voice / provider not configured.
+//      provider/model/voice/pace, so repeat clicks are free.
+// 400: unknown voice / provider not configured / pace out of range.
 //
-// Drives the ▶ buttons inside every voice picker.
+// Drives the ▶ buttons inside every voice picker — and, since S11, the
+// studio pacing control's audition.
 
 import { NextRequest, NextResponse } from "next/server";
 import { getVoicePreview, resolvePreviewVoice } from "@/lib/tubeforge/voice-preview";
@@ -17,7 +21,7 @@ export async function POST(req: NextRequest) {
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
   auth.enter(); // tenant scope: handler + spawned job closures
 
-  let body: { voice?: unknown; text?: unknown } = {};
+  let body: { voice?: unknown; text?: unknown; speed?: unknown } = {};
   try {
     body = await req.json();
   } catch {
@@ -30,6 +34,16 @@ export async function POST(req: NextRequest) {
   }
   // T-4.11 — optional one-off line (≤200 chars) for the pronunciation test row.
   const text = typeof body.text === "string" ? body.text.trim().slice(0, 200) : "";
+  // S11 — optional pace for the studio's pacing audition. Hostile values
+  // die here, before any synthesis work (same range as ttsSpeed).
+  let speed = 1;
+  if (body.speed !== undefined && body.speed !== null) {
+    const n = typeof body.speed === "number" ? body.speed : Number(body.speed);
+    if (!Number.isFinite(n) || n < 0.5 || n > 2) {
+      return NextResponse.json({ error: "Pick a pace between 0.5× and 2×" }, { status: 400 });
+    }
+    speed = n;
+  }
 
   const { known, config } = await resolvePreviewVoice(voice);
   if (!known) {
@@ -46,7 +60,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const wav = await getVoicePreview(voice, text || undefined);
+    const wav = await getVoicePreview(voice, text || undefined, speed);
     return new NextResponse(new Uint8Array(wav), {
       headers: {
         "Content-Type": "audio/wav",

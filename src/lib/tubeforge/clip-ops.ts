@@ -575,3 +575,114 @@ export async function performVoiceSwap(
     activity,
   };
 }
+
+// ---------- S11: the pace — a whole-video tempo change ----------
+//
+// The voice's sibling axis: HOW FAST the narrator reads. ttsSpeed is set
+// once at creation (the create form's slider) and until S11 the only way
+// to change it was the settings-style PATCH — whose invalidation nukes
+// every voice-keyed artifact and resets hasVoiceover, so the voiceover
+// stage has to re-run and a fresh assembly rebuilds the doc from scratch.
+// Every per-scene creative edit riding on top of the old reads was lost
+// to the burn-down — the exact trap performVoiceSwap was built to escape.
+//
+// performPaceChange is the surgical counterpart, one axis over: it
+// re-reads each scene with the SAME voice at the NEW speed, re-derives
+// each doc window from its fresh read through the SAME applyRevoiceToDoc
+// the transcript lane and the voice swap use (so every creative field on
+// the scene SURVIVES; only the window honestly resets — a trim tuned to
+// the old read is stale the moment the words are re-read), rebuilds the
+// merged voiceover.wav, and drops ONLY the artifacts that are genuinely
+// stale: the rendered outputs (the same VOICE_SWAP_STALE set — they are
+// keyed to the OLD reads; per-scene WAVs and the merged voiceover are
+// REBUILT, not deleted; hasVoiceover never flips).
+
+export interface PaceChangeResult {
+  rowScenes: Scene[];
+  timeline: AssembledTimeline;
+  sceneOrder: number[];
+  /** Updated row.audioDuration (null = keep the current value). */
+  audioDuration: number | null;
+  /** The pace now baked into every scene WAV. */
+  ttsSpeed: number;
+  /** How many stale rendered artifacts were dropped. */
+  droppedArtifacts: number;
+  /** One-line activity message for the toast. */
+  activity: string;
+}
+
+export async function performPaceChange(
+  video: Video,
+  newSpeed: number
+): Promise<PaceChangeResult> {
+  if (video.format !== "story")
+    throw new Error("Pacing is picked in the Timeline Studio — scene-format videos only");
+  if (video.voiceSource !== "tts")
+    throw new Error("Re-pacing re-reads the studio narration — re-attach the per-scene voiceover first (this video uses custom audio)");
+  if (!video.hasVoiceover)
+    throw new Error("Generate the voiceover first — the studio re-paces existing reads");
+  if (!Number.isFinite(newSpeed) || newSpeed < 0.5 || newSpeed > 2)
+    throw new Error("Pick a pace between 0.5× and 2×");
+  if (Math.abs(newSpeed - video.ttsSpeed) < 1e-9)
+    throw new Error("That's the current pace — pick a different speed");
+  const doc = parseTimeline(video.timeline);
+  if (!doc) throw new Error("Assemble the timeline first");
+  const rowScenes = parseScenes(video.scenes);
+  if (rowScenes.length === 0) throw new Error("No scenes — generate the script first");
+
+  const dir = videoDir(video.id);
+
+  // 1. Drop the rendered artifacts keyed to the OLD reads (fail-soft: a
+  //    missing prefix just means nothing to drop).
+  let droppedArtifacts = 0;
+  try {
+    const keys = await storage.list(video.id);
+    const stale = keys.filter(isVoiceSwapStale);
+    await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));
+    droppedArtifacts = stale.length;
+  } catch {
+    /* prefix may not exist yet — non-fatal */
+  }
+
+  // 2. Re-read every scene with the same voice at the new speed, folding
+  //    the doc as we go: each window re-derives from its fresh read,
+  //    every creative field on the scene survives (applyRevoiceToDoc
+  //    spreads the old entry).
+  let nextDoc = doc;
+  for (const [i, scene] of rowScenes.entries()) {
+    if (i > 0) await sleep(1000); // pace scenes like the voiceover stage
+    const wavDur = await synthSceneWav(
+      dir,
+      scene.index,
+      scene.narration,
+      video.voice,
+      newSpeed
+    );
+    nextDoc = applyRevoiceToDoc(
+      nextDoc,
+      scene.index,
+      scene.narration,
+      sceneSegmentSec(wavDur)
+    );
+  }
+
+  // 3. Rebuild the merged voiceover.wav from the fresh reads.
+  const merged = await syncVoiceover(video.id, dir, rowScenes);
+  const activity =
+    `Pacing set to ${newSpeed}× — ${rowScenes.length} scenes re-read, ` +
+    `${nextDoc.totalDurationSec.toFixed(1)}s total` +
+    (merged === null ? "; voiceover.wav not rebuilt (a scene WAV is missing)" : "") +
+    (droppedArtifacts > 0
+      ? `; ${droppedArtifacts} stale render${droppedArtifacts === 1 ? "" : "s"} dropped`
+      : "");
+
+  return {
+    rowScenes,
+    timeline: nextDoc,
+    sceneOrder: rowScenes.map((s) => s.index),
+    audioDuration: merged,
+    ttsSpeed: newSpeed,
+    droppedArtifacts,
+    activity,
+  };
+}

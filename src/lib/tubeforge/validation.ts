@@ -279,3 +279,15 @@ export const voiceSwapSchema = z.object({
     .max(64)
     .regex(/^[A-Za-z0-9_-]+$/, "Voice ids are slugs or clone ids"),
 });
+
+/** POST /studio/pace — S11: the pacing pick. Shape only (a finite number
+ *  in the ttsSpeed range, coerced like the create form's slider) — the
+ *  "already at this pace" refusal lives one layer in at performPaceChange,
+ *  where the row's standing speed is known, so a hostile body can only
+ *  ever 400, never reach a synth call. */
+export const paceChangeSchema = z.object({
+  speed: z.coerce
+    .number({ message: "Pick a pace between 0.5× and 2×" })
+    .min(0.5, "Pick a pace between 0.5× and 2×")
+    .max(2, "Pick a pace between 0.5× and 2×"),
+});
