@@ -12,6 +12,7 @@ import fs from "fs";
 import path from "path";
 import { imageGenerate } from "./providers/image";
 import { aiCall } from "./budget";
+import { getVideoTopicWorld, topicWorldClause } from "./story";
 import { videoDir } from "./ai";
 import type { Scene } from "./types";
 import type { MoveKind } from "./motion";
@@ -257,6 +258,10 @@ export async function ensureShotImages(opts: {
   plan: SceneShotPlan;
 }): Promise<SceneShotPlan> {
   const dir = videoDir(opts.videoId);
+  // S31 — the topic-world anchor for extra shots: the same net the scene
+  // art paints under (story.ts). Read once per scene; an absent world means
+  // the shot prompt passes through untouched.
+  const anchor = topicWorldClause(await getVideoTopicWorld(opts.videoId));
   const available: ShotExecution[] = [];
   for (const shot of opts.plan.available) {
     if (shot.source !== "extra" || !shot.prompt) {
@@ -272,7 +277,11 @@ export async function ensureShotImages(opts: {
       const buffer = await aiCall(
         "image",
         `scene ${opts.scene.index} shot ${shot.shotIndex}`,
-        () => imageGenerate({ prompt: shot.prompt!, size: "1344x768" }),
+        () =>
+          imageGenerate({
+            prompt: anchor ? `${shot.prompt!} ${anchor}.` : shot.prompt!,
+            size: "1344x768",
+          }),
         { attempts: 2, baseDelayMs: 4000 }
       );
       if (buffer && buffer.length > 10_000) {

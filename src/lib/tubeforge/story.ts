@@ -393,6 +393,15 @@ export function applyScenePlanFixes(
   return { fixes: applied, notes };
 }
 
+/**
+ * S31 — topic-world fidelity, auditor layer. Rule 6 of the audit pass (the
+ *  "never touch" meta-rule shifts to 7): a visual that could belong to a
+ *  DIFFERENT video is a script-to-scene mismatch just like a narration
+ *  mismatch, and gets the same surgical rewrite before art is painted.
+ */
+export const TOPIC_FIDELITY_AUDIT_RULE =
+  '6. "visual" must stay inside the video\'s topic world — its culture, era, region or domain. A visual that could belong to a different video (a generic stand-in, the wrong culture or era — a European plaza in an Arab-history video — or the wrong domain — a random landscape in a finance story) must be rewritten as one frozen paintable moment carrying the topic\'s authentic markers: its architecture, clothing, artifacts, settings, domain objects.';
+
 /** LLM audit pass — verifies the scene plan matches its own narration BEFORE
  *  the expensive storyboard stage (45s+ per image on the free tier). One
  *  chat call per script; surgical fixes only; FAIL-OPEN by contract: any
@@ -432,7 +441,8 @@ AUDIT RULES:
 3. "caption" must state THIS scene's key fact (under 45 characters, no quotes, no emojis). Fix it if it describes a different scene or is generic.
 4. "narration" may only be fixed if it contains formulas/math notation instead of spoken words, or contradicts the visual you are keeping. Otherwise leave it untouched.
 5. "hostInScene" is true ONLY when the visual clearly shows the recurring host. Flip it when the narration/visual do not feature the host.
-6. Never touch title, camera, mood, tone, pacing, scene order, or rehook structure.
+${TOPIC_FIDELITY_AUDIT_RULE}
+7. Never touch title, camera, mood, tone, pacing, scene order, or rehook structure.
 
 Return JSON exactly: {"scenes": [ ...ONLY the scenes that need fixes, each: {"index": N, "reason": "short why", then ONLY the fields to replace: "visual" and/or "caption" and/or "narration" and/or "hostInScene"} ], "ok": true}
 Return {"scenes": [], "ok": true} when every scene already matches its narration.`,
@@ -442,6 +452,21 @@ Return {"scenes": [], "ok": true} when every scene already matches its narration
   const fixes = Array.isArray(parsed?.scenes) ? (parsed.scenes as ScenePlanFix[]) : [];
   return applyScenePlanFixes(opts.scenes, fixes);
 }
+
+/**
+ * S31 — topic-world fidelity, script layer. The owner rule, taught to the
+ *  script LLM: storyboard art must ALWAYS belong to the video's story — a
+ *  video about Arab history paints Arab culture in every scene; a finance
+ *  story paints the financial world the narration is actually telling.
+ *  Appended to the VISUAL RULES of the scene package prompt. Exported so
+ *  the probe can pin the wording; changing it is a deliberate act, never
+ *  drift.
+ */
+export const TOPIC_FIDELITY_RULES = [
+  "- TOPIC FIDELITY: every visual must belong to THIS video's story world — never a generic stand-in that could sit just as well in a different video.",
+  "- When the topic involves a culture, region or era (Arab history, ancient Egypt, the samurai), every visual carries that world's authentic markers — its architecture, clothing, artifacts, people and settings — specific and respectful, never a caricature or another culture's or era's stand-in.",
+  "- When the topic is a domain (finance, real estate, fitness), every visual is set inside THAT domain's real world with its concrete places and objects (a trading floor, a vault door, stacked coins, a bank interior, a market street) — matching the exact story the narration tells, never a random landscape.",
+].join("\n");
 
 /** GLM writes the video as N scenes with narration + visual + camera + mood per scene. */
 export async function generateSceneScriptPackage(opts: {
@@ -500,6 +525,7 @@ VISUAL RULES (each scene art is painted by an AI image model):
 - Name the main subject with concrete nouns and give it a physical anchor — "a lighthouse keeper hauling a rope in a storm", never an abstract concept ("the idea of risk", "global markets in chaos") with nothing solid to paint.
 - NEVER ask for charts, graphs, formulas, floating numbers, letters, documents, contracts, UI screens or anything that contains writing — image models render those as garbled gibberish. Express the idea with physical objects and people instead (rising stacks of coins instead of a growth chart).
 - NEVER describe a transformation or morph ("aging from young to old", "dissolving into numbers") — pick the single most striking end-state and paint that.
+${TOPIC_FIDELITY_RULES}
 
 RETENTION RULES:
 - Scene 1 is the HOOK: open in mid-action, with a shocking number, or by dropping the viewer into the single most dramatic moment. Name something concrete in the first 5 words. The hook must create an open loop the video only closes at the end. NEVER open with background or context.
@@ -573,6 +599,44 @@ Return JSON with exactly these keys:
 /** dHash bits (of 64) under which two scene frames count as the same picture. */
 const DUPLICATE_HASH_BITS = 9;
 
+// ---------- S31: topic-world fidelity (paint-time net) ----------
+
+/**
+ * The video's story world for one paint — {topic, niche} or null. One
+ * tenant-scoped read through the same accessor seam the director clauses
+ * use above; a missing row or an empty topic returns null, and an absent
+ * world simply means an absent anchor (the net never blocks painting).
+ */
+export async function getVideoTopicWorld(
+  videoId: string
+): Promise<{ topic: string; niche: string } | null> {
+  const row = await db.video.findUnique({
+    where: { id: videoId },
+    select: { topic: true, niche: true },
+  });
+  const topic = row?.topic.trim() ?? "";
+  if (!topic) return null;
+  return { topic, niche: (row?.niche ?? "").trim() };
+}
+
+/**
+ * The anchor clause woven into every storyboard image prompt — scene art
+ * (generateSceneImage below) and extra shots (shots.ts ensureShotImages).
+ * PURE so the probe can pin it; "" when the world is unknown.
+ */
+export function topicWorldClause(
+  world: { topic: string; niche?: string } | null
+): string {
+  const topic = world?.topic?.trim();
+  if (!topic) return "";
+  const niche = world?.niche?.trim();
+  return (
+    `Story world: this frame belongs to a video about "${topic}"${niche ? ` (${niche})` : ""} — ` +
+    "every person, garment, building, artifact and setting in frame must be authentic to that " +
+    "story's culture, era and subject, never a generic or mismatched stand-in"
+  );
+}
+
 /**
  * Render one scene's storyboard image.
  * Host scenes + cast portrait → identity-locked image EDIT (keeps the face).
@@ -610,12 +674,17 @@ export async function generateSceneImage(opts: {
     : "";
   const worldClause = await getApprovedWorldClause(opts.videoId, scene.index);
   const continuityClauses = [appearanceClause, worldClause].filter(Boolean).join(" ");
+  // S31 — the topic-world anchor (owner rule: storyboard art always belongs
+  // to the video's story). One read per paint, the same accessor seam as the
+  // director clauses above; an absent world means an absent anchor.
+  const topicWorld = await getVideoTopicWorld(opts.videoId);
+  const topicClause = topicWorldClause(topicWorld);
   // Photorealistic-by-default look (Battle Yamuk feedback): the base
   // language steers the image model toward documentary-cinema photography
   // with real human emotion, not the illustrated/digital-art look generic
   // "highly detailed" prompts drift into. Explicit per-scene styles
   // (anime, watercolor, …) still override via styleClause.
-  const artPrompt = `${scene.visual}.${styleClause ? ` ${styleClause}.` : ""}${directorClause ? ` ${directorClause}.` : ""}${continuityClauses ? ` ${continuityClauses}` : ""} ${scene.mood}. Wide 16:9 cinematic frame, ultra-realistic photograph shot on a full-frame cinema camera with a 35mm lens, natural depth of field, physically accurate lighting for the time of day, lifelike skin, fabric and material textures, authentic human emotion and natural body language on every person in frame, documentary realism, ONE dominant subject filling the frame, professional cinematic color grading, storytelling composition. The frame must depict exactly the moment described — the named subject is the single dominant element. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
+  const artPrompt = `${scene.visual}.${topicClause ? ` ${topicClause}.` : ""}${styleClause ? ` ${styleClause}.` : ""}${directorClause ? ` ${directorClause}.` : ""}${continuityClauses ? ` ${continuityClauses}` : ""} ${scene.mood}. Wide 16:9 cinematic frame, ultra-realistic photograph shot on a full-frame cinema camera with a 35mm lens, natural depth of field, physically accurate lighting for the time of day, lifelike skin, fabric and material textures, authentic human emotion and natural body language on every person in frame, documentary realism, ONE dominant subject filling the frame, professional cinematic color grading, storytelling composition. The frame must depict exactly the moment described — the named subject is the single dominant element, and the whole frame belongs to the video's story world. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
 
   const portrait =
     scene.hostInScene && opts.character?.id
@@ -689,7 +758,7 @@ export async function generateSceneImage(opts: {
     kind: "scene",
     videoId: opts.videoId,
     imagePath,
-    context: `storyboard scene ${scene.index} "${scene.title}" of a story video — this exact image must depict the scene's moment: ${scene.visual} (mood: ${scene.mood}; narration at this moment: "${scene.narration.slice(0, 140)}")`,
+    context: `storyboard scene ${scene.index} "${scene.title}" of a story video${topicWorld ? ` about "${topicWorld.topic}"` : ""} — this exact image must depict the scene's moment AND stay authentic to that story's world, its culture, era and subject matter: ${scene.visual} (mood: ${scene.mood}; narration at this moment: "${scene.narration.slice(0, 140)}")`,
     generate: () => produce(),
   });
 
