@@ -86,6 +86,12 @@
 //     server re-reads EVERY scene with the same voice at the new speed
 //     (windows re-derive, creative fields survive, voiceover.wav rebuilds,
 //     only the stale renders die — the narrator swap's machinery).
+//   • COVER STYLE → S12: the subject's sibling axis (S9 picked WHICH
+//     moment the cover depicts, this picks WHAT the art looks like). A
+//     cheap row pick — PATCHes immediately, invalidates nothing; the
+//     poster cluster's Regenerate arm is the action that spends the
+//     generation, painting the picked subject in the picked style. The
+//     A/B variants set leads with the row style (pickVariantStyles).
 //
 // The preview is an approximation by design: the render (ffmpeg) stays the
 // source of truth. Everything the preview needs is deterministic and lives
@@ -147,6 +153,7 @@ import {
   Sparkles,
   Smartphone,
   Gauge,
+  Palette,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -172,7 +179,7 @@ import type {
   TimelineSceneDTO,
 } from "@/lib/tubeforge/types";
 import { TRANSITIONS } from "@/lib/tubeforge/transitions";
-import { MUSIC_MOODS as MUSIC_MOOD_PRESETS } from "@/lib/tubeforge/types";
+import { MUSIC_MOODS as MUSIC_MOOD_PRESETS, THUMB_STYLES } from "@/lib/tubeforge/types";
 import {
   GRADE_PRESETS,
   sanitizeGrade,
@@ -1558,6 +1565,48 @@ export function TimelineStudio({
     return () => clearTimeout(t);
   }, [posterArmed]);
 
+  // ---------- S12 — the cover's style ----------
+  // The subject's sibling axis (S9 picked WHICH moment, this picks WHAT
+  // the art looks like): the thumbnail's art direction, frozen at the
+  // create form's dropdown until S12. The pick is row-level and cheap —
+  // a style flip invalidates NOTHING (the standing cover stays until the
+  // Regenerate arm repaints it; the job reads the row fresh at generation
+  // time) — so unlike the narrator/pace it PATCHes immediately, no staged
+  // pending pick and no two-step arm. The Regenerate button beside it is
+  // the action that spends the generation.
+  const [styleSaving, setStyleSaving] = useState(false);
+  const pickCoverStyle = useCallback(
+    async (style: string) => {
+      if (styleSaving || style === video.thumbStyle) return;
+      setStyleSaving(true);
+      try {
+        const res = await fetch(`/api/videos/${videoId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ thumbStyle: style }),
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        onSaved?.(); // the parent re-fetches the row (the picker shows the new style)
+        toast({
+          title: "Cover style picked",
+          description: `${THUMB_STYLES.find((t) => t.id === style)?.label ?? style} — Regenerate repaints the cover in it.`,
+        });
+      } catch (err) {
+        toast({
+          title: "Style pick failed",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setStyleSaving(false);
+      }
+    },
+    [styleSaving, video.thumbStyle, videoId, onSaved, toast]
+  );
+
   // The apply: flush the doc, POST the thumbnail job (the concept
   // re-derives from the PICKED scene server-side — the same
   // posterSceneFor truth the A/B variants ride), then poll the job state
@@ -1589,12 +1638,16 @@ export function TimelineStudio({
         }
         setPosterEpoch((e) => e + 1);
         const pick = docPosterPick(timeline?.renderPrefs);
+        // S12 — name the STYLE the repaint wore (the row's standing pick
+        // directed the generation; the toast says what actually happened).
+        const styleLabel =
+          THUMB_STYLES.find((t) => t.id === video.thumbStyle)?.label ?? video.thumbStyle;
         toast({
           title: settled ? "Poster regenerated" : "Poster still painting",
           description: settled
             ? pick?.mode === "scene"
-              ? `The cover now depicts scene ${pick.sceneIndex}.`
-              : "The cover depicts the opening scene."
+              ? `The cover now depicts scene ${pick.sceneIndex} in ${styleLabel} style.`
+              : `The cover depicts the opening scene in ${styleLabel} style.`
             : "The generation is taking longer than expected — it will land on the video page.",
         });
       } catch (err) {
@@ -1607,7 +1660,7 @@ export function TimelineStudio({
         setPosterBusy(false);
       }
     },
-    [posterBusy, saving, loading, renderInFlight, dirty, save, videoId, timeline, toast]
+    [posterBusy, saving, loading, renderInFlight, dirty, save, videoId, timeline, video.thumbStyle, toast]
   );
 
   // ---------- S10: the short — the moment the vertical cut frames ----------
@@ -2634,6 +2687,33 @@ export function TimelineStudio({
                   {timeline?.scenes.map((s) => (
                     <SelectItem key={s.index} value={`scene:${s.index}`} className="text-[11px]">
                       Scene {s.index} — {s.title}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            {/* S12 — the cover's STYLE (the subject's sibling axis): what
+                the art looks like. A cheap row pick — PATCHes immediately,
+                invalidates nothing (the standing cover stays until the
+                Regenerate arm beside it repaints in the picked style). */}
+            <Select
+              value={video.thumbStyle}
+              onValueChange={(v) => void pickCoverStyle(v)}
+              disabled={saving || loading || renderInFlight || styleSaving}
+            >
+              <SelectTrigger
+                className="h-7 w-[128px] text-[11px]"
+                title="What the cover art looks like — the picked style directs the next generation (the Regenerate arm paints it); the A/B variants set leads with it too"
+              >
+                <Palette className="h-3 w-3 shrink-0 text-muted-foreground" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px]">Cover style</SelectLabel>
+                  {THUMB_STYLES.map((t) => (
+                    <SelectItem key={t.id} value={t.id} className="text-[11px]">
+                      {t.label}
                     </SelectItem>
                   ))}
                 </SelectGroup>

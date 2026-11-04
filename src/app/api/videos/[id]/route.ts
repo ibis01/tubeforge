@@ -4,7 +4,7 @@ import { requireUser } from "@/lib/tubeforge/tenant";
 import { latestStatsFor } from "@/lib/tubeforge/analytics";
 import { jobSnapshot } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
-import { RENDER_MODES } from "@/lib/tubeforge/types";
+import { RENDER_MODES, THUMB_STYLES } from "@/lib/tubeforge/types";
 import { TRANSITIONS, sanitizeTransitionDuration } from "@/lib/tubeforge/transitions";
 import { isDuckIntensity } from "@/lib/tubeforge/audiomix";
 import { isMusicMoodId } from "@/lib/tubeforge/music";
@@ -148,6 +148,24 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   }
   if (RENDER_MODES.some((m) => m.id === body.renderMode))
     data.renderMode = String(body.renderMode);
+
+  // S12 — the cover's STYLE (the subject's sibling axis: S9 picked WHICH
+  // moment the cover depicts, this picks WHAT the art looks like). The
+  // style feeds the thumbnail job's art direction AND leads the A/B
+  // variants set at GENERATION time, so a flip invalidates nothing — the
+  // standing cover stays until the studio's Regenerate arm repaints it.
+  // Catalog-gated like every pick: a hostile or foreign id dies here with
+  // a readable 400, never reaching the row.
+  if (typeof body.thumbStyle === "string") {
+    const style = body.thumbStyle.trim();
+    if (!THUMB_STYLES.some((t) => t.id === style)) {
+      return NextResponse.json(
+        { error: `Unknown thumbnail style "${style.slice(0, 40)}" — pick one from the style catalog` },
+        { status: 400 }
+      );
+    }
+    data.thumbStyle = style;
+  }
 
   // Background-music overrides (null = follow Settings defaults)
   if (typeof body.musicEnabled === "boolean" || body.musicEnabled === null)
