@@ -34,6 +34,11 @@
 // Run: node --import tsx scripts/s27-unit-probe.mts
 
 process.env.TUBEFORGE_AUTH_SECRET ??= "probe-secret-0123456789abcdef";
+// S32 — the probe exercises the BUDGET gate (the $5 limit), so it needs the
+// pricing-verified path. The source constant stays "provisional" until an
+// operator reconciles the registry; this env override is the same hook an
+// operator uses for a pre-activation sanity check.
+process.env.TUBEFORGE_PRICING_VERIFIED ??= "1";
 
 import { PrismaClient } from "@prisma/client";
 import { execFileSync } from "node:child_process";
@@ -67,12 +72,28 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   if (!ok) failures++;
 };
 
+// S32 — the user/org are created at the top so §4's sink-settle check can
+// use a REAL ctx (admitDispatch now persists a SpendReservation row with FK
+// constraints). §5-§6 reuses them; teardown cleans both up.
+const SUFFIX = Date.now().toString(36);
+const EMAIL = `s27-probe-${SUFFIX}@e2e.local`;
+let userId = "";
+let orgId = "";
+const passwordHash = await hashPassword("probe-password-123");
+const user = await prisma.user.create({ data: { email: EMAIL, passwordHash, name: "s27 probe" } });
+userId = user.id;
+const org = await prisma.organization.create({
+  data: { name: "s27 probe org", slug: `s27-probe-${SUFFIX}`, memberships: { create: { userId, role: "owner" } } },
+});
+orgId = org.id;
+
 // The gate's global state — the probe resets it between sections.
 const spendState = (globalThis as typeof globalThis & {
-  __tfSpend?: { booted: boolean; bootPromise: Promise<void> | null; recordedMicro: number; holds: Map<string, number> };
+  __tfSpend?: { booted: boolean; bootFailed: boolean; bootPromise: Promise<void> | null; recordedMicro: number; holds: Map<string, number> };
 }).__tfSpend!;
 function resetGate(recordedMicro = 0) {
   spendState.booted = true;
+  spendState.bootFailed = false;
   spendState.bootPromise ??= Promise.resolve();
   spendState.recordedMicro = recordedMicro;
   spendState.holds.clear();
@@ -152,14 +173,18 @@ console.log("\n§4 the gate");
 
   resetGate();
   // emitUsage keys the sink by the TenantCtx object — exercise the settle
-  // path inside a (synthetic) ctx exactly as a request would run.
-  await withCtx({ userId: "probe-sink-ctx", organizationId: "probe-sink-ctx", role: "owner" }, async () => {
+  // path inside a REAL ctx (S32: admitDispatch now persists a SpendReservation
+  // row with FK constraints on userId/organizationId, so the synthetic-ctx
+  // path is gone — use the real user/org created below in §5-§6, which runs
+  // before this section after the §4-§5 reorder). The user/org are created
+  // at the top of the probe (right after the baseline) so §4 can use them.
+  await withCtx({ userId, organizationId: orgId, role: "owner" }, async () => {
     const hold2 = await admitDispatch({ provider: "openai", model: "gpt-6.1-sol", estimatedMicro: 81_944 });
     emitUsage({ inputTokens: 100, outputTokens: 200 }); // what the transport saw
     const before2 = recorded();
     await hold2!.settleFromSink();
     check("reported usage settles at actual cost (2200 µ$)", recorded() - before2 === 2200, recorded() - before2);
-    drainUsage(); // leave the synthetic sink empty for later sections
+    drainUsage(); // leave the sink empty for later sections
   });
 
   resetGate();
@@ -194,19 +219,7 @@ console.log("\n§4 the gate");
 
 // ---------- §5 + §6 the live write path (real user/org, fetch fake) ----------
 console.log("\n§5-§6 live rows through the real pipeline");
-const SUFFIX = Date.now().toString(36);
-const EMAIL = `s27-probe-${SUFFIX}@e2e.local`;
-let userId = "";
-let orgId = "";
 try {
-  const passwordHash = await hashPassword("probe-password-123");
-  const user = await prisma.user.create({ data: { email: EMAIL, passwordHash, name: "s27 probe" } });
-  userId = user.id;
-  const org = await prisma.organization.create({
-    data: { name: "s27 probe org", slug: `s27-probe-${SUFFIX}`, memberships: { create: { userId, role: "owner" } } },
-  });
-  orgId = org.id;
-
   await withCtx({ userId, organizationId: orgId, role: "owner" }, async () => {
     // Saved capability: openai / gpt-6.1-sol — the row writer resolves
     // provider+model from here, the gate prices it.
@@ -343,6 +356,8 @@ try {
 } finally {
   // ---------- §8 teardown (end-state law) ----------
   await prisma.usageRecord.deleteMany({ where: { userId: userId || undefined } });
+  // S32 — the gate now persists reservations; clean them up too.
+  await prisma.spendReservation.deleteMany({ where: { userId: userId || undefined } });
   await prisma.creditLedger.deleteMany({ where: { userId: userId || undefined } });
   if (orgId) await prisma.organization.delete({ where: { id: orgId } }).catch(() => {});
   if (userId) await prisma.user.delete({ where: { id: userId } }).catch(() => {});
@@ -368,10 +383,10 @@ console.log("\n§7 the knobs");
   writeFileSync(tmp, script);
   const run = (env: NodeJS.ProcessEnv) =>
     execFileSync("node", ["--import", "tsx", tmp], { env: { ...process.env, ...env } }).toString().trim();
-  check("default: gate on, dispatch admitted", run({}).endsWith("ADMITTED"), run({}));
-  check("TUBEFORGE_SPEND_GATE=0 lifts the gate", run({ TUBEFORGE_SPEND_GATE: "0" }).endsWith("UNGATED"), run({ TUBEFORGE_SPEND_GATE: "0" }));
+  check("default: gate on, dispatch admitted", run({ TUBEFORGE_PRICING_VERIFIED: "1" }).endsWith("ADMITTED"), run({ TUBEFORGE_PRICING_VERIFIED: "1" }));
+  check("TUBEFORGE_SPEND_GATE=0 lifts the gate", run({ TUBEFORGE_SPEND_GATE: "0", TUBEFORGE_PRICING_VERIFIED: "1" }).endsWith("UNGATED"), run({ TUBEFORGE_SPEND_GATE: "0", TUBEFORGE_PRICING_VERIFIED: "1" }));
   check("tiny TUBEFORGE_SPEND_STOP_USD blocks instantly",
-    run({ TUBEFORGE_SPEND_STOP_USD: "0.000001" }).endsWith("BLOCKED"), run({ TUBEFORGE_SPEND_STOP_USD: "0.000001" }));
+    run({ TUBEFORGE_SPEND_STOP_USD: "0.000001", TUBEFORGE_PRICING_VERIFIED: "1" }).endsWith("BLOCKED"), run({ TUBEFORGE_SPEND_STOP_USD: "0.000001", TUBEFORGE_PRICING_VERIFIED: "1" }));
 }
 
 console.log(`\n${failures === 0 ? "ALL CHECKS PASS" : `${failures} FAILURE(S)`}`);

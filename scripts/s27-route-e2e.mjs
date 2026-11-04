@@ -8,12 +8,18 @@
 //   failed" to the spend-budget refusal — the gate blocked a dispatch that
 //   would cross $4.50 -> the zai gateway path stays open (ungated; metered,
 //   never priced) -> the account leaves through the account front door ->
-//   end state pristine (0 users, 0 orgs, 0 usage rows).
+//   end state pristine (0 users, 0 orgs, 0 usage rows, 0 reservations).
+//
+// S32 — the gate now persists reservations (SpendReservation table), so the
+// hammering survives a daemon restart. The daemon MUST run with
+// TUBEFORGE_PRICING_VERIFIED=1 for this suite (the pricing-unverified block
+// is exercised separately by s32-route-e2e). Restart the daemon with that
+// env before running.
 // The route-level dispatches carry NO UsageRecord rows (the settings test
-// calls chatComplete directly, outside aiCall), so a daemon restart
-// re-anchors the gate from an empty DB — the battery runs this suite LAST
-// against a throwaway daemon state.
-// Run after a daemon restart: node scripts/s27-route-e2e.mjs
+// calls chatComplete directly, outside aiCall), but S32's SpendReservation
+// rows ARE written — the gate's durability no longer depends on UsageRecord.
+// Run after a daemon restart with TUBEFORGE_PRICING_VERIFIED=1:
+//   node scripts/s27-route-e2e.mjs
 
 import { PrismaClient } from "@prisma/client";
 // S28 — baseline-relative end state, captured BEFORE the suite creates
@@ -22,6 +28,7 @@ const BASELINE = {
   users: await new PrismaClient().user.count(),
   orgs: await new PrismaClient().organization.count({ where: { memberships: { none: {} } } }),
   usageRows: await new PrismaClient().usageRecord.count(),
+  reservations: await new PrismaClient().spendReservation.count(),
 };
 
 const BASE = "http://localhost:3000";
@@ -128,9 +135,10 @@ await new Promise((r) => setTimeout(r, 500));
 const users = await prisma.user.count();
 const orgs = await prisma.organization.count({ where: { memberships: { none: {} } } });
 const usageRows = await prisma.usageRecord.count();
-check("5.2  end state: nothing behind (users/orphan-orgs/usage back to baseline)",
-  users === BASELINE.users && orgs === BASELINE.orgs && usageRows === BASELINE.usageRows,
-  { users, orgs, usageRows, BASELINE });
+const reservations = await prisma.spendReservation.count();
+check("5.2  end state: nothing behind (users/orphan-orgs/usage/reservations back to baseline)",
+  users === BASELINE.users && orgs === BASELINE.orgs && usageRows === BASELINE.usageRows && reservations === BASELINE.reservations,
+  { users, orgs, usageRows, reservations, BASELINE });
 
 console.log(`\n${fail === 0 ? "ALL CHECKS PASS" : `${fail} FAILURE(S)`} (${pass} passed)`);
 await prisma.$disconnect();

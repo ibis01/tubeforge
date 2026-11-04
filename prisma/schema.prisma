@@ -45,6 +45,8 @@ model User {
   activities          Activity[]
   jobs                Job[]
   usageRecords        UsageRecord[]
+  // S32 — the $5 door's durable reservation rows (gate source of truth).
+  spendReservations   SpendReservation[]
   // Stage 7 (T-7.5) — billing. One subscription per user (the plan);
   // grants are monthly allotments; ledger rows are individual spends.
   subscription        Subscription?
@@ -72,6 +74,8 @@ model Organization {
   jobs             Job[]
   storageUsage     StorageUsage?
   usageRecords     UsageRecord[]
+  // S32 — the $5 door's durable reservation rows.
+  spendReservations SpendReservation[]
   appearances      CharacterAppearance[]
   locations        Location[]
   props            Prop[]
@@ -646,6 +650,40 @@ model UsageRecord {
   @@index([organizationId, createdAt])
   @@index([userId, createdAt])
   @@index([organizationId, capability, createdAt])
+}
+
+// S32 — the $5 door's durable ledger. S27 kept outstanding reservations in
+// process memory and bootstrapped the recorded total from a SUM of
+// UsageRecord rows. Two gaps the external audit (Nov 2026) called out:
+//   * a crash mid-call lost the hold — the next boot under-counted;
+//   * connection-test dispatches (settings/ai route, outside aiCall) settled
+//     the in-memory recorded total but never wrote a UsageRecord row, so a
+//     restart lost their spend too.
+// This table is the gate's single source of truth: admitDispatch writes a
+// `pending` row; settle updates it to `settled` with the actual cost;
+// bootRecorded rebuilds `holds` from pending rows and `recordedMicro` from
+// settled rows, failing CLOSED on any DB error (a broken meter must not
+// re-open a spent budget). UsageRecord rows remain for the user-facing
+// usage dashboard (attribution); the GATE reads SpendReservation only.
+model SpendReservation {
+  id                String    @id // the holdId ("spend-N"), assigned by spend.ts
+  organizationId    String
+  userId            String
+  provider          String // must be in PAID_PROVIDERS (gate scope)
+  model             String
+  estimatedMicroUsd Int // reserved worst-case estimate
+  actualCostMicroUsd Int? // null while pending, set on settle
+  status            String    @default("pending") // pending | settled
+  usageRecordId     String? // link to UsageRecord when aiCall wrote one (attribution)
+  admittedAt        DateTime  @default(now())
+  settledAt         DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([provider, status])
+  @@index([status])
+  @@index([userId, status])
 }
 
 // ---------------------------------------------------------------------------
