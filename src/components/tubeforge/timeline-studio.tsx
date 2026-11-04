@@ -156,6 +156,7 @@ import {
   Palette,
   Frame,
   FileDown,
+  Move,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -180,7 +181,8 @@ import type {
   AssembledTimelineDTO,
   TimelineSceneDTO,
 } from "@/lib/tubeforge/types";
-import { TRANSITIONS } from "@/lib/tubeforge/transitions";
+import { TRANSITIONS, resolveTransition } from "@/lib/tubeforge/transitions";
+import { MOTION_MODES, sanitizeMotion } from "@/lib/tubeforge/motion";
 import { MUSIC_MOODS as MUSIC_MOOD_PRESETS, THUMB_STYLES, RENDER_ASPECTS, RENDER_FRAME_RATES } from "@/lib/tubeforge/types";
 import {
   GRADE_PRESETS,
@@ -1858,6 +1860,83 @@ export function TimelineStudio({
     [burnSaving, resolvedBurn, videoId, onSaved, toast]
   );
 
+  // ---------- S15 — the motion: the camera + the seam ----------
+  // The last render tier the studio PREVIEWED but couldn't shape: the
+  // preview lanes already re-derived their zoom amplitude, easing and
+  // seam blend from the row's motion + transition overrides, while the
+  // picks lived only on the detail dialog — and the PATCH route accepted
+  // the family with the old silent drop/clamp, so a hostile pick looked
+  // like it worked. S15 gives the family the law every tier since S12
+  // wears: the catalog-gated PATCH (a present-but-illegal value dies with
+  // a readable 400 before any write — the gate reads the SAME catalogs
+  // these pickers render) plus studio picks beside the frame and the
+  // delivery. Row-level picks that re-derive the preview immediately —
+  // like S13's frame they PATCH and the parent's re-fetch redraws the
+  // lanes; the standing render stays until the next one honors them.
+  // The deep controls (easing curve, direction variation) stay on the
+  // dialog's card; the studio carries the four decisive axes.
+  const [motionSaving, setMotionSaving] = useState(false);
+  // The RESOLVED truth the pickers show — the SAME shared resolvers the
+  // render job runs (motion.ts / transitions.ts): null falls back to the
+  // built-in defaults (smart / 12% / crossfade 0.5s), and a slides row
+  // with no seam pick hard-cuts (the deck's designed beats land clean).
+  // The dropdowns never show a move or a seam the render won't draw.
+  const resolvedMotion = sanitizeMotion({
+    mode: video.motionMode,
+    intensity: video.motionIntensity,
+    curve: video.motionCurve,
+    vary: video.motionVary,
+  });
+  const resolvedTransition = resolveTransition(
+    {
+      transitionStyle: video.transitionStyle,
+      transitionDuration: video.transitionDuration,
+    },
+    video.renderMode
+  );
+  const pickMotion = useCallback(
+    async (
+      patch: Partial<{
+        motionMode: string;
+        motionIntensity: number;
+        transitionStyle: string;
+        transitionDuration: number;
+      }>
+    ) => {
+      if (motionSaving) return;
+      setMotionSaving(true);
+      const isSeam =
+        patch.transitionStyle !== undefined || patch.transitionDuration !== undefined;
+      try {
+        const res = await fetch(`/api/videos/${videoId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        onSaved?.(); // the parent re-fetches the row — the preview lanes re-derive
+        toast({
+          title: isSeam ? "Transition picked" : "Motion picked",
+          description: isSeam
+            ? "The seam between scenes blends the picked way — the timeline's blend debt re-derives now; the next render composites it."
+            : "The camera treats still art the picked way — the preview's move re-derives now; the next render shoots it.",
+        });
+      } catch (err) {
+        toast({
+          title: isSeam ? "Transition pick failed" : "Motion pick failed",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setMotionSaving(false);
+      }
+    },
+    [motionSaving, videoId, onSaved, toast]
+  );
+
   // ---------- the preview canvas ----------
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -3056,6 +3135,148 @@ export function TimelineStudio({
             <span className="w-[64px] shrink-0 text-[10px] leading-tight text-muted-foreground" title="The resolved truth the next render applies when no per-render override rides the body">
               {burnSaving ? "saving…" : resolvedBurn ? "burned in" : "sidecar SRT"}
             </span>
+          </div>
+          <span className="h-5 w-px bg-white/10" aria-hidden />
+          {/* S15 — the motion: the camera + the seam. The preview lanes
+              ALWAYS followed the row's motion + transition overrides; the
+              picks lived only on the dialog (and the route silently dropped
+              hostile shapes). Row-level picks that re-derive the preview —
+              PATCH immediate like the frame; the standing render stays.
+              Amplitude sleeps when the camera is off, the blend length
+              when the seam is a hard cut — the disabled control says why,
+              and a standing off-stair pick (the dialog's sliders write
+              any legal integer / in-window step) shows as its own item so
+              the trigger never blanks. */}
+          <div className="flex items-center gap-1.5 mr-1">
+            <Move className="h-3.5 w-3.5 text-muted-foreground" />
+            <Select
+              value={resolvedMotion.mode}
+              onValueChange={(v) => {
+                if (v === resolvedMotion.mode) return; // a resolved no-op is not a pick
+                void pickMotion({ motionMode: v });
+              }}
+              disabled={saving || loading || renderInFlight || motionSaving}
+            >
+              <SelectTrigger
+                className="h-7 w-[118px] text-[11px]"
+                title="How the camera treats still art — the preview's move re-derives now; the next render shoots it (curve + direction variation live on the dialog's card)"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px]">Camera</SelectLabel>
+                  {MOTION_MODES.map((m) => (
+                    <SelectItem key={m.id} value={m.id} className="text-[11px]">
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select
+              value={String(resolvedMotion.intensity)}
+              onValueChange={(v) => {
+                const n = Number(v);
+                if (n === resolvedMotion.intensity) return; // a resolved no-op is not a pick
+                void pickMotion({ motionIntensity: n });
+              }}
+              disabled={
+                saving || loading || renderInFlight || motionSaving || resolvedMotion.mode === "off"
+              }
+            >
+              <SelectTrigger
+                className="h-7 w-[108px] text-[11px]"
+                title={
+                  resolvedMotion.mode === "off"
+                    ? "The camera is off — scenes hold still, amplitude has nothing to say"
+                    : "The zoom amplitude (the default is 12%) — the preview's push re-derives now; the next render moves with it"
+                }
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px]">Amplitude</SelectLabel>
+                  {![0, 6, 12, 18, 24, 30].includes(resolvedMotion.intensity) && (
+                    <SelectItem value={String(resolvedMotion.intensity)} className="text-[11px]">
+                      {resolvedMotion.intensity}% — custom
+                    </SelectItem>
+                  )}
+                  {[0, 6, 12, 18, 24, 30].map((n) => (
+                    <SelectItem key={n} value={String(n)} className="text-[11px]">
+                      {n}% — {n === 0 ? "still" : n === 12 ? "standard" : n >= 18 ? "strong" : "subtle"}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select
+              value={resolvedTransition.style}
+              onValueChange={(v) => {
+                if (v === resolvedTransition.style) return; // a resolved no-op is not a pick
+                void pickMotion({ transitionStyle: v });
+              }}
+              disabled={saving || loading || renderInFlight || motionSaving}
+            >
+              <SelectTrigger
+                className="h-7 w-[124px] text-[11px]"
+                title={
+                  video.renderMode === "slides"
+                    ? "Slides default to hard cuts (the deck's designed beats land clean) — an explicit pick is honored"
+                    : "How scenes hand off — the timeline's blend debt re-derives now; the next render composites it"
+                }
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px]">Seam</SelectLabel>
+                  {TRANSITIONS.map((t) => (
+                    <SelectItem key={t.id} value={t.id} className="text-[11px]">
+                      {t.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select
+              value={String(resolvedTransition.durationSec)}
+              onValueChange={(v) => {
+                const n = Number(v);
+                if (n === resolvedTransition.durationSec) return; // a resolved no-op is not a pick
+                void pickMotion({ transitionDuration: n });
+              }}
+              disabled={
+                saving || loading || renderInFlight || motionSaving || resolvedTransition.style === "cut"
+              }
+            >
+              <SelectTrigger
+                className="h-7 w-[92px] text-[11px]"
+                title={
+                  resolvedTransition.style === "cut"
+                    ? "A hard cut is the absence of a blend — there is no length to pick"
+                    : "The blend length (the default is 0.5s) — the timeline's seam debt re-derives now"
+                }
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px]">Blend</SelectLabel>
+                  {![0.2, 0.3, 0.5, 0.7, 1, 1.5].includes(resolvedTransition.durationSec) && (
+                    <SelectItem value={String(resolvedTransition.durationSec)} className="text-[11px]">
+                      {resolvedTransition.durationSec}s — custom
+                    </SelectItem>
+                  )}
+                  {[0.2, 0.3, 0.5, 0.7, 1, 1.5].map((n) => (
+                    <SelectItem key={n} value={String(n)} className="text-[11px]">
+                      {n}s — {n === 0.5 ? "standard" : n <= 0.3 ? "quick" : n >= 1 ? "slow" : "easy"}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
           </div>
           <Button size="sm" variant="ghost" onClick={undo} disabled={!canUndo || saving || loading} title="Undo (⌘Z)">
             <Undo2 className="h-3.5 w-3.5" />

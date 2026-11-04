@@ -102,6 +102,29 @@ export function sanitizeTransition(
   };
 }
 
+/** The row's EFFECTIVE transition — S15's one shared law (the S14 doctrine:
+ *  the render job, the studio picker and any future caller resolve the row
+ *  through the same function instead of drifting copies). A null style on a
+ *  slides row is a HARD CUT (the deck's designed beats land clean — the
+ *  PNG frames don't melt); anything else is the row's pick over the
+ *  crossfade default. An explicit pick on a slides row is honored. */
+export function resolveTransition(
+  row: {
+    transitionStyle?: string | null;
+    transitionDuration?: number | null;
+  } | null | undefined,
+  renderMode?: string | null
+): TransitionSettings {
+  const style =
+    renderMode === "slides" && row?.transitionStyle == null
+      ? "cut"
+      : row?.transitionStyle;
+  return sanitizeTransition({
+    style,
+    durationSec: row?.transitionDuration,
+  });
+}
+
 // ---------- timing math (pure) ----------
 
 /**

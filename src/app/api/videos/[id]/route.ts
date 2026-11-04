@@ -10,12 +10,20 @@ import {
   RENDER_ASPECT_IDS,
   RENDER_FPS,
 } from "@/lib/tubeforge/types";
-import { TRANSITIONS, sanitizeTransitionDuration } from "@/lib/tubeforge/transitions";
+import {
+  TRANSITION_IDS,
+  TRANSITION_DURATION_MIN,
+  TRANSITION_DURATION_MAX,
+} from "@/lib/tubeforge/transitions";
+import {
+  MOTION_MODE_IDS,
+  MOTION_CURVE_IDS,
+  MOTION_INTENSITY_MIN,
+  MOTION_INTENSITY_MAX,
+} from "@/lib/tubeforge/motion";
 import { isDuckIntensity } from "@/lib/tubeforge/audiomix";
 import { isMusicMoodId } from "@/lib/tubeforge/music";
 import * as storage from "@/lib/tubeforge/storage";
-
-const TRANSITION_IDS = new Set(TRANSITIONS.map((t) => t.id));
 
 /** Every artifact keyed off the voice/narration — used when the SCRIPT or
  *  the VOICE/SPEED changes, i.e. when EVERY scene's read is stale. (A
@@ -199,26 +207,129 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   if (isMusicMoodId(body.musicMood) || body.musicMood === null)
     data.musicMood = body.musicMood;
 
-  // Smart Motion (Ken Burns) overrides (null = built-in defaults)
-  if (typeof body.motionMode === "string" && ["smart", "zoom", "pan", "off"].includes(body.motionMode))
-    data.motionMode = body.motionMode;
-  if (body.motionMode === null) data.motionMode = null;
-  if (typeof body.motionIntensity === "number")
-    data.motionIntensity = Math.round(Math.min(Math.max(body.motionIntensity, 0), 30));
-  if (body.motionIntensity === null) data.motionIntensity = null;
-  if (typeof body.motionCurve === "string" && ["smooth", "linear"].includes(body.motionCurve))
-    data.motionCurve = body.motionCurve;
-  if (body.motionCurve === null) data.motionCurve = null;
-  if (typeof body.motionVary === "boolean") data.motionVary = body.motionVary;
-  if (body.motionVary === null) data.motionVary = null;
-
-  // Scene transition overrides (null = built-in default: crossfade 0.5s)
-  if (typeof body.transitionStyle === "string" && TRANSITION_IDS.has(body.transitionStyle))
-    data.transitionStyle = body.transitionStyle;
-  if (body.transitionStyle === null) data.transitionStyle = null;
-  if (typeof body.transitionDuration === "number")
-    data.transitionDuration = sanitizeTransitionDuration(body.transitionDuration);
-  if (body.transitionDuration === null) data.transitionDuration = null;
+  // Smart Motion (Ken Burns) + scene-transition overrides — S15, the
+  // motion's gate (the S12/S13/S14 catalog-gate law): a PRESENT but
+  // illegal value dies with a readable 400 before any write — foreign
+  // mode/curve/style ids, non-integer or off-window intensities, blend
+  // lengths outside the 0.2..1.5s window, type confusion, injection
+  // shapes — instead of the old silent drop/clamp (a hostile PATCH must
+  // not look like it worked). null clears to the built-in default
+  // (smart / 12% / smooth / varied motion; crossfade 0.5s — hard cuts
+  // for a slides row with no pick); an absent key stays untouched. The
+  // membership lists are the SHARED catalogs (motion.ts, transitions.ts)
+  // the studio pickers and the render resolvers read, so the gate and
+  // the dropdowns can never disagree.
+  if (body.motionMode !== undefined) {
+    if (body.motionMode === null) {
+      data.motionMode = null;
+    } else if (
+      typeof body.motionMode === "string" &&
+      MOTION_MODE_IDS.includes(body.motionMode)
+    ) {
+      data.motionMode = body.motionMode;
+    } else {
+      return NextResponse.json(
+        {
+          error: `Invalid motionMode — pick one of ${MOTION_MODE_IDS.join(
+            ", "
+          )}, or null for the smart default`,
+        },
+        { status: 400 }
+      );
+    }
+  }
+  if (body.motionIntensity !== undefined) {
+    if (body.motionIntensity === null) {
+      data.motionIntensity = null;
+    } else if (
+      typeof body.motionIntensity === "number" &&
+      Number.isInteger(body.motionIntensity) &&
+      body.motionIntensity >= MOTION_INTENSITY_MIN &&
+      body.motionIntensity <= MOTION_INTENSITY_MAX
+    ) {
+      data.motionIntensity = body.motionIntensity;
+    } else {
+      return NextResponse.json(
+        {
+          error: `Invalid motionIntensity — an integer ${MOTION_INTENSITY_MIN}..${MOTION_INTENSITY_MAX} (% zoom amplitude), or null for the 12 default`,
+        },
+        { status: 400 }
+      );
+    }
+  }
+  if (body.motionCurve !== undefined) {
+    if (body.motionCurve === null) {
+      data.motionCurve = null;
+    } else if (
+      typeof body.motionCurve === "string" &&
+      MOTION_CURVE_IDS.includes(body.motionCurve)
+    ) {
+      data.motionCurve = body.motionCurve;
+    } else {
+      return NextResponse.json(
+        {
+          error: `Invalid motionCurve — pick one of ${MOTION_CURVE_IDS.join(
+            ", "
+          )}, or null for the smooth default`,
+        },
+        { status: 400 }
+      );
+    }
+  }
+  if (body.motionVary !== undefined) {
+    if (body.motionVary === null) {
+      data.motionVary = null;
+    } else if (typeof body.motionVary === "boolean") {
+      data.motionVary = body.motionVary;
+    } else {
+      return NextResponse.json(
+        {
+          error:
+            "Invalid motionVary — true varies the move between scenes, false repeats one move, null returns to the default (varied)",
+        },
+        { status: 400 }
+      );
+    }
+  }
+  if (body.transitionStyle !== undefined) {
+    if (body.transitionStyle === null) {
+      data.transitionStyle = null;
+    } else if (
+      typeof body.transitionStyle === "string" &&
+      TRANSITION_IDS.has(body.transitionStyle)
+    ) {
+      data.transitionStyle = body.transitionStyle;
+    } else {
+      return NextResponse.json(
+        {
+          error: `Unknown transitionStyle "${String(body.transitionStyle).slice(
+            0,
+            40
+          )}" — pick one from the transition catalog, or null for the format default`,
+        },
+        { status: 400 }
+      );
+    }
+  }
+  if (body.transitionDuration !== undefined) {
+    if (body.transitionDuration === null) {
+      data.transitionDuration = null;
+    } else if (
+      typeof body.transitionDuration === "number" &&
+      Number.isFinite(body.transitionDuration) &&
+      body.transitionDuration >= TRANSITION_DURATION_MIN &&
+      body.transitionDuration <= TRANSITION_DURATION_MAX
+    ) {
+      data.transitionDuration = body.transitionDuration;
+    } else {
+      return NextResponse.json(
+        {
+          error: `Invalid transitionDuration — a blend length between ${TRANSITION_DURATION_MIN}s and ${TRANSITION_DURATION_MAX}s, or null for the 0.5s default`,
+        },
+        { status: 400 }
+      );
+    }
+  }
 
   // Stage 6 render defaults — per-project aspect ratio, frame rate, caption
   // burn-in (T-6.7/T-6.8). These ride alongside the existing overrides; the

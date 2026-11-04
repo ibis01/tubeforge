@@ -62,7 +62,8 @@ import { parsePlan, getApprovedAudioMap } from "./director-plan";
 import { parseTimeline, docSceneSettings, type DocSceneSettings } from "./timeline";
 import type { ExportQuality, MusicPick, PosterPick, ShortPick } from "./studio-doc";
 import { docMusicPick, docPosterPick, docShortPick } from "./studio-doc";
-import { sanitizeTransition, transitionSummary } from "./transitions";
+import { resolveTransition, transitionSummary } from "./transitions";
+import { sanitizeMotion } from "./motion";
 import {
   loadSlideDeck,
   planSlides,
@@ -575,12 +576,10 @@ export async function runRenderJob(
       }
     : null;
 
-  // Scene transitions: per-video override (null = built-in crossfade 0.5s).
-  const transition = sanitizeTransition(
-    mode === "slides" && video.transitionStyle === null
-      ? { style: "cut", durationSec: video.transitionDuration }
-      : { style: video.transitionStyle, durationSec: video.transitionDuration }
-  );
+  // Scene transitions: per-video override (null = built-in crossfade 0.5s;
+  // a slides row with no pick hard-cuts — S15's shared resolveTransition is
+  // the one law the studio picker shows too).
+  const transition = resolveTransition(video, mode);
 
   // Brand kit (keynote slides): accent recolor + corner logo badge.
   const brand = mode === "slides" ? await slideBrandFor(videoId, video.brandAccent, video.brandLogoOn) : null;
@@ -604,12 +603,12 @@ export async function runRenderJob(
       captionStyleId: docCaptionStyle,
       sceneDurationsSec,
       docScenes,
-      motion: {
-        mode: (video.motionMode ?? "smart") as "smart" | "zoom" | "pan" | "off",
-        intensity: video.motionIntensity ?? 12,
-        curve: (video.motionCurve ?? "smooth") as "smooth" | "linear",
-        vary: video.motionVary ?? true,
-      },
+      motion: sanitizeMotion({
+        mode: video.motionMode,
+        intensity: video.motionIntensity,
+        curve: video.motionCurve,
+        vary: video.motionVary,
+      }),
       motionContext: { tone: video.tone, niche: video.niche },
       topic: video.topic,
       transition,
@@ -797,12 +796,12 @@ export async function runShortJob(
       videoId,
       scenes,
       sceneIndex,
-      motion: {
-        mode: (video.motionMode ?? "smart") as "smart" | "zoom" | "pan" | "off",
-        intensity: video.motionIntensity ?? 12,
-        curve: (video.motionCurve ?? "smooth") as "smooth" | "linear",
-        vary: video.motionVary ?? true,
-      },
+      motion: sanitizeMotion({
+        mode: video.motionMode,
+        intensity: video.motionIntensity,
+        curve: video.motionCurve,
+        vary: video.motionVary,
+      }),
       transition: { style: video.transitionStyle, durationSec: video.transitionDuration },
       onProgress: (label) => setJobProgress(videoId, "short", 1, 2, label),
     });

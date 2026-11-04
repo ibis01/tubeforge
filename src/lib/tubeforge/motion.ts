@@ -55,10 +55,22 @@ export const MOTION_CURVES = [
   { id: "linear", label: "Linear — constant speed" },
 ] as const;
 
-const MOTION_MODE_IDS: readonly string[] = MOTION_MODES.map((m) => m.id);
-const MOTION_CURVE_IDS: readonly string[] = MOTION_CURVES.map((c) => c.id);
+export const MOTION_MODE_IDS: readonly string[] = MOTION_MODES.map((m) => m.id);
+export const MOTION_CURVE_IDS: readonly string[] = MOTION_CURVES.map((c) => c.id);
 
-/** Coerce anything (API body, DB row) into a valid MotionSettings. */
+// The intensity window (S15): one exported law for the route's gate, this
+// resolver and the studio picker — the same numbers that used to live
+// inline in three places.
+export const MOTION_INTENSITY_MIN = 0;
+export const MOTION_INTENSITY_MAX = 30;
+
+/** Coerce anything (API body, DB row) into a valid MotionSettings.
+ *
+ * S15 law: a null field means "follow the built-in default" EXACTLY like
+ * an absent one. `Number(null)` is 0 — the naive coercion used to turn
+ * every unset intensity into 0 (dead still) instead of the 12 default,
+ * the same bug class sanitizeTransitionDuration's comment documents
+ * (a naive Number() turned every unset duration into the MINIMUM). */
 export function sanitizeMotion(raw: {
   mode?: unknown;
   intensity?: unknown;
@@ -68,9 +80,11 @@ export function sanitizeMotion(raw: {
   const mode = MOTION_MODE_IDS.includes(String(raw?.mode))
     ? (String(raw?.mode) as MotionMode)
     : MOTION_DEFAULTS.mode;
-  const n = Number(raw?.intensity);
+  const n = raw?.intensity == null ? Number.NaN : Number(raw?.intensity);
   const intensity = Number.isFinite(n)
-    ? Math.round(Math.min(Math.max(n, 0), 30))
+    ? Math.round(
+        Math.min(Math.max(n, MOTION_INTENSITY_MIN), MOTION_INTENSITY_MAX)
+      )
     : MOTION_DEFAULTS.intensity;
   const curve = MOTION_CURVE_IDS.includes(String(raw?.curve))
     ? (String(raw?.curve) as MotionCurve)

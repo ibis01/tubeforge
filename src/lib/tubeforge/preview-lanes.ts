@@ -31,6 +31,8 @@
 
 import type { AssembledTimeline } from "./timeline";
 import { cameraAtKeys, type SceneCameraKeys } from "./studio-doc";
+import { sanitizeMotion } from "./motion";
+import { sanitizeTransitionDuration } from "./transitions";
 
 // ---------- settings ----------
 
@@ -64,15 +66,22 @@ export function previewSettingsFrom(partial: {
   const ratio =
     partial.aspectRatio === "9:16" || partial.aspectRatio === "1:1" ? partial.aspectRatio : "16:9";
   const fps = partial.frameRate === 24 || partial.frameRate === 60 ? partial.frameRate : 30;
-  const intensity = Math.min(30, Math.max(0, Number(partial.motionIntensity) || 12));
+  // S15: the motion quartet + the blend length resolve through the SAME
+  // law the render job uses (motion.ts / transitions.ts). The old inline
+  // `Number(x) || 12` turned a LEGAL explicit 0 (the slider's "None") back
+  // into 12 — the preview moved while the render held still.
+  const motion = sanitizeMotion({
+    intensity: partial.motionIntensity,
+    curve: partial.motionCurve,
+    vary: partial.motionVary,
+  });
   return {
     aspectRatio: ratio,
     frameRate: fps,
-    motionIntensity: intensity,
-    motionCurve: partial.motionCurve === "linear" ? "linear" : "smooth",
-    motionVary: partial.motionVary !== false,
-    // Render clamps blends to 0.2..1.5s; the preview clamps identically.
-    transitionDurationSec: Math.min(1.5, Math.max(0.2, Number(partial.transitionDurationSec) || 0.5)),
+    motionIntensity: motion.intensity,
+    motionCurve: motion.curve,
+    motionVary: motion.vary,
+    transitionDurationSec: sanitizeTransitionDuration(partial.transitionDurationSec),
   };
 }
 
