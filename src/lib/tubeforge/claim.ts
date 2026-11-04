@@ -75,14 +75,21 @@ export async function pendingLegacyRows(): Promise<
   });
 }
 
-/** Raw read — tolerates the table being absent (fresh install / claimed). */
+/** Raw read — tolerates the table being absent (fresh install / claimed).
+ *  The presence check goes through sqlite_master, which cannot fail: asking
+ *  for the rows directly made Prisma log the EXPECTED "no such table" as a
+ *  prisma:error on every auth-status poll — a fresh install screamed in its
+ *  own log on each page load (S19: the quiet door). */
 async function readLegacyRows(): Promise<{ key: string; value: string }[]> {
   try {
+    const present = await rawDb.$queryRaw<{ name: string }[]>`
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'LegacySetting'`;
+    if (present.length === 0) return []; // fresh install or already claimed
     return (await rawDb.$queryRaw<
       { key: string; value: string }[]
     >`SELECT key, value FROM LegacySetting`) as { key: string; value: string }[];
   } catch {
-    return []; // no such table — nothing to claim
+    return []; // nothing to claim
   }
 }
 
