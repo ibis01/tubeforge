@@ -1189,9 +1189,9 @@ and operations, not product redesign.
 
 | Item | Status | Notes |
 |---|---|---|
-| P0-1 Rotate the exposed GitHub PAT; enable secret-scanning push protection | ⏳ owner action | The worklog has flagged the plaintext PAT since Stage 6; rotation is outside the repo's reach. Push protection is a repository-settings toggle. |
-| P0-2 CI: e2e job runs on push to main (was PR-only — never fired, zero PRs in history) | ✅ S33 | `.github/workflows/ci.yml` |
-| P0-3 CI: gitleaks secret scan on every push/PR | ✅ S33 | `.github/workflows/ci.yml` `secrets` job |
+| P0-1 Rotate the exposed GitHub PAT; enable secret-scanning push protection | ✅ settings ON · PAT 🟡 rotate again | Secret scanning + push protection + Dependabot security updates enabled via the settings API on 2026-11-05. The S33 push used a fresh workflow-scoped PAT — which itself transited chat, so rotate it after use (standing rule, worklog). |
+| P0-2 CI: e2e job runs on push to main (was PR-only — never fired, zero PRs in history) | ✅ S33 · live | `.github/workflows/ci.yml`. First on-main run 41979158390 caught runner-image drift (ubuntu-latest → 26.04; Playwright 1.57 cannot install browsers there) → `918a1c7` pins ubuntu-24.04; run 41980112353 fully green — the first complete e2e on main ever. |
+| P0-3 CI: gitleaks secret scan on every push/PR | ✅ S33 · live | `.github/workflows/ci.yml` `secrets` job — green on the full 240+-commit history (runs 41979158390 / 41980112353). |
 | P0-4 README.md (the public front door) | ✅ S33 | Positioning, quickstart, tests, repo tour, docs index, deployment story |
 | P0-5 LICENSE decision | ⏳ owner decision | Proprietary / dual / open core — business decision; without a file, all rights reserved (documented in README) |
 | P0-6 One deployment topology + staging environment | ✅ decision landed (S33) → provisioning ⏳ | `DEPLOYMENT.md`: Fly (web+worker) + Neon + R2; `vercel.json` demoted to preview-only. Staging spec included; provisioning needs accounts. |
@@ -1208,7 +1208,7 @@ and operations, not product redesign.
 | P1-4 Warning burn-down (0 errors / ~295+) — structured logger first (deletes the largest class), then react-hooks in high-exposure views | ⏳ | Rides P0-7 |
 | P1-5 Coverage baseline (c8) on the money paths: billing / spend / render | ⏳ | |
 | P1-6 Stateful rate limiting + login lockout (Postgres sliding window; the in-process Map wipes on every deploy) | ⏳ | R-X risk; invisible until multi-instance |
-| P1-7 Release engineering: tag v0.1.0 at staging cutover, v0.9.0 at beta, v1.0.0 at paid launch; GitHub Releases cut from worklog entries; Dependabot weekly | ⏳ | |
+| P1-7 Release engineering: tag v0.1.0 at staging cutover, v0.9.0 at beta, v1.0.0 at paid launch; GitHub Releases cut from worklog entries; Dependabot weekly | 🟡 started | Dependabot SECURITY updates ON (2026-11-05) — 18 alerts surfaced (11H/4M/3L: python-multipart ×7, sharp ×3, js-yaml ×4, deepmerge-ts, minimatch, prismjs). Weekly version-bump PRs still need `.github/dependabot.yml`; tags at the milestones above. |
 
 ### Priority 2 — product growth & monetization (Sprint 3)
 
@@ -1229,3 +1229,10 @@ backup-postgres.sh + restore-drill runbook (P0-8), and this S-series index +
 S33+ backlog (P1-doc-drift). Final gate in the worklog. The owner-action
 items (PAT rotation, push protection, LICENSE, account provisioning) are
 flagged above and in the delivery message.
+
+Roll-out (same day, worklog "S33 roll-out"): pushed as `9ee7d4e` after a clean
+full-history secret scan; the gate's first fire caught ubuntu-latest's move to
+26.04 (Playwright 1.57 cannot install browsers there) → `918a1c7` pins
+ubuntu-24.04 → run `41980112353` fully green (first complete e2e on main
+ever). Push protection + secret scanning + Dependabot security updates ON;
+18 dependency alerts surfaced for burn-down.
