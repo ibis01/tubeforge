@@ -13,6 +13,13 @@
 # in (deterministic seed inside the job) is tracked in the S33+ backlog (P1).
 # The unit suite renders its QC fixtures with ffmpeg, so the runner needs it.
 #
+# NOTE (S33 follow-up): every job pins ubuntu-24.04. The FIRST e2e-on-main run
+# (41979158390, 2026-11-05) failed at `playwright install --with-deps` because
+# ubuntu-latest had moved to 26.04, which Playwright 1.57 has no OS dependency
+# map for ("ERROR: Playwright does not support chromium on ubuntu26.04-x64") —
+# the suite itself was skipped, not failed. Pin the image; bump Playwright
+# only when it actually supports 26.04.
+#
 # Pushing this file requires a PAT with `workflow` scope (GitHub rejects
 # workflow files otherwise). See worklog T-1.5 / T-5.2 / S33.
 
@@ -30,7 +37,7 @@ concurrency:
 jobs:
   secrets:
     name: Secret scan (gitleaks)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -45,7 +52,7 @@ jobs:
 
   check:
     name: Typecheck · Lint · Unit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -72,7 +79,7 @@ jobs:
 
   e2e:
     name: E2E (Playwright)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: check
     # S33: run on PRs AND on pushes to main (was PR-only — never fired,
     # because this repository has no pull-request history).
