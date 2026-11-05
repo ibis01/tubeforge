@@ -1372,3 +1372,31 @@ PRICING_STATUS stays provisional. No new JobKind. New probe coverage: +3
 unit tests on the core (happy path + body shape, five failure paths, URL
 fallback keys). Gate: tsc 0 · eslint 0 errors · 168/168 unit (+3) ·
 s36 probe 38/38 · queue PASS · 40/40 billing.
+
+### S38 record (2026-11-06 UTC)
+
+CSRF unblocks the z SDK preview — the deployed preview's "AI Script +
+Metadata failed / Cross-origin request rejected" was the same wire-up
+problem S30 fixed at the env-config level (proxy rewrites Host, Origin
+mismatch → 403), but the chat-bot preview platform serves every
+deployment at `preview-<id>.space-z.ai` and operators cannot provision
+`TUBEFORGE_ALLOWED_ORIGINS` on it. S37 wired the i2v core but the
+preview's first POST died at the CSRF door before the SDK was ever
+reached. S38 lands a built-in default trust: `origin-trust.ts` now
+matches the regex `^preview-[a-z0-9][a-z0-9-]*\.space-z\.ai$`
+unconditionally (precedence: operator allow-list first, then this
+default, then X-Forwarded-Host, then request Host). The pattern is
+deliberately tight — literal `preview-` prefix + literal `.space-z.ai`
+suffix, anchored — so the bare domain, unrelated subdomains, hyphen
+lookalikes, suffix-in-path attackers, and deeper attacker hosts all
+still reject. Cookie SameSite is the first CSRF line of defense; this is
+the second, scoped to Z.ai's own preview platform. Operator allow-list
+still wins (a stricter operator cannot be silently bypassed). Probe
+coverage: +14 cases in scripts/s30-unit-probe.mts (headline pass with
+empty env, screenshot URL passes, allow-list precedence over default,
+exact-host precedence, six lookalike rejections, default beats
+forwarded-host and Host fallback when both fire, case-insensitive, path
+doesn't break host extraction); C.1/C.2 hostnames swapped off the
+preview pattern so they still exercise the forwarded-host path. Gate:
+tsc 0 · eslint 0 errors · 168/168 unit · s30 probe 41/41 (+14) ·
+s36 probe 38/38 · queue PASS · 40/40 billing.

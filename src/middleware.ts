@@ -117,16 +117,21 @@ export async function middleware(req: NextRequest) {
   }
 
   // CSRF guard for cookie-authenticated mutations: if an Origin is present it
-  // must match a trusted origin. Trust is decided by origin-trust.ts (S30):
+  // must match a trusted origin. Trust is decided by origin-trust.ts:
   //   1. TUBEFORGE_ALLOWED_ORIGINS — explicit allow-list; SUFFIX entries
   //      (".space-z.ai" / "*.space-z.ai") cover the domain and every
   //      subdomain under it — the preview deployment's proxy rewrites the
   //      Host header, so the Stage-2 Host comparison alone rejected every
   //      mutation from the signed-in preview browser (the phone screenshots'
   //      "AI Script + Metadata failed / Cross-origin request rejected").
-  //   2. X-Forwarded-Host — only when TUBEFORGE_TRUST_FORWARDED_HOST=1 and
+  //   2. S38 BUILTIN PREVIEW TRUST — `preview-*.space-z.ai` (Z.ai chat-bot
+  //      preview platform) is always trusted, no env config needed — the
+  //      chat-bot preview deployment cannot have TUBEFORGE_ALLOWED_ORIGINS
+  //      provisioned out-of-band, so without this default the z SDK wiring
+  //      is unreachable from the deployed preview.
+  //   3. X-Forwarded-Host — only when TUBEFORGE_TRUST_FORWARDED_HOST=1 and
   //      the proxy provably overwrites the header.
-  //   3. The request's own Host header (direct connections, no proxy).
+  //   4. The request's own Host header (direct connections, no proxy).
   // A Bearer-token client (curl/scripts) sends no Origin and is allowed by
   // default; the cookie-session case is the only one this guard polices.
   if (payload.s === "session" && MUTATING.has(req.method)) {

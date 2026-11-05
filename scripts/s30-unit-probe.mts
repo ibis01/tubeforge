@@ -73,9 +73,16 @@ const decide = (o: {
 }
 
 // ---- C. X-Forwarded-Host ----
+//
+// Note (S38): the hostnames used here are deliberately NOT
+// `preview-*.space-z.ai`, because the S38 built-in default (D-bis) fires
+// BEFORE X-Forwarded-Host in the precedence chain — using a preview host
+// here would make the test pass for the wrong reason (D-bis.11 nails that
+// interaction). These cases use `studio.example.com` so they actually
+// exercise the X-Forwarded-Host path.
 {
-  check("C.1 trusted + first chain entry matches → allowed", decide({ origin: "https://preview-abc.space-z.ai", host: "internal:3000", forwardedHost: "preview-abc.space-z.ai, internal:3000", allowedOrigins: [], trustForwardedHost: true }).via === "forwarded-host");
-  check("C.2 the knob OFF means the header is ignored", !decide({ origin: "https://preview-abc.space-z.ai", host: "internal:3000", forwardedHost: "preview-abc.space-z.ai", allowedOrigins: [], trustForwardedHost: false }).ok);
+  check("C.1 trusted + first chain entry matches → allowed", decide({ origin: "https://studio.example.com", host: "internal:3000", forwardedHost: "studio.example.com, internal:3000", allowedOrigins: [], trustForwardedHost: true }).via === "forwarded-host");
+  check("C.2 the knob OFF means the header is ignored", !decide({ origin: "https://studio.example.com", host: "internal:3000", forwardedHost: "studio.example.com", allowedOrigins: [], trustForwardedHost: false }).ok);
   check("C.3 forwarded host differing from origin → still rejected", !decide({ origin: "https://evil.com", host: "internal:3000", forwardedHost: "evil-lookalike.com", allowedOrigins: [], trustForwardedHost: true }).ok);
   check("C.4 an empty forwardedHost is never trusted", !decide({ origin: "https://x.com", host: null, forwardedHost: "  ", allowedOrigins: [], trustForwardedHost: true }).ok);
 }
@@ -86,6 +93,50 @@ const decide = (o: {
   check("D.2 case-insensitive host comparison", decide({ origin: "https://LOCALhost:3000", host: "localHOST:3000", allowedOrigins: [] }).ok);
   check("D.3 port mismatch is a different origin (localhost ≠ localhost:3000)", !decide({ origin: "https://localhost:3000", host: "localhost", allowedOrigins: [] }).ok);
   check("D.4 allow-list wins before the host check, host mismatch and all", decide({ origin: "https://preview-x.space-z.ai", host: "localhost:3000", allowedOrigins: [".space-z.ai"] }).ok);
+}
+
+// ---- D-bis. the built-in Z.ai preview-deployment trust (S38) ----
+//
+// The chat-bot preview deployment URL is preview-<uuid>.space-z.ai and
+// operators cannot set TUBEFORGE_ALLOWED_ORIGINS on it. The built-in default
+// in origin-trust.ts trusts that pattern unconditionally — without it, the
+// deployed preview's first POST dies at the CSRF door before the z SDK is
+// ever reached (the screenshot pinned this in S38).
+{
+  // The headline: a bare preview-<id>.space-z.ai origin passes with NO env.
+  check("D-bis.1 chat-bot preview host passes with empty allow-list", decide({ origin: "https://preview-chat-d1f49856-ffa4-4152-bc31-67d7394dda19.space-z.ai", host: "vercel-app.internal", allowedOrigins: [] }).via === "builtin-preview");
+  // The real screenshot URL — long slug, UUID-shaped id.
+  check("D-bis.2 the actual screenshot URL passes", decide({ origin: "https://preview-chat-d1f49856-ffa4-4152-bc31-67d7394dda19.space-z.ai", allowedOrigins: [] }).ok);
+  // Operator's explicit allow-list still wins (the suffix entry returns
+  // "allow-suffix", NOT "builtin-preview" — stricter operator config is
+  // never silently bypassed by the built-in default).
+  check("D-bis.3 operator suffix allow-list wins, not the built-in default", decide({ origin: "https://preview-abc.space-z.ai", allowedOrigins: [".space-z.ai"] }).via === "allow-suffix");
+  // Operator exact host wins too.
+  check("D-bis.4 operator exact host wins over built-in default", decide({ origin: "https://preview-abc.space-z.ai", allowedOrigins: ["preview-abc.space-z.ai"] }).via === "allow-exact");
+  // The pattern is tight — these all REJECT despite containing "space-z.ai":
+  //   · the bare domain (no preview- prefix)
+  check("D-bis.5 bare space-z.ai (no preview- prefix) is NOT auto-trusted", !decide({ origin: "https://space-z.ai", allowedOrigins: [] }).ok);
+  //   · a different subdomain under space-z.ai
+  check("D-bis.6 unrelated subdomain under space-z.ai is NOT auto-trusted", !decide({ origin: "https://studio.space-z.ai", allowedOrigins: [] }).ok);
+  //   · a hyphen lookalike
+  check("D-bis.7 hyphen lookalike (evil-preview-.space-z.ai) rejected", !decide({ origin: "https://evil-preview-x.space-z.ai", allowedOrigins: [] }).ok);
+  //   · preview- prefix but wrong base domain
+  check("D-bis.8 preview- prefix on a different base domain rejected", !decide({ origin: "https://preview-abc.evil.com", allowedOrigins: [] }).ok);
+  //   · a deeper attacker host with the pattern as a suffix
+  check("D-bis.9 deeper-attacker lookalike (preview-x.space-z.ai.evil) rejected", !decide({ origin: "https://preview-x.space-z.ai.evil", allowedOrigins: [] }).ok);
+  //   · a deeper attacker host on a different base
+  check("D-bis.10 deeper-attacker lookalike (preview-x.space-z.ai.attacker.com) rejected", !decide({ origin: "https://preview-x.space-z.ai.attacker.com", allowedOrigins: [] }).ok);
+  // The built-in default is happy to coexist with X-Forwarded-Host trust —
+  // when both could fire, the built-in default wins because it's earlier in
+  // the precedence chain (X-Forwarded-Host is opt-in and heavier; we want
+  // the lighter path to win when both are available).
+  check("D-bis.11 built-in default beats X-Forwarded-Host when both fire", decide({ origin: "https://preview-abc.space-z.ai", host: "vercel-app.internal", forwardedHost: "preview-abc.space-z.ai", allowedOrigins: [], trustForwardedHost: true }).via === "builtin-preview");
+  // And beats the Host fallback too (which is the Stage-2 default).
+  check("D-bis.12 built-in default beats the Host fallback when both fire", decide({ origin: "https://preview-abc.space-z.ai", host: "preview-abc.space-z.ai", allowedOrigins: [] }).via === "builtin-preview");
+  // Case-insensitive: the URL host is lowercased before the regex test.
+  check("D-bis.13 case-insensitive preview host passes", decide({ origin: "https://PREVIEW-ABC.SPACE-Z.AI", allowedOrigins: [] }).ok);
+  // Origin path doesn't affect host extraction.
+  check("D-bis.14 preview host with a path passes (host-only comparison)", decide({ origin: "https://preview-abc.space-z.ai/some/deep/path", allowedOrigins: [] }).ok);
 }
 
 // ---- E. rejection hygiene ----

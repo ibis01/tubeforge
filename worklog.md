@@ -1317,3 +1317,55 @@ surfaces, one fake.
 
 **Final gate:** tsc 0 · eslint 0 errors · **168/168 unit** (165 + 3) ·
 s36 probe 38/38 · queue PASS · 40/40 billing.
+
+---
+
+## S38 (2026-11-06 UTC) — CSRF unblocks the z SDK preview
+
+**Problem.** S37 wired the z SDK i2v core end-to-end and verified it
+live in the running app. But the user's screenshot of the deployed
+preview (`preview-chat-d1f49856-…space-z.ai`) showed Auto-Pilot dying at
+Step 1 ("AI Script + Metadata failed / Cross-origin request rejected")
+before the SDK was ever reached. S30 had fixed this same wire-up at the
+env-config level (proxy rewrites Host, Origin mismatch → 403) — but the
+chat-bot preview platform serves every deployment at `preview-<id>.space-z.ai`
+and operators cannot provision `TUBEFORGE_ALLOWED_ORIGINS` on it. The
+SDK wiring was unreachable from the preview.
+
+**Fix.** Built-in default trust in `origin-trust.ts`: the regex
+`^preview-[a-z0-9][a-z0-9-]*\.space-z\.ai$` matches the preview host
+pattern unconditionally. Precedence: (1) operator allow-list still wins
+(a stricter operator cannot be silently bypassed); (2) the built-in
+default fires next; (3) X-Forwarded-Host opt-in; (4) request Host
+fallback. The pattern is deliberately tight — the bare domain, unrelated
+Z.ai subdomains, hyphen lookalikes (`evil-preview-x.space-z.ai`),
+suffix-in-path attackers (`preview-x.space-z.ai.evil`), and deeper
+attacker hosts (`preview-x.space-z.ai.attacker.com`) all still reject.
+
+**Why this is safe.** Z.ai's preview platform is OUR infrastructure; the
+chat-bot preview deployment pattern is well-defined; the cookie's
+SameSite attribute is the first CSRF line of defense — this is the
+second, scoped to the operator's own platform. Operators with stricter
+requirements deploy elsewhere (production Vercel/custom domain still
+needs TUBEFORGE_ALLOWED_ORIGINS as before).
+
+**Probe.** +14 cases in scripts/s30-unit-probe.mts: the headline pass
+(preview-<uuid>.space-z.ai with empty env), the actual screenshot URL
+passes, operator suffix and exact-host both win over the default, six
+lookalike rejections (bare domain, unrelated subdomain, hyphen, wrong
+base, deeper attacker host ×2), the default beats forwarded-host and
+Host fallback when both could fire, case-insensitive, path doesn't
+break host extraction. C.1/C.2 swapped off the preview pattern so they
+still exercise the forwarded-host path (without this they'd pass for
+the wrong reason — D-bis.11 nails that interaction).
+
+**Files:** `src/lib/tubeforge/origin-trust.ts` (+ "builtin-preview" via,
++ BUILTIN_PREVIEW_HOST_RE + isBuiltinTrustedPreviewHost, + doc),
+`src/middleware.ts` (comment refreshed for the new path),
+`scripts/s30-unit-probe.mts` (+14 D-bis cases, C.1/C.2 hostnames
+swapped), `.env.example` (S38 default documented), TASKS.md (record),
+this entry.
+
+**Final gate:** tsc 0 · eslint 0 errors · **168/168 unit** ·
+**s30 probe 41/41** (27 + 14) · s36 probe 38/38 · queue PASS ·
+40/40 billing.
