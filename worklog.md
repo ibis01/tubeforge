@@ -1164,3 +1164,68 @@ Source: the owner's 2026-11-05 audit priority order (security/CI → S34 spend-g
 **Files:** `src/lib/tubeforge/liveliness.ts` (NEW — selector + prompt tables + `LivelinessDecision`), `src/lib/tubeforge/render.ts` (S35 orchestrator block; channel-keyed plans/shots/overrides/labels; buildSegment channel + honest fallback; RenderResult.liveliness; motionPrompt removed — replaced by the plan-aware prompt), `scripts/test-unit.mts` (+7 S35 units: mode wins, stock precedence, the loop-closure, human seniority ×4, legacy camera phrases, the full Director vocabulary, scene-kind subject clauses), `scripts/s35-unit-probe.mts` (NEW — the REAL derivation chain: a realistic shotList through the real parsePlan → the render's exact input mapping → the selector → the prompt → the ledger mutation; 17 checks), `TASKS.md` (record), this entry.
 
 **Final gate:** tsc 0 · eslint 0 errors (71 warnings on the touched files — pre-existing classes; verified via git-diff that none are new) · **159/159 unit** (152 + 7 new) · **s35 probe 17/17** · **queue PASS** · **40/40 billing**. Push status: pending — the working PAT from the S33/S34 pushes is now invalid (Bad credentials; likely rotated — the standing hygiene rule working as intended), so this push awaits a fresh scoped token from the owner.
+
+### S36 record (2026-11-06)
+
+Render QC lenses — the owner-audit's next milestone: automatic detection of
+flicker, stutter (unnatural motion) and continuity breaks, the three defect
+classes the S33-era battery could not see. freezedetect catches EXACT freezes
+and the static-run scan catches "nothing happens", but luminance pumping
+reads as neither; broken frame pacing reads as judder while every frame is
+unique; and nothing held the rendered pixels to the assembled timeline's own
+cut list. NEW `src/lib/tubeforge/render-qc.ts`: three pure cores behind thin
+ffmpeg shells, wired into `runQcReport` as checks 11-13 (never failing the
+render — the badge asks a human, as always).
+
+- **Flicker** (`flicker`): a `signalstats` luma track sampled at 8 Hz /
+  64×36; one strong delta = |ΔYAVG| ≥ 12 (≈5% brightness). One CONTIGUOUS
+  pumping episode = one event, recorded at run-end (gap budget 2 weak
+  samples) — recording at run-end instead of at the altMin=4 threshold
+  keeps a 20-second pump from fragmenting into an event per window.
+  Alternation (not magnitude) is the signature: crossfades are monotone
+  ramps and never flag; single flashes are one +/− pair and never flag.
+- **Stutter** (`stutter`): packet pts times only (no decode), sorted back
+  to presentation order (H.264 B-frames make packet pts wiggle — the
+  live capture wiggles); duplicated presentation frames flag at dupRunMin=8
+  (≈0.27 s @30 fps), timestamp gaps at delta > 2.5/fps with a 12-gap fail
+  floor (single dropped frames stay under the threshold by design). CFR
+  renders ship zero of either.
+- **Cut alignment** (`cut-alignment`): the render's own
+  `transitionOffsetsMulti` math builds the expectation (hard cuts MUST
+  appear within 0.6 s; blend windows ±0.3 s explain detections); a
+  `select=gt(scene,0.40)` pass detects what the pixels actually do.
+  Unexpected stray cuts and missing hard cuts both fail. Single-scene
+  renders ship an empty expectation — any cut is then a genuine break.
+  The expectation rides `RenderResult.expectedCuts` (same durations +
+  boundary settings the stitcher consumed — it cannot disagree with the
+  render by construction); the QC re-run endpoint rebuilds it from the
+  timeline doc, and doc-less videos report "unmeasured" — never clean.
+- **Calibration was live, not guessed.** Real ffmpeg 7.1.5 synthetic
+  clips: 2.5 Hz luminance pumping (the i2v-breakage class), a red/blue
+  hard cut at exactly 3.0 s, a setpts-clamped 59-duplicate stutter stream,
+  and a 0.5 s xfade correctly explained by its blend window. Two
+  live-found parser bugs fixed before they could ship: blank pts lines
+  parse as phantom zeros (`Number("") === 0`), and 15 Hz synthetic strobes
+  alias against 8 Hz sampling (an unrealistic class — real pumping is
+  1-6 Hz, which the sampler handles).
+- **UI:** the scorecard's Video group gains flicker / stutter /
+  cut-alignment (three-state chips, "unmeasured" still amber). The spend
+  law untouched: QC probes are local ffmpeg — $0. No new JobKind.
+
+**Files:** `src/lib/tubeforge/render-qc.ts` (NEW — FLICKER_SAMPLE /
+STUTTER_LIMITS / CUT_TOL_SEC, pure cores, parsers, shells,
+expectedCutsForTimeline over the render's own offsets), `src/lib/tubeforge/
+qc.ts` (checks 11-13 + opts.expectedCuts/frameRate + qcForVideo passthrough
++ header doc), `src/lib/tubeforge/render.ts` (RenderResult.expectedCuts),
+`src/lib/tubeforge/video-jobs.ts` (render call site passes it + frameRate;
+re-run site rebuilds the expectation from the doc), `src/components/
+tubeforge/video-detail-dialog.tsx` (Video group ids), `scripts/test-unit.mts`
+(+5 S36 units on captured ffmpeg-7.1.5 fixtures), `scripts/s36-unit-probe.mts`
+(NEW — 38 pure property checks around the live-calibrated points),
+TASKS.md (record), this entry.
+
+**Final gate:** tsc 0 · eslint 0 errors (644 warnings repo-wide; verified
+zero new in src/ — the +10 are the probe's no-console class) · **164/164
+unit** (159 + 5 new) · **s36 probe 38/38** · **queue PASS** · **40/40
+billing** · live calibration 4/4 lenses on real ffmpeg 7.1.5. Pushed by the
+owner-rotated PAT.

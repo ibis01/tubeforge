@@ -3614,6 +3614,142 @@ await test("S35 i2v prompt: scene-kind subject motion — text stays legible, fa
   ok(face.includes("breathing, blinking, micro-expressions"), "face scene: subtle natural life clause");
 });
 
+// ---------- S36 — render QC lenses: flicker / stutter / cut alignment ----------
+
+await test("S36 flicker: pumping luma flags one merged event; crossfade ramps and single flashes stay clean", async () => {
+  const { flickerEventsFromLuma, FLICKER_SAMPLE } = await import("../src/lib/tubeforge/render-qc.ts");
+  // A 2.5 Hz brightness pump at 8 Hz sampling: alternating ~90-unit swings
+  // (the live-calibrated synthetic — real i2v pumping class).
+  const pumped: number[] = [];
+  for (let i = 0; i < 64; i++) pumped.push(128 + 90 * Math.sin((2 * Math.PI * 2.5 * i) / FLICKER_SAMPLE.fps));
+  const events = flickerEventsFromLuma(pumped);
+  ok(events.length >= 1, `pumping flags (got ${events.length} events)`);
+  ok(events[0].startSec < 1, "event lands where the pump begins");
+
+  // A crossfade is ONE monotone ramp — STRONG same-sign deltas (≥12 units,
+  // well over the noise floor) never alternate, so no pumping reads.
+  const ramp: number[] = [];
+  for (let i = 0; i < 64; i++) ramp.push(20 + i * 15);
+  eq(flickerEventsFromLuma(ramp).length, 0, "monotone ramp is not flicker");
+
+  // A single flash (+40 then −40) is a cut/exposure pop, not pumping.
+  const flash = [128, 128, 168, 128, 128, 128, 128, 128, 128, 128];
+  eq(flickerEventsFromLuma(flash).length, 0, "single flash is not flicker");
+
+  // Continuous pumping merges into one event, not one per detector window.
+  const long: number[] = [];
+  for (let i = 0; i < 160; i++) long.push(128 + 90 * Math.sin((2 * Math.PI * 2.5 * i) / FLICKER_SAMPLE.fps));
+  const merged = flickerEventsFromLuma(long);
+  eq(merged.length, 1, `one continuous pump = one ledger event (got ${merged.length})`);
+});
+
+await test("S36 parsers: captured ffmpeg 7.1.5 fixtures — YAVG log, packet pts CSV, showinfo lines", async () => {
+  const { parseYavgLog, parsePtsCsv, parseSceneCuts } = await import("../src/lib/tubeforge/render-qc.ts");
+  // Real lines from the live calibration run (fps=8 signalstats metadata=print).
+  const yavgLog = [
+    "[Parsed_metadata_3 @ 0x7fcdb000f880] lavfi.signalstats.YAVG=16.0278",
+    "[Parsed_metadata_3 @ 0x7fcdb000f880] lavfi.signalstats.YAVG=235.0104",
+    "[Parsed_metadata_3 @ 0x7fcdb000f880] lavfi.signalstats.YAVG=128.5000",
+  ].join("\n");
+  const yavg = parseYavgLog(yavgLog);
+  eq(yavg.length, 3, "YAVG lines parsed in order");
+  ok(Math.abs(yavg[1] - 235.0104) < 1e-9, "value preserved exactly");
+
+  // Real packet CSV from a 30 fps CFR x264 file — DECODE order (B-frames
+  // wiggle pts), N/A lines and trailing junk must drop out.
+  const ptsCsv = "0.000000\n0.133333\n0.066667\nN/A\n0.033333\n0.100000\n";
+  const pts = parsePtsCsv(ptsCsv);
+  eq(pts.length, 5, "N/A dropped");
+  eq(pts[0], 0, "first pts is zero");
+  ok(pts.includes(0.133333), "decode-order pts preserved for sorting");
+
+  // Real showinfo frame line from the scene-cut probe (config lines carry
+  // no pts_time and must be ignored).
+  const showinfoLog = [
+    "[Parsed_showinfo_1 @ 0x7f2b84001fc0] config in time_base: 1/15360, frame_rate: 30/1",
+    "[Parsed_showinfo_1 @ 0x7f57a4001fc0] n:   0 pts:  46080 pts_time:3       duration:    512 duration_time:0.0333333 fmt:yuv420p cl:left sar:1/1 s:320x180 i:P iskey:1 type:I",
+    "frame=  120 fps=312 drop=0",
+  ].join("\n");
+  const cuts = parseSceneCuts(showinfoLog);
+  eq(cuts.length, 1, "one scene-change frame among config lines");
+  eq(cuts[0], 3, "pts_time extracted");
+});
+
+await test("S36 stutter: decode-order pts sorts clean, duplicate runs and gaps flag", async () => {
+  const { stutterFromPts } = await import("../src/lib/tubeforge/render-qc.ts");
+  // Clean 30 fps CFR — the exact capture from the live clean.mp4 run.
+  const clean: number[] = [];
+  for (let i = 0; i < 120; i++) clean.push(i / 30);
+  const cleanOut = stutterFromPts(clean, 30);
+  eq(cleanOut.dupRuns.length, 0, "CFR has no duplicate runs");
+  eq(cleanOut.gaps.length, 0, "CFR has no gaps");
+
+  // Same stream scrambled into a decode-like order (B-frames make packet
+  // pts arrive non-monotonic — the live capture wiggles) — must read clean.
+  const idx = clean.map((_, i) => i);
+  const decoded = idx.sort((a, b) => ((b % 3) - (a % 3))).map((i) => clean[i]);
+  const decodedOut = stutterFromPts(decoded, 30);
+  eq(decodedOut.dupRuns.length, 0, "b-frame decode order sorts back to clean");
+  eq(decodedOut.gaps.length, 0, "no phantom gaps from decode order");
+
+  // 10 duplicated presentation frames (the stutter.mkv live-calibration
+  // class — broken VFR segment) flags one run with the right size.
+  const duped = [...clean.slice(0, 30), ...Array(9).fill(clean[29]), ...clean.slice(30)];
+  const dupOut = stutterFromPts(duped, 30);
+  eq(dupOut.dupRuns.length, 1, "duplicate run flagged");
+  eq(dupOut.dupRuns[0].frames, 10, "run size counts every duplicated frame");
+  ok(Math.abs(dupOut.dupRuns[0].startSec - 29 / 30) < 0.01, "run starts where dupes begin");
+
+  // Timestamp gaps accumulate; the fail decision belongs to qc.ts. A single
+  // dropped frame (2/30 s) sits UNDER the gap threshold — only real holes
+  // (two-plus frames, the encoder-crash class) count.
+  const gappy = clean.filter((_, i) => (i % 15 !== 0 && i % 15 !== 1) || i === 0);
+  const gapOut = stutterFromPts(gappy, 30);
+  ok(gapOut.gaps.length >= 7, `dropped frame pairs read as gaps (got ${gapOut.gaps.length})`);
+  eq(stutterFromPts(clean.filter((_, i) => i !== 45), 30).gaps.length, 0, "single dropped frame does not gap");
+});
+
+await test("S36 cut alignment: stray cuts fail, missing hard cuts fail, blends explain", async () => {
+  const { alignCuts, expectedCutsForTimeline } = await import("../src/lib/tubeforge/render-qc.ts");
+  // A 3s + 3s hard-cut timeline (the live hardcut.mp4 case): detection at
+  // exactly 3.0 aligns.
+  const cut3 = expectedCutsForTimeline([3, 3], [{ style: "cut", durationSec: 0.5 }]);
+  eq(cut3.cuts.length, 1, "one expected cut");
+  ok(Math.abs(cut3.cuts[0] - 3) < 1e-9, "cut sits at the boundary");
+  eq(cut3.windows.length, 0, "cuts build no windows");
+  eq(alignCuts([3.0], cut3).unexpected.length, 0, "in-place cut explained");
+  eq(alignCuts([3.0], cut3).missing.length, 0, "expected cut found");
+
+  // A stray cut 2s away from every boundary is a continuity break.
+  eq(alignCuts([1.0], cut3).unexpected.length, 1, "stray cut flagged");
+  // The timeline's hard cut never appearing in the pixels is one too.
+  eq(alignCuts([], cut3).missing.length, 1, "missing hard cut flagged");
+
+  // A crossfade boundary builds a blend window and expects no cut.
+  const blend = expectedCutsForTimeline([3, 3], [{ style: "fade", durationSec: 0.5 }]);
+  eq(blend.cuts.length, 0, "blend builds no expected cut");
+  ok(Math.abs(blend.windows[0][0] - 2.2) < 1e-9 && Math.abs(blend.windows[0][1] - 3.3) < 1e-9,
+    "window spans the blend ±0.3s (live-verified shape)");
+  eq(alignCuts([2.6], blend).unexpected.length, 0, "detection inside the blend is explained");
+
+  // Mixed catalog: the blend's duration debt pulls the later cut earlier —
+  // the render's own offset math, not a parallel one.
+  const mixed = expectedCutsForTimeline([3, 3, 3], [
+    { style: "fadeblack", durationSec: 0.5 },
+    { style: "cut", durationSec: 0.5 },
+  ]);
+  ok(Math.abs(mixed.cuts[0] - 5.5) < 1e-9, `cut after a blend sits at 5.5 (got ${mixed.cuts[0]})`);
+  ok(Math.abs(mixed.windows[0][0] - 2.2) < 1e-9, "blend window from the same offsets");
+});
+
+await test("S36 single-scene expectation: any detected cut is a genuine continuity break", async () => {
+  const { alignCuts, expectedCutsForTimeline } = await import("../src/lib/tubeforge/render-qc.ts");
+  const single = expectedCutsForTimeline([42], []);
+  eq(single.cuts.length, 0, "no boundaries");
+  eq(single.windows.length, 0, "no windows");
+  eq(alignCuts([7.5], single).unexpected.length, 1, "a stray cut in a single-scene render breaks continuity");
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

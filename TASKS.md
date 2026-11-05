@@ -1286,3 +1286,24 @@ render never breaks on the Director. Known corner documented in the worklog:
 needsI2V + stills contract renders still (lens-a exempts, lens-b catches).
 Full narrative + gate results in the worklog ("S35"). New probe:
 `scripts/s35-unit-probe.mts`; +7 unit tests.
+
+### S36 record (2026-11-06)
+
+Render QC lenses — flicker, stutter and continuity, the three defect classes
+the 12-check battery could not see, now checks 11-13 of `runQcReport` (NEW
+`src/lib/tubeforge/render-qc.ts`; pure cores + thin ffmpeg shells). Flicker:
+8 Hz luma sampling, one contiguous pumping episode = one ledger event
+(alternation is the signature — crossfades are monotone ramps, single flashes
+are one pair, neither flags). Stutter: packet-pts pacing — duplicated
+presentation frames ≥8 and timestamp gaps, presentation order restored
+through B-frame decode-order wiggle. Cut alignment: the render's own
+transition-offset math builds the expectation (hard cuts must appear, blend
+windows explain nearby detections, single-scene renders flag ANY cut) and
+rides RenderResult.expectedCuts so it cannot disagree with what the stitcher
+consumed; the QC re-run rebuilds it from the doc (doc-less → honest
+"unmeasured"). Thresholds live-calibrated against real ffmpeg 7.1.5
+synthetics (2.5 Hz pumping, a 3.0 s hard cut, a 59-duplicate stutter stream,
+an explained xfade); two parser bugs caught in the process. Scorecard Video
+group carries the three new chips. Spend law untouched (local ffmpeg, $0);
+no new JobKind. Full narrative + gate results in the worklog ("S36"). New
+probe: `scripts/s36-unit-probe.mts` (38 checks); +5 unit tests.

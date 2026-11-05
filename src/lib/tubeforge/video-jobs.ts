@@ -58,11 +58,14 @@ import {
   musicBedActive,
 } from "./music";
 import { qcForVideo } from "./qc";
+import { expectedCutsForTimeline } from "./render-qc";
+import type { ExpectedCuts } from "./render-qc";
 import { parsePlan, getApprovedAudioMap } from "./director-plan";
 import { parseTimeline, docSceneSettings, type DocSceneSettings } from "./timeline";
 import type { ExportQuality, MusicPick, PosterPick, ShortPick } from "./studio-doc";
 import { docMusicPick, docPosterPick, docShortPick } from "./studio-doc";
-import { resolveTransition, transitionSummary } from "./transitions";
+import { resolveTransition, transitionSummary, sanitizeTransitionStyle, TRANSITION_IDS } from "./transitions";
+import type { TransitionSettings } from "./transitions";
 import { sanitizeMotion } from "./motion";
 import {
   loadSlideDeck,
@@ -636,7 +639,11 @@ export async function runRenderJob(
         {
           i2vEverywhere: mode === "animated",
           stockEverywhere: mode === "stock",
-        }
+        },
+        // S36 — the render just computed the continuity expectation from the
+        // exact durations + boundaries it stitched; hold the pixels to it.
+        result.expectedCuts ?? null,
+        frameRate
       );
       await db.video.update({
         where: { id: videoId },
@@ -1352,6 +1359,33 @@ export async function runQcJob(videoId: string): Promise<void> {
     const aspect = (video.aspectRatio === "9:16" ? "9:16" : "16:9") as
       | "16:9"
       | "9:16";
+    // S36 — rebuild the continuity expectation from the timeline doc the way
+    // the render built it: doc durations + per-boundary transitionIn wins
+    // over the video-level default. Doc-less videos have nothing to align
+    // against — the check then reports "unmeasured", never clean.
+    const timeline = parseTimeline(video.timeline);
+    let expectedCuts: ExpectedCuts | null = null;
+    if (timeline && timeline.scenes.length > 0) {
+      const docDur = timeline.scenes.map(
+        (s) => (typeof s.durationSec === "number" && Number.isFinite(s.durationSec) && s.durationSec > 0 ? s.durationSec : 0)
+      );
+      if (docDur.every((d) => d > 0)) {
+        const def = resolveTransition(video, video.renderMode);
+        const docSettings = docSceneSettings(timeline, timeline.scenes.length);
+        const settings: TransitionSettings[] = [];
+        for (let b = 0; b + 1 < docDur.length; b++) {
+          const docStyle = docSettings?.[b + 1]?.transitionIn ?? null;
+          settings.push({
+            style:
+              docStyle != null && TRANSITION_IDS.has(docStyle as never)
+                ? sanitizeTransitionStyle(docStyle)
+                : def.style,
+            durationSec: def.durationSec,
+          });
+        }
+        expectedCuts = expectedCutsForTimeline(docDur, settings);
+      }
+    }
     const report = await qcForVideo(
       videoId,
       video.videoDuration,
@@ -1362,7 +1396,9 @@ export async function runQcJob(videoId: string): Promise<void> {
       {
         i2vEverywhere: video.renderMode === "animated",
         stockEverywhere: video.renderMode === "stock",
-      }
+      },
+      expectedCuts,
+      video.frameRate === 24 || video.frameRate === 60 ? video.frameRate : 30
     );
     await db.video.update({
       where: { id: videoId },

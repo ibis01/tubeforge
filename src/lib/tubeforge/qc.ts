@@ -14,6 +14,13 @@
 //                      "opening scene unchanged for 15 s" class of defect)
 //   9. captions      — SRT cues monotonic, non-overlapping, inside duration
 //  10. tail fade     — ends on a fade, not an abrupt cut
+//  11. flicker       — luminance pumping (S36): brightness oscillating fast
+//                      enough to strobe while no frame is frozen
+//  12. stutter       — uneven frame timing (S36): duplicated presentation
+//                      frames and timestamp gaps the eye reads as judder
+//  13. cut alignment — continuity (S36): scene changes landing where the
+//                      timeline says nothing should cut, hard cuts missing
+//                      from the pixels
 //
 // The render never fails because of QC — the report drives the QC badge in
 // the UI so a human can inspect before export/upload.
@@ -41,6 +48,15 @@ import {
 } from "./audiomix";
 import { planStaticRuns } from "./director-plan";
 import type { DirectorPlan } from "./director-plan";
+import {
+  detectFlicker,
+  detectStutter,
+  detectSceneCuts,
+  alignCuts,
+  STUTTER_LIMITS,
+  CUT_TOL_SEC,
+} from "./render-qc";
+import type { ExpectedCuts } from "./render-qc";
 
 const execFileAsync = promisify(execFile);
 
@@ -216,6 +232,14 @@ export async function runQcReport(opts: {
    * render moves every scene regardless of plan flags. */
   shotPlanI2VEverywhere?: boolean;
   shotPlanStockEverywhere?: boolean;
+  /** S36 continuity lens — where the assembled timeline says cuts and blend
+   * windows sit on the blended clock. null/absent = no reconstruction
+   * possible (doc-less re-run) → the check reports "unmeasured", never
+   * clean. A single-scene render passes { cuts: [], windows: [] }: any
+   * detected cut is then a genuine continuity break. */
+  expectedCuts?: ExpectedCuts | null;
+  /** Frame rate the render shipped at (stutter lens); default 30. */
+  frameRate?: number;
 }): Promise<QcReport> {
   const aspect: QcAspect =
     opts.expectedAspect === "9:16" ? "9:16" : opts.expectedAspect === "1:1" ? "1:1" : "16:9";
@@ -448,6 +472,108 @@ export async function runQcReport(opts: {
       )
     );
 
+    // 9) S36 lenses — flicker, stutter, cut alignment. Each is a separate
+    // probe with its own measured flag: one crashed lens must not silence
+    // the others, and every unmeasured lens keeps the report red/amber.
+    const flick = await detectFlicker(opts.mp4Path);
+    checks.push(
+      check(
+        "flicker",
+        "Steady brightness (no flicker or pumping)",
+        !flick.measured
+          ? "unmeasured"
+          : flick.events.length === 0
+            ? "pass"
+            : "fail",
+        !flick.measured
+          ? "not measured"
+          : flick.events.length === 0
+            ? "none detected"
+            : `${flick.events.length} pumping run${flick.events.length > 1 ? "s" : ""}`,
+        !flick.measured
+          ? "luma-sampling probe failed — this check did not run"
+          : flick.events
+              .slice(0, 4)
+              .map((e) => `from ${e.startSec.toFixed(1)}s (${e.alternations} swings)`)
+              .join(", ")
+      )
+    );
+
+    const stut = await detectStutter(opts.mp4Path, opts.frameRate ?? 30);
+    const stutterBad = stut.dupRuns.length > 0 || stut.gaps.length >= STUTTER_LIMITS.gapCountMin;
+    checks.push(
+      check(
+        "stutter",
+        "Even frame timing (no stutter)",
+        !stut.measured
+          ? "unmeasured"
+          : stutterBad
+            ? "fail"
+            : "pass",
+        !stut.measured
+          ? "not measured"
+          : stut.dupRuns.length === 0 && stut.gaps.length === 0
+            ? "even timing throughout"
+            : `${stut.dupRuns.length} duplicate-frame run${stut.dupRuns.length === 1 ? "" : "s"}, ${stut.gaps.length} timestamp gap${stut.gaps.length === 1 ? "" : "s"}`,
+        !stut.measured
+          ? "packet-timing probe failed — this check did not run"
+          : [
+              ...stut.dupRuns
+                .slice(0, 3)
+                .map((r) => `${r.frames} duplicated frames from ${r.startSec.toFixed(1)}s`),
+              ...stut.gaps
+                .slice(0, 3)
+                .map((g) => `timing gap after ${g.toFixed(1)}s`),
+            ].join(", ")
+      )
+    );
+
+    if (opts.expectedCuts) {
+      const sc = await detectSceneCuts(opts.mp4Path);
+      const aligned = sc.measured
+        ? alignCuts(sc.cuts, opts.expectedCuts, CUT_TOL_SEC)
+        : { unexpected: [], missing: [] };
+      const cutBad = aligned.unexpected.length > 0 || aligned.missing.length > 0;
+      checks.push(
+        check(
+          "cut-alignment",
+          "Cuts land where the timeline says (continuity)",
+          !sc.measured
+            ? "unmeasured"
+            : cutBad
+              ? "fail"
+              : "pass",
+          !sc.measured
+            ? "not measured"
+            : cutBad
+              ? `${aligned.unexpected.length} unexpected, ${aligned.missing.length} missing`
+              : opts.expectedCuts.cuts.length === 0
+                ? "no stray cuts"
+                : `all ${opts.expectedCuts.cuts.length} cut${opts.expectedCuts.cuts.length === 1 ? "" : "s"} in place`,
+          !sc.measured
+            ? "scene-change probe failed — this check did not run"
+            : [
+                ...aligned.unexpected
+                  .slice(0, 4)
+                  .map((t) => `stray cut at ${t.toFixed(1)}s`),
+                ...aligned.missing
+                  .slice(0, 4)
+                  .map((t) => `timeline cut missing at ${t.toFixed(1)}s`),
+              ].join(", ")
+        )
+      );
+    } else {
+      checks.push(
+        check(
+          "cut-alignment",
+          "Cuts land where the timeline says (continuity)",
+          "unmeasured",
+          "no timeline reconstruction",
+          "this video has no aligned timeline doc — cuts cannot be checked"
+        )
+      );
+    }
+
     // 7b) Abrupt ending — the final 0.4 s should sit in a fade/silence, not
     // mid-beat. Music beds fade out by design; a hard audio cut reads as a
     // glitch (and YouTube viewers notice).
@@ -509,7 +635,9 @@ export async function qcForVideo(
   expectedBlack?: [number, number][],
   expectedAspect?: QcAspect,
   shotPlan?: DirectorPlan | null,
-  pacingExemptions?: { i2vEverywhere?: boolean; stockEverywhere?: boolean }
+  pacingExemptions?: { i2vEverywhere?: boolean; stockEverywhere?: boolean },
+  expectedCuts?: ExpectedCuts | null,
+  frameRate?: number
 ): Promise<QcReport> {
   // Storage seam (T-3.7): ffprobe/readFile need real paths — materialize
   // returns the uploads path locally, a cached download under s3.
@@ -524,5 +652,7 @@ export async function qcForVideo(
     shotPlan,
     shotPlanI2VEverywhere: pacingExemptions?.i2vEverywhere,
     shotPlanStockEverywhere: pacingExemptions?.stockEverywhere,
+    expectedCuts,
+    frameRate,
   });
 }

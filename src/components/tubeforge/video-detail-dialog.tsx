@@ -106,7 +106,7 @@ import { clsx } from "clsx";
 const QC_GROUPS: { title: string; ids: string[] }[] = [
   {
     title: "Video",
-    ids: ["playable", "aspect", "black-frames", "frozen-frames", "static-shots", "tail-fade"],
+    ids: ["playable", "aspect", "black-frames", "frozen-frames", "static-shots", "tail-fade", "flicker", "stutter", "cut-alignment"],
   },
   { title: "Audio", ids: ["loudness", "true-peak", "loudness-range", "dead-air"] },
   { title: "Sync", ids: ["duration", "captions"] },

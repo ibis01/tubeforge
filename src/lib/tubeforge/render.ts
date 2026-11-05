@@ -101,6 +101,8 @@ import {
 } from "./transitions";
 import type { DocSceneSettings } from "./timeline";
 import { MUSIC_SLIDER_GAIN } from "./music";
+import { expectedCutsForTimeline } from "./render-qc";
+import type { ExpectedCuts } from "./render-qc";
 
 const execFileAsync = promisify(execFile);
 
@@ -200,6 +202,9 @@ export interface RenderResult {
   aspect: "16:9" | "9:16" | "1:1";
   /** Designed black-dip windows (fadeblack blends) for the transition-aware QC gate. */
   blackWindows?: [number, number][];
+  /** S36 — where the assembled timeline says cuts and blend windows sit on
+   *  the blended clock; the QC cut-alignment lens holds the pixels to it. */
+  expectedCuts?: ExpectedCuts;
   /** S35 — the per-scene liveliness ledger: which channel played and why.
    *  Reflects what PLAYED (an i2v scene that fell back mid-render reports
    *  the fallback), so the render row and the worklog can audit the
@@ -1743,6 +1748,10 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       // QC black-frame exemptions — every fadeblack boundary in the doc's
       // per-scene catalog (S2: mixed styles dip exactly where told to).
       blackWindows: scenes.length > 1 ? fadeblackWindowsMulti(durations, boundary) : [],
+      // S36 — the continuity expectation, built from the SAME durations +
+      // per-boundary settings the stitcher just consumed: hard cuts must
+      // appear in the pixels, blend windows explain detections nearby.
+      expectedCuts: expectedCutsForTimeline(durations, boundary),
       // S35 — the liveliness ledger (what played, per scene, and why).
       liveliness,
     };
