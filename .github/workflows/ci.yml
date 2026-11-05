@@ -13,6 +13,11 @@
 # in (deterministic seed inside the job) is tracked in the S33+ backlog (P1).
 # The unit suite renders its QC fixtures with ffmpeg, so the runner needs it.
 #
+# NOTE (external-audit response, 2026-11-05): `npm run test:queue` JOINED the
+# check job below — the Stage-3 resume contract is now CI-proven on every
+# push, not just commit-reported. It runs after the unit suite on the same
+# postinstall-bootstrapped SQLite database.
+#
 # NOTE (S33 follow-up): every job pins ubuntu-24.04. The FIRST e2e-on-main run
 # (41979158390, 2026-11-05) failed at `playwright install --with-deps` because
 # ubuntu-latest had moved to 26.04, which Playwright 1.57 has no OS dependency
@@ -76,6 +81,9 @@ jobs:
 
       - name: Unit + regression suite
         run: npm run test
+
+      - name: Queue integration suite (resume contract, real worker restart)
+        run: npm run test:queue
 
   e2e:
     name: E2E (Playwright)

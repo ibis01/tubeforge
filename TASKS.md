@@ -1307,3 +1307,36 @@ an explained xfade); two parser bugs caught in the process. Scorecard Video
 group carries the three new chips. Spend law untouched (local ffmpeg, $0);
 no new JobKind. Full narrative + gate results in the worklog ("S36"). New
 probe: `scripts/s36-unit-probe.mts` (38 checks); +5 unit tests.
+
+### External-audit response record (2026-11-05 UTC)
+
+The fresh read-only external audit confirmed S36/S35/S34 in the repo and
+left a P0 pair; both closed this session, plus the two hardening items the
+audit implied.
+
+1. **S36 CI verified** — run 42109038621 (push, attempt 1, conclusion
+   success): Typecheck·Lint·Unit, E2E (Playwright) and gitleaks all green.
+   The audit's "no associated runs" was an endpoint artifact — Actions
+   results surface under check-runs, not the commit-status endpoint (which
+   only carries Vercel contexts).
+2. **Pricing provenance de-confused** — the "future-dated" 2026-11-06
+   stamps were Asia/Shanghai calendar dates of fetches that landed
+   2026-11-05 UTC (S34 commit 1e24911, authored 2026-11-05T19:20:00Z,
+   independently bounds them — second offense after the S27 flag, so the
+   wire itself is now documented). Every stamp in spend.ts is a UTC
+   date/instant anchored to the commit; PRICING_STATUS stays "provisional"
+   and paid testing stays OFF, as the audit asked.
+3. **Override controls made observable** — new `spendOverrides()` export +
+   once-per-process stderr announcement at the admitDispatch choke point:
+   a lifted TUBEFORGE_SPEND_GATE or forced TUBEFORGE_PRICING_VERIFIED can
+   no longer operate silently.
+4. **test:queue joined the CI check job** — the Stage-3 resume contract
+   (real worker restart) is now CI-proven on every push instead of
+   commit-reported, answering the audit's "commit-reported results are
+   not independently confirmed".
+
+Roadmap candidates recorded from the audit (not started here): five-genre
+visual benchmark (BLOCKED on paid-dispatch activation — needs pricing
+verification + operator go), QC enforcement policy (which of checks 1-13
+must block export), S35 fallback/override combination audit, 18
+dependency-alert triage.

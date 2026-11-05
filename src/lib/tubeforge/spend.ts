@@ -83,6 +83,45 @@ const STOP_MICRO_USD = (() => {
  *  metering and pricing keep running — only the block is lifted). */
 const GATE_ENABLED = process.env.TUBEFORGE_SPEND_GATE !== "0";
 
+/** External-audit response — the two operator escape hatches, made
+ *  observable. Both are documented, deliberate tools (probes; a
+ *  pre-activation sanity check), but an override that leaves no trace is
+ *  the dangerous kind: TUBEFORGE_SPEND_GATE=0 lifts the $5 stop line and
+ *  TUBEFORGE_PRICING_VERIFIED=1 admits dispatches on provisional prices.
+ *  spendOverrides() reports which are active in this process, and
+ *  admitDispatch announces them ONCE per process on stderr — a degraded
+ *  protection state can never again be silent. */
+export function spendOverrides(): {
+  gateLifted: boolean;
+  pricingForcedVerified: boolean;
+} {
+  return {
+    gateLifted: process.env.TUBEFORGE_SPEND_GATE === "0",
+    pricingForcedVerified: process.env.TUBEFORGE_PRICING_VERIFIED === "1",
+  };
+}
+
+let overridesAnnounced = false;
+function announceOverridesOnce(): void {
+  if (overridesAnnounced) return;
+  overridesAnnounced = true;
+  const o = spendOverrides();
+  if (!o.gateLifted && !o.pricingForcedVerified) return;
+  const parts: string[] = [];
+  if (o.gateLifted)
+    parts.push(
+      "TUBEFORGE_SPEND_GATE=0 — the $5.00 stop line is LIFTED in this process"
+    );
+  if (o.pricingForcedVerified)
+    parts.push(
+      "TUBEFORGE_PRICING_VERIFIED=1 — provisional pricing is being treated as verified"
+    );
+  console.warn(
+    `[spend] OVERRIDE ACTIVE: ${parts.join("; ")}. ` +
+      "Paid-dispatch protections are degraded by environment, not by source."
+  );
+}
+
 /** Output clamp for every gated dispatch — the output half of the
  *  estimate≥actual invariant. Director JSON plans run 1–4k tokens; 8192
  *  is headroom, priced in full by every estimate. */
@@ -105,6 +144,15 @@ export const MAX_OUTPUT_TOKENS = 8192;
 // SpendPricingUnverifiedError — belt-and-suspenders on top of the existing
 // "no paid API keys configured" posture. (zai gateway + local servers stay
 // ungated; the experiment's spend is paid external chat/vision only.)
+//
+// Provenance-stamp convention (external-audit response, 2026-11-05 UTC):
+// bare LOCAL calendar dates keep reading as future-dated to a reviewer in
+// an earlier timezone. The S27 stamp above was the first hit (an audit run
+// 2026-11-04 saw "2026-11-05"); the S34 stamps were flagged again by the
+// 2026-11-05 UTC audit because "2026-11-06" was the Asia/Shanghai calendar
+// date of a fetch that landed 2026-11-05 UTC. Every stamp in this file is
+// now a UTC date or an ISO instant, anchored where possible to the git
+// commit whose author timestamp independently bounds it.
 
 export const PRICING_VERSION = "2026-11";
 
@@ -120,7 +168,9 @@ export const PRICING_STATUS: "provisional" | "verified" = "provisional";
  *  flips PRICING_STATUS to "verified" only after confirming each source
  *  still lists the price recorded here.
  *
- *  S34 reconciliation (2026-11-06): the OpenAI pricing page was re-fetched
+ *  S34 reconciliation (2026-11-05 UTC — the Asia/Shanghai session recorded
+ *  it as 2026-11-06 local; bounded above by commit 1e24911, authored
+ *  2026-11-05T19:20:00Z): the OpenAI pricing page was re-fetched
  *  and EVERY current-generation row below matched exactly. The legacy
  *  gpt-4.1/gpt-4o rows' cited source (CloudZero survey) is now a 404 and
  *  OpenAI's live page no longer lists those models — unverifiable-cheap is
@@ -129,15 +179,15 @@ export const PRICING_STATUS: "provisional" | "verified" = "provisional";
 export const PRICING_SOURCES = [
   {
     url: "https://developers.openai.com/api/docs/pricing",
-    retrievedAt: "2026-11-06",
+    retrievedAt: "2026-11-05", // UTC day; 2026-11-06 Asia/Shanghai local — stamp convention above
     covers: ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-cyber", "gpt-6-rosalind", "gpt-rosalind-research", "gpt-rosalind-discovery", "gpt-6-astra-law"],
-    note: "gpt-6 generation standard-mode pricing — S34 re-fetch 2026-11-06: every row reconciled exactly against the live page",
+    note: "gpt-6 generation standard-mode pricing — S34 re-fetch 2026-11-05 UTC (2026-11-06 Asia/Shanghai local): every row reconciled exactly against the live page",
   },
   {
     url: "https://www.cloudzero.com/blog/gpt-4-cost",
     retrievedAt: "2026-06-15",
     covers: [],
-    note: "TOMBSTONE — 404 as of the S34 re-check (2026-11-06). The legacy gpt-4.1/gpt-4o rows it sourced are gone from MODEL_PRICES (unverifiable-cheap under-prices the gate); legacy ids price at FALLBACK_PRICE until a live source exists",
+    note: "TOMBSTONE — 404 as of the S34 re-check (2026-11-05 UTC / 2026-11-06 Asia/Shanghai local). The legacy gpt-4.1/gpt-4o rows it sourced are gone from MODEL_PRICES (unverifiable-cheap under-prices the gate); legacy ids price at FALLBACK_PRICE until a live source exists",
   },
 ] as const;
 
@@ -161,7 +211,8 @@ type ModelPrice = { in: number; out: number };
 
 const MODEL_PRICES: Record<string, ModelPrice> = {
   // Current flagship generation — every row RECONCILED against the live
-  // OpenAI pricing page on 2026-11-06 (S34): all ten matched exactly.
+  // OpenAI pricing page on 2026-11-05 UTC (S34; 2026-11-06 Asia/Shanghai
+  // local): all ten matched exactly.
   "gpt-6-astra": { in: 10_000_000, out: 50_000_000 },
   "gpt-6.1-sol": { in: 2_000_000, out: 10_000_000 },
   "gpt-6.1-terra": { in: 1_000_000, out: 5_000_000 },
@@ -478,7 +529,10 @@ export class SpendPricingUnverifiedError extends Error {
       "AI spend pricing is unverified — PRICING_STATUS is \"provisional\". " +
         "Reconcile every MODEL_PRICES row against its cited source " +
         "(PRICING_SOURCES), then flip PRICING_STATUS to \"verified\" in " +
-        "src/lib/tubeforge/spend.ts before authorizing paid dispatches."
+        "src/lib/tubeforge/spend.ts before authorizing paid dispatches. " +
+        "(The TUBEFORGE_PRICING_VERIFIED=1 environment override exists for " +
+        "probes and pre-activation checks only; it is announced on stderr " +
+        "when active.)"
     );
     this.name = "SpendPricingUnverifiedError";
   }
@@ -602,6 +656,7 @@ export async function admitDispatch(opts: {
   model: string;
   estimatedMicro: number;
 }): Promise<SpendHold | null> {
+  announceOverridesOnce();
   if (!GATE_ENABLED || !isPaidProvider(opts.provider)) return null;
   // S32 — unverified pricing blocks paid dispatches (belt-and-suspenders on
   // top of the existing "no paid API keys" posture). The operator flips

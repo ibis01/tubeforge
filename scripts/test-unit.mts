@@ -3750,6 +3750,33 @@ await test("S36 single-scene expectation: any detected cut is a genuine continui
   eq(alignCuts([7.5], single).unexpected.length, 1, "a stray cut in a single-scene render breaks continuity");
 });
 
+// ---------- S36-audit — spend-gate observability (escape hatches surfaced) ----------
+
+await test("S36-audit: spendOverrides reports the operator escape hatches; a clean env stays silent", async () => {
+  const { spendOverrides } = await import("../src/lib/tubeforge/spend.ts");
+  const savedGate = process.env.TUBEFORGE_SPEND_GATE;
+  const savedPricing = process.env.TUBEFORGE_PRICING_VERIFIED;
+  delete process.env.TUBEFORGE_SPEND_GATE;
+  delete process.env.TUBEFORGE_PRICING_VERIFIED;
+  try {
+    const clean = spendOverrides();
+    ok(!clean.gateLifted, "no TUBEFORGE_SPEND_GATE → gate not lifted");
+    ok(!clean.pricingForcedVerified, "no TUBEFORGE_PRICING_VERIFIED → pricing not forced");
+    process.env.TUBEFORGE_SPEND_GATE = "0";
+    process.env.TUBEFORGE_PRICING_VERIFIED = "1";
+    const lifted = spendOverrides();
+    ok(lifted.gateLifted, "TUBEFORGE_SPEND_GATE=0 → gateLifted");
+    ok(lifted.pricingForcedVerified, "TUBEFORGE_PRICING_VERIFIED=1 → pricingForcedVerified");
+  } finally {
+    if (savedGate === undefined) delete process.env.TUBEFORGE_SPEND_GATE;
+    else process.env.TUBEFORGE_SPEND_GATE = savedGate;
+    if (savedPricing === undefined) delete process.env.TUBEFORGE_PRICING_VERIFIED;
+    else process.env.TUBEFORGE_PRICING_VERIFIED = savedPricing;
+  }
+  const restored = spendOverrides();
+  ok(!restored.gateLifted && !restored.pricingForcedVerified, "env fully restored after the test");
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

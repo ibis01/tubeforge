@@ -1229,3 +1229,44 @@ zero new in src/ — the +10 are the probe's no-console class) · **164/164
 unit** (159 + 5 new) · **s36 probe 38/38** · **queue PASS** · **40/40
 billing** · live calibration 4/4 lenses on real ffmpeg 7.1.5. Pushed by the
 owner-rotated PAT.
+
+## External-audit response — CI proof, UTC provenance, loud overrides (2026-11-05 UTC)
+
+The fresh external audit (read-only) confirmed S36 in the repo and left a
+P0 pair: Actions CI unverified for S36, and pricing provenance
+"future-dated". Both closed this session, plus the two hardening items the
+audit implied.
+
+- **S36 CI proof.** The audit queried the commit-status endpoint, which
+  only carries Vercel contexts — Actions results live under check-runs.
+  The proper lookup shows run 42109038621 (push, attempt 1, conclusion
+  success): gitleaks, Typecheck·Lint·Unit, E2E (Playwright) — all green on
+  the first try, matching the commit-reported gate.
+- **The Nov 6 "future date" was a timezone artifact — now structurally
+  fixed.** S34's re-fetch landed 2026-11-05 ~19:20 UTC, which IS
+  2026-11-06 on the Asia/Shanghai clock the session ran on; the auditor
+  (UTC side) read the bare local stamp as not-yet-true. Same wire as the
+  S27 flag — so the convention is now written into the PRICING_STATUS
+  block: every spend.ts stamp is a UTC date or ISO instant, and the S34
+  reconciliation is anchored to commit 1e24911 (authored
+  2026-11-05T19:20:00Z — independently checkable with `git show -s
+  --format=%aI 1e24911`).
+- **Overrides announce themselves.** TUBEFORGE_SPEND_GATE=0 and
+  TUBEFORGE_PRICING_VERIFIED=1 are documented escape hatches, but until
+  now they left no trace. New `spendOverrides()` export plus a
+  once-per-process stderr announcement at the admitDispatch choke point —
+  a degraded protection state can never again be silent.
+  PRICING_STATUS stays "provisional": no unverified paid dispatch, exactly
+  as the audit asked.
+- **test:queue joined CI.** The check job now runs the Stage-3 resume
+  contract (real worker restart) after the unit suite, so the queue gate
+  is CI-proven on every push instead of commit-reported.
+
+**Files:** `src/lib/tubeforge/spend.ts` (stamp convention + UTC stamps +
+`spendOverrides()`/`announceOverridesOnce()` + error-message pointer),
+`scripts/test-unit.mts` (+1 test on the override surface),
+`.github/workflows/ci.yml` (queue step + header note), TASKS.md (record),
+this entry.
+
+**Final gate:** tsc 0 · eslint 0 errors · 165/165 unit · s36 probe 38/38 ·
+queue PASS · 40/40 billing.
