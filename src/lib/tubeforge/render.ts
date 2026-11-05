@@ -75,8 +75,17 @@ import {
   type ScenePip,
   type ExportQuality,
 } from "./studio-doc";
-import { getApprovedMotionMap, getApprovedAudioMap, getApprovedPlan } from "./director-plan";
+import { getApprovedMotionMap, getApprovedAudioMap, getApprovedPlan, type DirectorScene } from "./director-plan";
 import { buildSceneShots, ensureShotImages, PSEUDO_CROPS, type SceneShotPlan } from "./shots";
+// S35 — Universal Scene Liveliness: the per-scene channel selector + the
+// plan-aware i2v motion prompt. The renderer reads the world once (plan,
+// provider, stock files) and the PURE selector decides who plays.
+import {
+  selectChannels,
+  i2vMotionPrompt,
+  type LivelinessChannel,
+  type LivelinessDecision,
+} from "./liveliness";
 import { ensureAmbience } from "./ambience";
 import {
   BLEND_GROUP_MAX,
@@ -191,6 +200,11 @@ export interface RenderResult {
   aspect: "16:9" | "9:16" | "1:1";
   /** Designed black-dip windows (fadeblack blends) for the transition-aware QC gate. */
   blackWindows?: [number, number][];
+  /** S35 — the per-scene liveliness ledger: which channel played and why.
+   *  Reflects what PLAYED (an i2v scene that fell back mid-render reports
+   *  the fallback), so the render row and the worklog can audit the
+   *  selector's decisions against the pixels. */
+  liveliness: LivelinessDecision[];
 }
 
 /**
@@ -250,24 +264,21 @@ export async function probeDuration(file: string): Promise<number> {
 
 // ---------- Animated (CogVideoX i2v) ----------
 
-/** Motion prompt describing how the scene should animate. */
-function motionPrompt(scene: Scene): string {
-  const cameraMotion: Record<string, string> = {
-    "zoom-in": "slow cinematic zoom in",
-    "zoom-out": "slow cinematic zoom out revealing the scene",
-    "pan-left": "smooth camera pan to the left",
-    "pan-right": "smooth camera pan to the right",
-    "push-in": "steady dramatic push in toward the subject",
-  };
-  const motion = cameraMotion[scene.camera] ?? "subtle cinematic camera drift";
-  return `${motion}. ${scene.visual}. ${scene.mood}. Natural ambient motion, cinematic quality, no text.`;
-}
-
 /**
  * Generate (or reuse a cached) 5s animated clip for one scene via
  * CogVideoX image-to-video, seeded from the storyboard image.
+ *
+ * S35 — the motion prompt is plan-aware (i2vMotionPrompt in liveliness.ts):
+ * an approved Director camera (crane-up, handheld, drone…) drives the
+ * generation instead of the old five-id map that degraded everything else
+ * to generic drift, and a per-scene-kind SUBJECT-motion clause names what
+ * actually moves — the thing Ken Burns cannot produce.
  */
-async function ensureSceneClip(videoId: string, scene: Scene): Promise<string> {
+async function ensureSceneClip(
+  videoId: string,
+  scene: Scene,
+  directorScene: DirectorScene | null
+): Promise<string> {
   const clipPath = path.join(videoDir(videoId), `scene-${String(scene.index).padStart(2, "0")}.mp4`);
   if (fs.existsSync(clipPath) && fs.statSync(clipPath).size > 10_000) return clipPath;
 
@@ -292,7 +303,7 @@ async function ensureSceneClip(videoId: string, scene: Scene): Promise<string> {
     async () => {
       const submit = await zai.video.generations.create({
         model: videoModel,
-        prompt: motionPrompt(scene),
+        prompt: i2vMotionPrompt(scene, directorScene),
         image_url: `data:image/png;base64,${imageB64}`,
         quality: "speed",
         with_audio: false,
@@ -478,6 +489,16 @@ async function buildSegment(opts: {
   aspect?: "16:9" | "9:16" | "1:1";
   /** Stage 6 (T-6.8) — per-render frame rate (default 30). */
   fps?: number;
+  /** S35 — the liveliness selector's per-scene channel. Absent → the mode's
+   *  own default, so any caller that doesn't know about the selector keeps
+   *  its exact pre-S35 behavior. */
+  channel?: LivelinessChannel;
+  /** S35 — the scene's approved Director row (drives the i2v motion prompt). */
+  directorScene?: DirectorScene | null;
+  /** S35 — fired when the i2v channel degrades to Ken Burns (per-scene picks
+   *  never break the render; the orchestrator turns this into a progress
+   *  note so the degradation is VISIBLE, never silent). */
+  onI2vFallback?: (sceneIndex: number, reason: string) => void;
 }): Promise<void> {
   const { scene, dur, mode, motion, plan, shotPlan, outPath } = opts;
   const dir = videoDir(opts.videoId);
@@ -611,7 +632,8 @@ async function buildSegment(opts: {
   }
   if (mode === "stock") {
     // Hybrid: matched stock footage when the scene has a clip on disk,
-    // otherwise fall through to the Smart Motion art path below.
+    // otherwise fall through to the art path below. (S35: the selector only
+    // names "stock" when the clip exists — this fs guard is belt-and-braces.)
     const clip = scene.stock
       ? path.join(dir, scene.stock.file)
       : null;
@@ -628,7 +650,17 @@ async function buildSegment(opts: {
     }
   }
 
-  if (mode !== "animated") {
+  // S35 — the scene's execution channel: the selector's verdict, or the
+  // mode's own default for callers that predate the selector. (Slides and
+  // animated callers that bypass the selector: slides already returned above;
+  // animated maps to i2v — the pre-S35 behavior, unchanged.)
+  const chan: LivelinessChannel = opts.channel ?? (mode === "animated" ? "i2v" : mode);
+
+  // S35 — the Ken Burns executor (the M2 multi-shot Director graph, or the
+  // single-image Smart Motion graph), extracted so an i2v scene that cannot
+  // produce its clip degrades HERE — the liveliness pick never breaks the
+  // render, it just plays the next-liveliest channel.
+  const runKenburns = async (): Promise<void> => {
     const img = path.join(dir, sceneImageFile(scene.index));
 
     // M2 — the approved Director shot list drives the scene (spec §1.7):
@@ -703,17 +735,42 @@ async function buildSegment(opts: {
       "-filter_complex", `${fullVisual(vChain, hasPip ? 2 + audio.inputs.filter((a) => a === "-i").length : null)};${audio.graph}`,
       ...common,
     ]);
-  } else {
-    const clip = await ensureSceneClip(opts.videoId, scene);
-    await run("ffmpeg", [
-      "-stream_loop", "-1", "-t", dur.toFixed(3), "-i", clip,
-      "-i", wav,
-      ...audio.inputs,
-      ...pipInputs,
-      "-filter_complex", `${fullVisual(visualSuffix(FOOTAGE), hasPip ? 2 + audio.inputs.filter((a) => a === "-i").length : null)};${audio.graph}`,
-      ...common,
-    ]);
+  };
+
+  // S35 — the i2v channel: subject-real motion for the scenes the approved
+  // plan (or the video-level animated pick) sent here. The generation rides
+  // aiCall("video") — metered under the $5 gate like every other dispatch.
+  if (chan === "i2v") {
+    try {
+      const clip = await ensureSceneClip(opts.videoId, scene, opts.directorScene ?? null);
+      await run("ffmpeg", [
+        "-stream_loop", "-1", "-t", dur.toFixed(3), "-i", clip,
+        "-i", wav,
+        ...audio.inputs,
+        ...pipInputs,
+        "-filter_complex", `${fullVisual(visualSuffix(FOOTAGE), hasPip ? 2 + audio.inputs.filter((a) => a === "-i").length : null)};${audio.graph}`,
+        ...common,
+      ]);
+      return;
+    } catch (err) {
+      // Honest degradation, two contracts:
+      //  • video-level "animated": the user asked for FULL animation — a
+      //    failed clip fails the render (a silently different product would
+      //    be a lie). Pre-S35 behavior, unchanged.
+      //  • per-scene liveliness picks (the Director's needsI2V): the render
+      //    falls back to the Ken Burns executor and the orchestrator reports
+      //    the fallback — visible, never silent.
+      if (mode === "animated") throw err;
+      opts.onI2vFallback?.(
+        scene.index,
+        err instanceof Error ? err.message : String(err).slice(0, 160)
+      );
+      await runKenburns();
+      return;
+    }
   }
+
+  await runKenburns();
 }
 
 /** Per-scene audio levels for one segment's graph (S2 — from the timeline
@@ -1266,10 +1323,69 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     const motionAspect: "16:9" | "9:16" | "1:1" =
       opts.mode === "slides" ? "9:16" : (opts.aspectRatio ?? "16:9");
     const motionFps = opts.frameRate ?? FPS;
-    const needsPlan =
-      opts.mode === "kenburns" ||
-      (opts.mode === "stock" &&
-        scenes.some((s) => !(s.stock && fs.existsSync(path.join(dir, s.stock.file)))));
+
+    // S35 — Universal Scene Liveliness: derive ONE execution channel per
+    // scene before anything else plans against the mode. The world is read
+    // ONCE here (approved plan, human motion map, video provider, stock
+    // files on disk, doc camera keys) and handed to the PURE selector —
+    // every downstream block (camera plans, shot plans, overrides, segment
+    // execution) now keys off the channel instead of re-deriving the mode
+    // arithmetic inline.
+    //
+    // The loop this closes: the approved plan's per-scene needsI2V flag was
+    // already written by the Director pass, already approved by the human,
+    // and already trusted by the QC pacing gate as a motion channel — but
+    // the default render mode never consumed it. Now it does: a flagged
+    // scene animates (metered under the $5 gate), degrading honestly to
+    // Ken Burns when no video provider is configured or the clip fails.
+    const hasStock = scenes.map(
+      (s) => Boolean(s.stock && fs.existsSync(path.join(dir, s.stock.file)))
+    );
+    // One read each — the shot-plan block and the module-D override block
+    // consume the same rows instead of re-querying.
+    const approvedPlan = await getApprovedPlan(opts.videoId).catch((err) => {
+      console.warn("[render] director plan unavailable — liveliness falls back to Ken Burns:", err);
+      return null;
+    });
+    const motionOverrides = await getApprovedMotionMap(opts.videoId).catch(() => new Map<number, "zoom" | "pan" | "off">());
+    let i2vReady = false;
+    if (opts.mode !== "slides" && opts.mode !== "animated") {
+      // Only the per-scene picks need this check; animated mode doesn't ask
+      // (it IS i2v — the provider error surfaces from ensureSceneClip itself,
+      // as it always has) and slides/stock-with-clips never generate.
+      try {
+        i2vReady = (await getCapability("video")).provider === "zai";
+      } catch {
+        i2vReady = false; // no provider configured — honest KB fallback below
+      }
+    }
+    const planNeedsI2V = scenes.map(
+      (s) => approvedPlan?.scenes.find((p) => p.sceneIndex === s.index)?.needsI2V === true
+    );
+    const planMotionOff = scenes.map(
+      (s) => approvedPlan?.scenes.find((p) => p.sceneIndex === s.index)?.motion === "off"
+    );
+    const humanMotionOff = scenes.map((s) => motionOverrides.get(s.index) === "off");
+    const docCameraKeys = scenes.map((s) => docScenes?.[s.index - 1]?.cameraKeys != null);
+    const channels = selectChannels({
+      mode: opts.mode,
+      motionOff: motion.mode === "off" || motion.intensity < 1,
+      planNeedsI2V,
+      planMotionOff,
+      humanMotionOff,
+      docCameraKeys,
+      hasStock,
+      i2vReady,
+    });
+    // Mutable copy for the result: an i2v scene that falls back mid-render
+    // updates its decision, so RenderResult.liveliness reports what PLAYED,
+    // not what was planned.
+    const liveliness: LivelinessDecision[] = channels.map((d) => ({ ...d }));
+    const directorSceneByIndex = new Map(
+      (approvedPlan?.scenes ?? []).map((s) => [s.sceneIndex, s])
+    );
+
+    const needsPlan = channels.some((d) => d.channel === "kenburns");
     const plans =
       opts.mode === "animated"
         ? []
@@ -1285,43 +1401,37 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
 
     // M2 — the approved Director shot list becomes the authoritative shot
     // plan of every Ken Burns scene (docs/director-m1-m2-spec.md §1.3). ONE
-    // plan read for the whole video; per scene: buildSceneShots (pure) →
+    // plan read for the whole video (hoisted into the S35 block above — the
+    // selector consumes the same rows); per scene: buildSceneShots (pure) →
     // ensureShotImages (≤3 extra AI images, failures demote to pseudo). ANY
     // failure here falls back to the legacy single-image path — the render
     // never breaks on the Director. No approved plan → this block is skipped
     // entirely and every scene renders bit-identical to the pre-M2 path.
     let shotPlans: (SceneShotPlan | undefined)[] | null = null;
-    if (needsPlan) {
+    if (needsPlan && approvedPlan && approvedPlan.scenes.length > 0) {
       try {
-        const approved = await getApprovedPlan(opts.videoId);
-        if (approved && approved.scenes.length > 0) {
-          const byScene = new Map(approved.scenes.map((s) => [s.sceneIndex, s]));
-          const shotPlans2: (SceneShotPlan | undefined)[] = [];
-          let plannedScenes = 0;
-          for (const [i, scene] of scenes.entries()) {
-            // Only scenes that will actually run the Ken Burns path consume
-            // shots — stock scenes with footage and slides/animated keep
-            // their own visual path (their motion plans are ignored too).
-            const usesKenburns =
-              opts.mode === "kenburns" ||
-              (opts.mode === "stock" &&
-                !(scene.stock && fs.existsSync(path.join(dir, scene.stock.file))));
-            if (!usesKenburns) {
-              shotPlans2.push(undefined);
-              continue;
-            }
-            const sp = buildSceneShots({
-              scene,
-              planScene: byScene.get(scene.index) ?? null,
-              measuredSec: durations[i],
-            });
-            shotPlans2.push(await ensureShotImages({ videoId: opts.videoId, scene, plan: sp }));
-            if (byScene.has(scene.index)) plannedScenes++;
+        const byScene = new Map(approvedPlan.scenes.map((s) => [s.sceneIndex, s]));
+        const shotPlans2: (SceneShotPlan | undefined)[] = [];
+        let plannedScenes = 0;
+        for (const [i, scene] of scenes.entries()) {
+          // S35: the channel list IS the Ken Burns set — stock scenes with
+          // footage, i2v-picked scenes and slides keep their own visual path
+          // (their motion plans are ignored too).
+          if (channels[i]?.channel !== "kenburns") {
+            shotPlans2.push(undefined);
+            continue;
           }
-          // A plan that matches no rendered scene (scenes edited after
-          // approval) has no bearing on this video — legacy path everywhere.
-          if (plannedScenes > 0) shotPlans = shotPlans2;
+          const sp = buildSceneShots({
+            scene,
+            planScene: byScene.get(scene.index) ?? null,
+            measuredSec: durations[i],
+          });
+          shotPlans2.push(await ensureShotImages({ videoId: opts.videoId, scene, plan: sp }));
+          if (byScene.has(scene.index)) plannedScenes++;
         }
+        // A plan that matches no rendered scene (scenes edited after
+        // approval) has no bearing on this video — legacy path everywhere.
+        if (plannedScenes > 0) shotPlans = shotPlans2;
       } catch (err) {
         console.warn("[render] director shot plan unavailable — legacy motion path:", err);
         shotPlans = null;
@@ -1331,15 +1441,17 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     // Stage 5 (module D) — an APPROVED director plan overrides the video-level
     // motion mode PER SCENE (the director picks the movement channel per shot
     // list; "off" deliberately stills a scene, zoom/pan narrow it). Only the
-    // Ken Burns / stock-fallback path is overridden: slides keep their
-    // deterministic deck plans and i2v renders move everything anyway.
+    // Ken Burns channel is overridden: slides keep their deterministic deck
+    // plans, stock plays real footage, and i2v scenes move for real (S35 —
+    // a Ken Burns override on a true-motion scene would contradict the pick;
+    // "off" was already honored upstream by the selector).
     if (needsPlan && opts.mode !== "slides" && plans.length === scenes.length) {
-      const overrides = await getApprovedMotionMap(opts.videoId);
-      if (overrides.size > 0) {
+      if (motionOverrides.size > 0) {
         for (let i = 0; i < scenes.length; i++) {
-          const mode = overrides.get(scenes[i].index);
+          const mode = motionOverrides.get(scenes[i].index);
           if (!mode) continue;
           if (shotPlans?.[i]) continue; // M2: the Director's per-shot moves are senior (spec §1.3)
+          if (channels[i]?.channel !== "kenburns") continue; // S35: overrides steer the KB camera only
           plans[i] = planSceneMovements(
             [scenes[i]],
             { ...motion, mode },
@@ -1417,10 +1529,15 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     // 2) One segment per scene (visual + narration audio, exact duration).
     const segPaths: string[] = [];
     for (const [i, scene] of scenes.entries()) {
+      // S35 — the label tells the truth about WHO is playing: the channel
+      // decides, and a per-scene i2v pick says so by name.
+      const chan = channels[i]?.channel;
       const label =
-        opts.mode === "animated"
-          ? `Animating scene ${i + 1}`
-          : scene.stock && fs.existsSync(path.join(dir, scene.stock.file))
+        chan === "i2v"
+          ? opts.mode === "animated"
+            ? `Animating scene ${i + 1}`
+            : `Animating scene ${i + 1} — director's true-motion pick`
+          : chan === "stock"
             ? `Cutting stock footage — scene ${i + 1}`
             : `Composing scene ${i + 1}`;
       report(i, label);
@@ -1442,6 +1559,18 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         scene,
         dur: durations[i],
         mode: opts.mode,
+        // S35 — the selector's verdict for this scene (undefined → the
+        // mode's own default; can't happen here, the list is always built).
+        channel: chan,
+        directorScene: directorSceneByIndex.get(scene.index) ?? null,
+        onI2vFallback: (sceneIndex, reason) => {
+          const d = liveliness.find((x) => x.sceneIndex === sceneIndex);
+          if (d) {
+            d.channel = "kenburns";
+            d.reason = `i2v unavailable — Ken Burns fallback (${reason.slice(0, 90)})`;
+          }
+          report(i, `Composing scene ${i + 1} — i2v unavailable, Ken Burns fallback`);
+        },
         motion,
         plan: plans[i],
         shotPlan: shotPlans?.[i],
@@ -1614,6 +1743,8 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       // QC black-frame exemptions — every fadeblack boundary in the doc's
       // per-scene catalog (S2: mixed styles dip exactly where told to).
       blackWindows: scenes.length > 1 ? fadeblackWindowsMulti(durations, boundary) : [],
+      // S35 — the liveliness ledger (what played, per scene, and why).
+      liveliness,
     };
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

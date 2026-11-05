@@ -3422,6 +3422,198 @@ await test("spend sink: per-hold slices — baseline + usageSinceBaseline", asyn
   eq(usageSinceBaseline(0), undefined, "no ctx → usageSinceBaseline undefined");
 });
 
+// ---------- S35 — Universal Scene Liveliness ----------
+
+await test("S35 selector: mode wins — animated is i2v everywhere, slides is slides everywhere", async () => {
+  const { selectChannels } = await import("../src/lib/tubeforge/liveliness.ts");
+  const base = {
+    mode: "animated" as const,
+    motionOff: false,
+    planNeedsI2V: [false, false, false],
+    planMotionOff: [false, false, false],
+    humanMotionOff: [false, false, false],
+    docCameraKeys: [false, false, false],
+    hasStock: [true, false, false],
+    i2vReady: false, // animated mode doesn't ask — the mode IS the ask
+  };
+  const animated = selectChannels(base);
+  eq(animated.length, 3, "one decision per scene");
+  ok(animated.every((d) => d.channel === "i2v"), "animated mode → i2v on every scene");
+  eq(animated[0].sceneIndex, 1, "sceneIndex is 1-based");
+
+  const slides = selectChannels({ ...base, mode: "slides" });
+  ok(slides.every((d) => d.channel === "slides"), "slides mode → the deck plays everywhere");
+});
+
+await test("S35 selector: stock mode — matched footage wins, fallbacks follow the plan + provider", async () => {
+  const { selectChannels } = await import("../src/lib/tubeforge/liveliness.ts");
+  const base = {
+    mode: "stock" as const,
+    motionOff: false,
+    planNeedsI2V: [false, true, true],
+    planMotionOff: [false, false, false],
+    humanMotionOff: [false, false, false],
+    docCameraKeys: [false, false, false],
+    hasStock: [true, false, false],
+    i2vReady: true,
+  };
+  const out = selectChannels(base);
+  eq(out[0].channel, "stock", "clip on disk → real footage plays");
+  eq(out[1].channel, "i2v", "no clip + plan needsI2V + provider ready → the true-motion pick animates");
+  eq(out[2].channel, "i2v", "same for the third scene");
+  ok(out[1].reason.includes("director"), "the reason names the director's pick");
+
+  const noProvider = selectChannels({ ...base, i2vReady: false });
+  eq(noProvider[1].channel, "kenburns", "no video provider → honest Ken Burns fallback");
+  ok(noProvider[1].reason.includes("no video provider"), "the reason says WHY it fell back");
+});
+
+await test("S35 selector: the loop-closure — kenburns mode finally consumes the plan's needsI2V", async () => {
+  const { selectChannels } = await import("../src/lib/tubeforge/liveliness.ts");
+  const base = {
+    mode: "kenburns" as const,
+    motionOff: false,
+    planNeedsI2V: [false, true, false],
+    planMotionOff: [false, false, false],
+    humanMotionOff: [false, false, false],
+    docCameraKeys: [false, false, false],
+    hasStock: [false, false, false],
+    i2vReady: true,
+  };
+  const out = selectChannels(base);
+  eq(out[0].channel, "kenburns", "unflagged scene → the camera engine (pre-S35 behavior)");
+  ok(out[0].reason.includes("Ken Burns camera plan"), "default reason names the camera plan");
+  eq(out[1].channel, "i2v", "THE FIX: approved needsI2V scene animates in the default mode");
+  eq(out[2].channel, "kenburns", "unflagged scene stays Ken Burns");
+});
+
+await test("S35 selector: explicit human edits stay senior — keys, stills contract, off overrides", async () => {
+  const { selectChannels } = await import("../src/lib/tubeforge/liveliness.ts");
+  const base = {
+    mode: "kenburns" as const,
+    motionOff: false,
+    planNeedsI2V: [true, true, true, true],
+    planMotionOff: [false, false, false, false],
+    humanMotionOff: [false, false, false, false],
+    docCameraKeys: [false, false, false, false],
+    hasStock: [false, false, false, false],
+    i2vReady: true,
+  };
+  const keys = selectChannels({ ...base, docCameraKeys: [true, false, false, false] });
+  eq(keys[0].channel, "kenburns", "studio camera keys (a user edit) beat the director's i2v pick");
+  ok(keys[0].reason.includes("senior"), "the reason states the seniority law");
+  eq(keys[1].channel, "i2v", "untouched scenes keep the pick");
+
+  const stills = selectChannels({ ...base, motionOff: true });
+  ok(stills.every((d) => d.channel === "kenburns"), "the stills contract (motion off) silences i2v picks too");
+
+  const planOff = selectChannels({ ...base, planMotionOff: [false, true, false, false] });
+  eq(planOff[1].channel, "kenburns", "the plan's own motion:off stills the scene");
+
+  const humanOff = selectChannels({ ...base, humanMotionOff: [false, false, true, false] });
+  eq(humanOff[2].channel, "kenburns", "the human's per-scene motion-map off stills the scene");
+});
+
+await test("S35 i2v prompt: legacy camera ids keep their phrases; unknown falls back to drift", async () => {
+  const { i2vMotionPrompt } = await import("../src/lib/tubeforge/liveliness.ts");
+  const scene = {
+    index: 3,
+    title: "The charge",
+    narration: "cavalry sweeps the ridge",
+    visual: "cavalry charging across a dust-red ridge at dawn",
+    camera: "push-in",
+    mood: "dramatic amber light",
+    caption: "The charge begins",
+    hostInScene: false,
+    rehook: false,
+    sfx: "none",
+  };
+  const p = i2vMotionPrompt(scene, null);
+  ok(p.startsWith("Steady dramatic push in toward the subject."), "legacy push-in phrase leads verbatim");
+  ok(p.includes(scene.visual), "the scene visual rides along");
+  ok(p.includes(scene.mood), "the mood rides along");
+  ok(p.endsWith("Cinematic quality, natural physics, no text."), "the tail contract holds");
+
+  const drift = i2vMotionPrompt({ ...scene, camera: "some-new-id" }, null);
+  ok(drift.startsWith("Subtle cinematic camera drift."), "unknown camera → the generic drift default");
+
+  const standard = i2vMotionPrompt(scene, null);
+  ok(standard.includes("subjects move with real, visible energy"), "action-kind subject-motion clause present");
+});
+
+await test("S35 i2v prompt: the FULL Director vocabulary drives generative motion (the old code drifted)", async () => {
+  const { i2vMotionPrompt } = await import("../src/lib/tubeforge/liveliness.ts");
+  const scene = {
+    index: 5,
+    title: "The camp",
+    narration: "the army settled for the night",
+    visual: "a sprawling night camp, fires burning",
+    camera: "push-in",
+    mood: "cold blue moonlight",
+    caption: "Night falls",
+    hostInScene: false,
+    rehook: false,
+    sfx: "none",
+  };
+  const shot = (camera: string) => ({
+    shotIndex: 0,
+    framing: "wide",
+    camera,
+    lens: "24mm wide",
+    composition: "rule of thirds",
+    duration: 2.5,
+    imagePrompt: "",
+  });
+  const planScene = (camera: string) => ({
+    sceneIndex: 5,
+    mood: "",
+    motion: "smart",
+    needsI2V: true,
+    useStock: false,
+    shots: [shot(camera)],
+  });
+  // The four phrases the OLD five-id map degraded to generic drift — pinned
+  // here so the camera execution gap stays closed.
+  for (const [camera, expected] of [
+    ["handheld", "Organic handheld camera sway, subtle documentary shake."],
+    ["crane-up", "Smooth crane rise revealing the scene from above."],
+    ["drone", "Slow aerial drone pull-back reveal."],
+    ["dolly-in", "Smooth dolly move in toward the subject with natural parallax."],
+  ] as const) {
+    const p = i2vMotionPrompt(scene, planScene(camera) as never);
+    ok(p.startsWith(expected), `plan camera "${camera}" → its real phrase (was: generic drift)`);
+  }
+  const locked = i2vMotionPrompt(scene, planScene("static") as never);
+  ok(locked.startsWith("Locked-off camera"), "static camera → locked-off, motion in the subjects");
+});
+
+await test("S35 i2v prompt: scene-kind subject motion — text stays legible, faces live subtly", async () => {
+  const { i2vMotionPrompt } = await import("../src/lib/tubeforge/liveliness.ts");
+  const base = {
+    index: 2,
+    title: "The decree",
+    narration: "the scribe sealed the decree",
+    visual: "a wax-sealed decree scroll on a wooden desk",
+    camera: "push-in",
+    mood: "warm candlelight",
+    caption: "Sealed",
+    hostInScene: false,
+    rehook: false,
+    sfx: "none",
+  };
+  const texty = i2vMotionPrompt(
+    { ...base, visual: "inscription text carved writing letters on the stone decree" },
+    null
+  );
+  ok(texty.includes("perfectly static and legible"), "text-heavy art: legibility clause wins");
+
+  const face = i2vMotionPrompt(
+    { ...base, visual: "close-up portrait of the messenger, eyes wide, tears forming" },
+    null
+  );
+  ok(face.includes("breathing, blinking, micro-expressions"), "face scene: subtle natural life clause");
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

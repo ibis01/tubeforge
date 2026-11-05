@@ -1265,3 +1265,24 @@ flagship fallback — over-reserve only). `PRICING_STATUS` stays
 "provisional" until the owner reconciles the first real invoices against
 the SpendReservation ledger. Full narrative + gate results in the worklog
 ("S34"). New probe: `scripts/s34-unit-probe.mts`; +6 unit tests.
+
+### S35 record (2026-11-06)
+
+Universal Scene Liveliness — the owner-audit's next product milestone, landed
+as the loop-closure the motion architecture was already shaped for: the
+approved Director plan's per-scene `needsI2V` flag (written by the pass,
+approved by the human, trusted by the QC pacing gate as a motion channel) was
+never consumed by the default render mode. Now one PURE selector
+(`src/lib/tubeforge/liveliness.ts`) derives each scene's execution channel —
+slides deck / matched stock / i2v (subject-real motion, $5-gate-metered) /
+Ken Burns — with explicit human edits (camera keys, stills contract, motion
+overrides) staying senior and every decision carrying a human-readable reason
+(`RenderResult.liveliness`). The i2v motion prompt now speaks the FULL
+Director camera vocabulary (crane-up, handheld, drone, dolly-in — the old
+five-id map degraded them all to generic drift) plus per-scene-kind SUBJECT
+motion clauses. Honest degradation everywhere: no provider, failed clip or
+missing stock falls back to Ken Burns with a visible progress note, and the
+render never breaks on the Director. Known corner documented in the worklog:
+needsI2V + stills contract renders still (lens-a exempts, lens-b catches).
+Full narrative + gate results in the worklog ("S35"). New probe:
+`scripts/s35-unit-probe.mts`; +7 unit tests.
