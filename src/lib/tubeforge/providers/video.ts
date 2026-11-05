@@ -1,4 +1,5 @@
 // Video adapter — image-to-video generation.
+//   zai         → Z.ai SDK (CogVideoX i2v — zai-video-core.ts)
 //   fal         → POST {baseUrl}/fal-ai/...
 //   replicate   → POST {baseUrl}/predictions
 //   huggingface → POST {baseUrl}/models/{model}
@@ -9,6 +10,7 @@ import { zaiClientFor } from "../zai-client";
 import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta } from "./registry";
 import { joinUrl, providerFetch, providerFetchJson } from "./http";
+import { zaiVideoViaClient } from "./zai-video-core";
 
 export interface ImageToVideoRequest {
   imagePngBase64: string;
@@ -39,20 +41,28 @@ export async function imageToVideo(
   }
 }
 
-// ---------- Z.ai (SDK — unchanged legacy shape) ----------
+// ---------- Z.ai (SDK) ----------
 
+/**
+ * WIRING (audit follow-up, 2026-11-05 UTC): this was the stub that threw
+ * "Z.ai video generation is currently handled in the pipeline, not here" —
+ * so the settings Test button (and any imageToVideo caller with provider
+ * "zai") could never exercise the default provider even though the render
+ * pipeline's own i2v path has spoken to the SDK since Stage 4. The live
+ * gateway probe (cogvideox-3, 5s 1080p, ~2.8 min → 4.9 MB h264) calibrated
+ * the real call shape; the submit/poll/download logic lives in the tested
+ * core (zai-video-core.ts) that render.ts's ensureSceneClip now shares.
+ */
 async function zaiVideo(
   req: ImageToVideoRequest,
   config: CapabilityConfig,
 ): Promise<Buffer> {
   const zai = await zaiClientFor("video");
   const model = config.model?.trim() || "cogvideox-3";
-
-  // Note: Z.ai SDK method for video may vary. Using a placeholder here.
-  // If it doesn't work, ensure the correct method is called.
-  throw new Error(
-    "Z.ai video generation is currently handled in the pipeline, not here. Please select fal.ai, Replicate, or Ken Burns for testing.",
-  );
+  return zaiVideoViaClient(zai, req, {
+    model,
+    ...(req.duration !== undefined ? { duration: req.duration } : {}),
+  });
 }
 
 // ---------- fal.ai ----------

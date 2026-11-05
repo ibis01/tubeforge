@@ -21,6 +21,7 @@ import { sceneImageFile, sceneWavFile, buildSrtFromSegments } from "./story";
 import { buildSmartSrt } from "./captions";
 import { videoDir } from "./ai";
 import { zaiClientFor } from "./zai-client";
+import { zaiVideoViaClient } from "./providers/zai-video-core";
 import * as storage from "./storage";
 import { aiCall } from "./budget";
 import { ensureSfx } from "./sfx";
@@ -306,32 +307,27 @@ async function ensureSceneClip(
     "video",
     `scene ${scene.index} i2v`,
     async () => {
-      const submit = await zai.video.generations.create({
-        model: videoModel,
-        prompt: i2vMotionPrompt(scene, directorScene),
-        image_url: `data:image/png;base64,${imageB64}`,
-        quality: "speed",
-        with_audio: false,
-        duration: 5,
-        fps: FPS,
-        size: "1920x1080",
-      });
-
-      // Poll the async task (i2v takes ~3-5 min per clip)
-      for (let i = 0; i < 60; i++) {
-        await new Promise((r) => setTimeout(r, 10_000));
-        const res = await zai.async.result.query(submit.id);
-        const status = res.task_status;
-        const url = res.video_result?.[0]?.url ?? res.video_url ?? null;
-        if (status === "SUCCESS" && url) {
-          const buf = Buffer.from(await (await fetch(url)).arrayBuffer());
-          if (buf.length < 10_000) throw new Error("i2v returned an empty clip");
-          fs.writeFileSync(clipPath, buf);
-          return clipPath;
-        }
-        if (status === "FAIL") throw new Error(`i2v task failed for scene ${scene.index}`);
-      }
-      throw new Error(`i2v task timed out for scene ${scene.index}`);
+      // S36-audit wiring — the submit/poll/download loop now lives in the
+      // tested core (providers/zai-video-core.ts), shared with the provider
+      // adapter; this site keeps the clip cache, the 10s×60 window and the
+      // aiCall retry it always had.
+      const buf = await zaiVideoViaClient(
+        zai,
+        {
+          prompt: i2vMotionPrompt(scene, directorScene),
+          imagePngBase64: imageB64,
+        },
+        {
+          model: videoModel,
+          duration: 5,
+          fps: FPS,
+          size: "1920x1080",
+          pollMs: 10_000,
+          maxPolls: 60,
+        },
+      );
+      fs.writeFileSync(clipPath, buf);
+      return clipPath;
     },
     { attempts: 2, baseDelayMs: 8000 } // one retry — these are long calls
   );

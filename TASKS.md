@@ -1340,3 +1340,35 @@ visual benchmark (BLOCKED on paid-dispatch activation — needs pricing
 verification + operator go), QC enforcement policy (which of checks 1-13
 must block export), S35 fallback/override combination audit, 18
 dependency-alert triage.
+
+### S37 record (2026-11-05 UTC)
+
+Z SDK video wiring — the owner's "wire the z sdk to it so we can preview
+it": the render pipeline's i2v path has spoken to the Z.ai SDK since Stage
+4 (render.ts's ensureSceneClip), but the provider adapter's `zaiVideo` was
+a STUB that threw ("handled in the pipeline, not here") — so the settings
+Test button and every `imageToVideo` caller with provider "zai" could
+never exercise the default provider. NEW
+`src/lib/tubeforge/providers/zai-video-core.ts`: the submit → poll →
+download core as a STRUCTURAL client shape (SDK-free, fake-driven tests —
+the S36 "pure cores behind thin shells" pattern), live-calibrated against
+the real gateway (cogvideox-3, 5s 1080p, ~2.8 min → 4.9 MB h264). Both
+callers now share it: `providers/video.ts` zaiVideo (stub → real) and
+`render.ts` ensureSceneClip (inline loop → core; keeps its clip cache,
+10s×60 window, aiCall retry). URL fallbacks (video_result[0].url →
+video_url → url → video), empty-download guard, honest errors everywhere.
+LIVE-VERIFIED end-to-end in the running app: story video → script (12
+scenes) → director plan + approve → storyboard (12 SDK image gens) → TTS
+voiceover (12 wavs) → animated scene-1 render — the i2v clip came back
+through the wired core (5.1s h264) and the stitched preview PLAYED in the
+video dialog (real wave motion, not Ken Burns). Known issues found during
+the live run (pre-existing, NOT fixed here): a director-plan re-run can
+fail parsing the LLM's JSON (first attempt had succeeded and its plan
+persists); a render job killed mid-flight and re-run by boot recovery
+fails with "No tenant context (runRenderJob)" (the recovery re-enqueue
+loses the tenant scope for render bodies); preview renders do not persist
+a qcReport. Spend law untouched: zai gateway calls are ungated ($0),
+PRICING_STATUS stays provisional. No new JobKind. New probe coverage: +3
+unit tests on the core (happy path + body shape, five failure paths, URL
+fallback keys). Gate: tsc 0 · eslint 0 errors · 168/168 unit (+3) ·
+s36 probe 38/38 · queue PASS · 40/40 billing.

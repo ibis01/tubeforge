@@ -3777,6 +3777,100 @@ await test("S36-audit: spendOverrides reports the operator escape hatches; a cle
   ok(!restored.gateLifted && !restored.pricingForcedVerified, "env fully restored after the test");
 });
 
+// ---------- S37 — z sdk wiring: the i2v core behind the SDK shell ----------
+
+/** Scripted fake of the Z.ai client slice the core needs. `script` answers
+ *  successive async.result.query polls (last entry repeats); `id` controls
+ *  the submission result. Records every create() body for shape asserts. */
+function fakeZaiVideoClient(script: Array<Record<string, unknown>>, id?: string) {
+  let polls = 0;
+  const bodies: Array<Record<string, unknown>> = [];
+  return {
+    client: {
+      video: {
+        generations: {
+          create: async (body: Record<string, unknown>) => {
+            bodies.push(body);
+            return { id };
+          },
+        },
+      },
+      async: {
+        result: {
+          query: async () => script[Math.min(polls++, script.length - 1)],
+        },
+      },
+    },
+    bodies,
+  };
+}
+
+const S37_PNG = "aGVsbG8=";
+const S37_BIG = async () => new Response(new ArrayBuffer(20_000));
+const S37_TINY = async () => new Response(new ArrayBuffer(100));
+
+await test("S37 zai-video-core: happy path polls to SUCCESS and downloads a real-sized clip", async () => {
+  const { zaiVideoViaClient } = await import("../src/lib/tubeforge/providers/zai-video-core.ts");
+  const { client, bodies } = fakeZaiVideoClient(
+    [
+      { task_status: "PROCESSING" },
+      { task_status: "PROCESSING" },
+      { task_status: "SUCCESS", video_result: [{ url: "https://cdn.example/v.mp4" }] },
+    ],
+    "task-1"
+  );
+  const buf = await zaiVideoViaClient(
+    client as Parameters<typeof zaiVideoViaClient>[0],
+    { prompt: "pan", imagePngBase64: S37_PNG },
+    { model: "cogvideox-3", pollMs: 1, fetchFn: S37_BIG }
+  );
+  ok(buf.length >= 10_000, `downloaded ${buf.length} bytes`);
+  const b = bodies[0];
+  eq(b.model, "cogvideox-3", "model passes through");
+  eq(b.prompt, "pan", "prompt passes through");
+  eq(b.image_url, `data:image/png;base64,${S37_PNG}`, "image_url is a data URL");
+  eq(b.quality, "speed", "speed quality by default");
+  eq(b.with_audio, false, "no audio by default");
+  eq(b.duration, 5, "5s by default");
+  eq(b.fps, 30, "30fps by default");
+  eq(b.size, "1920x1080", "1080p by default");
+});
+
+await test("S37 zai-video-core: FAIL, no task id, SUCCESS-without-url, timeout, empty download all throw", async () => {
+  const { zaiVideoViaClient } = await import("../src/lib/tubeforge/providers/zai-video-core.ts");
+  type Core = typeof zaiVideoViaClient;
+  const run = async (client: unknown, opts: Record<string, unknown> = {}, fetchFn = S37_BIG) =>
+    zaiVideoViaClient(client as Parameters<Core>[0], { prompt: "pan", imagePngBase64: S37_PNG }, { model: "m", pollMs: 1, ...opts } as Parameters<Core>[2]);
+
+  const fails: Array<[string, Promise<unknown>]> = [
+    ["FAIL status", run(fakeZaiVideoClient([{ task_status: "FAIL" }]).client)],
+    ["no task id", run(fakeZaiVideoClient([], undefined).client)],
+    ["SUCCESS without url", run(fakeZaiVideoClient([{ task_status: "SUCCESS" }]).client)],
+    ["timeout", run(fakeZaiVideoClient([{ task_status: "PROCESSING" }]).client, { maxPolls: 2 })],
+    ["empty download", run(fakeZaiVideoClient([{ task_status: "SUCCESS", video_result: [{ url: "u" }] }]).client, {}, S37_TINY)],
+  ];
+  for (const [label, p] of fails) {
+    let err: unknown = null;
+    try { await p; } catch (e) { err = e; }
+    ok(err instanceof Error, `${label} throws (got ${String(err)})`);
+  }
+});
+
+await test("S37 zai-video-core: url fallback keys (video_url, url, video) all accepted", async () => {
+  const { zaiVideoViaClient } = await import("../src/lib/tubeforge/providers/zai-video-core.ts");
+  type Core = typeof zaiVideoViaClient;
+  const run = (script: Array<Record<string, unknown>>) =>
+    zaiVideoViaClient(
+      fakeZaiVideoClient(script, "task-1").client as Parameters<Core>[0],
+      { prompt: "pan", imagePngBase64: S37_PNG },
+      { model: "m", pollMs: 1, fetchFn: S37_BIG } as Parameters<Core>[2]
+    );
+  for (const key of ["video_url", "url", "video"]) {
+    const buf = await run([{ task_status: "SUCCESS", [key]: "https://cdn.example/v.mp4" }]);
+    ok(buf.length >= 10_000, `fallback key ${key} downloads`);
+  }
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

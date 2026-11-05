@@ -1270,3 +1270,50 @@ this entry.
 
 **Final gate:** tsc 0 · eslint 0 errors · 165/165 unit · s36 probe 38/38 ·
 queue PASS · 40/40 billing.
+
+## S37 — the z sdk is wired: i2v core, live-calibrated, previewed in the app (2026-11-05 UTC)
+
+The owner asked to "wire the z sdk to it so we can preview it". Discovery:
+the pipeline's i2v path was ALREADY SDK-wired (Stage 4's ensureSceneClip),
+but the provider adapter was a throwing STUB — the settings Test button
+and any imageToVideo caller on the default "zai" provider got "Z.ai video
+generation is currently handled in the pipeline, not here". Two real
+surfaces, one fake.
+
+- **Live calibration first.** A probe against the real gateway
+  (cogvideox-3, a 256×144 steelblue frame, quality "speed", 5s 1080p)
+  came back SUCCESS in ~2.8 min with video_result[0].url → a 4.9 MB h264
+  1920×1080 5.1s clip. That pinned the exact request/response shape: 
+  video.generations.create → {id, task_status} → async.result.query →
+  {task_status, video_result:[{url}]} (plus url fallback keys on other
+  model versions). Credentials resolve via the SDK's /etc/.z-ai-config
+  search path in this sandbox — the platform client path just works.
+- **The core.** `providers/zai-video-core.ts` — submit/poll/download
+  behind a STRUCTURAL client interface, so the unit suite drives every
+  path with a scripted fake: happy path (+ full body-shape asserts),
+  FAIL, no-task-id, SUCCESS-without-url, timeout, empty download, and
+  the three URL fallback keys. SDK-free module, zero side effects.
+- **Both callers share it.** zaiVideo = the stub, now real (the Test
+  button works); ensureSceneClip = its inline loop replaced by the core
+  (clip cache, 10s×60 window, aiCall retry untouched).
+- **The preview, for real.** Drove the app's own flow live: story video →
+  AI script (12 scenes) → director plan → approve → storyboard (12 SDK
+  image gens, 95–175 KB each) → TTS voiceover (12 wavs) → animated
+  scene-1 render. The i2v clip returned through the wired core and the
+  stitched preview (15.3 MB) played in the video dialog — genuine wave
+  motion from CogVideoX, not a Ken Burns pan. Browser-verified with a
+  playing <video src=…variant=preview>.
+- **Found live (pre-existing, recorded not fixed):** a director re-run
+  can die parsing the LLM's JSON (the first plan persists); a render
+  killed mid-flight and re-run by boot recovery fails "No tenant context
+  (runRenderJob)" — the recovery re-enqueue drops tenant scope for render
+  bodies; preview renders write no qcReport. All three are backlog, not
+  blockers.
+
+**Files:** `src/lib/tubeforge/providers/zai-video-core.ts` (NEW),
+`src/lib/tubeforge/providers/video.ts` (stub → real),
+`src/lib/tubeforge/render.ts` (inline loop → core),
+`scripts/test-unit.mts` (+3 S37 tests), TASKS.md (record), this entry.
+
+**Final gate:** tsc 0 · eslint 0 errors · **168/168 unit** (165 + 3) ·
+s36 probe 38/38 · queue PASS · 40/40 billing.
