@@ -112,6 +112,8 @@ const STAGE_LABEL: Record<string, string> = {
   stock: "stock b-roll",
   research: "Topic Radar scan",
   script: "script",
+  director: "director pass", // Stage 5 — was missing from this map until the
+  continuity: "continuity check", // S33 contract-drift fix caught the family
   qc: "quality check",
 };
 
@@ -184,7 +186,12 @@ async function runRecovery(): Promise<void> {
         });
 
         // Surface the interruption where the UI already looks for errors.
-        if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "slide", "verify", "comments", "upload", "short", "convert", "script", "stock", "qc"].includes(row.kind)) {
+        // (director/continuity joined in the S33 drift fix: their outputs are
+        // advisory reports, so there is no artifactLanded case — an
+        // interrupted pass simply tells the user to re-run. Unreachable today
+        // while every kind is handler-registered; this is the defense for the
+        // day one isn't.)
+        if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "slide", "verify", "comments", "upload", "short", "convert", "script", "stock", "qc", "director", "continuity"].includes(row.kind)) {
           const videoId = baseEntityId(row.entityId);
           const video = await rawDb.video.findUnique({ where: { id: videoId } });
           // Only set the error if the artifact never landed (completed after the row went stale).

@@ -8,9 +8,11 @@
 // queue + real worker process:
 //
 //   A. IN-PROCESS — the handler registry + payload plumbing:
-//      registerDefaultHandlers registers every resumable kind (and NOT the
-//      unimplemented "upload" kind), and a claimed handler receives the
-//      entityId + the PARSED Job.payload the route stored at enqueue time.
+//      registerDefaultHandlers registers every resumable kind — ALL 20
+//      JobKind values, exhaustively ("upload" joined in Stage 6; the old
+//      "!upload" assertion predated it) — and a claimed handler receives
+//      the entityId + the PARSED Job.payload the route stored at enqueue
+//      time.
 //
 //   B. WORKER PROCESS (a FRESH process = "the application restarted"):
 //      1. Seed tenants + Job rows that look exactly like jobs that died
@@ -24,10 +26,13 @@
 //         error about missing stock keys — not the old silent no-op where a
 //         composite "<videoId>#scene<N>" id made runStockRefresh findUnique
 //         null and quietly "finish").
-//      4. A kind WITHOUT a handler ("upload" — YouTube publishing is Stage 6
-//         and nothing enqueues it yet) stays "interrupted" with a readable
-//         error on the video row: the honest degradation, never a silent
-//         re-run or a zombie row.
+//      4. A kind WITHOUT a handler — probed with a SYNTHETIC "legacy-probe"
+//         kind, since Stage 6 registered "upload" and no real JobKind is
+//         unregistered anymore — stays "interrupted" with a readable error
+//         on the job row: the honest degradation, never a silent re-run or
+//         a zombie row. (Pre-S33-fix this probe used "upload" and had
+//         silently rotted: the suite is not in CI, so the Stage 6
+//         registration never updated it.)
 //
 // Run: npm run test:queue     (needs the local SQLite DB; not in CI)
 
@@ -79,11 +84,24 @@ async function phaseA(): Promise<void> {
   initQueue("web");
 
   // Registry completeness — every kind the routes start must be resumable.
+  // resumableKinds() is registry-derived (S33 contract fix), so the loop is
+  // a tautology by construction; the real pin is exhaustiveness — all 20
+  // JobKind values registered, no strays.
   const kinds = handlerKinds();
   for (const kind of resumableKinds()) {
     ok(kinds.includes(kind), `handler registered for "${kind}"`);
   }
-  ok(!kinds.includes("upload"), `"upload" (Stage 6, never enqueued) stays unregistered`);
+  const allKinds = [
+    "script", "research", "stock", "voiceover", "storyboard", "scene",
+    "render", "short", "convert", "verify", "comments", "director",
+    "continuity", "thumbnail", "variants", "slide", "qc", "upload",
+    "portrait", "poses",
+  ];
+  ok(
+    allKinds.every((k) => kinds.includes(k)),
+    "all 20 JobKind values are handler-registered (upload since Stage 6)"
+  );
+  ok(kinds.length === allKinds.length, `no stray handler kinds (got ${kinds.length})`);
 
   // Payload delivery — spy on one kind, enqueue with a payload, claim it.
   const run = `p${Date.now().toString(36)}`;
@@ -247,13 +265,15 @@ async function phaseB(): Promise<void> {
   });
 
   // A third row WITHOUT a handler kind — must stay interrupted (the honest
-  // degradation), never silently re-run. "upload" (YouTube publishing,
-  // Stage 6) is the only kind nothing registers today.
+  // degradation), never silently re-run. Since Stage 6 registered "upload"
+  // (a crashed publish now resumes with the user's title/privacy picks), no
+  // real JobKind is unregistered anymore — so the no-handler branch is
+  // probed with a SYNTHETIC kind a real route could never enqueue.
   const orphanNoHandler = await db.job.create({
     data: {
       organizationId: org.id,
       userId: user.id,
-      kind: "upload",
+      kind: "legacy-probe",
       entityId: video.id,
       status: "running",
       claimedBy: "web:4194304:deadbeef",
@@ -279,7 +299,7 @@ async function phaseB(): Promise<void> {
   try {
     // ---- 3. wait for the resume to happen ---------------------------------
     let resumed: { status: string; claimedBy: string | null; attempts: number } | null = null;
-    let interrupted: { status: string } | null = null;
+    let interrupted: { status: string; error: string | null } | null = null;
     let perScene: { status: string; error: string | null } | null = null;
     let perSceneVideoError: string | null = null;
     const deadline = Date.now() + 60_000;
@@ -291,7 +311,7 @@ async function phaseB(): Promise<void> {
       });
       interrupted = await db.job.findUnique({
         where: { id: orphanNoHandler.id },
-        select: { status: true },
+        select: { status: true, error: true },
       });
       perScene = await db.job.findUnique({
         where: { id: orphanPerScene.id },
@@ -327,10 +347,16 @@ async function phaseB(): Promise<void> {
       interrupted?.status === "interrupted",
       `non-handler kind interrupted honestly, not re-run (got "${interrupted?.status}")`
     );
+    ok(
+      typeof interrupted?.error === "string" &&
+        interrupted.error.includes("legacy-probe") &&
+        interrupted.error.includes("restarted"),
+      `the interrupted row carries the readable restart message (got "${interrupted?.error}")`
+    );
     const videoAfter = await db.video.findUnique({ where: { id: video.id } });
     ok(
-      Boolean(videoAfter?.error?.includes("YouTube upload")),
-      `the visible error is attributed to the INTERRUPTED upload stage, not the resumed stock job (got "${videoAfter?.error}")`
+      videoAfter?.error == null,
+      `the synthetic kind has no video surface — the video row stays clean (got "${videoAfter?.error}")`
     );
   } finally {
     worker.kill("SIGTERM");

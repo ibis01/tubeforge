@@ -1236,3 +1236,18 @@ full-history secret scan; the gate's first fire caught ubuntu-latest's move to
 ubuntu-24.04 → run `41980112353` fully green (first complete e2e on main
 ever). Push protection + secret scanning + Dependabot security updates ON;
 18 dependency alerts surfaced for burn-down.
+
+### Queue-contract drift fix (2026-11-05, post-S33)
+
+The Stage 7.2-era queue-contract gap had NOT been absorbed upstream — a fresh
+S33 re-clone showed `resumableKinds()` still listing 18 of 20 kinds (director +
+continuity missing since Stage 5) with the unit test mirroring the same stale
+list, and test-queue.mts (not in CI) still asserting "upload" was unregistered
+two stages after Stage 6 registered it. Production crash recovery was never
+wrong (it checks the live handler registry); the tests pinning it were. Fix:
+`resumableKinds()` is now DERIVED from the registry (cannot drift), the unit
+test pins all 20 kinds exhaustively, test-queue Phase B probes the no-handler
+branch with a synthetic "legacy-probe" kind, and the jobs.ts STAGE_LABEL /
+recovery-surface omissions of the Stage 5 kinds are closed. Gate: tsc 0 ·
+146/146 unit · queue PASS · 40/40 billing. Full narrative in the worklog
+("Queue-contract drift fix").

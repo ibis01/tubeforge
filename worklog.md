@@ -1114,3 +1114,17 @@ The owner supplied a fresh workflow-scoped PAT; this entry records what happened
 - **Dependabot's opening statement.** Turning security updates on immediately surfaced **18 open alerts (11 high / 4 medium / 3 low)**: `python-multipart` ×7 (the voice-server / preview-app Python pins), `sharp` ×3, `js-yaml` ×4, plus `deepmerge-ts`, `minimatch`, `prismjs`. The burn-down list is live at /security/dependabot; most should resolve with routine dependency bumps — P1-7's `.github/dependabot.yml` (weekly version PRs) is the standing follow-up.
 
 - **PAT hygiene (standing rule).** The workflow-scoped PAT used for these pushes transited the chat session in plaintext — rotate/revoke it now that the push is done, exactly as its predecessor was.
+
+## Queue-contract drift fix — resumableKinds() now derives from the registry — 2026-11-05
+
+Source: the follow-up question to the 2026-11-05 remote audit ("has the Stage 7.2-era queue-contract fix landed?"). It had not — and a fresh S33 re-clone showed the defect had shape-shifted, not healed.
+
+- **The drift.** `resumableKinds()` (queue-handlers.ts) was a hand-maintained literal, and the Stage 5 kinds "director" + "continuity" were never added to it: 18 of 20 route-started kinds listed. The unit contract test mirrored the same stale literal — green while pinning the wrong contract. Worse, `scripts/test-queue.mts` (not in CI) had rotted the OTHER way: Phase A still asserted "!upload stays unregistered" and Phase B still seeded an "upload" orphan expecting "interrupted" — both false since Stage 6 registered the upload handler. Production recovery was never wrong (`reenqueueIfHandlerKind` checks the live registry, not the list); every test that claimed to pin the contract was.
+
+- **The fix — make the contract self-enforcing.** `resumableKinds()` now calls `registerDefaultHandlers()` (idempotent) and returns `handlerKinds()` — the same map boot recovery consults — so the list can never drift from the registrations again. The unit test's expected literal is now all 20 JobKind values (exhaustiveness, not recall). test-queue.mts Phase A pins all-20-registered + no strays; Phase B probes the no-handler degradation with a SYNTHETIC "legacy-probe" kind (no real JobKind is unregistered anymore), asserting the readable restart message on the job row and a clean video row.
+
+- **The drift family, closed.** jobs.ts STAGE_LABEL was also missing director/continuity (an interrupted director pass would read "this director was running" via the raw-kind fallback), and the recovery surface-the-error list omitted them too. Both fixed; both branches unreachable today (every kind is handler-registered) — defense for the day one isn't.
+
+**Files:** `src/lib/tubeforge/queue-handlers.ts` (resumableKinds registry-derived), `scripts/test-unit.mts` (contract test → 20 kinds, exhaustive), `scripts/test-queue.mts` (Phase A exhaustiveness + Phase B legacy-probe), `src/lib/tubeforge/jobs.ts` (STAGE_LABEL + recovery surface list), `TASKS.md` (record), this entry.
+
+**Final gate:** tsc 0 · eslint 0 errors (65 warnings on the touched files — pre-existing classes) · **146/146 unit** · **queue integration PASS** (Phases A + B incl. the new assertions) · **40/40 billing**. Push status: pending — committed locally, push awaits a fresh scoped PAT per the standing hygiene rule (P0-1).

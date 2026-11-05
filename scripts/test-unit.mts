@@ -1292,16 +1292,19 @@ await test("queue: splitEntityId parses scene/slide composite ids, rejects garba
 
 await test("queue: resumableKinds covers every kind the routes start", async () => {
   // Static contract: the routes call startJob with these kinds (grep-checked
-  // in review); every one must be resumable after a crash. Stage 6 wired the
-  // final two unregistered kinds — "qc" (re-run the QC battery against the
-  // existing final.mp4) and "upload" (YouTube publish) — so a crashed upload
-  // resumes with the SAME title/description the user picked.
+  // in review); every one must be resumable after a crash. Since the S33
+  // contract fix, resumableKinds() is DERIVED from the handler registry, so
+  // this test can no longer pass with a stale list — the literal below pins
+  // exhaustiveness: all 20 JobKind values are route-started AND
+  // handler-registered (director + continuity joined in Stage 5, upload in
+  // Stage 6; the pre-fix copy listed only 18 and enshrined the drift).
   const { resumableKinds } = await import("../src/lib/tubeforge/queue-handlers.ts");
   const kinds = resumableKinds();
   const expected = [
     "script", "research", "stock", "voiceover", "storyboard", "scene",
     "render", "short", "convert", "verify", "comments", "thumbnail",
     "variants", "slide", "portrait", "poses", "qc", "upload",
+    "director", "continuity",
   ];
   for (const k of expected) {
     ok(kinds.includes(k), `"${k}" is resumable`);

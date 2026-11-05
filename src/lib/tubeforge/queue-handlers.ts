@@ -23,7 +23,7 @@ import fs from "fs";
 import path from "path";
 import { db } from "./tenant-db";
 import { assertCtx } from "./tenant";
-import { registerJobHandler } from "./queue";
+import { registerJobHandler, handlerKinds } from "./queue";
 import { runScriptJob } from "./script-job";
 import { runResearchScan } from "./research";
 import { parseScenes } from "./story";
@@ -377,26 +377,16 @@ export function registerDefaultHandlers(): void {
   registerJobHandler("poses", (characterId) => runPosesJob(characterId));
 }
 
-/** Test helper — the kinds this build can resume after a crash. */
+/** The kinds this build can resume after a crash — the live handler
+ *  registry itself (boot recovery's reenqueueIfHandlerKind checks the same
+ *  map), so this list can never drift from the registrations above.
+ *
+ *  History: this used to be a hand-maintained literal, and it drifted —
+ *  "director" + "continuity" were registered in Stage 5 but never added
+ *  here, and the unit contract test mirrored the same stale literal, so it
+ *  stayed green while covering 18 of 20 route-started kinds. Production
+ *  recovery was never wrong (it checks the registry); the TEST was. */
 export function resumableKinds(): JobKind[] {
-  return [
-    "script",
-    "research",
-    "stock",
-    "voiceover",
-    "storyboard",
-    "scene",
-    "render",
-    "short",
-    "convert",
-    "verify",
-    "comments",
-    "thumbnail",
-    "variants",
-    "slide",
-    "portrait",
-    "poses",
-    "qc",
-    "upload",
-  ];
+  registerDefaultHandlers(); // idempotent Map.set per kind — no-op after boot
+  return handlerKinds();
 }
