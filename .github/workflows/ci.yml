@@ -1,14 +1,20 @@
-# TubeForge CI (T-1.5, restored)
+# TubeForge CI (T-1.5, restored; e2e-on-main + gitleaks since S33)
 #
-# Contract: the `check` job runs on every push/PR; the `e2e` job runs on PRs
-# only (Playwright boots its own dev server via playwright.config.ts).
+# Contract:
+#   secrets — gitleaks scans every push/PR for leaked credentials (roadmap §4.1)
+#   check   — typecheck + lint + unit suite, on every push/PR
+#   e2e     — Playwright suite, on PRs AND on pushes to main (S33: the repo
+#             landed 240+ commits by direct push with zero PRs, so the PR-only
+#             gate meant the 5 suites — including cross-tenant isolation —
+#             never ran in CI; they now run on every push to main)
 #
-# NOTE: `npm run test:billing` is intentionally NOT part of CI — it needs the
-# local SQLite DB with seeded plans (see scripts/test-billing.mts header).
+# NOTE: `npm run test:billing` is intentionally NOT part of CI yet — it needs
+# a seeded SQLite database (see scripts/test-billing.mts header). Wiring it
+# in (deterministic seed inside the job) is tracked in the S33+ backlog (P1).
 # The unit suite renders its QC fixtures with ffmpeg, so the runner needs it.
 #
 # Pushing this file requires a PAT with `workflow` scope (GitHub rejects
-# workflow files otherwise). See worklog T-1.5 / T-5.2.
+# workflow files otherwise). See worklog T-1.5 / T-5.2 / S33.
 
 name: CI
 
@@ -22,6 +28,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history — gitleaks scans all commits
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          # Free for personal (user-owned) repositories; if this repo ever
+          # moves to an org, GITLEAKS_LICENSE becomes required.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   check:
     name: Typecheck · Lint · Unit
     runs-on: ubuntu-latest
@@ -53,7 +74,9 @@ jobs:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
     needs: check
-    if: github.event_name == 'pull_request'
+    # S33: run on PRs AND on pushes to main (was PR-only — never fired,
+    # because this repository has no pull-request history).
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4

@@ -1121,3 +1121,111 @@ Still outstanding before commercial launch (operational): real Stripe test-mode 
 | 7 — Quality assurance & commercial launch | ✅ Done (T-7.7 — code side) | pipeline e2e + backup test + mobile sweep + k6 + Stripe billing scaffold + reconciliation tests |
 
 All 33 weeks of the ROADMAP are covered at the code level. The commercial-launch items (real beta, real YouTube, real Stripe Checkout, real k6 staging run) are operational follow-ups against a deployed environment.
+
+---
+
+## S-series index (S1 → S32) — the studio era — added 2026-11-05 (S33)
+
+`ROADMAP.md` and this file freeze at Stage 7.2 (2026-11-02) while the
+repository moved ~30 stages ahead, documented only in commit subjects and
+evidence scripts. This index closes that drift (improvement roadmap §5.3):
+stage, headline commit, one-line intent, and the evidence pair that
+re-verifies it. Supporting commits within a stage are parenthesized.
+
+| Stage | Commit | Intent | Evidence |
+|---|---|---|---|
+| S1 | `32ea155` | Restorable studio smoke + fixture restore tooling | `studio-smoke.mjs` · `studio-restore.mjs` · `inspect-fixtures.mts` |
+| S2 | `7d30aa3` (+`57828c0`, `34b3f96`, `32da782`) | Per-boundary transition engine; the render consumes the timeline doc; inspector honesty flip | `s2-automation-probe.mts` · `s2-render-evidence.mts` |
+| S3 | `612530b` (+`41b71e0`, `38706a2`, `ab6f727`, `68ddc23`, `74ca9af`) | Creative fields: chroma key, corner-logo PIP, export presets; transcript editing; autosave; AI assist | `s3-unit-probe.mts` |
+| S4 | `8f9e9c2` (+`7037eb7`, `94697b0`) | Art actions in the scene inspector (magic-byte format guard) | `s4-unit-probe.mts` |
+| S5 | `9fa91e8` | The sound stage: per-scene cue + ambience bed | `s5-unit-probe.mts` · `s5-route-e2e.mjs` |
+| S6 | `c02091d` | The words' face: caption styles the render burns | `s6-unit-probe.mts` |
+| S7 | `57ab980` (+`2243cba`) | The score: the music pick the render lays under; the bed's-one-truth audit | `s7-unit-probe.mts` · `s7-route-e2e.mjs` |
+| S8 | `3ddf94a` | The voice: the narrator pick re-reads the pipeline | `s8-unit-probe.mts` · `s8-route-e2e.mjs` |
+| S9 | `87b4940` | The poster: the scene the studio picks, the cover depicts | `s9-unit-probe.mts` |
+| S10 | `5e7b288` | The short: the moment the studio picks, the cut frames | `s10-unit-probe.mts` · `s10-route-e2e.mjs` |
+| S11 | `1b5a303` | The pace: the tempo the studio picks, the read re-derives | `s11-unit-probe.mts` · `s11-route-e2e.mjs` |
+| S12 | `c09b061` | The look: the style the studio picks, the cover wears | `s12-unit-probe.mts` · `s12-route-e2e.mjs` |
+| S13 | `788ad0d` | The frame: the aspect shape the studio picks, the render draws | `s13-unit-probe.mts` · `s13-route-e2e.mjs` |
+| S14 | `04ccfe9` | The delivery: the grade the studio picks, the render encodes at | `s14-unit-probe.mts` · `s14-route-e2e.mjs` |
+| S15 | `842df70` | The motion: the camera and the seam the studio picks, the render draws | `s15-unit-probe.mts` · `s15-route-e2e.mjs` |
+| S16 | `dece0dd` | The account: the password the studio rotates, the sessions fall in line | `s16-unit-probe.mts` · `s16-route-e2e.mjs` (+`s16-owner-reseed.mts`) |
+| S17 | `0c1b6fc` | The ship: the real publish flow replaces the fossil; the QC gate gets its caller | `s17-unit-probe.mts` · `s17-route-e2e.mjs` |
+| S18 | `5e13f76` | The recovery: the login screen's forgotten half (reset + fresh door) | `s18-unit-probe.mts` · `s18-route-e2e.mjs` (+`s18-login-wipe.mts`) |
+| S19 | `d2099f8` | The quiet door: the fresh install stops screaming in its own log | `s19-quiet-door.mjs` |
+| S20 | `b9d205f` | The keyring: the 90-day bearer finally answers to its owner (API-token registry migration) | `s20-unit-probe.mts` · `s20-route-e2e.mjs` |
+| S21 | `27945c5` | The confirmed address: the verification link lands, the promise gets a route | `s21-unit-probe.mts` · `s21-route-e2e.mjs` |
+| S22 | `1c1a515` | The world gets a door: the World library's surface; the end-state law closes its leaks | `s22-unit-probe.mts` · `s22-route-e2e.mjs` |
+| S23 | `b73c15e` | The account surface: the usage dashboard gets its dashboard; the GDPR pair gets a front door | `s23-unit-probe.mts` · `s23-route-e2e.mjs` |
+| S24 | `9d82cf1` | The money door: Stripe checkout + customer portal; the plan card stops being read-only | `s24-unit-probe.mts` · `s24-route-e2e.mjs` |
+| S25 | `a987379` | The excavation: the dead voice-engine pair gets buried; the day-one PWA gets wired | `s25-unit-probe.mts` · `s25-route-e2e.mjs` |
+| S26 | `8b3ca48` | The e2e suites that never ran finally run — and they leave nothing behind | `e2e/*.spec.ts` (5 suites) |
+| S27 | `42f0253` | The $5 door: real token metering, versioned pricing, the hard experiment ceiling | `s27-unit-probe.mts` · `s27-route-e2e.mjs` |
+| S28 | `28cd69c` | The door the preview couldn't open (session-cookie fix) | `s28-unit-probe.mts` · `s28-route-e2e.mjs` |
+| S29 | `e67b0b0` | The chain's pure invariants: parseScenes hand-off, scene file naming, export-ZIP laws, parseSrt | `s29-unit-probe.mts` · `s29-route-e2e.mjs` |
+| S30 | `18ba0af` | The wire-up: the front door stops eating the preview's mutations; the SDK proves it live | `s30-unit-probe.mts` · `s30-route-e2e.mjs` |
+| S31 | `d48d255` | The world rule: every storyboard frame must belong to the video's story | `s31-unit-probe.mts` |
+| S32 | `0491934` | The $5 door's durable ledger, fail-closed boot, and pricing provenance | `s32-unit-probe.mts` · `s32-route-e2e.mjs` · `s32-durability-check.mjs` |
+
+Adjacent hardening commits outside the stage numbering: the creative layer
+(`e0c4450` grade/titles/camera keys, `add0350` voice-lane speed/fades/waveforms),
+the missing AuthGate keystore (`f0155ca`), the Director provider
+reconciliation (`4d71d76`), the owner's password-recovery script (`24845a5`,
+`s13-owner-password-reset.mts`), and the Scene Studio upload-route restore
+(`b64c47a`).
+
+---
+
+## S33+ backlog — the improvement roadmap (2026-11-05)
+
+Source: the improvement roadmap assessment of the S32 snapshot (fresh
+inspection at commit `0491934`, 2026-11-05). Full narrative in
+`download/TubeForge_Improvement_Roadmap.docx` (delivery copy); this is the
+executable ledger. The verdict it reached: **feature-complete for a paid
+launch, operations-incomplete** — the remaining work is release engineering
+and operations, not product redesign.
+
+### Priority 0 — security & launch blockers (Sprint 1)
+
+| Item | Status | Notes |
+|---|---|---|
+| P0-1 Rotate the exposed GitHub PAT; enable secret-scanning push protection | ⏳ owner action | The worklog has flagged the plaintext PAT since Stage 6; rotation is outside the repo's reach. Push protection is a repository-settings toggle. |
+| P0-2 CI: e2e job runs on push to main (was PR-only — never fired, zero PRs in history) | ✅ S33 | `.github/workflows/ci.yml` |
+| P0-3 CI: gitleaks secret scan on every push/PR | ✅ S33 | `.github/workflows/ci.yml` `secrets` job |
+| P0-4 README.md (the public front door) | ✅ S33 | Positioning, quickstart, tests, repo tour, docs index, deployment story |
+| P0-5 LICENSE decision | ⏳ owner decision | Proprietary / dual / open core — business decision; without a file, all rights reserved (documented in README) |
+| P0-6 One deployment topology + staging environment | ✅ decision landed (S33) → provisioning ⏳ | `DEPLOYMENT.md`: Fly (web+worker) + Neon + R2; `vercel.json` demoted to preview-only. Staging spec included; provisioning needs accounts. |
+| P0-7 Observability: Sentry (or GlitchTip) via `instrumentation.ts`, pino structured logs with request ids, external uptime monitor | ⏳ S34 candidate | Code-side wiring is in-repo work; the accounts are owner actions. |
+| P0-8 Production Postgres backups | ✅ S33 (tooling) → scheduling ⏳ | `scripts/backup-postgres.sh` (verified dump + checksum + off-box upload + retention) + `docs/runbooks/backup-restore.md` (nightly cron + quarterly restore drill). First drill pending staging. |
+
+### Priority 1 — engineering quality & CI depth (Sprint 2)
+
+| Item | Status | Notes |
+|---|---|---|
+| P1-1 Billing suite in CI (deterministic seed inside the job) | ⏳ | `scripts/test-billing.mts` header documents the seeding requirement |
+| P1-2 Nightly CI job: Playwright + the durable s-series route probes | ⏳ | The per-stage probes currently run on demand only |
+| P1-3 `next build` in CI (7 GB runners can build; the 4 GB sandbox cannot) | ⏳ | Catches build-only failures before the platform |
+| P1-4 Warning burn-down (0 errors / ~295+) — structured logger first (deletes the largest class), then react-hooks in high-exposure views | ⏳ | Rides P0-7 |
+| P1-5 Coverage baseline (c8) on the money paths: billing / spend / render | ⏳ | |
+| P1-6 Stateful rate limiting + login lockout (Postgres sliding window; the in-process Map wipes on every deploy) | ⏳ | R-X risk; invisible until multi-instance |
+| P1-7 Release engineering: tag v0.1.0 at staging cutover, v0.9.0 at beta, v1.0.0 at paid launch; GitHub Releases cut from worklog entries; Dependabot weekly | ⏳ | |
+
+### Priority 2 — product growth & monetization (Sprint 3)
+
+| Item | Status | Notes |
+|---|---|---|
+| P2-1 (S34) Close the spend-gate estimator: chars-per-3 token estimate → real metering where the provider returns usage; flip `PRICING_STATUS` off provisional once proven against real invoices | ⏳ | Deferred by S32's own commit message |
+| P2-2 Unit-economics report from the existing ledger (cost per rendered video by niche/length/voice/aspect, joined against plan revenue) | ⏳ | Data already accumulating in SpendReservation + UsageRecord |
+| P2-3 Onboarding instrumentation (register → first script → storyboard → render → export) + template gallery (documentary / shorts / explainer) | ⏳ | Master plan's 15-minute first-video metric |
+| P2-4 Email deliverability (SPF/DKIM/DMARC, transactional provider if needed) + terms & privacy pages (Stripe live-mode requirement) | ⏳ | |
+| P2-5 Voice-server queueing: visible position, per-user concurrency cap, GPU host when queue depth says so | ⏳ | |
+| P2-6 Beta cohort (5–10 users) with SUS scoring (target ≥ 75) + mobile re-check on real devices | ⏳ | Stage 4 gate never run against real users |
+
+### S33 record (2026-11-05)
+
+Sprint 1 kickoff — the in-repo half of Priority 0: CI e2e-on-main + gitleaks
+(P0-2, P0-3), README (P0-4), DEPLOYMENT.md topology decision (P0-6),
+backup-postgres.sh + restore-drill runbook (P0-8), and this S-series index +
+S33+ backlog (P1-doc-drift). Final gate in the worklog. The owner-action
+items (PAT rotation, push protection, LICENSE, account provisioning) are
+flagged above and in the delivery message.
