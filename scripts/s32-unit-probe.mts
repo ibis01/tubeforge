@@ -91,12 +91,21 @@ console.log("\n§1 pricing provenance");
   check("PRICING_SOURCES covers every gpt-6 model in the registry",
     ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-cyber", "gpt-6-rosalind", "gpt-rosalind-research", "gpt-rosalind-discovery", "gpt-6-astra-law"]
       .every((m) => PRICING_SOURCES[0].covers.includes(m as never)));
-  check("PRICING_SOURCES carries the legacy survey entry for gpt-4.1/gpt-4o",
-    ["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o"]
-      .every((m) => PRICING_SOURCES[1].covers.includes(m as never)));
-  // The source date is NOT future-dated relative to the audit (2026-11-04).
-  check("the OpenAI source retrievedAt is 2026-11-04 (audit's date, not future)",
-    PRICING_SOURCES[0].retrievedAt === "2026-11-04", PRICING_SOURCES[0].retrievedAt);
+  // The S34 re-fetch (2026-11-06) reconciled every current-generation row.
+  check("the OpenAI source retrievedAt is 2026-11-06 (the S34 re-fetch that reconciled every row)",
+    PRICING_SOURCES[0].retrievedAt === "2026-11-06", PRICING_SOURCES[0].retrievedAt);
+
+  // S34 reconciliation aftermath: the legacy gpt-4.1/gpt-4o rows are GONE
+  // (their cited source 404s and OpenAI's live page no longer lists them —
+  // unverifiable-cheap under-prices the gate). The entry is a tombstone, and
+  // a legacy id must price at the flagship fallback.
+  check("the legacy source entry is a TOMBSTONE (covers emptied, note marks it)",
+    (PRICING_SOURCES[1].covers as readonly string[]).length === 0 &&
+      /TOMBSTONE/.test(PRICING_SOURCES[1].note));
+  check("a legacy model id prices at the flagship FALLBACK (conservative over-reserve)",
+    priceForModel("gpt-4.1").in === priceForModel("gpt-6-astra").in &&
+      priceForModel("gpt-4o-mini").out === priceForModel("gpt-6-astra").out,
+    { legacy: priceForModel("gpt-4.1"), fallback: priceForModel("gpt-6-astra") });
 
   // With the env override OFF, pricingVerified() returns false.
   const saved = process.env.TUBEFORGE_PRICING_VERIFIED;

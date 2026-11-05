@@ -3324,6 +3324,104 @@ suiteStart("S2 honest mix: per-boundary transitions");
   });
 }
 
+// ---------- S34: spend-gate estimator — script-aware floors + per-hold usage slices ----------
+
+await test("estimateInputTokens: the ASCII chars/3 law is unchanged", async () => {
+  const { estimateInputTokens } = await import("../src/lib/tubeforge/spend.ts");
+  eq(estimateInputTokens(""), 0, "empty text → 0");
+  eq(estimateInputTokens("hello world"), 4, "11 ASCII chars → ceil(11/3) = 4");
+  eq(estimateInputTokens("a".repeat(6000)), 2000, "6000 ASCII chars → 2000 (the S27 law)");
+  eq(estimateInputTokens('{"scenes":[{"index":1}]}'), 8, "24 JSON chars → ceil(24/3) = 8 — JSON rides the same law");
+});
+
+await test("estimateInputTokens: non-Latin scripts price ABOVE chars/3 (the S34 fix)", async () => {
+  const { estimateInputTokens } = await import("../src/lib/tubeforge/spend.ts");
+  // The pre-S34 bug: "你好世界".length 4 → chars/3 = 2 tokens, but a real
+  // tokenizer bills ~4-6 for CJK — the $5 law broke on non-English content.
+  eq(estimateInputTokens("你好世界"), 6, "4 CJK chars → ceil(4×1.5) = 6");
+  eq(estimateInputTokens("あいうえお"), 8, "5 kana → ceil(5×1.5) = 8");
+  eq(estimateInputTokens("한국어"), 5, "3 Hangul syllables → ceil(3×1.5) = 5");
+  eq(estimateInputTokens("ก".repeat(10)), 15, "Thai → 1.5/char");
+  eq(estimateInputTokens("好".repeat(6000)), 9000, "6000 CJK chars → 9000 (was 2000 — the 4.5x under-reserve)");
+  eq(estimateInputTokens("Привет"), 6, "Cyrillic → 1/char (6 chars, real ratio 2-4 ch/tok so 1/char is ≥)");
+  eq(estimateInputTokens("مرحبا"), 5, "Arabic → 1/char");
+  eq(estimateInputTokens("café"), 2, "accented Latin: 3 ASCII → 1, é → 1");
+});
+
+await test("estimateInputTokens: astral plane (emoji) counts as surrogate pairs at 2 tokens each", async () => {
+  const { estimateInputTokens } = await import("../src/lib/tubeforge/spend.ts");
+  eq(estimateInputTokens("😀😀"), 4, "2 astral emoji → 2×2 = 4");
+  eq(estimateInputTokens("hi😀"), 3, "2 ASCII → 1, one emoji → 2");
+  // JSON-escaped emoji are ASCII escape text — the same law prices them at
+  // /3, which still exceeds the ~2-3 tokens an unescaped emoji bills.
+  eq(estimateInputTokens('"\\ud83d\\ude00"'), 5, "14 escape chars → ceil(14/3) = 5");
+});
+
+await test("estimateInputTokens: mixed-script text sums per class", async () => {
+  const { estimateInputTokens } = await import("../src/lib/tubeforge/spend.ts");
+  // 2 ASCII → 1; 2 CJK → 3; 1 emoji → 2 — total 6, every class at its own floor.
+  eq(estimateInputTokens("hi你好😀"), 6, "ascii+cjk+astral mix");
+});
+
+await test("estimateDispatchMicroUsd: same-length CJK input reserves strictly more than ASCII", async () => {
+  const { estimateDispatchMicroUsd } = await import("../src/lib/tubeforge/spend.ts");
+  // Spaced English — a bare "aaaa…" run would be stripped as base64 before
+  // the token math (the estimator's own heavy-payload rule), so the ASCII
+  // side uses real prose shape.
+  const ascii = estimateDispatchMicroUsd("gpt-6.1-sol", ["hello world ".repeat(500)]);
+  const cjk = estimateDispatchMicroUsd("gpt-6.1-sol", ["你好".repeat(3000)]);
+  ok(cjk > ascii, `CJK dispatch reserves more (ascii ${ascii}µ$ < cjk ${cjk}µ$)`);
+  // The input-side delta: 9000 vs 2000 tokens, each at 2 µ$ ($2 per 1M) =
+  // exactly 14000µ$ (the output half is priced identically in both).
+  eq(cjk - ascii, 14_000, "delta is exactly the 7000 extra input tokens at 2 µ$ each");
+  // Image floor unchanged: one explicit image adds the 4000-token floor at
+  // the model's input price.
+  const withImage = estimateDispatchMicroUsd("gpt-6.1-sol", ["hello world ".repeat(500)], 1);
+  eq(withImage - ascii, 8000, "one image → 4000 tokens × 2 µ$ = 8000µ$");
+});
+
+await test("spend sink: per-hold slices — baseline + usageSinceBaseline", async () => {
+  const { withCtx } = await import("../src/lib/tubeforge/tenant.ts");
+  const { emitUsage, sinkBaseline, usageSinceBaseline, drainUsage } = await import(
+    "../src/lib/tubeforge/spend.ts"
+  );
+  await withCtx({ userId: "u-s34", organizationId: "o-s34", role: "owner" }, async () => {
+    // Fresh request: nothing emitted.
+    eq(sinkBaseline(), 0, "fresh request → baseline 0");
+    eq(usageSinceBaseline(0), undefined, "nothing emitted → undefined (settle falls to estimate)");
+
+    // Dispatch A emits its usage; A's hold (baseline 0) reads exactly it.
+    emitUsage({ inputTokens: 100, outputTokens: 50 });
+    eq(sinkBaseline(), 1, "one entry after A");
+    const a = usageSinceBaseline(0);
+    ok(a && a.inputTokens === 100 && a.outputTokens === 50, "A's slice is A's usage");
+
+    // Dispatch B: baseline captured AFTER A's entry. B emits nothing (a
+    // provider that answered without a usage block) — B's slice is undefined,
+    // NOT a stale read of A's usage. This is the exact pre-S34 defect.
+    const bBaseline = sinkBaseline();
+    eq(bBaseline, 1, "B's baseline sits after A's entry");
+    eq(usageSinceBaseline(bBaseline), undefined, "no-usage dispatch settles at the estimate, not A's stale usage");
+
+    // B' emits TWO entries (an internally retried transport, both attempts
+    // billed) — the slice sums both.
+    emitUsage({ inputTokens: 40, outputTokens: 10 });
+    emitUsage({ inputTokens: 60, outputTokens: 20 });
+    const bp = usageSinceBaseline(bBaseline);
+    ok(bp && bp.inputTokens === 100 && bp.outputTokens === 30, "multi-emit slice sums every billed attempt");
+
+    // The request-level drain still sees everything (UsageRecord row).
+    const drained = drainUsage();
+    ok(drained && drained.inputTokens === 200 && drained.outputTokens === 80, "drainUsage sums the whole request");
+    eq(sinkBaseline(), 0, "drain clears the sink");
+  });
+
+  // Outside a request scope the sink no-ops (platform path).
+  eq(sinkBaseline(), 0, "no ctx → baseline 0");
+  emitUsage({ inputTokens: 5, outputTokens: 5 });
+  eq(usageSinceBaseline(0), undefined, "no ctx → usageSinceBaseline undefined");
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

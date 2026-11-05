@@ -1214,7 +1214,7 @@ and operations, not product redesign.
 
 | Item | Status | Notes |
 |---|---|---|
-| P2-1 (S34) Close the spend-gate estimator: chars-per-3 token estimate → real metering where the provider returns usage; flip `PRICING_STATUS` off provisional once proven against real invoices | ⏳ | Deferred by S32's own commit message |
+| P2-1 (S34) Close the spend-gate estimator: chars-per-3 token estimate → real metering where the provider returns usage; flip `PRICING_STATUS` off provisional once proven against real invoices | 🟡 S34 estimator closed · pricing source-reconciled · invoice proof pending | Script-aware input floors (CJK 1.5 tok/char — the old chars/3 under-reserved a CJK pass 4.5x), per-hold usage slices (no stale cross-dispatch reads, multi-attempt sums), legacy gpt-4.1/gpt-4o rows REMOVED (cited source 404, OpenAI page no longer lists them — legacy ids price at the conservative flagship fallback). OpenAI pricing page re-fetched 2026-11-06: all 10 current rows matched exactly. `PRICING_STATUS` stays provisional until the first real invoices reconcile the ledger — then a one-word flip. |
 | P2-2 Unit-economics report from the existing ledger (cost per rendered video by niche/length/voice/aspect, joined against plan revenue) | ⏳ | Data already accumulating in SpendReservation + UsageRecord |
 | P2-3 Onboarding instrumentation (register → first script → storyboard → render → export) + template gallery (documentary / shorts / explainer) | ⏳ | Master plan's 15-minute first-video metric |
 | P2-4 Email deliverability (SPF/DKIM/DMARC, transactional provider if needed) + terms & privacy pages (Stripe live-mode requirement) | ⏳ | |
@@ -1251,3 +1251,17 @@ branch with a synthetic "legacy-probe" kind, and the jobs.ts STAGE_LABEL /
 recovery-surface omissions of the Stage 5 kinds are closed. Gate: tsc 0 ·
 146/146 unit · queue PASS · 40/40 billing. Full narrative in the worklog
 ("Queue-contract drift fix").
+
+### S34 record (2026-11-06)
+
+The spend-gate estimator close-out (roadmap P2-1 / S32's deferred Gap C).
+Script-aware input floors fix the estimate≥actual law for non-Latin text
+(chars/3 under-reserved CJK ~4.5x); per-hold usage slices fix the settle
+path's stale cross-dispatch reads and partial multi-attempt sums; the
+pricing registry was reconciled against the live OpenAI page (all 10
+current rows exact, retrievedAt 2026-11-06) and the unverifiable legacy
+gpt-4.1/gpt-4o rows were removed (dead source → legacy ids price at the
+flagship fallback — over-reserve only). `PRICING_STATUS` stays
+"provisional" until the owner reconciles the first real invoices against
+the SpendReservation ledger. Full narrative + gate results in the worklog
+("S34"). New probe: `scripts/s34-unit-probe.mts`; +6 unit tests.

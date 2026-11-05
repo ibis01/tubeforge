@@ -36,9 +36,12 @@
 //                   an upstream provider may already have billed an
 //                   accepted request (timeouts included). Never release.
 //   7. THE LIMIT  — because the estimate is provably ≥ the actual cost
-//                   (input: chars/3 ≥ tokens for English AND JSON, plus
-//                   per-message overhead and a 4000-token/image floor;
-//                   output: every paid dispatch is clamped to
+//                   (input: script-aware floors — ASCII chars/3 for English
+//                   AND JSON, CJK/complex scripts at 1.5 tokens/char, other
+//                   non-ASCII at 1, astral at 2 (S34; the old chars/3 broke
+//                   the law for non-Latin text, under-reserving a CJK pass
+//                   ~4.5x), plus per-message overhead and a 4000-token/image
+//                   floor; output: every paid dispatch is clamped to
 //                   MAX_OUTPUT_TOKENS, which the estimate prices in full),
 //                   the admit rule caps RECORDED spend at STOP ($4.50 by
 //                   default) — and true provider spend, including any hold
@@ -107,25 +110,34 @@ export const PRICING_VERSION = "2026-11";
 
 /** The verification state of the pricing registry. "provisional" blocks
  *  paid dispatches; "verified" admits them. Flip to "verified" only after
- *  reconciling every MODEL_PRICES row against its cited source URL. */
+ *  reconciling every MODEL_PRICES row against its cited source URL AND
+ *  proving the ledger against the first real invoices (the audit's P2-1
+ *  condition — source pages are necessary, invoices are ground truth). */
 export const PRICING_STATUS: "provisional" | "verified" = "provisional";
 
 /** Provenance for the registry — one entry per cited source. The audit's
  *  rule: every model and price has valid source provenance. An operator
  *  flips PRICING_STATUS to "verified" only after confirming each source
- *  still lists the price recorded here. */
+ *  still lists the price recorded here.
+ *
+ *  S34 reconciliation (2026-11-06): the OpenAI pricing page was re-fetched
+ *  and EVERY current-generation row below matched exactly. The legacy
+ *  gpt-4.1/gpt-4o rows' cited source (CloudZero survey) is now a 404 and
+ *  OpenAI's live page no longer lists those models — unverifiable-cheap is
+ *  the dangerous direction, so the rows were REMOVED; a configured legacy
+ *  id now prices at FALLBACK_PRICE (over-reserve only, never under). */
 export const PRICING_SOURCES = [
   {
     url: "https://developers.openai.com/api/docs/pricing",
-    retrievedAt: "2026-11-04",
+    retrievedAt: "2026-11-06",
     covers: ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-cyber", "gpt-6-rosalind", "gpt-rosalind-research", "gpt-rosalind-discovery", "gpt-6-astra-law"],
-    note: "gpt-6 generation standard-mode pricing (reconcile before activation)",
+    note: "gpt-6 generation standard-mode pricing — S34 re-fetch 2026-11-06: every row reconciled exactly against the live page",
   },
   {
     url: "https://www.cloudzero.com/blog/gpt-4-cost",
     retrievedAt: "2026-06-15",
-    covers: ["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o"],
-    note: "June 2026 CloudZero GPT-4 cost survey + OpenRouter listing for the legacy generation",
+    covers: [],
+    note: "TOMBSTONE — 404 as of the S34 re-check (2026-11-06). The legacy gpt-4.1/gpt-4o rows it sourced are gone from MODEL_PRICES (unverifiable-cheap under-prices the gate); legacy ids price at FALLBACK_PRICE until a live source exists",
   },
 ] as const;
 
@@ -148,7 +160,8 @@ export function pricingVerified(): boolean {
 type ModelPrice = { in: number; out: number };
 
 const MODEL_PRICES: Record<string, ModelPrice> = {
-  // current flagship generation (official pricing page, Nov 2026)
+  // Current flagship generation — every row RECONCILED against the live
+  // OpenAI pricing page on 2026-11-06 (S34): all ten matched exactly.
   "gpt-6-astra": { in: 10_000_000, out: 50_000_000 },
   "gpt-6.1-sol": { in: 2_000_000, out: 10_000_000 },
   "gpt-6.1-terra": { in: 1_000_000, out: 5_000_000 },
@@ -159,11 +172,13 @@ const MODEL_PRICES: Record<string, ModelPrice> = {
   "gpt-rosalind-research": { in: 5_000_000, out: 25_000_000 },
   "gpt-rosalind-discovery": { in: 5_000_000, out: 25_000_000 },
   "gpt-6-astra-law": { in: 10_000_000, out: 50_000_000 },
-  // legacy generation — still callable per the June 2026 survey data
-  "gpt-4.1": { in: 2_000_000, out: 8_000_000 },
-  "gpt-4.1-mini": { in: 400_000, out: 1_600_000 },
-  "gpt-4.1-nano": { in: 100_000, out: 400_000 },
-  "gpt-4o": { in: 2_500_000, out: 10_000_000 },
+  // Legacy generation (gpt-4.1 / gpt-4.1-mini / gpt-4.1-nano / gpt-4o / the
+  // gpt-4o-mini default): REMOVED in S34 — their only cited source is a 404
+  // and OpenAI's live page no longer lists them, so their prices cannot be
+  // verified, and unverifiable-cheap is the dangerous direction (an under-
+  // priced row under-reserves the $5 gate). A configured legacy id resolves
+  // to FALLBACK_PRICE below, which can only OVER-reserve. Re-add a row only
+  // with a live, citable source.
 };
 
 /** Unknown model on a PAID provider → the priciest standard-mode flagship.
@@ -284,6 +299,39 @@ const BASE64_RUN_RE = /[A-Za-z0-9+/=]{512,}/g;
 const TOKENS_PER_IMAGE = 4000;
 const TOKENS_PER_MESSAGE = 8;
 
+// S34 — script-aware input floors. chars/3 is a provable ceiling ONLY for
+// ASCII text (English prose ~4 ch/tok, JSON/code ~3-3.5). Non-Latin scripts
+// tokenize at roughly ONE-AND-A-HALF tokens PER CHAR — a 6000-char CJK
+// director pass is ~9000 real tokens, which chars/3 priced at 2000: a 4.5x
+// under-reserve that broke the $5 law on exactly the non-English content a
+// multi-language narration pipeline produces. The floors (each ≥ every
+// tokenizer average we could find, with margin — over-reserving only blocks
+// earlier, never late):
+//   ASCII            → ceil(chars/3)   the S27 English+JSON law, unchanged
+//   CJK/complex      → 1.5 tokens/char Han, kana, Hangul, Thai, Lao, Khmer,
+//                                       Myanmar, CJK punctuation/fullwidth
+//   other non-ASCII  → 1 token/char    Cyrillic, Greek, Arabic, Hebrew,
+//                                       Devanagari, Latin accents (real
+//                                       ratio 2-4 ch/tok — 1/char is ≥)
+//   astral plane     → 2 tokens/char   emoji + rare scripts (each is a
+//                                       surrogate pair; 1-3 tokens each)
+const ASCII_RE = /[\x00-\x7F]/g;
+const CJK_RE =
+  /[\u0E00-\u0E7F\u0E80-\u0EFF\u1000-\u109F\u1100-\u11FF\u1780-\u17FF\u3000-\u303F\u3040-\u30FF\u3130-\u318F\u3400-\u4DBF\u4E00-\u9FFF\uA960-\uA97F\uAC00-\uD7AF\uF900-\uFAFF\uFF00-\uFFEF]/g;
+const HIGH_SURROGATE_RE = /[\uD800-\uDBFF]/g;
+
+/** Worst-case input-token count for one text — the input half of the
+ *  estimate≥actual invariant, safe for every script mix. Base64/data-URI
+ *  runs must be stripped first (stripHeavy). */
+export function estimateInputTokens(text: string): number {
+  const ascii = text.match(ASCII_RE)?.length ?? 0;
+  const cjk = text.match(CJK_RE)?.length ?? 0;
+  const astral = text.match(HIGH_SURROGATE_RE)?.length ?? 0; // 1 per astral char
+  // Remaining UTF-16 units are other-BMP chars (1 unit = 1 char each).
+  const other = Math.max(0, text.length - ascii - cjk - 2 * astral);
+  return Math.ceil(ascii / 3) + Math.ceil(cjk * 1.5) + other + astral * 2;
+}
+
 function countImages(text: string): number {
   return (text.match(DATA_URI_RE)?.length ?? 0) + (text.match(BASE64_RUN_RE)?.length ?? 0);
 }
@@ -292,26 +340,25 @@ function stripHeavy(text: string): string {
   return text.replace(DATA_URI_RE, " ").replace(BASE64_RUN_RE, " ");
 }
 
-/** Worst-case USD estimate for one dispatch. Input: chars/3 (≥ tokens for
- *  English ~4 ch/tok AND JSON/code ~3-3.5 ch/tok) + per-message overhead +
- *  a fixed floor per image (explicit counts for vision-style dispatches
- *  whose image bytes never ride inside the texts); output: MAX_OUTPUT_TOKENS
- *  priced in full. */
+/** Worst-case USD estimate for one dispatch. Input: the script-aware floors
+ *  (ASCII chars/3 for English ~4 ch/tok AND JSON ~3-3.5 ch/tok; CJK at
+ *  1.5 tokens/char; astral at 2) + per-message overhead + a fixed floor per
+ *  image (explicit counts for vision-style dispatches whose image bytes never
+ *  ride inside the texts); output: MAX_OUTPUT_TOKENS priced in full. */
 export function estimateDispatchMicroUsd(
   model: string,
   texts: string[],
   images = 0
 ): number {
-  let chars = 0;
+  let inputTokens = 0;
   let messageImages = 0;
   let messages = 0;
   for (const t of texts) {
     messages += 1;
     messageImages += countImages(t);
-    chars += stripHeavy(t).length;
+    inputTokens += estimateInputTokens(stripHeavy(t));
   }
-  const inputTokens =
-    Math.ceil(chars / 3) +
+  inputTokens +=
     messages * TOKENS_PER_MESSAGE +
     (images + messageImages) * TOKENS_PER_IMAGE;
   const p = priceForModel(model);
@@ -338,17 +385,9 @@ export function emitUsage(usage: LLMUsage | undefined): void {
   else sinks.set(ctx, [usage]);
 }
 
-/** Latest reported usage WITHOUT clearing — the settle path reads the
- *  attempt that produced the returned content. */
-export function peekLastUsage(): LLMUsage | undefined {
-  const ctx = currentCtx();
-  if (!ctx) return undefined;
-  const sink = sinks.get(ctx);
-  return sink && sink.length ? sink[sink.length - 1] : undefined;
-}
-
 /** Drain every reported usage in this request (sum across retry attempts —
- *  each attempt that got a billed response DID cost tokens). */
+ *  each attempt that got a billed response DID cost tokens). budget.ts
+ *  consumes this for the UsageRecord row AFTER the aiCall resolves. */
 export function drainUsage(): LLMUsage | undefined {
   const ctx = currentCtx();
   if (!ctx) return undefined;
@@ -363,6 +402,42 @@ export function drainUsage(): LLMUsage | undefined {
   );
   sinks.delete(ctx);
   return total;
+}
+
+// S34 — per-hold usage slices. The S27/S32 settle path read peekLastUsage():
+// the LAST entry in the REQUEST-scoped sink. Two defects: a dispatch whose
+// provider answered without a usage block settled at a STALE usage some
+// earlier dispatch in the same request had emitted (under- or over-count,
+// depending on the models involved), and a transport that emitted twice (an
+// internally retried fetch where both attempts got billed responses) settled
+// at only the second. The fix: admitDispatch snapshots the sink size at admit
+// time, and the hold settles on exactly the entries emitted since — its own
+// attempts, nobody else's. peekLastUsage() was removed with the fix (it had
+// no callers outside the settle path).
+
+/** Snapshot of the request sink's size — the hold's baseline. */
+export function sinkBaseline(): number {
+  const ctx = currentCtx();
+  if (!ctx) return 0;
+  return sinks.get(ctx)?.length ?? 0;
+}
+
+/** Sum of the usage entries emitted since `baseline` (this hold's own
+ *  attempts). Undefined when nothing was emitted — the caller settles at
+ *  the reserved estimate (a provider that answered without a usage block
+ *  may still have billed). */
+export function usageSinceBaseline(baseline: number): LLMUsage | undefined {
+  const ctx = currentCtx();
+  if (!ctx) return undefined;
+  const sink = sinks.get(ctx);
+  if (!sink || sink.length <= baseline) return undefined;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  for (let i = baseline; i < sink.length; i++) {
+    inputTokens += sink[i].inputTokens;
+    outputTokens += sink[i].outputTokens;
+  }
+  return { inputTokens, outputTokens };
 }
 
 // ---------- the gate ----------
@@ -504,7 +579,8 @@ async function bootRecorded(): Promise<void> {
 }
 
 export interface SpendHold {
-  /** Success path: settle at the reported usage's cost, or — when the
+  /** Success path: settle at the cost of THIS hold's reported usage (the
+   *  sink entries emitted since admit — S34 per-hold slice), or — when the
    *  provider answered without a usage block — conservatively at the
    *  reserved estimate. */
   settleFromSink(): Promise<void>;
@@ -548,6 +624,12 @@ export async function admitDispatch(opts: {
 
   const holdId = `spend-${spend.nextHoldId++}`;
   spend.holds.set(holdId, est);
+
+  // S34 — the hold's usage slice starts HERE: everything the request sink
+  // already holds belongs to earlier dispatches (already settled off their
+  // own slices). settleFromSink reads exactly the entries emitted after
+  // this line — this hold's attempts, nobody else's.
+  const baseline = sinkBaseline();
 
   // S32 — persist the reservation so it survives restarts. A crash mid-call
   // leaves a pending row that the next boot counts against the stop line
@@ -608,7 +690,11 @@ export async function admitDispatch(opts: {
 
   return {
     async settleFromSink() {
-      const usage = peekLastUsage();
+      // S34 — the hold's OWN slice, not the request's last entry: a dispatch
+      // whose provider answered without a usage block settles at the estimate
+      // (never at a stale usage an earlier dispatch emitted), and a transport
+      // that emitted twice (both attempts billed) settles at the sum.
+      const usage = usageSinceBaseline(baseline);
       await settle(usage ? computeCostMicroUsd(opts.model, usage) : est);
     },
     async settleUncertain() {

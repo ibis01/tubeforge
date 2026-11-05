@@ -106,7 +106,10 @@ console.log("\n§1 pricing registry");
   const sol = priceForModel("gpt-6.1-sol");
   check("exact row: gpt-6.1-sol $2/$10 per 1M", sol.in === 2_000_000 && sol.out === 10_000_000, sol);
   const legacy = priceForModel("gpt-4o");
-  check("legacy row: gpt-4o $2.50/$10 per 1M", legacy.in === 2_500_000 && legacy.out === 10_000_000, legacy);
+  // S34: the legacy rows were removed (dead source, unverifiable-cheap) — a
+  // legacy id must now resolve to the conservative flagship fallback.
+  check("legacy id (rows removed in S34) → conservative flagship fallback",
+    legacy.in === 10_000_000 && legacy.out === 50_000_000, legacy);
   const snap = priceForModel("gpt-6.1-sol-2026-10-15");
   check("dated snapshot resolves by longest prefix", snap.in === sol.in && snap.out === sol.out, snap);
   const vendor = priceForModel("openai/gpt-6.1-sol");
@@ -118,7 +121,9 @@ console.log("\n§1 pricing registry");
   const cost = computeCostMicroUsd("gpt-6.1-sol", { inputTokens: 111, outputTokens: 222 });
   check("cost math: 111 in + 222 out on sol = 2442 µ$", cost === 2442, cost);
   const tiny = computeCostMicroUsd("gpt-4.1-nano", { inputTokens: 10, outputTokens: 10 });
-  check("cost math: 10+10 on nano = 5 µ$ (per-side rounding)", tiny === 5, tiny);
+  // S34: nano's row is gone too — fallback prices 10 in + 10 out at
+  // $10/$50 per 1M = 100 + 500 = 600 µ$ (per-side rounding).
+  check("cost math on a removed legacy id uses the fallback (600 µ$)", tiny === 600, tiny);
 }
 
 // ---------- §2 the estimate law ----------
