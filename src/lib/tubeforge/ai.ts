@@ -49,19 +49,150 @@ export function resetZAIClient() {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Extract JSON from an LLM response that may contain markdown fences or prose. */
+// ---------------------------------------------------------------------------
+// S45 — LLM JSON tolerance. The old parser had two blind spots the live
+// director re-run hit: (1) the greedy /\{[\s\S]*\}/ fallback matched from the
+// FIRST "{" to the LAST "}" of the whole response, so one stray brace in the
+// prose AFTER the object swallowed it into an unparseable blob (and its
+// JSON.parse wasn't even guarded — a raw SyntaxError surfaced); (2) trailing
+// commas and curly quotes, the two most common LLM JSON defects, were never
+// repaired. Strategy ladder, cheapest first: strip fences/invisible noise →
+// direct parse → repaired parse (trailing commas, curly double quotes) →
+// largest string-aware balanced object/array scan (handles braces in prose
+// AND braces inside string values) → repaired scan. Every rung that fails
+// falls through; only total failure throws the readable error.
+// ---------------------------------------------------------------------------
+
+/** Parse without throwing — undefined when the text is not valid JSON. */
+function tryJsonParse(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Deterministic repairs for the most common LLM JSON defects. Only ever
+ * applied to text that ALREADY failed a direct parse, so a well-formed
+ * document is never rewritten. */
+function repairCommonJson(text: string): string {
+  return (
+    text
+      // trailing commas before a closing bracket/brace (`,}` `, ]` etc.)
+      .replace(/,\s*([\]}])/g, "$1")
+      // curly double quotes used as string delimiters
+      .replace(/[\u201C\u201D]/g, '"')
+  );
+}
+
+/** Largest balanced top-level object (or array) in the text, string-aware:
+ * braces inside "…" literals never count toward depth, so both prose-around-
+ * JSON and braces-in-values survive. null when no balanced container exists. */
+function largestBalancedJson(text: string): string | null {
+  let best: string | null = null;
+  for (const [open, close] of [
+    ["{", "}"],
+    ["[", "]"],
+  ] as const) {
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] !== open) continue;
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let j = i; j < text.length; j++) {
+        const ch = text[j];
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (ch === "\\") {
+          if (inString) escaped = true;
+          continue;
+        }
+        if (ch === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (inString) continue;
+        if (ch === open) depth++;
+        else if (ch === close) {
+          depth--;
+          if (depth === 0) {
+            const candidate = text.slice(i, j + 1);
+            if (best === null || candidate.length > best.length) best = candidate;
+            break; // this `i` is done — its first balance is its largest
+          }
+        }
+      }
+    }
+  }
+  return best;
+}
+
+/** Extract JSON from an LLM response that may contain markdown fences, prose,
+ * trailing commas or curly quotes. Throws the readable "Model did not return
+ * valid JSON" only after every strategy fails — never a raw SyntaxError. */
 export function parseJsonLoose(raw: string): Record<string, unknown> {
   const cleaned = raw
     .replace(/```json/gi, "```")
     .replace(/```/g, "")
+    // invisible noise some models emit around the payload
+    .replace(/\uFEFF/g, "")
+    .replace(/[\u200B-\u200D\u2060]/g, "")
     .trim();
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (match) return JSON.parse(match[0]);
-    throw new Error("Model did not return valid JSON");
+  const strategies: unknown[] = [
+    tryJsonParse(cleaned),
+    tryJsonParse(repairCommonJson(cleaned)),
+  ];
+  const balanced = largestBalancedJson(cleaned);
+  if (balanced !== null) {
+    strategies.push(tryJsonParse(balanced));
+    strategies.push(tryJsonParse(repairCommonJson(balanced)));
   }
+  for (const parsed of strategies) {
+    if (parsed !== undefined) return parsed as Record<string, unknown>;
+  }
+  throw new Error("Model did not return valid JSON");
+}
+
+/**
+ * S45 — LLM call + JSON parse + shape validation in ONE retried closure.
+ * Before this, every call site parsed OUTSIDE aiCall, so a single malformed
+ * response failed the job with no re-ask (the live director re-run: attempt
+ * 1 wrote a good plan, attempt 2's prose-with-braces answer died at parse).
+ * `ask` returns the raw text; parse/validate throw INSIDE the retry loop, so
+ * variance costs one fresh generation, not the job. `validate` maps the
+ * parsed value to the caller's type and throws on unusable shapes (also
+ * retried). `call` exists for the fake-driven unit tests (defaults to the
+ * real budgeting aiCall).
+ */
+export async function aiCallJson<T = Record<string, unknown>>(
+  service: Parameters<typeof aiCall>[0],
+  label: string,
+  ask: () => Promise<string>,
+  opts: {
+    validate?: (parsed: Record<string, unknown>) => T;
+    retry?: { attempts?: number; baseDelayMs?: number };
+    /** Structural stand-in for aiCall (defaults to the real budgeting call);
+     * typed structurally so the fake-driven unit tests need no casts. */
+    call?: <U>(
+      service: Parameters<typeof aiCall>[0],
+      label: string,
+      fn: () => Promise<U>,
+      retryOpts?: { attempts?: number; baseDelayMs?: number }
+    ) => Promise<U>;
+  } = {}
+): Promise<T> {
+  const run = opts.call ?? aiCall;
+  return run(
+    service,
+    label,
+    async () => {
+      const parsed = parseJsonLoose(await ask());
+      return opts.validate ? opts.validate(parsed) : (parsed as T);
+    },
+    opts.retry ?? {}
+  );
 }
 
 export interface ScriptPackage {
@@ -120,11 +251,14 @@ export async function generateScriptPackage(opts: {
   };
   const toneDesc = toneMap[opts.tone] ?? "clear and engaging";
 
-  const raw = await aiCall("llm", "script LLM", () =>
-    chatComplete({
-      system:
-        "You are an elite faceless-YouTube scriptwriter with 10M+ views per video and 70%+ average retention. You write narration-first scripts with surgical concreteness: real names, numbers with units, specific places, sensory verbs. BANNED everywhere: generic openers ('Since the dawn of time', 'Throughout history', 'In a world where', 'Have you ever wondered', 'X was one of the most Y in history'), tired clichés ('the eighth wonder of the world', 'Einstein said...', 'skip the daily latte', 'the best time to plant a tree was', 'the power of X is real', 'whether you're a X or a Y'), apocryphal or unverifiable quotes attributed to famous people, filler words, vague superlatives without specifics, corporate hedging, math formulas or equations written as notation (speak them in words instead). You always respond with STRICT JSON only — no markdown, no commentary.",
-      user: `Create a complete YouTube video package for a faceless channel.
+  // S45 — parse + shape-check INSIDE the retried closure: a malformed or
+  // shape-less response re-asks instead of failing the autopilot's step 1.
+  const pkg = await aiCallJson<ScriptPackage>("llm", "script LLM",
+    () =>
+      chatComplete({
+        system:
+          "You are an elite faceless-YouTube scriptwriter with 10M+ views per video and 70%+ average retention. You write narration-first scripts with surgical concreteness: real names, numbers with units, specific places, sensory verbs. BANNED everywhere: generic openers ('Since the dawn of time', 'Throughout history', 'In a world where', 'Have you ever wondered', 'X was one of the most Y in history'), tired clichés ('the eighth wonder of the world', 'Einstein said...', 'skip the daily latte', 'the best time to plant a tree was', 'the power of X is real', 'whether you're a X or a Y'), apocryphal or unverifiable quotes attributed to famous people, filler words, vague superlatives without specifics, corporate hedging, math formulas or equations written as notation (speak them in words instead). You always respond with STRICT JSON only — no markdown, no commentary.",
+        user: `Create a complete YouTube video package for a faceless channel.
 Niche: ${opts.niche}
 Tone: ${toneDesc}
 Topic: "${opts.topic}"
@@ -144,20 +278,22 @@ Return JSON with exactly these keys:
   "description": "engaging YouTube description (2-3 sentences) followed by a line of relevant hashtags",
   "tags": ["array of 10 SEO tags relevant to the topic"]
 }`,
-    }),
+      }),
+    {
+      validate: (parsed) => {
+        const title = String(parsed.title ?? "").trim();
+        const script = String(parsed.script ?? "").trim();
+        const description = String(parsed.description ?? "").trim();
+        const tags = Array.isArray(parsed.tags)
+          ? parsed.tags.map(String).slice(0, 12)
+          : [];
+        if (!title || !script)
+          throw new Error("Incomplete script package from model");
+        return { title, script, description, tags };
+      },
+    }
   );
-  const parsed = parseJsonLoose(raw);
-
-  const title = String(parsed.title ?? "").trim();
-  const script = String(parsed.script ?? "").trim();
-  const description = String(parsed.description ?? "").trim();
-  const tags = Array.isArray(parsed.tags)
-    ? parsed.tags.map(String).slice(0, 12)
-    : [];
-
-  if (!title || !script)
-    throw new Error("Incomplete script package from model");
-  return { title, script, description, tags };
+  return pkg;
 }
 
 /** Clean a script for speech: strip markers, markdown and emoji noise. */

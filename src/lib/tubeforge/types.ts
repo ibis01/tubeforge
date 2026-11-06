@@ -585,6 +585,10 @@ export interface QcReportDTO {
   checkedAt: string;
   durationSec: number;
   checks: QcCheckDTO[];
+  /** S45 — "preview" when the standing report measured a first-N-scenes
+   * preview render (honest partial evidence for the badge; the ship gate
+   * refuses to certify final.mp4 on it). Absent = a full render. */
+  scope?: "preview";
 }
 
 /** S40 — the ship-gate verdict computed server-side from the standing QC

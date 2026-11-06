@@ -57,7 +57,7 @@ import {
   isMusicEnabledForVideo,
   musicBedActive,
 } from "./music";
-import { qcForVideo } from "./qc";
+import { qcForVideo, qcForPreview, type QcReport } from "./qc";
 import { expectedCutsForTimeline } from "./render-qc";
 import type { ExpectedCuts } from "./render-qc";
 import { applyQcPolicy, qcEnforcementMode } from "./qc-policy";
@@ -462,7 +462,26 @@ export interface RenderJobOptions {
   quality?: ExportQuality;
 }
 
-/** Render the final/preview MP4 (+ QC battery on full renders). */
+/**
+ * S45 — PURE: the DB patch a preview render writes for its QC evidence.
+ * The invariant, pinned here and unit-tested both ways:
+ *   • no full render stands (hasVideo false) → the preview report is the
+ *     standing evidence (or an explicit null when the probes crashed — no
+ *     stale scene-1 evidence may survive a newer preview);
+ *   • a full render stands → the final report OWNS the field; preview
+ *     evidence never downgrades it (the export gate must never judge
+ *     final.mp4 on a scene-1 file).
+ */
+export function previewQcPatch(
+  hasVideo: boolean,
+  report: QcReport | null
+): { hasPreview: boolean; error: null; qcReport?: string | null } {
+  if (hasVideo) return { hasPreview: true, error: null };
+  return { hasPreview: true, error: null, qcReport: report ? JSON.stringify(report) : null };
+}
+
+/** Render the final/preview MP4 (+ the QC battery — full scope on final
+ * renders, scoped preview evidence on previews; see previewQcPatch). */
 export async function runRenderJob(
   videoId: string,
   opts: RenderJobOptions = {}
@@ -701,14 +720,51 @@ export async function runRenderJob(
         /* billing write is best-effort */
       }
     } else {
-      await db.video.update({ where: { id: videoId }, data: { hasPreview: true, error: null } });
+      // S45 — preview renders persist their own SCOPED QC evidence. The old
+      // branch wrote only hasPreview, so the badge said "not run" over a
+      // playable artifact (the S37 live finding). Rules, pinned by
+      // previewQcPatch below: preview evidence persists ONLY while no full
+      // render stands (a standing final report is never downgraded to
+      // scene-1 evidence), and the report carries scope "preview" so the
+      // ship gate refuses it as certification of final.mp4. QC itself never
+      // fails the render — a crashed battery leaves the preview shippable
+      // as a preview (the artifact exists whatever the probes say).
+      setJobProgress(videoId, "render", scenes.length + 1, scenes.length + 1, "Running quality checks");
+      const approvedPlan =
+        video.directorState === "approved" ? parsePlan(video.shotList) : null;
+      let previewReport: QcReport | null = null;
+      try {
+        previewReport = await qcForPreview(
+          videoId,
+          result.durationSec,
+          result.blackWindows,
+          aspect,
+          approvedPlan,
+          {
+            i2vEverywhere: mode === "animated",
+            stockEverywhere: mode === "stock",
+          },
+          result.expectedCuts ?? null,
+          frameRate
+        );
+      } catch {
+        previewReport = null; // probes crashed — evidence stays absent, never stale
+      }
+      await db.video.update({
+        where: { id: videoId },
+        data: previewQcPatch(video.hasVideo, previewReport),
+      });
       await db.activity.create({
         data: {
           organizationId: video.organizationId,
           userId: ctx.userId,
           videoId,
           stage: "render",
-          message: `Preview rendered (scene 1, ${mode === "animated" ? "animated" : "Ken Burns"})`,
+          message:
+            `Preview rendered (scene 1, ${mode === "animated" ? "animated" : "Ken Burns"})` +
+            (previewReport
+              ? ` — QC ${previewReport.passed ? "passed" : `flagged ${previewReport.checks.filter((c) => c.status !== "pass").length} check(s) (preview scope)`}`
+              : ""),
         },
       });
     }

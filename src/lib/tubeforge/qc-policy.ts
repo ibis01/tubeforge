@@ -178,6 +178,10 @@ export interface QcGateDecision {
  * feed the same pure decision. */
 export interface QcReportLike {
   checks: (QcCheckDTO | { id: string; label: string; status: QcStatusDTO; value: string; detail?: string })[];
+  /** S45 — evidence scope. "preview" = the standing report measured a
+   * first-N-scenes preview render, not final.mp4: it can never certify the
+   * artifact the export gate is about to ship. Absent = full render. */
+  scope?: string;
 }
 
 /**
@@ -193,8 +197,16 @@ export function applyQcPolicy(
   const blockers: QcPolicyFinding[] = [];
   const advisories: QcPolicyFinding[] = [];
   // Fail-closed #2/#4: no report, or a report the battery never populated,
-  // is an unmeasured file — not a clean one.
-  const missingReport = report === null || !Array.isArray(report.checks) || report.checks.length === 0;
+  // is an unmeasured file — not a clean one. S45: a preview-scoped report
+  // is equally NOT evidence for the final artifact — the write site only
+  // persists it while no full render stands, but the policy refuses to
+  // trust it even if a future writer violates that invariant (fail-closed
+  // #5: partial evidence never certifies the whole).
+  const missingReport =
+    report === null ||
+    !Array.isArray(report.checks) ||
+    report.checks.length === 0 ||
+    report.scope === "preview";
   if (!missingReport) {
     for (const c of report.checks) {
       if (c.status === "pass") continue;

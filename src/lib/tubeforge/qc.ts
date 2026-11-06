@@ -97,6 +97,12 @@ export interface QcReport {
   checkedAt: string;
   durationSec: number;
   checks: QcCheck[];
+  /** S45 — evidence scope. Absent/undefined = the FULL render (final.mp4,
+   * every historical report). "preview" = a first-N-scenes preview render:
+   * honest partial evidence for the badge, NEVER certifying the final
+   * artifact (qc-policy treats a preview-scoped standing report as not
+   * standing for the ship gate). */
+  scope?: "preview";
 }
 
 async function ffprobeJson(file: string) {
@@ -655,4 +661,46 @@ export async function qcForVideo(
     expectedCuts,
     frameRate,
   });
+}
+
+/**
+ * S45 — scoped QC for a PREVIEW render (the first N scenes, preview.mp4).
+ * Mirrors qcForVideo with preview-honest expectations:
+ *   • no narration-sync check — the preview is a partial artifact; its
+ *     "narration" is scenes 1..N, which no single field carries;
+ *   • no captions check — no SRT ships for previews (the burned captions,
+ *     if on, are measured by the visual lenses like any other pixels);
+ *   • every artifact-local lens (playable, black/frozen frames, aspect,
+ *     loudness family, dead air, static, flicker, stutter, cut alignment,
+ *     tail fade) runs exactly as for a full render.
+ * The report carries scope "preview" so qc-policy can refuse to treat it
+ * as evidence for the final artifact, and the render job persists it ONLY
+ * while no full render stands (preview evidence never overwrites full
+ * evidence — the export gate must never judge final.mp4 on a scene-1 file).
+ */
+export async function qcForPreview(
+  videoId: string,
+  videoDuration: number,
+  expectedBlack?: [number, number][],
+  expectedAspect?: QcAspect,
+  shotPlan?: DirectorPlan | null,
+  pacingExemptions?: { i2vEverywhere?: boolean; stockEverywhere?: boolean },
+  expectedCuts?: ExpectedCuts | null,
+  frameRate?: number
+): Promise<QcReport> {
+  const { materialize } = await import("./storage");
+  const report = await runQcReport({
+    mp4Path: await materialize(`${videoId}/preview.mp4`),
+    videoDuration,
+    narrationSec: null,
+    srtPath: null,
+    expectedBlack,
+    expectedAspect,
+    shotPlan,
+    shotPlanI2VEverywhere: pacingExemptions?.i2vEverywhere,
+    shotPlanStockEverywhere: pacingExemptions?.stockEverywhere,
+    expectedCuts,
+    frameRate,
+  });
+  return { ...report, scope: "preview" };
 }

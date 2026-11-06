@@ -4288,7 +4288,249 @@ await test("S40 parseQcReport: tolerance matches the serializer (bad payloads ne
   eq(applyQcPolicy(empty).missingReport, true, "…and the gate treats it as missing");
 });
 
-// ---------- summary ----------
+// ---------------------------------------------------------------------------
+// S45 — LLM JSON variance (the director re-run that died at parse) + scoped
+// preview QC evidence (the report the preview never wrote)
+// ---------------------------------------------------------------------------
+
+await test("S45 parseJsonLoose: plain and fenced JSON still parse untouched", async () => {
+  const { parseJsonLoose } = await import("../src/lib/tubeforge/ai.ts");
+  const plain = parseJsonLoose('{"title":"T","scenes":[1,2]}');
+  eq(plain.title, "T", "plain object parses");
+  eq((plain.scenes as number[]).length, 2, "nested array survives");
+  const fenced = parseJsonLoose('```json\n{"title":"F"}\n```');
+  eq(fenced.title, "F", "json-fenced payload parses");
+  const prosey = parseJsonLoose('Here you go:\n{"title":"P"}\nHope that helps!');
+  eq(prosey.title, "P", "prose around the object parses");
+});
+
+await test("S45 parseJsonLoose: trailing commas and curly quotes are repaired", async () => {
+  const { parseJsonLoose } = await import("../src/lib/tubeforge/ai.ts");
+  const commas = parseJsonLoose('{"a":1,"b":[1,2,3,],}');
+  eq(commas.a, 1, "trailing comma in object repaired");
+  eq((commas.b as number[]).length, 3, "trailing comma in array repaired");
+  const curly = parseJsonLoose('{\u201Ctitle\u201D:\u201Ccurly\u201D}');
+  eq(curly.title, "curly", "curly double quotes repaired to delimiters");
+});
+
+await test("S45 parseJsonLoose: prose-with-a-brace after the JSON no longer swallows it", async () => {
+  const { parseJsonLoose } = await import("../src/lib/tubeforge/ai.ts");
+  // THE live re-run shape: the model answered with the plan, then added a
+  // closing thought containing a brace. The old greedy /\{[\s\S]*\}/ matched
+  // from the first "{" to THAT last "}" — an unparseable blob — and its
+  // unguarded JSON.parse surfaced a raw SyntaxError.
+  const answer =
+    'Here is the plan:\n{"concept":"desert at dusk","scenes":[{"sceneIndex":1,"mood":"warm"}]}\n' +
+    'Note: I kept it to one scene because you asked } :)';
+  const parsed = parseJsonLoose(answer);
+  eq(parsed.concept, "desert at dusk", "the object is recovered despite the trailing brace");
+  eq((parsed.scenes as unknown[]).length, 1, "nested scenes survive the balanced scan");
+});
+
+await test("S45 parseJsonLoose: braces inside string values never break the scan", async () => {
+  const { parseJsonLoose } = await import("../src/lib/tubeforge/ai.ts");
+  const parsed = parseJsonLoose('{"caption":"use {braces} here","n":2}');
+  eq(parsed.caption, "use {braces} here", "braces in a string literal are not depth");
+  eq(parsed.n, 2, "sibling fields survive");
+});
+
+await test("S45 parseJsonLoose: unparseable input throws the READABLE error, never a SyntaxError", async () => {
+  const { parseJsonLoose } = await import("../src/lib/tubeforge/ai.ts");
+  let err: unknown;
+  try {
+    parseJsonLoose("I could not produce that plan, sorry.");
+  } catch (e) {
+    err = e;
+  }
+  ok(err instanceof Error, "throws an Error");
+  ok(!(err instanceof SyntaxError), "not a raw SyntaxError (callers match on message)");
+  ok(
+    /did not return valid JSON/i.test((err as Error).message),
+    `readable message (got: ${(err as Error).message})`
+  );
+  // Zero-width noise and BOM around an otherwise-valid payload are stripped.
+  eq(
+    parseJsonLoose("\uFEFF\u200B{\"ok\":true}\u200D").ok,
+    true,
+    "BOM + zero-width chars stripped before parsing"
+  );
+});
+
+await test("S45 aiCallJson: parse + validate run INSIDE the retried closure — variance costs a fresh ask, not the job", async () => {
+  const { aiCallJson } = await import("../src/lib/tubeforge/ai.ts");
+  // A minimal withRetry stand-in: run the composed fn up to N times, no
+  // delay — the real retry pacing is budget.ts's contract (queue/billing
+  // suites); this pins the COMPOSITION: every retry re-runs `ask` (a FRESH
+  // generation, not a re-parse of the same text) and parse/validate
+  // failures are retryable throws.
+  const makeCall = (answers: string[]) => {
+    const state = { asks: [] as string[], calls: 0 };
+    const call = async <U>(
+      _service: "llm",
+      _label: string,
+      fn: () => Promise<U>,
+      retryOpts: { attempts?: number } = {}
+    ): Promise<U> => {
+      const max = retryOpts.attempts ?? 3;
+      let lastErr: unknown;
+      for (let i = 0; i < max; i++) {
+        state.calls++;
+        try {
+          return await fn();
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      throw lastErr;
+    };
+    const ask = async () => {
+      const a = answers[Math.min(state.asks.length, answers.length - 1)];
+      state.asks.push(a);
+      return a;
+    };
+    return { state, call, ask };
+  };
+
+  // 1) THE live bug shape: attempt 1 is prose-with-a-brace (the old code
+  //    died at parse with NO re-ask), attempt 2 is a clean plan.
+  const bug = makeCall([
+    'Sorry, here is prose } instead',
+    '{"concept":"ok","scenes":[{"sceneIndex":1}]}',
+  ]);
+  const plan = await aiCallJson<{ concept: string }>("llm", "director pass LLM", bug.ask, {
+    call: bug.call,
+  });
+  eq(plan.concept, "ok", "the second attempt's plan comes back");
+  eq(bug.state.asks.length, 2, "a FRESH ask per retry (not a re-parse of attempt 1)");
+  eq(bug.state.calls, 2, "two closure invocations");
+
+  // 2) A parseable but shape-less response is ALSO retried (validate throws
+  //    inside the closure), then succeeds.
+  const shapeless = makeCall([
+    '{"concept":"ok"}', // no scenes — validate must reject
+    '{"concept":"fixed","scenes":[{"sceneIndex":1}]}',
+  ]);
+  const plan2 = await aiCallJson<{ concept: string; scenes: unknown[] }>(
+    "llm", "director pass LLM", shapeless.ask,
+    {
+      call: shapeless.call,
+      validate: (p) => {
+        if (!Array.isArray(p.scenes) || p.scenes.length === 0)
+          throw new Error("Director pass returned no usable scenes — try again");
+        return p as { concept: string; scenes: unknown[] };
+      },
+    }
+  );
+  eq(plan2.concept, "fixed", "validate rejection was retried, not fatal");
+  eq(shapeless.state.asks.length, 2, "shape-less response cost one fresh ask");
+
+  // 3) All attempts unparseable → the LAST readable error surfaces (the
+  //    job fails with the message users can act on).
+  const hopeless = makeCall(["no json", "still no json", "never json"]);
+  let err: unknown;
+  try {
+    await aiCallJson("llm", "director pass LLM", hopeless.ask, {
+      call: hopeless.call,
+    });
+  } catch (e) {
+    err = e;
+  }
+  ok(err instanceof Error, "exhausted retries throw");
+  ok(/did not return valid JSON/i.test((err as Error).message), "the readable parser error, not a SyntaxError");
+  eq(hopeless.state.asks.length, 3, "every attempt got a fresh ask");
+
+  // 4) Happy path: one ask, one call — no retry tax on good responses.
+  const happy = makeCall(['{"concept":"first try"}']);
+  const plan3 = await aiCallJson<{ concept: string }>("llm", "director pass LLM", happy.ask, {
+    call: happy.call,
+  });
+  eq(plan3.concept, "first try", "first-try success returns immediately");
+  eq(happy.state.calls, 1, "exactly one closure invocation");
+});
+
+await test("S45 applyQcPolicy: preview-scoped evidence NEVER certifies the final artifact", () => {
+  const allPass = S40_EMITTED_IDS.map((id) => s40Check(id, "pass"));
+  // An all-pass PREVIEW report is still not a report for final.mp4.
+  const previewClean = { ...s40Report(allPass), scope: "preview" };
+  const decision = applyQcPolicy(previewClean);
+  eq(decision.missingReport, true, "preview scope reads as missing evidence");
+  eq(decision.blocked, true, "an all-pass preview report still blocks export in enforce mode");
+  // The same report without the scope is a clean full render (unchanged S40 law).
+  const fullClean = s40Report(allPass);
+  eq(applyQcPolicy(fullClean).blocked, false, "full-scope all-pass still ships");
+  eq(applyQcPolicy(fullClean).missingReport, false, "full scope is standing evidence");
+  // Report mode releases the hold but the evidence is still marked missing.
+  const released = applyQcPolicy(previewClean, { mode: "report" });
+  eq(released.blocked, false, "report mode releases even preview evidence");
+  eq(released.missingReport, true, "…but the badge still says the final artifact is unmeasured");
+});
+
+await test("S45 parseQcReport: the scope field survives the round trip", () => {
+  const stored = JSON.stringify({
+    passed: false,
+    checkedAt: "2026-11-06T00:00:00.000Z",
+    durationSec: 8.2,
+    scope: "preview",
+    checks: [s40Check("playable", "pass")],
+  });
+  const parsed = parseQcReport(stored);
+  ok(parsed !== null, "preview report parses");
+  eq(parsed?.scope, "preview", "scope preserved through the parser");
+  eq(parseQcReport(JSON.stringify(s40Report([s40Check("playable", "pass")])))?.scope, undefined, "full reports stay scope-less");
+});
+
+await test("S45 previewQcPatch: preview evidence persists ONLY while no full render stands", async () => {
+  const { previewQcPatch } = await import("../src/lib/tubeforge/video-jobs.ts");
+  const report = {
+    passed: true,
+    checkedAt: "2026-11-06T00:00:00.000Z",
+    durationSec: 7.5,
+    checks: [],
+    scope: "preview",
+  } as const;
+
+  // No full render: the preview report becomes the standing evidence.
+  const fresh = previewQcPatch(false, report);
+  eq(fresh.hasPreview, true, "preview flag set");
+  const stored = JSON.parse(fresh.qcReport ?? "null") as { scope?: string } | null;
+  ok(stored !== null, "report persisted");
+  eq(stored?.scope, "preview", "persisted with preview scope");
+
+  // No full render + crashed probes: stale evidence is CLEARED, never kept.
+  eq(previewQcPatch(false, null).qcReport, null, "a failed battery clears the field");
+
+  // A full render stands: the final report owns the field — a later preview
+  // must not downgrade it (the export gate would then judge final.mp4 on a
+  // scene-1 file).
+  const standing = previewQcPatch(true, report);
+  eq(standing.hasPreview, true, "preview flag still set");
+  eq("qcReport" in standing, false, "the standing final report is untouched");
+});
+
+await test("S45 qcForPreview: scoped battery on a real preview.mp4 — no narration-sync, no captions, scope stamped", async () => {
+  const storage = await import("../src/lib/tubeforge/storage.ts");
+  const { qcForPreview } = await import("../src/lib/tubeforge/qc.ts");
+  delete process.env.TUBEFORGE_STORAGE_DRIVER; // local driver — real bytes on disk
+  const probe = `s45-preview-probe-${Date.now()}`;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-s45-"));
+  const tmpPreview = path.join(dir, "s45-preview.mp4");
+  try {
+    await genFixture(tmpPreview, fadeOutArgs());
+    await storage.put(`${probe}/preview.mp4`, fs.readFileSync(tmpPreview));
+    const report = await qcForPreview(probe, 4, undefined, "16:9", null, undefined, null, 24);
+    eq(report.scope, "preview", "the report is scoped as preview evidence");
+    const ids = report.checks.map((c) => c.id);
+    ok(ids.includes("playable"), "artifact-local lenses run (playable)");
+    ok(ids.includes("black-frames"), "black-frames measured");
+    ok(ids.includes("tail-fade"), "tail fade measured");
+    eq(ids.includes("duration"), false, "no narration-sync check — the preview is a partial artifact");
+    eq(ids.includes("captions"), false, "no captions check — no SRT ships for previews");
+    assertReportInvariants(report);
+  } finally {
+    await storage.remove(`${probe}/preview.mp4`).catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 console.log(`\n${"─".repeat(56)}`);
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);

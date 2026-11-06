@@ -2155,12 +2155,12 @@ export function VideoDetailDialog({
       )}
 
       {/* Quality-check scorecard (T-4.12) — grouped video/audio/sync,
-          measured on every full render (qc.ts) */}
+          measured on every full render and, scoped, on previews (qc.ts) */}
       {video.qc ? (
         <div className="rounded-xl border border-white/10 bg-white/3 p-4">
           <div className="flex items-center justify-between gap-2 mb-3">
             <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
-              Quality check · {new Date(video.qc.checkedAt).toLocaleString()}
+              Quality check{video.qc.scope === "preview" ? " (preview — first scenes only)" : ""} · {new Date(video.qc.checkedAt).toLocaleString()}
             </p>
             {/* S17 — the pre-flight gate: the /qc route re-measures the
                 STANDING render without paying for a re-render (the route ran

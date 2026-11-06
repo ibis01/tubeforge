@@ -26,7 +26,7 @@ import { db } from "./tenant-db";
 import { assertCtx } from "./tenant";
 import { aiCall } from "./budget";
 import { llmChat, llmVision } from "./llm";
-import { parseJsonLoose } from "./ai";
+import { aiCallJson, parseJsonLoose } from "./ai";
 import { parseScenes, sceneImageFile } from "./story";
 import * as storage from "./storage";
 import { errorText } from "./redact";
@@ -294,22 +294,32 @@ export async function runDirectorPass(
     profile,
   });
 
-  const raw = await aiCall("llm", "director pass LLM", () =>
-    llmChat({
-      messages: [
-        { role: "system", content: directorSystemPrompt(profile) },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0.6,
-    })
+  // S45 — parse + normalize INSIDE the retried closure. The live re-run bug:
+  // attempt 1 succeeded, attempt 2's response (prose around the JSON, a
+  // stray brace after it) died at parseJsonLoose with no re-ask, failing
+  // the whole job. Now a malformed or scene-less response costs one fresh
+  // generation, and the hardened parser (ai.ts) recovers most variance
+  // without spending the retry at all.
+  const normalized = await aiCallJson<DirectorPlan>("llm", "director pass LLM",
+    async () =>
+      (await llmChat({
+        messages: [
+          { role: "system", content: directorSystemPrompt(profile) },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.6,
+      })).choices?.[0]?.message?.content ?? "",
+    {
+      validate: (parsed) => {
+        const plan = parsePlan(
+          typeof parsed === "object" && parsed !== null ? JSON.stringify(parsed) : null
+        );
+        if (!plan || plan.scenes.length === 0)
+          throw new Error("Director pass returned no usable scenes — try again");
+        return plan;
+      },
+    }
   );
-  const text = raw.choices?.[0]?.message?.content ?? "";
-  const parsed = parseJsonLoose(text) as unknown;
-  const normalized = parsePlan(
-    typeof parsed === "object" && parsed !== null ? JSON.stringify(parsed) : null
-  );
-  if (!normalized || normalized.scenes.length === 0)
-    throw new Error("Director pass returned no usable scenes — try again");
 
   const plan: DirectorPlan = {
     ...normalized,

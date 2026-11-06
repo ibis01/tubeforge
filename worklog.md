@@ -1713,3 +1713,88 @@ local copy (one source of truth, ~170 lines deduped).
 
 **Verification:** tsc 0 · eslint 0 errors · unit suite unchanged (181/181 —
 UI-only change).
+
+## S45 (2026-11-06 UTC) — the re-run that died at parse, and the report the preview never wrote
+
+Closes the two S37/S39 live findings that stayed backlog through S44:
+(1) a director-plan re-run failing on LLM JSON variance (the owner hit it
+live — attempt 1 wrote a good plan, attempt 2's prose-flavored answer
+killed the job), and (2) preview renders persisting no qcReport (post-S40
+this left the badge saying "not run" over a playable artifact).
+
+**Finding 1 — the parse lived outside the retry.** Every one of the 15
+`parseJsonLoose` call sites parsed AFTER `aiCall` returned, so the retry
+loop could only retry the transport, never the answer: one malformed
+response failed the job with no re-ask. And the parser itself had two
+blind spots: the `/\{[\s\S]*\}/` fallback matched from the first `{` to
+the LAST `}` of the whole response — one stray brace in trailing prose
+swallowed the object into an unparseable blob — and its fallback
+`JSON.parse` was unguarded, surfacing a raw SyntaxError.
+
+**Fix 1 (three layers):**
+1. `parseJsonLoose` (ai.ts) is a strategy ladder now: strip fences +
+   BOM/zero-width noise → direct parse → repaired parse (trailing commas,
+   curly double quotes) → largest string-aware balanced object/array scan
+   (braces inside string literals never count toward depth, so both
+   prose-after-JSON and braces-in-values survive) → repaired scan. Only
+   total failure throws, and it throws the readable "Model did not return
+   valid JSON" — never a SyntaxError. Every one of the 15 sites benefits
+   without touching them.
+2. New `aiCallJson()` (ai.ts): ask + parse + shape-validation in ONE
+   retried closure — a malformed or shape-less response costs a fresh
+   generation, not the job. The retry pacing stays budget.ts's
+   (queue/billing-proven); the composition is unit-pinned with a
+   fake-driven `call` seam (the S37 SDK-free-client pattern).
+3. The two proven-exposure sites migrate: the director pass (the live
+   failure) and `generateScriptPackage` (autopilot step 1) — parsePlan
+   normalization and the title/script shape-check now throw INSIDE the
+   closure and get re-asked. The other 13 sites keep the hardened parser
+   without restructuring (documented as the migration pattern).
+
+**Finding 2 — preview evidence.** The preview branch of `runRenderJob`
+wrote only `hasPreview: true`; the QC battery never ran, so the scorecard
+badge showed nothing over a playable scene-1 artifact. The naive fix (run
+the battery and persist) would have poisoned the S40 gate: the standing
+qcReport is the export gate's evidence for final.mp4, and a scene-1 report
+judging a full export — or a preview overwriting a standing final report
+and staling a human's override acceptance — is exactly the failure the
+gate exists to prevent.
+
+**Fix 2 (scope, one invariant, fail-closed both ways):**
+- `QcReport.scope?: "preview"` (additive; absent = full render — every
+  historical report parses unchanged). New `qcForPreview()` (qc.ts) runs
+  the battery against preview.mp4 with preview-honest expectations: no
+  narration-sync check (the preview is a partial artifact), no captions
+  check (no SRT ships for previews); every artifact-local lens (playable,
+  black/frozen frames, aspect, loudness family, dead air, static, flicker,
+  stutter, cut alignment, tail fade) runs exactly as for a full render.
+- The persistence invariant lives in one pure function, `previewQcPatch()`
+  (video-jobs.ts): preview evidence persists ONLY while no full render
+  stands; a standing final report is never downgraded to scene-1 evidence;
+  a crashed battery CLEARS the field (stale evidence never survives a
+  newer preview). The render job's activity line now carries the verdict
+  ("QC passed / flagged N check(s) (preview scope)").
+- `applyQcPolicy` (qc-policy.ts) treats a preview-scoped standing report
+  as NOT standing for the ship (missingReport) — fail-closed #5: even if
+  a future writer violates the invariant, partial evidence can never
+  certify the whole. Report mode releases the hold but keeps the badge
+  honest.
+- The scorecard header renders "Quality check (preview — first scenes
+  only)" for scoped reports; the Re-run QC button was already
+  final-render-only (its tooltip says so).
+
+**Files:** `src/lib/tubeforge/ai.ts` (parser ladder + aiCallJson + script
+migration), `src/lib/tubeforge/director.ts` (closure migration),
+`src/lib/tubeforge/qc.ts` (scope + qcForPreview), `src/lib/tubeforge/
+qc-policy.ts` (preview guard), `src/lib/tubeforge/types.ts` (DTO scope),
+`src/lib/tubeforge/video-jobs.ts` (preview branch + previewQcPatch),
+`src/components/tubeforge/video-detail-dialog.tsx` (scope chip),
+`scripts/test-unit.mts` (+10 S45 tests).
+
+**Verification:** tsc 0 · eslint 0 errors (670 warnings, the exact
+pre-change baseline) · **191/191 unit** (181 + 10 new: the parser ladder
+×5, the aiCallJson composition ×4 branches, the policy guard, the
+parseQcReport round-trip, previewQcPatch both ways, and a real-ffmpeg
+preview.mp4 through qcForPreview proving scope + the absent duration/
+captions checks) · queue PASS · billing 40/40 · s30 41/41 · s36 38/38 ·
+s40 102/102 · s34 ALL PASS · s35 17/17 · s4 ALL PASS · s5 ALL PASS.

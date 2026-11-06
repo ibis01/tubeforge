@@ -1609,3 +1609,35 @@ via Settings → Background Music — not where a video's track is picked.
 immediately. settings-music.tsx deduped onto the shared component.
 
 **Verification:** tsc 0 · eslint 0 errors · unit suite 181/181 (UI-only).
+
+## S45 (2026-11-06 UTC) — the re-run that died at parse, and the report the preview never wrote
+
+Closes the two S37/S39 live findings that stayed backlog: director-plan
+re-runs failing on LLM JSON variance, and preview renders persisting no
+qcReport.
+
+1. **The parse lived outside the retry** — all 15 `parseJsonLoose` sites
+   parsed after `aiCall` returned, so one malformed response failed the
+   job with no re-ask; the parser's greedy `/\{[\s\S]*\}/` fallback also
+   swallowed the object whenever trailing prose contained a brace, and
+   its fallback parse was unguarded (raw SyntaxError). Now: a strategy
+   ladder in `parseJsonLoose` (fences/noise strip → direct → repaired
+   [trailing commas, curly quotes] → string-aware balanced scan →
+   repaired scan → readable error), a new `aiCallJson()` that parses and
+   shape-validates INSIDE the retried closure, and the two
+   proven-exposure sites (director pass, script package) migrated onto
+   it. Fake-driven unit tests pin the composition: variance costs a
+   FRESH ask, not the job.
+2. **Preview evidence, scoped** — `qcForPreview()` runs the battery
+   against preview.mp4 with preview-honest expectations (no narration-sync,
+   no captions; every artifact-local lens runs), the report carries
+   `scope: "preview"`, the pure `previewQcPatch()` pins the persistence
+   invariant (preview evidence persists only while no full render stands;
+   a crashed battery clears the field), and `applyQcPolicy` fail-closes:
+   a preview-scoped report is not standing evidence for the export gate.
+   The scorecard header labels scoped reports; the activity line carries
+   the verdict.
+
+Gate: tsc 0 · eslint 0 errors (670 warnings = baseline) · 191/191 unit
+(+10) · queue PASS · billing 40/40 · s30 41/41 · s36 38/38 · s40 102/102
+· s34/s4/s5 ALL PASS · s35 17/17. Full narrative in the worklog ("S45").
