@@ -2024,9 +2024,9 @@ export function CreateView() {
                         key={s.index}
                         className="shrink-0 w-40 rounded-xl overflow-hidden border border-white/10 bg-white/3 relative"
                       >
-                        {video.hasStoryboard ? (
+                        {s.imageUrl ? (
                           <img
-                            src={`/api/videos/${video.id}/storyboard/${s.index}`}
+                            src={s.imageUrl}
                             alt={`Scene ${s.index}: ${s.title}`}
                             className="w-full aspect-video object-cover"
                           />

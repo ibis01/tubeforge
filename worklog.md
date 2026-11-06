@@ -1550,3 +1550,65 @@ TASKS.md (record), this entry.
 **Final gate:** tsc 0 · eslint 0 errors · **174/174 unit** · queue PASS
 · s36 probe 38/38 · s30 probe 41/41 · s40 probe 102/102 · billing 40/40
 · s41 probe PASS (desktop + mobile).
+
+## S42 (2026-11-06 UTC) — the upload that looked like a no-op
+
+**Trigger:** user report — replacing a scene's storyboard image with
+their own artwork in the Scene Studio ("上传自有图片") "doesn't work":
+the dialog keeps showing the old AI-generated take after the upload.
+
+**Diagnosis (evidence-first):** the s29 route-e2e already proves the
+POST works end-to-end (200, `hasStoryboard` flips, cover-crop accepted)
+— so the bytes land; the UI just never shows them. The mechanism:
+
+- The scene-art route serves `/api/videos/<id>/storyboard/<n>` with
+  `Cache-Control: private, max-age=3600`, and the URL is STABLE —
+  upload, re-roll and AI edit all rewrite the bytes behind the same
+  path.
+- `serializeScenes` emitted that bare URL, and every `<img>` (Scene
+  Studio current-art + Before/After, storyboard grid, video-detail
+  cards, timeline thumbnails) rendered it verbatim → after a
+  replacement the src string is unchanged → the browser serves the
+  cached first take for up to an hour. A successful upload that
+  "does nothing".
+- The codebase already knew: timeline-studio manually appended
+  `?v=${artEpoch}`, cast-view `?v=${updatedAt}` — and the slides PNG
+  route chose `private, no-cache` for exactly this reason. The scene
+  art route was the one asset family without either defense.
+
+**Fix (version-stamped URLs + revalidation, five coordinated edits):**
+
+1. `story.ts` — `serializeScenes` probes `storage.stat` instead of
+   `exists` (same driver seam, one call) and stamps the URL:
+   `?v=<mtime-ms>-<size>` via the new exported `sceneArtVersion()`.
+   The URL rotates the moment new art lands, so max-age now caches
+   exactly ONE take. Cross-driver safe: s3 HEADs carry second-granular
+   Last-Modified; size disambiguates same-second writes; a broken
+   clock degrades to `0-<size>` (never "NaN" in a URL).
+2. `storyboard/[n]/route.ts` — content-hash ETag + `If-None-Match` →
+   304, so a stale copy revalidates cheaply instead of re-downloading.
+3. `create-view.tsx` — the library strip stopped hand-building the raw
+   URL; it renders the DTO's versioned `imageUrl` (per-scene truth,
+   not the whole-video `hasStoryboard` flag).
+4. `timeline-studio.tsx` — the canvas preview pool entries now carry
+   their URL and reload when the stamp rotates (was: keyed by scene
+   index forever, so a replaced take kept drawing the stale decode).
+5. `scene-editor.tsx` — upload and AI-edit now save text edits FIRST
+   (the re-roll contract): the new URL rotation re-seeds the dialog
+   from server truth, and saving first means that truth already
+   carries the user's keystrokes instead of reverting them.
+
+**Verification:** two new tests in `scripts/test-unit.mts` pin the
+contract — `sceneArtVersion` (URL-safe, rotates on mtime OR size,
+NaN-clock degrades) and a storage-backed `serializeScenes` round-trip
+(no art → null; art lands → `?v=` stamp present; art REPLACED → stamp
+rotates — the exact bug; art removed → null again). Gate: tsc 0 ·
+eslint 0 errors (touched files: same warning count before/after) ·
+**176/176 unit** (174 + the 2 new).
+
+**Files:** `src/lib/tubeforge/story.ts` (stat + `sceneArtVersion` +
+stamped DTO), `src/app/api/videos/[id]/storyboard/[n]/route.ts`
+(ETag/304), `src/components/tubeforge/views/create-view.tsx` (DTO
+URL), `src/components/tubeforge/timeline-studio.tsx` (pool carries
+URL), `src/components/tubeforge/scene-editor.tsx` (save-before-art),
+`scripts/test-unit.mts` (S42 tests), TASKS.md (record), this entry.

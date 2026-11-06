@@ -953,7 +953,10 @@ export function TimelineStudio({
 
   // ---------- preview media pools (images / stock video) ----------
 
-  const imagePool = useRef(new Map<number, HTMLImageElement>());
+  // S42: image entries carry their URL — the DTO stamps it with an art
+  // version (?v=), so a replaced take rotates the key and the pool reloads
+  // it instead of drawing the stale decode forever.
+  const imagePool = useRef(new Map<number, { img: HTMLImageElement; url: string }>());
   const stockPool = useRef(new Map<number, HTMLVideoElement>());
   // S3 — per-scene keyed-art cache (chroma) + the brand logo for PIP.
   const keyedArtPool = useRef(new Map<string, HTMLCanvasElement>());
@@ -962,12 +965,12 @@ export function TimelineStudio({
 
   useEffect(() => {
     for (const s of scenes) {
-      if (s.imageUrl && !imagePool.current.has(s.index)) {
+      if (s.imageUrl && imagePool.current.get(s.index)?.url !== s.imageUrl) {
         const img = new Image();
         img.onload = bump;
         img.onerror = bump;
         img.src = s.imageUrl;
-        imagePool.current.set(s.index, img);
+        imagePool.current.set(s.index, { img, url: s.imageUrl });
       }
       if (s.stockUrl && !stockPool.current.has(s.index)) {
         const vid = document.createElement("video");
@@ -2062,7 +2065,7 @@ export function TimelineStudio({
     };
 
     const drawLayer = (idx: number, localSec: number, cam: { scale: number; dx: number; dy: number }) => {
-      const img = imagePool.current.get(idx);
+      const img = imagePool.current.get(idx)?.img;
       const vid = stockPool.current.get(idx);
       const src: HTMLImageElement | HTMLVideoElement | null =
         img && img.complete && img.naturalWidth > 0

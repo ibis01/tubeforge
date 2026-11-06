@@ -33,6 +33,16 @@ export function sceneImageFile(index: number): string {
   return `scene-${String(index).padStart(2, "0")}.png`;
 }
 
+/** URL cache-buster for one scene's art, derived from its storage stat
+ *  (S42). The storyboard image route serves stable URLs under max-age, so
+ *  the DTO rotates the URL instead: a new take → new mtime/size → new ?v= →
+ *  every <img> refetches. Cross-driver safe: s3 HEADs carry second-granular
+ *  Last-Modified, size disambiguates same-second writes. */
+export function sceneArtVersion(st: { size: number; mtime: Date }): string {
+  const ms = st.mtime.getTime();
+  return `${Number.isFinite(ms) ? Math.floor(ms) : 0}-${st.size}`;
+}
+
 export function sceneWavFile(index: number): string {
   return `scene-${String(index).padStart(2, "0")}.wav`;
 }
@@ -98,10 +108,21 @@ export async function serializeScenes(
 ): Promise<import("./types").SceneDTO[]> {
   // Storage seam (T-3.7): existence checks go through the driver — a local
   // existsSync probe would lie under s3.
-  const hasImageByIdx = new Map<number, boolean>();
+  // S42: the probe is a STAT, not a bare exists — the scene-art URL is
+  // version-stamped from it (see sceneArtVersion). The bytes behind
+  // /storyboard/<n> change on upload / re-roll / AI edit while the URL stays
+  // put, so an unstamped URL under max-age pins every <img> to the FIRST
+  // take it fetched — a successful upload that "does nothing" for an hour.
+  const artByIdx = new Map<
+    number,
+    { size: number; mtime: Date } | null
+  >();
   await Promise.all(
     scenes.map(async (s) => {
-      hasImageByIdx.set(s.index, await storage.exists(`${videoId}/${sceneImageFile(s.index)}`));
+      artByIdx.set(
+        s.index,
+        await storage.stat(`${videoId}/${sceneImageFile(s.index)}`)
+      );
     })
   );
   // Stage 5 (module C) — the cast's logged looks, ONE grouped query for the
@@ -123,7 +144,8 @@ export async function serializeScenes(
     }
   }
   return scenes.map((s) => {
-    const hasImage = hasImageByIdx.get(s.index) ?? false;
+    const art = artByIdx.get(s.index) ?? null;
+    const hasImage = art !== null;
     return {
       index: s.index,
       title: s.title,
@@ -139,7 +161,12 @@ export async function serializeScenes(
       focal: normalizeFocalToken(s.focal) ?? "center",
       style: sanitizeSceneStyle(s.style),
       hasImage,
-      imageUrl: hasImage ? `/api/videos/${videoId}/storyboard/${s.index}` : null,
+      // S42 — version-stamped: rotates the moment new art lands (upload,
+      // re-roll, AI edit) so browsers refetch instead of serving the cached
+      // previous take for the route's max-age window.
+      imageUrl: hasImage
+        ? `/api/videos/${videoId}/storyboard/${s.index}?v=${sceneArtVersion(art)}`
+        : null,
       generating: isJobRunning(`${videoId}#scene${s.index}`, "scene"),
       hasStock: Boolean(s.stock),
       stockUrl: s.stock ? `/api/videos/${videoId}/stock/${s.index}` : null,

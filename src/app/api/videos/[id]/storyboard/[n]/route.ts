@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/tubeforge/tenant-db";
@@ -34,12 +35,24 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!image)
     return NextResponse.json({ error: "Scene image not found" }, { status: 404 });
 
+  // S42 — revalidation contract: the DTO stamps this URL with ?v=<mtime>-<size>
+  // (serializeScenes), so a fresh take means a fresh URL and the max-age below
+  // only ever caches ONE take. The ETag (content hash) additionally lets a
+  // stale copy revalidate cheaply — 304 instead of a full re-download.
+  const etag = `"s-${createHash("sha1").update(image).digest("hex").slice(0, 20)}"`;
+  if (req.headers.get("if-none-match") === etag)
+    return new NextResponse(null, {
+      status: 304,
+      headers: { ETag: etag, "Cache-Control": "private, max-age=3600" },
+    });
+
   return new NextResponse(new Uint8Array(image), {
     status: 200,
     headers: {
       "Content-Type": "image/png",
       "Content-Length": String(image.length),
       "Cache-Control": "private, max-age=3600",
+      ETag: etag,
     },
   });
 }

@@ -290,6 +290,13 @@ export function SceneEditorDialog({
       return;
     }
     setBusy("edit");
+    // S42: persist text edits BEFORE the art rotates — the repaint lands a
+    // new version-stamped URL, which re-seeds this dialog from server truth;
+    // saving first means that truth already carries the user's keystrokes.
+    if (!(await saveText(true))) {
+      setBusy(null);
+      return;
+    }
     try {
       const res = await fetch(`/api/videos/${videoId}/storyboard`, {
         method: "POST",
@@ -316,6 +323,12 @@ export function SceneEditorDialog({
       return;
     }
     setBusy("upload");
+    // S42: same contract as re-roll — save text edits first, so the re-seed
+    // that follows the new art URL never reverts unsaved keystrokes.
+    if (!(await saveText(true))) {
+      setBusy(null);
+      return;
+    }
     try {
       const form = new FormData();
       form.set("scene", String(scene.index));

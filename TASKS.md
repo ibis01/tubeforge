@@ -1531,3 +1531,36 @@ width), hero 670px, 6/6 presets inside; plus a 375px mobile leg (373 =
 373, no overflow) and before/after screenshots. Gate: tsc 0 · eslint 0
 errors (touched files 8 warnings before = 8 after) · 174/174 unit ·
 queue PASS · s36 38/38 · s30 41/41 · s40 probe 102/102 · billing 40/40.
+
+## S42 (2026-11-06 UTC) — the upload that looked like a no-op
+
+**Symptom:** replacing a scene's storyboard image with an uploaded
+artwork in the Scene Studio appeared to do nothing — the dialog kept
+showing the previous take.
+
+**Root cause:** the scene-art route serves a STABLE URL
+(`/api/videos/<id>/storyboard/<n>`) under `Cache-Control: private,
+max-age=3600`, and `serializeScenes` emitted that bare URL to every
+`<img>`. Upload/re-roll/AI-edit rewrite the bytes behind the same
+path, so after a replacement the src string is unchanged and the
+browser serves the cached first take for up to an hour. (The slides
+PNG route already used `no-cache`; timeline-studio/cast-view already
+appended manual `?v=` params — scene art was the unprotected family.)
+
+**Fix:** version-stamped URLs + revalidation. `serializeScenes` now
+stats the art through the storage seam and stamps the DTO URL with
+`?v=<mtime-ms>-<size>` (`sceneArtVersion`, exported) — the URL rotates
+the moment new art lands, so max-age caches exactly one take. The
+route adds a content-hash ETag with `If-None-Match` → 304.
+create-view's library strip renders the DTO URL instead of a
+hand-built one; timeline-studio's preview pool entries carry their URL
+and reload on rotation; scene-editor's upload/AI-edit save text edits
+first (the re-roll contract) so the re-seed that follows a rotated URL
+never reverts unsaved keystrokes.
+
+**Verification:** `scripts/test-unit.mts` — two new S42 tests: the
+pure token contract (URL-safe, rotates on mtime or size, NaN clock
+degrades to `0-<size>`) and a storage-backed `serializeScenes`
+round-trip proving the stamp rotates when art is replaced (the bug)
+and returns to null when removed. Gate: tsc 0 · eslint 0 errors ·
+176/176 unit (174 + 2 new).

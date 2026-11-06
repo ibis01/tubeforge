@@ -1222,6 +1222,76 @@ await test("storage: list() enumerates a prefix and tolerates absence (T-4.0)", 
 });
 
 // ---------------------------------------------------------------------------
+// S42 — version-stamped scene-art URLs (the upload that looked like a no-op)
+// ---------------------------------------------------------------------------
+
+await test("S42 sceneArtVersion: URL-safe token that rotates with mtime AND size", async () => {
+  const { sceneArtVersion } = await import("../src/lib/tubeforge/story.ts");
+  const base = sceneArtVersion({ size: 4096, mtime: new Date(1700000000123) });
+  eq(base, "1700000000123-4096", "mtime ms + size, dash-joined");
+  ok(/^[0-9]+-[0-9]+$/.test(base), "token is URL-safe (digits + dash only)");
+  // Rotation axes: either a new mtime or a new size must change the token.
+  ok(sceneArtVersion({ size: 4096, mtime: new Date(1700000000999) }) !== base, "different mtime rotates");
+  ok(sceneArtVersion({ size: 8192, mtime: new Date(1700000000123) }) !== base, "different size rotates");
+  // A broken clock (s3 HEAD without Last-Modified) degrades to size-only —
+  // never "NaN", which would poison the URL.
+  eq(sceneArtVersion({ size: 10, mtime: new Date(Number.NaN) }), "0-10", "invalid mtime degrades to 0");
+});
+
+await test("S42 serializeScenes: the art URL carries ?v= and rotates when art is replaced", async () => {
+  const storage = await import("../src/lib/tubeforge/storage.ts");
+  const { parseScenes, serializeScenes } = await import("../src/lib/tubeforge/story.ts");
+  delete process.env.TUBEFORGE_STORAGE_DRIVER; // local driver — real bytes on disk
+  const probe = `s42-art-probe-${Date.now()}`;
+  const scenes = parseScenes(
+    JSON.stringify([
+      {
+        index: 1, title: "A", narration: "First scene narration here.", visual: "v", camera: "static",
+        mood: "m", caption: "", hostInScene: false, rehook: false, sfx: "none",
+      },
+      {
+        index: 2, title: "B", narration: "Second scene narration here.", visual: "v", camera: "static",
+        mood: "m", caption: "", hostInScene: false, rehook: true, sfx: "sting",
+      },
+    ])
+  );
+  ok(scenes.length === 2, "fixture parses");
+  try {
+    // No art yet — the DTO must say so (null URL, hasImage false).
+    let dtos = await serializeScenes(probe, scenes);
+    eq(dtos[0].hasImage, false, "no art → hasImage false");
+    eq(dtos[0].imageUrl, null, "no art → imageUrl null");
+
+    // Art lands (generation / upload path writes the same key).
+    await storage.put(`${probe}/scene-01.png`, Buffer.alloc(1000, 1));
+    dtos = await serializeScenes(probe, scenes);
+    eq(dtos[0].hasImage, true, "art present → hasImage true");
+    ok(
+      /^\/api\/videos\/[^/]+\/storyboard\/1\?v=\d+-\d+$/.test(dtos[0].imageUrl ?? ""),
+      `URL keeps the /storyboard/<n>?v=<mtime>-<size> shape (got ${dtos[0].imageUrl})`
+    );
+    const v1 = dtos[0].imageUrl?.split("?v=")[1] ?? "";
+    ok(v1.length > 0, "URL carries a non-empty ?v= stamp");
+    eq(dtos[1].imageUrl, null, "scene 2 still has no art → null");
+
+    // THE BUG: same key, new bytes. The URL must rotate or every <img> under
+    // the route's max-age keeps rendering the previous take.
+    await storage.put(`${probe}/scene-01.png`, Buffer.alloc(2000, 2));
+    const dtos2 = await serializeScenes(probe, scenes);
+    const v2 = dtos2[0].imageUrl?.split("?v=")[1] ?? "";
+    ok(v2.length > 0 && v2 !== v1, `replaced art rotates the stamp (${v1} → ${v2})`);
+
+    // Art removed (invalidation) — back to the honest null.
+    await storage.remove(`${probe}/scene-01.png`);
+    const dtos3 = await serializeScenes(probe, scenes);
+    eq(dtos3[0].hasImage, false, "removed art → hasImage false");
+    eq(dtos3[0].imageUrl, null, "removed art → imageUrl null");
+  } finally {
+    await storage.remove(`${probe}/scene-01.png`).catch(() => {});
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Stage 3 — email adapter (T-3.9)
 // ---------------------------------------------------------------------------
 
