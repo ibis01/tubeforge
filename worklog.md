@@ -1494,3 +1494,59 @@ TASKS.md (record), this entry.
 **Final gate:** tsc 0 · eslint 0 errors · **174/174 unit** (169 + 5) ·
 queue PASS · s36 probe 38/38 · s30 probe 41/41 · **s40 probe 102/102** ·
 billing 40/40 · e2e 26/26.
+
+## S41 (2026-11-06 UTC) — the dialog that ate its own frame
+
+**Trigger:** user report — the video-detail card renders badly (giant
+cropped thumbnail, selects and preset chips cut off at the right edge,
+text clipped mid-sentence).
+
+**Diagnosis (evidence-first, not guesswork):** VLM pass over the
+screenshot named the symptoms; the code read found the suspects;
+`scripts/s41-visual-probe.mts` (new — Playwright against the local dev
+server, library → dialog → Video tab, desktop 1440px + mobile 375px
+legs) pinned the mechanism with live numbers:
+
+- `DialogContent` computed `display: grid`, single AUTO track sized
+  `3194.56px` vs `clientWidth: 510` — the track followed the Timeline
+  Studio picker row's nowrap min-content (measured **3,113px**: nine
+  fixed-width select groups, S6→S15 each adding one).
+- Every grid item stretched to the track: hero `img.w-full` at
+  **3,195px** (aspect-video → ~1,797px tall — the "giant photo" that
+  pushed the pills/title/tabs below the fold), cards and chips laid out
+  at track width, 2/6 preset chips inside the frame.
+- The frame itself was wrong: `max-w-2xl` wrote 672px, computed 510px —
+  the base's `sm:max-w-lg` survives tailwind-merge as a separate variant
+  group and out-capped every wider override (scene-editor `max-w-2xl`,
+  cast-view `max-w-3xl` — all silently 512px).
+
+**Fix (three coordinated edits):**
+
+1. `timeline-studio.tsx` — the picker row `ml-auto flex … gap-1` →
+   `flex-wrap … gap-1.5`, and all nine select groups wrap internally, so
+   the row reflows at any width (7 rows at 672px).
+2. `ui/dialog.tsx` — base gains `grid-cols-1` (`repeat(1,
+   minmax(0, 1fr))`): the track can never again size to a child's
+   min-content; a wide child overflows only its own box. Base drops
+   `sm:max-w-lg` so caller max-w-* finally wins; `ui/command.tsx`
+   restates its own 512px (confirm dialogs unchanged).
+3. Comments at both sites document the mechanism and the merge-group
+   trap.
+
+**After:** track 670px = clientWidth, `hasHorizontalScrollbar: false`,
+toolbar 588px wrapped, hero 670px, 6/6 presets inside; mobile leg 373 =
+373 no overflow. VLM re-read of the after screenshot: thumbnail
+full-width uncropped, pills + title + tabs visible, tidy wrapped rows,
+no overlap. (Select labels still ellipsize inside their fixed widths —
+the designed compact picks; tooltips carry the full text.)
+
+**Files:** `src/components/tubeforge/timeline-studio.tsx` (wrap the
+picker row + 9 groups, S41 comment), `src/components/ui/dialog.tsx`
+(grid-cols-1, drop sm:max-w-lg, S41/S41b comments),
+`src/components/ui/command.tsx` (restate confirm-dialog width),
+`scripts/s41-visual-probe.mts` (new — the measuring probe),
+TASKS.md (record), this entry.
+
+**Final gate:** tsc 0 · eslint 0 errors · **174/174 unit** · queue PASS
+· s36 probe 38/38 · s30 probe 41/41 · s40 probe 102/102 · billing 40/40
+· s41 probe PASS (desktop + mobile).

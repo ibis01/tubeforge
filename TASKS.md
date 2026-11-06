@@ -1479,3 +1479,55 @@ unmeasured alone blocks exactly per its severity; maximal cases; the
 staleness matrix; injected-env switch; parser edges). Gate: tsc 0 · eslint 0
 errors · 174/174 unit (+5) · queue PASS · s36 38/38 · s30 41/41 · s40 probe
 102/102 · billing 40/40 · e2e 26/26.
+
+## S41 (2026-11-06 UTC) — the dialog that ate its own frame
+
+**Report:** the video-detail card "not rendering well" — thumbnail a giant
+cropped sliver, voice select truncated mid-word at the right edge, a third
+export preset chip cut past the border ("R…"), Ken Burns / Keynote card
+text clipped mid-sentence, nested scrollbars.
+
+**Root cause (two stacked layout bugs, mechanically pinned by
+`scripts/s41-visual-probe.mts`):**
+
+1. **The grid blowout.** `ui/dialog.tsx`'s DialogContent base is a bare
+   `grid` — a single AUTO track, which sizes to the widest item's
+   min-content. The Timeline Studio picker row (`ml-auto flex
+   items-center gap-1`, nowrap) had accumulated one fixed-width select
+   group per stage — S6 captions, S7 music, S8 voice, S9 poster ×2 +
+   image + regenerate, S10 short, S13 frame + fps, S14 grade + burn,
+   S15 motion + transition — until its nowrap min-content measured
+   **3,113px**. The auto track followed: `gridTemplateColumns: 3194.56px`
+   against a **510px** visible frame. Every grid item stretched with it
+   (the thumbnail `img.w-full` rendered 3,195px wide → aspect-video
+   ≈ 1,797px tall → the "giant cropped photo" that pushed the real
+   content off-screen), every card laid out at track width and clipped at
+   the frame, and only 2 of 6 preset chips stayed inside.
+
+2. **The width that never was.** The dialog asked for `max-w-2xl`
+   (672px) but rendered at **510px**: the base also carried
+   `sm:max-w-lg`, and tailwind-merge keeps `sm:`-prefixed max-width as a
+   SEPARATE variant group — the override silently lost on every viewport
+   ≥ 640px. Same for scene-editor (`max-w-2xl`) and cast-view's second
+   dialog (`max-w-3xl`); every wide-dialog intent in the app was capped
+   at 512px.
+
+**Fix:** (a) the picker row and each of its nine groups now
+`flex-wrap` — groups flow onto as many rows as the width demands (7 rows
+at the restored 672px frame, nothing overflows); (b) DialogContent base
+gains `grid-cols-1` (= `repeat(1, minmax(0, 1fr))`) so the track is
+capped at the container width — a wide child can only overflow its own
+box, never stretch the dialog again; (c) the base drops `sm:max-w-lg`
+(callers own the desktop cap; `ui/command.tsx`'s confirm wrapper
+restates its own 512px), so `max-w-2xl` finally means 672px — mobile
+keeps the `calc(100%-2rem)` gutter.
+
+**Verification:** new `scripts/s41-visual-probe.mts` (Playwright, local
+dev server + minted session) measures the live dialog: before — track
+3194.56px / scrollWidth 3195 vs clientWidth 510, toolbar one 3,113px
+nowrap row, hero img 3,195px, 2/6 presets visible; after — track 670px =
+clientWidth, zero horizontal overflow, toolbar wrapped (588px content
+width), hero 670px, 6/6 presets inside; plus a 375px mobile leg (373 =
+373, no overflow) and before/after screenshots. Gate: tsc 0 · eslint 0
+errors (touched files 8 warnings before = 8 after) · 174/174 unit ·
+queue PASS · s36 38/38 · s30 41/41 · s40 probe 102/102 · billing 40/40.

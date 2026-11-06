@@ -2544,11 +2544,17 @@ export function TimelineStudio({
             </span>
           ) : null}
         </div>
-        <div className="ml-auto flex items-center gap-1">
+        {/* S41 — flex-wrap: this row accumulated one fixed-width select
+            group per stage (S6 captions, S7 music, S8 voice, S9 poster ×2,
+            S10 short, S13 frame, S14 grade, S15 motion + transition) until its
+            nowrap min-content hit ~3,100px. Inside the dialog's 672px frame
+            that blew the whole grid out (see ui/dialog.tsx) — now the groups
+            flow onto as many rows as the width demands. */}
+        <div className="ml-auto flex flex-wrap items-center gap-1.5">
           {/* S6 — the caption look: doc-level, burned by the render whenever
               captions are on; the preview mirrors it. Junk can only ever
               select a catalog look (sanitizeCaptionStyle at both ends). */}
-          <div className="flex items-center gap-1.5 mr-1">
+          <div className="flex flex-wrap items-center gap-1.5 mr-1">
             <Type className="h-3.5 w-3.5 text-muted-foreground" />
             <Select
               value={timeline?.renderPrefs?.captionStyle ?? "classic"}
@@ -2575,7 +2581,7 @@ export function TimelineStudio({
               preview resolve through the SAME chain (doc > plan > row);
               "Follow Settings" keeps the pre-S7 behavior, "Mute bed" ships
               true silence, and the audition button plays the resolved bed. */}
-          <div className="flex items-center gap-1.5 mr-1">
+          <div className="flex flex-wrap items-center gap-1.5 mr-1">
             <Music2 className="h-3.5 w-3.5 text-muted-foreground" />
             <Select
               value={
@@ -2655,7 +2661,7 @@ export function TimelineStudio({
               (real TTS re-reads every scene), so it stages PENDING, auditions
               on the video's own opening line, and commits through a two-step
               button — never a casual dropdown flip. */}
-          <div className="flex items-center gap-1.5 mr-1">
+          <div className="flex flex-wrap items-center gap-1.5 mr-1">
             <Mic className="h-3.5 w-3.5 text-muted-foreground" />
             <Select
               value={voicePick ?? video.voice}
@@ -2760,7 +2766,7 @@ export function TimelineStudio({
               the pause is the cost disclosure), with its own ears: the
               audition plays the CURRENT narrator at the staged tempo on
               the video's own opening line. */}
-          <div className="flex items-center gap-1.5 mr-1">
+          <div className="flex flex-wrap items-center gap-1.5 mr-1">
             <Gauge className="h-3.5 w-3.5 text-muted-foreground" />
             <Select
               value={(() => {
@@ -2856,7 +2862,7 @@ export function TimelineStudio({
               out-of-range index falls back to the opening scene); the thumb
               shows what the world sees, the two-step Regenerate runs the
               CogView pass (the cost disclosure). */}
-          <div className="flex items-center gap-1.5 mr-1">
+          <div className="flex flex-wrap items-center gap-1.5 mr-1">
             <ImagePlus className="h-3.5 w-3.5 text-muted-foreground" />
             <Select
               value={(() => {
@@ -2951,7 +2957,7 @@ export function TimelineStudio({
               falls back to the hook heuristic); the arm cuts the 9:16 Short
               from the rendered master — an ffmpeg slice, no generation
               pass, so it is single-step (no cost disclosure needed). */}
-          <div className="flex items-center gap-1.5 mr-1">
+          <div className="flex flex-wrap items-center gap-1.5 mr-1">
             <Smartphone className="h-3.5 w-3.5 text-muted-foreground" />
             <Select
               value={(() => {
@@ -3027,7 +3033,7 @@ export function TimelineStudio({
               (PATCH immediate, the standing render stays; the next render
               draws the picked frame). Slides locks the aspect vertical — the
               deck's PNG IS the frame, the render only ever draws 9:16 there. */}
-          <div className="flex items-center gap-1.5 mr-1">
+          <div className="flex flex-wrap items-center gap-1.5 mr-1">
             <Frame className="h-3.5 w-3.5 text-muted-foreground" />
             <Select
               value={resolvedAspect}
@@ -3094,7 +3100,7 @@ export function TimelineStudio({
               default). The grade is a doc pick (autosave persists); the
               burn is a row pick (PATCH immediate, the standing render
               stays — the next render ships captions the picked way). */}
-          <div className="flex items-center gap-1.5 mr-1">
+          <div className="flex flex-wrap items-center gap-1.5 mr-1">
             <FileDown className="h-3.5 w-3.5 text-muted-foreground" />
             <Select
               value={timeline?.renderPrefs?.quality ?? "standard"}
@@ -3147,7 +3153,7 @@ export function TimelineStudio({
               and a standing off-stair pick (the dialog's sliders write
               any legal integer / in-window step) shows as its own item so
               the trigger never blanks. */}
-          <div className="flex items-center gap-1.5 mr-1">
+          <div className="flex flex-wrap items-center gap-1.5 mr-1">
             <Move className="h-3.5 w-3.5 text-muted-foreground" />
             <Select
               value={resolvedMotion.mode}

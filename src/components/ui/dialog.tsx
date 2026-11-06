@@ -60,7 +60,21 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg",
+          // S41 — grid-cols-1 (repeat(1, minmax(0, 1fr))) is structural, not
+          // cosmetic: a bare `grid` sizes its single AUTO track to the widest
+          // item's min-content, so ONE unwrappable child (the Timeline Studio
+          // picker row, ~3,100px of fixed-width selects) stretched the track —
+          // and with it every sibling: the thumbnail, every card, every chip —
+          // far past the max-w frame, clipping the whole dialog at the right
+          // edge. minmax(0, 1fr) caps the track at the container width so a
+          // wide child can only overflow its own box, never the dialog's.
+          //
+          // S41b — the base also carried `sm:max-w-lg`, which tailwind-merge
+          // keeps as a SEPARATE variant group: every caller's `max-w-2xl`/
+          // `max-w-3xl` override silently lost to it (the video detail dialog
+          // rendered 512px instead of the intended 672px). Callers now own
+          // the desktop cap; the mobile gutter survives via calc(100%-2rem).
+          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid grid-cols-1 w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200",
           className
         )}
         {...props}
