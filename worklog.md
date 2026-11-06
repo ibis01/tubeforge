@@ -1612,3 +1612,104 @@ stamped DTO), `src/app/api/videos/[id]/storyboard/[n]/route.ts`
 URL), `src/components/tubeforge/timeline-studio.tsx` (pool carries
 URL), `src/components/tubeforge/scene-editor.tsx` (save-before-art),
 `scripts/test-unit.mts` (S42 tests), TASKS.md (record), this entry.
+
+## S43 (2026-11-06 UTC) — the boom, the caption that wouldn't stick, and the iPhone photo
+
+**Trigger:** user field report on a rendered video (b.mp4, 4:03 Battle-of-Badr
+documentary) — three issues: (1) "unnecessary sound at the beginning or
+during transition", (2) "when I edit the storyboard caption it renders in the
+voice", (3) HEIC uploads rejected.
+
+**Diagnosis (evidence-first, on the actual file):**
+
+- **The sounds are OURS.** Sub-bass envelope scan (25-120 Hz bandpass,
+  200ms windows, `scripts/subbass-scan.py`): the loudest event of the whole
+  243s sits at 0.0-0.8s — **12 dB above the median floor** — decaying over
+  ~1.3s, exactly the fingerprint of the sfx.ts `boom` recipe
+  (pitch-falling 110→38 Hz body) that `applyRetentionRules` hard-assigns to
+  scene 1. After that, clusters of low-frequency hits every ~9-10s — the
+  `sting` braams fired 40ms after every rehook cut (rehooks land every 3rd
+  scene). Both cues start at FULL level (-3 dB RMS synthesized, mixed at
+  0.35/0.45 weight). The recipe fingerprints were re-synthesized from
+  sfx.ts verbatim and matched before touching anything.
+- **The caption trap.** The Scene Studio's Caption field writes the ROW's
+  `scene.caption`, but the smart-caption render path only honors caption
+  overrides from the SAVED TIMELINE DOC (`docScenes.map(d => d.caption)`) —
+  and the doc's captions were a snapshot of the row at ASSEMBLY time
+  (assembleTimeline seeded them). So a Scene Studio caption edit changed
+  the row while the render kept the doc's stale copy: the edit never showed.
+  The only text edit that visibly changed anything was NARRATION — which
+  invalidates + re-TTSes the voice. Hence "editing the caption renders in
+  the voice": the field that works is the one that speaks.
+- **HEIC.** `sniffImageFormat` rejected HEIF bytes, and stock ffmpeg (the
+  CI image's apt build included) ships WITHOUT libheif — so "just accept
+  it" would die at decode.
+
+**Fix (four coordinated changes):**
+
+1. **SFX default OFF** — `"sfx.enabled": "false"` in settings-public's
+   DEFAULTS and `getSfxEnabled()`'s null-default (both sides of the seam
+   agree). Users who want the cinematic cues flip Settings → Sound back
+   on; the Timeline Studio's per-scene cue picker (doc-level) is
+   unaffected. Installs that explicitly saved a value keep it.
+2. **The caption contract, one source of truth** — `captionOverridesFor()`
+   (captions.ts, pure, unit-pinned): doc caption (Timeline Studio edit) >
+   row caption WITH the new `captionUser` flag (Scene Studio edit) > null
+   (word-synced narration chunks). The script LLM seeds `caption` on every
+   scene, so a non-empty row caption alone must never override — that
+   would regress Phase 4's word-sync into one frozen LLM line per scene.
+   `assembleTimeline` seeds the doc caption ONLY from captionUser rows
+   (also fixes the latent regression where every assembled doc froze its
+   captions against later row edits). The Scene Studio PATCH sets
+   `captionUser`, writes the caption THROUGH to the aligned doc, and
+   invalidates ONLY rendered artifacts (voiceover + per-scene WAVs survive
+   — re-render is a re-mix, no re-TTS). The dialog's caption copy now
+   says what it does; a toast confirms "next render, voice untouched".
+3. **HEIC uploads** — sniff gains the HEIF family (ftyp brands heic/heix/
+   hevc/heim/heis/mif1/msf1; MP4's isom/avc1 refused); `replaceSceneImage`
+   decodes HEIC → PNG via the WASM libheif build (`heic-convert`, lazy
+   import, new dependency + ambient d.ts) then runs the same cover-crop
+   geometry. Gotcha pinned in a comment: convert() resolves to the Buffer
+   DIRECTLY — reaching for `.buffer` grabs the Buffer-pool ArrayBuffer
+   (64 KB of unrelated memory that once aliased the input HEIC and
+   produced a "PNG" that was still HEIC bytes). Committed a real 7 KB
+   libheif-generated fixture (scripts/fixtures/scene-upload.heic); the
+   test proves decode → 1344x768 crop end-to-end.
+4. Client accept attr + copy updated for HEIC.
+
+**Files:** `src/lib/tubeforge/settings-public.ts`, `src/lib/tubeforge/music.ts`
+(sfx default), `src/lib/tubeforge/story.ts` (HEIF sniff + decode +
+captionUser passthrough), `src/lib/tubeforge/captions.ts`
+(`captionOverridesFor`), `src/lib/tubeforge/timeline.ts` (doc seeding),
+`src/lib/tubeforge/render.ts` (chain swap), `src/lib/tubeforge/types.ts`
+(Scene.captionUser), `src/app/api/videos/[id]/scenes/route.ts` (flag +
+doc write-through + render-only invalidation),
+`src/components/tubeforge/scene-editor.tsx` (copy + toast + accept),
+`src/types/heic-convert.d.ts` (new), `scripts/fixtures/scene-upload.heic`
+(new), `scripts/test-unit.mts` (5 new S43 tests + the assembleTimeline
+caption test re-pinned to the new contract), package.json (+heic-convert).
+
+**Verification:** sub-bass scan of the user's file before (boom 12 dB above
+floor at 0.6s; sting clusters every ~9-10s) — tsc 0 · eslint 0 errors
+(touched files: same warning count before/after) · **181/181 unit** (176 +
+5 new, 1 re-pinned) · s4 probe ALL PASS · s5 probe ALL PASS.
+
+## S44 (2026-11-06 UTC) — bring your own bed, where the track is picked
+
+**Trigger:** "one should be able to use his own background sound" — the
+upload door existed (POST /api/music multipart: sniff + loudness-normalize
++ license metadata + org quota, MusicTrack rows) but only in Settings →
+Background Music, three screens away from where a video's track is chosen.
+
+**Fix:** the licensed-track upload dialog is lifted out of
+settings-music.tsx into a shared `MusicUploadDialog`
+(src/components/tubeforge/music-upload-dialog.tsx, onUploaded now carries
+the new track's id). Settings uses it as before; the per-video
+MusicPickerCard (Create form + video detail) gains a "My own" button next
+to the track Select — upload lands the track in the library AND pins it
+to this video immediately (enabled: true, trackId set), with the same
+volume/fades/ducking controls applying. settings-music.tsx drops its
+local copy (one source of truth, ~170 lines deduped).
+
+**Verification:** tsc 0 · eslint 0 errors · unit suite unchanged (181/181 —
+UI-only change).

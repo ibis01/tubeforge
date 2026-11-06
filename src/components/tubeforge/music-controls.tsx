@@ -19,9 +19,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Music2, Play, BadgeCheck, Sparkles, Headphones } from "lucide-react";
+import { Music2, Play, BadgeCheck, Sparkles, Headphones, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { MUSIC_MOODS } from "@/lib/tubeforge/types";
+import { MusicUploadDialog } from "@/components/tubeforge/music-upload-dialog";
 
 /** Ducking intensity ids (server catalog in audiomix.ts — mirrored for UI). */
 export const DUCK_LEVELS = [
@@ -230,7 +231,7 @@ export function MusicPickerCard({
   videoId?: string;
   canPreview?: boolean;
 }) {
-  const { tracks, settings, loading } = useMusicLibrary();
+  const { tracks, settings, loading, reload } = useMusicLibrary();
   const pinned = tracks.find((t) => t.id === value.trackId) ?? null;
 
   // Default = follow global settings; show what that would do.
@@ -297,6 +298,29 @@ export function MusicPickerCard({
                 ))}
               </SelectContent>
             </Select>
+            {/* S44 — bring your own bed: the same licensed-track upload door
+                Settings has, right where the track is picked. The new track
+                is pinned to THIS video on success. */}
+            <MusicUploadDialog
+              trigger={
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 px-2.5 text-xs shrink-0"
+                  title="Upload your own licensed track and use it in this video"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">My own</span>
+                </Button>
+              }
+              onUploaded={(trackId) => {
+                reload();
+                onChange({ ...value, enabled: true, trackId });
+                toast.success("Your track is pinned to this video", {
+                  description: "It mixes with the same volume / fades / ducking controls above.",
+                });
+              }}
+            />
             {pinned && <TrackPreviewButton track={pinned} />}
           </div>
 

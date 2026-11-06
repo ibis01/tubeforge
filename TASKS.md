@@ -1564,3 +1564,48 @@ degrades to `0-<size>`) and a storage-backed `serializeScenes`
 round-trip proving the stamp rotates when art is replaced (the bug)
 and returns to null when removed. Gate: tsc 0 · eslint 0 errors ·
 176/176 unit (174 + 2 new).
+
+## S43 (2026-11-06 UTC) — the boom, the caption that wouldn't stick, and the iPhone photo
+
+**Symptoms (field report, rendered b.mp4):** unwanted sound at the video
+start and at scene transitions; storyboard caption edits appeared to only
+take effect through the voice; HEIC (iPhone) art uploads rejected.
+
+**Root causes:** (1) the sfx.ts synthesized boom (scene 1) and sting (every
+rehook) cues are ON by default — the sub-bass scan of the user's file shows
+the scene-1 boom as the loudest 25-120 Hz event of the entire 243s video,
+12 dB above the floor, with sting clusters every ~9-10s after; (2) the Scene
+Studio's Caption field writes the row, but the smart-caption render honored
+only the timeline DOC's caption — a snapshot of the row at assembly time —
+so caption edits never rendered while narration edits (which re-voice) were
+the only ones that visibly worked; (3) sniffImageFormat rejected HEIF and
+stock ffmpeg ships without libheif.
+
+**Fix:** SFX default OFF (Settings → Sound still enables; per-scene doc
+picker unaffected). Caption contract centralized in
+`captionOverridesFor()`: doc caption > row caption with the new
+`captionUser` flag (set by the Scene Studio PATCH, which also writes
+through to the aligned doc and invalidates ONLY rendered artifacts — the
+voiceover survives) > word-synced narration chunks; assembleTimeline seeds
+doc captions only from captionUser rows. HEIC: ftyp-brand sniff (heic/heix/
+hevc/heim/heis/mif1/msf1) + WASM libheif decode (heic-convert, lazy
+import, ambient d.ts) feeding the same 1344x768 cover-crop; real committed
+fixture pins decode → crop end-to-end.
+
+**Verification:** 5 new unit tests (HEIF sniff incl. refusing MP4 brands,
+real-fixture decode+crop, the override chain, the captionUser round-trip,
+the doc seeding) + the assembleTimeline caption test re-pinned to the new
+contract. Gate: tsc 0 · eslint 0 errors · 181/181 unit · s4 probe ALL PASS
+· s5 probe ALL PASS.
+
+## S44 (2026-11-06 UTC) — bring your own bed, where the track is picked
+
+**Symptom:** users could upload their own licensed background track only
+via Settings → Background Music — not where a video's track is picked.
+
+**Fix:** the upload dialog is extracted into a shared `MusicUploadDialog`
+(license metadata form unchanged); the per-video MusicPickerCard gains a
+"My own" button that uploads AND pins the new track to the video
+immediately. settings-music.tsx deduped onto the shared component.
+
+**Verification:** tsc 0 · eslint 0 errors · unit suite 181/181 (UI-only).
