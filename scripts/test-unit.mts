@@ -3871,6 +3871,67 @@ await test("S37 zai-video-core: url fallback keys (video_url, url, video) all ac
   }
 });
 
+// S39 — the tenant AsyncLocalStorage must be ONE instance per PROCESS, not
+// one per compiled module copy. next dev compiles per-route server bundles,
+// so tenant.ts exists as several copies with separate module-level state;
+// before S39 each `new AsyncLocalStorage()` was disjoint, and a ctx entered
+// by one copy (auth.enter() in a route) was invisible to another's assertCtx
+// — the live "No tenant context (runRenderJob)" on a render re-run after a
+// daemon restart. The fix keys the ALS on globalThis (__tfTenantAls); this
+// test imports tenant.ts under a SECOND ESM identity (query string) and
+// proves the two copies now share one scope.
+await test("S39 tenant ALS: module-graph duplication shares one storage", async () => {
+  type TenantModule = typeof import("../src/lib/tubeforge/tenant.ts");
+  // Copy A — the identity every other import in this file resolves to.
+  const a: TenantModule = await import("../src/lib/tubeforge/tenant.ts");
+  // Copy B — a distinct ESM identity, exactly what a second compiled bundle
+  // (another route's server chunk, the instrumentation graph) would be.
+  // Non-literal specifier keeps TS from collapsing the two identities.
+  const bSpecifier = "../src/lib/tubeforge/tenant.ts?bundle=s39-second-copy";
+  const b = (await import(bSpecifier)) as TenantModule;
+
+  const ctxA = { userId: "s39-u", organizationId: "s39-o", role: "owner" };
+
+  // 1. A ctx entered on copy A is visible to copy B (the S39 headline).
+  let seenByB: unknown = "unset";
+  await a.withCtx(ctxA, async () => {
+    seenByB = b.currentCtx();
+  });
+  ok(
+    JSON.stringify(seenByB) === JSON.stringify(ctxA),
+    `ctx entered on copy A is visible to copy B's currentCtx() (got ${JSON.stringify(seenByB)})`
+  );
+
+  // 2. The null scope is shared too — withCtxNull on A reads null on B.
+  let nullByB: unknown = "unset";
+  await a.withCtxNull(async () => {
+    nullByB = b.currentCtx();
+  });
+  ok(nullByB === null, `withCtxNull on copy A reads null on copy B (got ${JSON.stringify(nullByB)})`);
+
+  // 3. assertCtx on copy B RESOLVES inside copy A's scope — the exact call
+  //    shape of the live failure (queue tick wraps, job body asserts).
+  let asserted: unknown = "unset";
+  await a.withCtx(ctxA, async () => {
+    try {
+      asserted = b.assertCtx("s39-probe");
+    } catch (err) {
+      asserted = err instanceof Error ? err.message : "threw";
+    }
+  });
+  ok(
+    typeof asserted === "object" && asserted !== null &&
+      JSON.stringify(asserted) === JSON.stringify(ctxA),
+    `assertCtx on copy B resolves inside copy A's scope (got ${JSON.stringify(asserted)})`
+  );
+
+  // 4. Outside any scope BOTH copies agree it's null (fail-closed parity).
+  ok(
+    a.currentCtx() === null && b.currentCtx() === null,
+    "outside any scope, both copies read null"
+  );
+});
+
 // ---------- summary ----------
 
 console.log(`\n${"─".repeat(56)}`);

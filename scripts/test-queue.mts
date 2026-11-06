@@ -25,7 +25,11 @@
 //         the per-scene stock job DISPATCHES to the scene logic (visible
 //         error about missing stock keys — not the old silent no-op where a
 //         composite "<videoId>#scene<N>" id made runStockRefresh findUnique
-//         null and quietly "finish").
+//         null and quietly "finish"). The RENDER job (S39) proves the
+//         ctx-restore for a job body that calls assertCtx FIRST: it must
+//         fail at the storyboard gate ("Generate the storyboard first"),
+//         NEVER at "No tenant context (runRenderJob)" — the S37 live
+//         failure on a render re-run after a daemon restart.
 //      4. A kind WITHOUT a handler — probed with a SYNTHETIC "legacy-probe"
 //         kind, since Stage 6 registered "upload" and no real JobKind is
 //         unregistered anymore — stays "interrupted" with a readable error
@@ -282,6 +286,36 @@ async function phaseB(): Promise<void> {
     },
   });
 
+  // S39 — a stale RENDER row. The render handler's FIRST act is
+  // assertCtx("runRenderJob"), so this row is the ctx-restore probe: it
+  // must fail at the storyboard gate (the video has scenes but no art),
+  // proving the worker restored the tenant scope from the row — never the
+  // S37 live failure ("No tenant context (runRenderJob)"). Two scenes and
+  // a persisted payload mirror what the render route enqueues.
+  const videoRender = await db.video.create({
+    data: {
+      organizationId: org.id,
+      topic: `Queue probe render ${run}`,
+      niche: "Motivation",
+      format: "story",
+      scenes: scenesJson(2),
+    },
+  });
+  const orphanRender = await db.job.create({
+    data: {
+      organizationId: org.id,
+      userId: user.id,
+      kind: "render",
+      entityId: videoRender.id,
+      status: "running",
+      claimedBy: "web:4194304:deadbeef",
+      claimedAt: new Date(Date.now() - 3_600_000),
+      startedAt: new Date(Date.now() - 3_600_000),
+      attempts: 1,
+      payload: JSON.stringify({ mode: "kenburns" }),
+    },
+  });
+
   // ---- 2. start the worker (the "restart") --------------------------------
   const worker = spawn("node", ["--import", "tsx", "scripts/worker.mts"], {
     cwd: root,
@@ -302,6 +336,7 @@ async function phaseB(): Promise<void> {
     let interrupted: { status: string; error: string | null } | null = null;
     let perScene: { status: string; error: string | null } | null = null;
     let perSceneVideoError: string | null = null;
+    let renderRow: { status: string; error: string | null; claimedBy: string | null; attempts: number } | null = null;
     const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) {
       await sleep(500);
@@ -321,10 +356,18 @@ async function phaseB(): Promise<void> {
         where: { id: video2.id },
         select: { error: true },
       }))?.error ?? null;
+      renderRow = await db.job.findUnique({
+        where: { id: orphanRender.id },
+        select: { status: true, error: true, claimedBy: true, attempts: true },
+      });
+      const renderSettled =
+        renderRow !== null &&
+        (renderRow.status === "failed" || renderRow.status === "done" || renderRow.status === "interrupted");
       if (
         resumed?.status === "done" &&
         interrupted?.status === "interrupted" &&
-        (perSceneVideoError?.includes("No stock provider") || perScene?.status === "failed")
+        (perSceneVideoError?.includes("No stock provider") || perScene?.status === "failed") &&
+        renderSettled
       )
         break;
     }
@@ -357,6 +400,28 @@ async function phaseB(): Promise<void> {
     ok(
       videoAfter?.error == null,
       `the synthetic kind has no video surface — the video row stays clean (got "${videoAfter?.error}")`
+    );
+
+    // S39 — the render recovery ran under a RESTORED tenant context.
+    ok(
+      renderRow?.status === "failed",
+      `recovered render job executed to a terminal state (got "${renderRow?.status}")`
+    );
+    ok(
+      typeof renderRow?.error === "string" && renderRow.error.includes("storyboard"),
+      `the render job failed at the storyboard gate — ctx restored (got "${renderRow?.error}")`
+    );
+    ok(
+      typeof renderRow?.error === "string" && !renderRow.error.includes("No tenant context"),
+      `the render job NEVER hit "No tenant context" (got "${renderRow?.error}")`
+    );
+    ok(
+      renderRow !== null && Boolean(renderRow.claimedBy?.startsWith("worker:")),
+      `the render job was executed by the worker (claimedBy="${renderRow?.claimedBy}")`
+    );
+    ok(
+      renderRow !== null && renderRow.attempts >= 2,
+      `the render attempts counted the original claim + the resume (attempts=${renderRow?.attempts})`
     );
   } finally {
     worker.kill("SIGTERM");

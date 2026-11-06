@@ -38,7 +38,24 @@ export interface TenantCtx {
   role: string; // owner | admin | editor | viewer
 }
 
-const storage = new AsyncLocalStorage<TenantCtx | null>();
+// S39 (2026-11-06 UTC) — ONE AsyncLocalStorage per PROCESS, not per compiled
+// copy. next dev compiles per-route server bundles, so a module-level
+// `new AsyncLocalStorage()` existed as several DISJOINT instances: the
+// enqueueing route entered ITS copy's scope (auth.enter()), the queue tick
+// (the instrumentation graph, or any route's kick that lost the shared
+// `ticking` race) wrapped the closure/handler in ITS copy, and the job
+// body's assertCtx read a third — null. That is the S37 live failure:
+// "No tenant context (runRenderJob)" on a render re-run after a daemon
+// restart, while the same job worked pre-restart (the route's own kick had
+// claimed it on the matching copy). globalThis dedupes the instance exactly
+// the way __tfJobs / __tfQueue / __tfCancel already dedupe their state —
+// HMR reloads and dev-mode bundle copies all share one scope. The module
+// graph only needs to agree on the KEY, never on the instance.
+const tenantGlobal = globalThis as typeof globalThis & {
+  __tfTenantAls?: AsyncLocalStorage<TenantCtx | null>;
+};
+const storage: AsyncLocalStorage<TenantCtx | null> =
+  (tenantGlobal.__tfTenantAls ??= new AsyncLocalStorage<TenantCtx | null>());
 
 /** The acting tenant for the current async scope (null outside a request/job). */
 export function currentCtx(): TenantCtx | null {

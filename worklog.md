@@ -1369,3 +1369,58 @@ this entry.
 **Final gate:** tsc 0 · eslint 0 errors · **168/168 unit** ·
 **s30 probe 41/41** (27 + 14) · s36 probe 38/38 · queue PASS ·
 40/40 billing.
+
+---
+
+## S39 (2026-11-06 UTC) — one tenant scope per process, not per compiled copy
+
+**Problem.** The S37 live run recorded: a render job killed mid-flight and
+re-run by boot recovery fails "No tenant context (runRenderJob)". Paper
+analysis said the worker's handler path restores the ctx from the row
+(ctxFromRow → withCtx), and a seeded-worker reproduction CONFIRMED the
+recovery path works — so the live failure had to be the OTHER execution
+path: the route-enqueued closure executed by a queue tick from a DIFFERENT
+module copy.
+
+**Mechanism (reproduced in isolation).** `next dev` compiles per-route
+server bundles; local modules exist as several copies with separate
+module-level state. tenant.ts's `const storage = new AsyncLocalStorage()`
+was one such — two copies = two disjoint ALSes. A dual-identity import
+(`tenant.ts` vs `tenant.ts?bundle=copy`) proved it: ctx entered on copy A
+reads null on copy B. In the live daemon: the route entered ITS copy
+(auth.enter()), the instrumentation graph's tick loop (or any route's kick
+that found the shared `ticking` flag held) claimed the job and wrapped it
+in ITS copy, and the job body's assertCtx read null. The happy path worked
+pre-restart because the route's own synchronous kickQueue usually won the
+claim race on the matching copy.
+
+**Fix.** One line of substance: the ALS is keyed on globalThis
+(`__tfTenantAls ??= new AsyncLocalStorage()`), so every compiled copy, HMR
+reload, and the instrumentation graph share ONE storage per process —
+exactly the dedupe pattern __tfJobs / __tfQueue / __tfCancel already use.
+cancel.ts audited: already globalThis-backed. No public-surface change.
+
+**Pinned forever.**
+- test-unit.mts +1: "S39 tenant ALS: module-graph duplication shares one
+  storage" — dual-identity import; ctx entered on A visible to B's
+  currentCtx; withCtxNull shared; assertCtx on B resolves inside withCtx
+  on A (the exact live call shape); both copies read null outside any
+  scope.
+- test-queue.mts phase B +5: a stale RENDER row (dead-pid claim, persisted
+  payload, 2-scene video without art) recovered by the REAL worker must
+  fail at the storyboard gate — "Generate the storyboard first" — never
+  "No tenant context", claimed by the worker, attempts ≥ 2. The render
+  kind was previously unprobed (stock-only), which is exactly how the
+  live bug slipped through.
+
+**Still backlog (recorded, not fixed here):** director-plan re-run JSON
+parse variance (parseJsonLoose already in use; residual LLM variance);
+preview renders write no qcReport.
+
+**Files:** `src/lib/tubeforge/tenant.ts` (ALS → globalThis), 
+`scripts/test-unit.mts` (+1 S39 test), `scripts/test-queue.mts` (+render
+recovery probe, header), TASKS.md (record), this entry.
+
+**Final gate:** tsc 0 · eslint 0 errors · **169/169 unit** (168 + 1) ·
+**queue PASS** (+5 render assertions) · s36 probe 38/38 · s30 probe
+41/41 · 40/40 billing.

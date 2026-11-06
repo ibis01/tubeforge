@@ -1400,3 +1400,34 @@ doesn't break host extraction); C.1/C.2 hostnames swapped off the
 preview pattern so they still exercise the forwarded-host path. Gate:
 tsc 0 · eslint 0 errors · 168/168 unit · s30 probe 41/41 (+14) ·
 s36 probe 38/38 · queue PASS · 40/40 billing.
+
+### S39 record (2026-11-06 UTC)
+
+Tenant-context durability — fixes the S37 live finding "a render job killed
+mid-flight and re-run by boot recovery fails with 'No tenant context
+(runRenderJob)'". Root cause (reproduced in isolation, then fixed): the
+tenant AsyncLocalStorage was MODULE-LEVEL in tenant.ts, and `next dev`
+compiles per-route server bundles — the module exists as several copies
+with disjoint ALS instances. The enqueueing route entered its copy's scope
+(auth.enter()), the executing queue tick (the instrumentation graph, or a
+route's kick that lost the shared `ticking` race) wrapped the closure or
+handler in ITS copy, and the job body's assertCtx read a third — null.
+This also explains why the happy path worked pre-restart (the route's own
+synchronous kickQueue usually claimed the job on the matching copy) while
+the recovered re-run died. Fix: the ALS is now keyed on globalThis
+(__tfTenantAls) — ONE instance per process across every compiled copy,
+HMR reload included, the same dedupe pattern __tfJobs / __tfQueue /
+__tfCancel already use. cancel.ts was audited: already globalThis-backed.
+Verification: (1) a dual-identity import probe (tenant.ts + tenant.ts?bundle=…)
+showed disjoint scopes pre-fix and one shared scope post-fix; (2) the
+mechanism is pinned forever as a unit test (test-unit.mts "S39 tenant ALS:
+module-graph duplication shares one storage" — ctx visible across copies,
+null shared, assertCtx-on-B inside withCtx-on-A, fail-closed parity); (3)
+test-queue.mts phase B gained a stale RENDER row recovery probe — the
+recovered job must fail at the storyboard gate ("Generate the storyboard
+first"), NEVER at "No tenant context", executed by the worker, attempts
+counted. The other two S37 live findings stay backlog: director-plan re-run
+JSON parse variance (parseJsonLoose already used; residual LLM output
+variance), preview renders write no qcReport. Gate: tsc 0 · eslint 0
+errors · 169/169 unit (+1) · queue PASS (+5 assertions) · s36 probe 38/38
+· s30 probe 41/41 · billing 40/40.
