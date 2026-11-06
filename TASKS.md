@@ -1690,3 +1690,29 @@ cleaned. Gate: tsc 0 · eslint 0 errors (670 warnings = exact baseline) ·
 s30 route e2e ALL PASS (live server) · e2e 26/26. Migration
 20261107000000_s46_auth_attempt (Postgres chain; SQLite via db push).
 Full narrative in the worklog ("S46").
+
+---
+
+## S47 — Production Integrity and Acceptance (opened 2026-11-06 UTC)
+
+**Source:** the external repository audit ("Fresh Repository Check",
+8.7/10, 2026-11-06) and its five next actions. Feature sprints are ON
+HOLD until this ledger closes. Tranche 1 executed 2026-11-06.
+
+| Workstream | Status | Notes |
+|---|---|---|
+| T-47.1 shared spend admission | ✅ Done | `spend.ts`: the S32 boot-once snapshot is GONE — every paid admit runs READ-check-RESERVE inside ONE `$transaction` (Serializable on Postgres so the DB itself serializes concurrent instances; P2034 loser retries once; SQLite single-writer as-is) against `SpendReservation`. UUID hold ids (no cross-instance PK collisions). `bootFailed` is fail-closed WITH self-heal (refuse one dispatch, clear, next admit re-tries the read — the S32 latch never retried, contradicting its own error contract). ctx-null holds (probes) tracked in `localOnly` so the per-admit DB re-sync cannot wipe them, and counted explicitly in the in-transaction projection. |
+| T-47.2 probe seeding modernized | ✅ Done | s27/s32 seeded by POKING the in-process mirror — valid only under boot-once semantics (S32's own precedent: S32 rewrote S27's ctx seeding). `resetGate` now wipes `SpendReservation` and seeds settled ROWS — the only seeding that proves anything about a DB-decision gate. s32 §1 had a PRE-EXISTING failure on main (retrievedAt expected 2026-11-06; the source stamps the UTC day 2026-11-05 per its own provenance convention) — the audit's "commit-reported results are not independently executed", found in the wild. |
+| T-47.3 CI evidence | ✅ Verified | Authenticated GitHub API: 87 Actions runs exist. S45 CI = success. **S46's run (30281a8): gitleaks PASS, `Typecheck · Lint · Unit` CANCELLED mid-run, E2E skipped — 30281a8 has NO green CI.** The audit tranche independently reproduced the local evidence (tsc 0 · 194/194 unit · s27/s32/s34 probes ALL PASS); the S47 push re-runs CI on the reconciled tree and its run is the green reference. The audit's "could not retrieve" = unauthenticated API rate limit, not missing CI. |
+| T-47.4 date discrepancy | ✅ Resolved | S46 commit 30281a8 authored/committed **2026-11-06T20:12:40Z** (= 04:12 Nov 7 Asia/Shanghai — the worklog header took the local day). Worklog header corrected to 2026-11-06 UTC; the audit's Nov 6 dating was right. |
+| T-47.5 lint programme | ✅ Baseline | Exact S46 baseline frozen: **0 errors / 670 warnings / 402 files** — no-console 370, no-non-null-assertion 160, no-unused-vars 69, set-state-in-effect 33, no-unused-expressions 11, exhaustive-deps 9, no-explicit-any 7, misc 11. `docs/baselines/s47-lint-baseline-2026-11-06.txt` carries the census + the reduction order (errors stay 0, warnings never rise). |
+| T-47.6 docs reconciliation | ✅ Done | README status → S46 + foundation proofs; **ARCHITECTURE.md §1 rewritten from source** (31 models, 18 migrations, tenancy via `tenant-db.ts`, default-deny auth, DB queue, storage abstraction, S47 shared gate, §1.7 shared-state table); §2 marked as Stage-1 history with remaining deltas in §1.8; ROADMAP.md status header refreshed. |
+| T-47.7 director acceptance benchmark | ⬜ Next | repeated generation + malformed-JSON recovery evidence (builds on S45's aiCallJson), five-genre visual pass |
+| T-47.8 visual continuity acceptance | ⬜ | character/object consistency across scenes |
+| T-47.9 dependency alerts triage | ⬜ | Dependabot: 18 (11 high / 4 moderate / 3 low) — map to actual reachability in TubeForge's surface; the app is not Vercel-serverless and most alerts are build/dev-chain |
+| T-47.10 CI concurrency audit | ⬜ | explain the S46 run's cancellation (`Typecheck · Lint · Unit` cancelled mid-run); check `ci.yml` concurrency groups |
+
+Verification (tranche 1): tsc 0 · eslint 0 errors / 670 warnings
+(unchanged baseline) · **194/194 unit** · **s27 ALL CHECKS PASS · s32 ALL
+PASS · s34 ALL PASS** against the shared gate · `SpendReservation` empty
+after probe teardowns.

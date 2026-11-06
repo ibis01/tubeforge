@@ -57,15 +57,21 @@
 // vLLM) are metered (tokens recorded, shown on the usage dashboard) but
 // never gated or priced — they are not the experiment's spend.
 //
-// Process scope: S32 — the hold set is DURABLE in the SpendReservation
-// table. admitDispatch writes a pending row; settle updates it to settled;
-// bootRecorded rebuilds the in-process holds Map and recordedMicro from
-// the table on every boot. A crash mid-call leaves a pending row that the
-// next boot counts against the stop line (conservative — the gate holds
-// it again). Connection-test dispatches (settings/ai route, outside
-// aiCall) now persist too — their spend is no longer lost on restart.
-// Multi-instance deployments would still need a shared counter; this
-// deployment runs exactly one daemon process.
+// Process scope: S32 made the hold set DURABLE in the SpendReservation
+// table (admit writes a pending row; settle marks it settled; connection
+// tests outside aiCall persist too). S47 closes the one gap the S32
+// comment still had to disclaim — "multi-instance deployments would still
+// need a shared counter". Every paid admit now runs READ-check-RESERVE
+// inside ONE serializable transaction against SpendReservation, so
+// concurrent instances serialize on the same rows: no instance can admit
+// against a stale snapshot of another instance's settlements or holds.
+// Holds are UUID-keyed (no cross-instance id collisions). A failed
+// admission read stays fail-CLOSED and is re-tried on the next admit,
+// matching the SpendBootFailedError contract. Crash semantics are
+// unchanged: a pending row left behind by a mid-call crash counts against
+// the stop line on every future admit (conservative).
+
+import { randomUUID } from "node:crypto";
 
 import { currentCtx, type TenantCtx } from "./tenant";
 
@@ -554,25 +560,31 @@ export class SpendBootFailedError extends Error {
 }
 
 interface SpendState {
-  booted: boolean;
-  /** S32 — fail-closed: a DB boot failure sets this, and admitDispatch
-   *  throws SpendBootFailedError for PAID providers until the next boot
-   *  succeeds. Ungated providers (zai/local) are unaffected. */
+  /** S32/S47 — fail-closed: a failed shared-admission read sets this, and
+   *  admitDispatch throws SpendBootFailedError for PAID providers. Unlike
+   *  the S32 boot latch there is NO permanent flag: the next admit re-tries
+   *  the read, so the gate self-heals once the DB recovers. Ungated
+   *  providers (zai/local) are unaffected. */
   bootFailed: boolean;
-  bootPromise: Promise<void> | null;
-  recordedMicro: number; // DB-bootstrapped from settled SpendReservation rows, grows with every settle
-  holds: Map<string, number>; // holdId → reserved estimate (rebuilt from pending rows on boot)
-  nextHoldId: number;
+  /** Mirror of SUM(settled.actualCostMicroUsd) — re-derived from the DB on
+   *  every paid admit (S47), grown by every local settle in between. */
+  recordedMicro: number;
+  /** Mirror of every instance's pending reservation rows (re-derived on
+   *  every paid admit) plus this process's own in-flight holds. */
+  holds: Map<string, number>; // holdId → reserved estimate
+  /** S47 — holds minted WITHOUT a request ctx (probes/tests) never persist
+   *  to SpendReservation; tracked here so the per-admit DB re-sync cannot
+   *  wipe them. Production dispatches always run under a tenant ctx and are
+   *  fully DB-backed. */
+  localOnly: Set<string>;
 }
 
 const g = globalThis as typeof globalThis & { __tfSpend?: SpendState };
 const spend: SpendState = (g.__tfSpend ??= {
-  booted: false,
   bootFailed: false,
-  bootPromise: null,
   recordedMicro: 0,
   holds: new Map(),
-  nextHoldId: 1,
+  localOnly: new Set(),
 });
 
 function outstandingMicro(): number {
@@ -581,55 +593,16 @@ function outstandingMicro(): number {
   return sum;
 }
 
-/** Boot the recorded total AND the outstanding holds from the SpendReservation
- *  table — the gate's durable source of truth (S32). Lazy, once per process.
- *  Fail-CLOSED: a DB aggregation error sets bootFailed and admitDispatch
- *  refuses paid dispatches until the next boot succeeds (a broken meter must
- *  never re-open a spent budget). The zai gateway and local servers stay
- *  open (ungated) regardless. */
-async function bootRecorded(): Promise<void> {
-  if (spend.booted) return;
-  spend.bootPromise ??= (async () => {
-    try {
-      const { rawDatabase } = await import("./tenant-db");
-      const [settledAgg, pendingRows] = await Promise.all([
-        rawDatabase.spendReservation.aggregate({
-          _sum: { actualCostMicroUsd: true },
-          where: { status: "settled", provider: { in: [...PAID_PROVIDERS] } },
-        }),
-        rawDatabase.spendReservation.findMany({
-          where: { status: "pending", provider: { in: [...PAID_PROVIDERS] } },
-          select: { id: true, estimatedMicroUsd: true },
-        }),
-      ]);
-      spend.recordedMicro = settledAgg._sum.actualCostMicroUsd ?? 0;
-      // Rebuild the in-process holds from pending rows — a crash mid-call
-      // left these behind, and the next boot counts them against the stop
-      // line (conservative: the gate holds them again until a settle lands).
-      spend.holds.clear();
-      let maxId = 0;
-      for (const row of pendingRows) {
-        spend.holds.set(row.id, row.estimatedMicroUsd);
-        const num = parseInt(row.id.replace("spend-", ""), 10);
-        if (Number.isFinite(num) && num >= maxId) maxId = num + 1;
-      }
-      spend.nextHoldId = maxId;
-      spend.bootFailed = false;
-      spend.booted = true;
-    } catch (err) {
-      // S32 — fail-closed: the recorded total could not be verified. Block
-      // paid dispatches until the DB recovers; do NOT continue with
-      // recordedMicro=0 (the S27 fail-open path that could re-open a spent
-      // budget). The next admitDispatch re-tries the boot.
-      console.error(
-        "[spend] boot failed — PAID dispatches blocked (fail-closed):",
-        err instanceof Error ? err.message : err
-      );
-      spend.bootFailed = true;
-      spend.booted = true; // do not retry every call; admitDispatch re-checks bootFailed
-    }
-  })();
-  await spend.bootPromise;
+/** S47 — one retry on a Prisma serialization conflict (P2034): the loser
+ *  of a concurrent-admission race re-runs the transaction against the
+ *  winner's committed rows. Any other error propagates (fail-closed). */
+async function admitWithConflictRetry<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if ((err as { code?: string })?.code !== "P2034") throw err;
+    return await fn();
+  }
 }
 
 export interface SpendHold {
@@ -662,23 +635,116 @@ export async function admitDispatch(opts: {
   // top of the existing "no paid API keys" posture). The operator flips
   // PRICING_STATUS to "verified" after reconciling the registry.
   if (!pricingVerified()) throw new SpendPricingUnverifiedError();
-  await bootRecorded();
-  if (spend.bootFailed) throw new SpendBootFailedError("boot failed");
+  // S47 — fail-closed on the LAST failed read: this dispatch is refused
+  // without touching the DB. The flag clears HERE so the NEXT admit re-tries
+  // the shared read (self-healing; a still-broken DB re-sets the flag from
+  // the transaction failure below).
+  if (spend.bootFailed) {
+    spend.bootFailed = false;
+    throw new SpendBootFailedError("shared admission unavailable (last read failed)");
+  }
 
   const ctx = currentCtx();
   const est = Math.max(0, Math.round(opts.estimatedMicro));
-  const projection = spend.recordedMicro + outstandingMicro() + est;
-  if (projection > STOP_MICRO_USD) {
-    throw new SpendBlockedError(
-      spend.recordedMicro,
-      outstandingMicro(),
-      est,
-      STOP_MICRO_USD
+  // S47 — UUID-keyed holds: two instances minting holds at the same moment
+  // can never collide on the SpendReservation primary key.
+  const holdId = `spend-${randomUUID()}`;
+
+  // S47 — context-free holds (probes/tests) live only in this process's
+  // mirror; the shared DB read cannot see them, so the in-transaction
+  // check adds them explicitly. Production dispatches always run under a
+  // tenant ctx — their holds are DB rows every instance sees.
+  let localOutstanding = 0;
+  for (const id of spend.localOnly) {
+    const v = spend.holds.get(id);
+    if (v !== undefined) localOutstanding += v;
+  }
+
+  // S47 — shared admission. READ (settled total + every instance's pending
+  // reservations), CHECK the stop line, and INSERT our reservation inside
+  // ONE transaction — Serializable on Postgres, so the DB itself serializes
+  // concurrent admissions (two instances racing on the same snapshot cannot
+  // both commit; the loser retries against the winner's committed rows).
+  // SQLite is single-writer, so its default transaction is already
+  // serialized. Any read/write failure is fail-CLOSED (SpendBootFailedError)
+  // with no permanent latch — the next admit re-tries.
+  const { rawDatabase } = await import("./tenant-db");
+  const serializable = !`${process.env.DATABASE_URL ?? ""}`.startsWith("file:");
+  let fresh: { recorded: number; pendingRows: { id: string; estimatedMicroUsd: number }[] };
+  try {
+    fresh = await admitWithConflictRetry(() =>
+      rawDatabase.$transaction(
+        async (tx) => {
+          const [settledAgg, pendingRows] = await Promise.all([
+            tx.spendReservation.aggregate({
+              _sum: { actualCostMicroUsd: true },
+              where: { status: "settled", provider: { in: [...PAID_PROVIDERS] } },
+            }),
+            tx.spendReservation.findMany({
+              where: { status: "pending", provider: { in: [...PAID_PROVIDERS] } },
+              select: { id: true, estimatedMicroUsd: true },
+            }),
+          ]);
+          const recorded = settledAgg._sum.actualCostMicroUsd ?? 0;
+          const outstanding = pendingRows.reduce((s, r) => s + r.estimatedMicroUsd, 0);
+          if (recorded + outstanding + localOutstanding + est > STOP_MICRO_USD) {
+            throw new SpendBlockedError(
+              recorded,
+              outstanding + localOutstanding,
+              est,
+              STOP_MICRO_USD
+            );
+          }
+          // Request-scoped dispatches persist (production always runs under
+          // a tenant ctx — job bodies inherit the launching request's ALS).
+          // Context-free dispatches (probes/tests) stay process-local, as in
+          // S32 — they are not part of the deployed spend surface.
+          if (ctx) {
+            await tx.spendReservation.create({
+              data: {
+                id: holdId,
+                organizationId: ctx.organizationId,
+                userId: ctx.userId,
+                provider: opts.provider,
+                model: opts.model,
+                estimatedMicroUsd: est,
+                status: "pending",
+              },
+            });
+          }
+          return { recorded, pendingRows };
+        },
+        serializable ? { isolationLevel: "Serializable" } : undefined
+      )
+    );
+  } catch (err) {
+    if (err instanceof SpendBlockedError) throw err; // a real gate refusal, not an outage
+    spend.bootFailed = true;
+    console.error(
+      "[spend] shared admission failed — PAID dispatches blocked (fail-closed):",
+      err instanceof Error ? err.message : err
+    );
+    throw new SpendBootFailedError(
+      `shared admission failed: ${err instanceof Error ? err.message : String(err)}`
     );
   }
 
-  const holdId = `spend-${spend.nextHoldId++}`;
+  // Re-sync the local mirrors from what the transaction actually saw (every
+  // instance's pending rows + the fresh settled total), then add THIS hold.
+  // ctx-null (process-local) holds never exist as DB rows — carry them over
+  // so the re-sync cannot erase spend the gate has already counted.
+  spend.bootFailed = false;
+  spend.recordedMicro = fresh.recorded;
+  const localOnlyPrev = new Map<string, number>();
+  for (const id of spend.localOnly) {
+    const v = spend.holds.get(id);
+    if (v !== undefined) localOnlyPrev.set(id, v);
+  }
+  spend.holds.clear();
+  for (const row of fresh.pendingRows) spend.holds.set(row.id, row.estimatedMicroUsd);
+  for (const [id, v] of localOnlyPrev) spend.holds.set(id, v);
   spend.holds.set(holdId, est);
+  if (!ctx) spend.localOnly.add(holdId);
 
   // S34 — the hold's usage slice starts HERE: everything the request sink
   // already holds belongs to earlier dispatches (already settled off their
@@ -686,38 +752,11 @@ export async function admitDispatch(opts: {
   // this line — this hold's attempts, nobody else's.
   const baseline = sinkBaseline();
 
-  // S32 — persist the reservation so it survives restarts. A crash mid-call
-  // leaves a pending row that the next boot counts against the stop line
-  // (conservative). If the persistence write itself fails, we must NOT
-  // admit — an un-persisted hold would be invisible on restart, under-
-  // counting the gate. Fail closed: roll back the in-memory hold and throw.
-  if (ctx) {
-    try {
-      const { rawDatabase } = await import("./tenant-db");
-      await rawDatabase.spendReservation.create({
-        data: {
-          id: holdId,
-          organizationId: ctx.organizationId,
-          userId: ctx.userId,
-          provider: opts.provider,
-          model: opts.model,
-          estimatedMicroUsd: est,
-          status: "pending",
-        },
-      });
-    } catch (err) {
-      spend.holds.delete(holdId);
-      spend.nextHoldId--; // reuse the id on the next admit
-      throw new SpendBootFailedError(
-        `reservation persist failed: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }
-
   const settle = async (micro: number) => {
     // The hold comes off at the estimate; the recorded total takes the
     // settlement. est ≥ actual is the invariant, so recorded never jumps.
     if (!spend.holds.delete(holdId)) return; // already settled (idempotent)
+    spend.localOnly.delete(holdId);
     spend.recordedMicro += micro;
     // S32 — persist the settlement so the next boot's SUM picks it up. A
     // settle-write failure leaves the row pending — on next boot the gate

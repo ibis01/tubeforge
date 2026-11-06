@@ -89,14 +89,39 @@ orgId = org.id;
 
 // The gate's global state — the probe resets it between sections.
 const spendState = (globalThis as typeof globalThis & {
-  __tfSpend?: { booted: boolean; bootFailed: boolean; bootPromise: Promise<void> | null; recordedMicro: number; holds: Map<string, number> };
+  __tfSpend?: {
+    bootFailed: boolean;
+    recordedMicro: number;
+    holds: Map<string, number>;
+    localOnly: Set<string>;
+  };
 }).__tfSpend!;
-function resetGate(recordedMicro = 0) {
-  spendState.booted = true;
+// S47 — the gate's decision input is the DATABASE (a serialized per-admit
+// read), so resetting the world now means wiping SpendReservation and — for
+// a nonzero baseline — seeding a settled row that the next admit's shared
+// read will count. The in-process mirror is a read-model; poking it no
+// longer influences admission (that was the S32 boot-snapshot semantics).
+async function resetGate(recordedMicro = 0) {
   spendState.bootFailed = false;
-  spendState.bootPromise ??= Promise.resolve();
-  spendState.recordedMicro = recordedMicro;
+  spendState.recordedMicro = 0;
   spendState.holds.clear();
+  (spendState as unknown as { localOnly?: Set<string> }).localOnly?.clear();
+  await prisma.spendReservation.deleteMany({});
+  if (recordedMicro > 0) {
+    await prisma.spendReservation.create({
+      data: {
+        id: `spend-reset-${SUFFIX}-${Math.random().toString(36).slice(2, 8)}`,
+        organizationId: orgId,
+        userId,
+        provider: "openai",
+        model: "gpt-6.1-sol",
+        estimatedMicroUsd: recordedMicro,
+        actualCostMicroUsd: recordedMicro,
+        status: "settled",
+        settledAt: new Date(),
+      },
+    });
+  }
 }
 const recorded = () => spendState.recordedMicro;
 
@@ -162,21 +187,21 @@ console.log("\n§3 usage shapes");
 // ---------- §4 the gate ----------
 console.log("\n§4 the gate");
 {
-  resetGate();
+  await resetGate();
   check("zai gateway is ungated",
     (await admitDispatch({ provider: "zai", model: "glm-4.6", estimatedMicro: 4_400_000 })) === null);
   check("local servers are ungated",
     (await admitDispatch({ provider: "ollama", model: "llama3", estimatedMicro: 4_400_000 })) === null);
   check("openai is a paid provider", isPaidProvider("openai") && isPaidProvider("anthropic") && isPaidProvider("gemini"));
 
-  resetGate();
+  await resetGate();
   const hold = await admitDispatch({ provider: "openai", model: "gpt-6.1-sol", estimatedMicro: 81_944 });
   check("within stop → hold returned", hold !== null);
   const before = recorded();
   await hold!.settleFromSink(); // no emitted usage → conservative estimate settle
   check("no-usage success settles at the estimate", recorded() - before === 81_944, recorded() - before);
 
-  resetGate();
+  await resetGate();
   // emitUsage keys the sink by the TenantCtx object — exercise the settle
   // path inside a REAL ctx (S32: admitDispatch now persists a SpendReservation
   // row with FK constraints on userId/organizationId, so the synthetic-ctx
@@ -192,13 +217,13 @@ console.log("\n§4 the gate");
     drainUsage(); // leave the sink empty for later sections
   });
 
-  resetGate();
+  await resetGate();
   const hold3 = await admitDispatch({ provider: "openai", model: "gpt-6.1-sol", estimatedMicro: 81_944 });
   const before3 = recorded();
   await hold3!.settleUncertain(); // the provider may have billed an accepted request
   check("uncertain failure settles at the estimate (never released)", recorded() - before3 === 81_944, recorded() - before3);
 
-  resetGate(4_500_000);
+  await resetGate(4_500_000);
   let blocked: unknown = null;
   try {
     await admitDispatch({ provider: "openai", model: "gpt-6.1-sol", estimatedMicro: 1 });
@@ -210,7 +235,7 @@ console.log("\n§4 the gate");
   check("the error carries the arithmetic", !!e && e.recordedMicro === 4_500_000 && e.stopMicro === 4_500_000, e?.message);
 
   // outstanding holds count toward the projection
-  resetGate(4_400_000);
+  await resetGate(4_400_000);
   const h = await admitDispatch({ provider: "openai", model: "gpt-6.1-sol", estimatedMicro: 50_000 }); // in flight
   let blocked2: unknown = null;
   try {
@@ -236,7 +261,7 @@ try {
     });
 
     // §5 — the clamp law + gate + sink, against a fetch fake.
-    resetGate();
+    await resetGate();
     let captured = "";
     const realFetch = globalThis.fetch;
     (globalThis as { fetch: unknown }).fetch = async (_url: unknown, init?: RequestInit) => {
@@ -264,7 +289,7 @@ try {
     }
 
     // failure path: the fake dispatch throws → uncertain settle at estimate
-    resetGate();
+    await resetGate();
     (globalThis as { fetch: unknown }).fetch = async () => {
       throw new Error("connect ECONNREFUSED (fake)");
     };

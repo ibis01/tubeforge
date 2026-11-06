@@ -1,8 +1,11 @@
 # TubeForge — Roadmap
 
-**Status:** Stage 1 audit complete; Stage 1 implementation in progress.
-**Last updated:** 2026-11-01
-**Source:** `MASTER_PLAN.md` + `FOUNDATION_AUDIT.md` findings
+**Status:** Stages 1–7 closed at the code level; the S-series hardening
+sprints (S1→S46) landed on top. Feature sprints are ON HOLD for S47 —
+Production Integrity and Acceptance (external audit, 2026-11-06: prove
+shared admission, acceptance benchmarks, CI evidence, docs truth).
+**Last updated:** 2026-11-06
+**Source:** `MASTER_PLAN.md` + `FOUNDATION_AUDIT.md` findings + the S47 external audit
 
 ---
 

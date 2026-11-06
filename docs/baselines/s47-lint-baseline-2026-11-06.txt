@@ -1,0 +1,42 @@
+TubeForge — ESLint baseline frozen at S47 (2026-11-06 UTC)
+==========================================================
+
+Command   : npx eslint .            (eslint.config.mjs, warn-level rules)
+Result    : 0 errors · 670 warnings · 402 files linted
+Reference : the S46 commit-reported "~670 warnings" (external audit
+            Finding 3) is hereby pinned to an exact, reproducible number.
+
+Warning census (by rule)
+------------------------
+  370  no-console
+  160  @typescript-eslint/no-non-null-assertion
+   69  @typescript-eslint/no-unused-vars
+   33  react-hooks/set-state-in-effect
+   11  @typescript-eslint/no-unused-expressions
+    9  react-hooks/exhaustive-deps
+    7  @typescript-eslint/no-explicit-any
+    5  no-useless-escape
+    3  prefer-const
+    1  import/no-anonymous-default-export
+    1  @next/next/no-location-assign-relative-destination
+    1  (plugin-internal, no rule id)
+
+Reduction programme (S47+; measurable: the census above is the score)
+---------------------------------------------------------------------
+1. no-unused-vars (69) — pure deletions, zero runtime risk. Target: 0 in
+   S48. Re-enable as error afterwards.
+2. prefer-const (3) + no-useless-escape (5) — trivial. Fold into (1).
+3. no-unused-expressions (11) — mostly probe scripts; tighten or inline.
+4. react-hooks/exhaustive-deps (9) — real correctness review per site;
+   fix deps, never silence without a comment.
+5. no-explicit-any (7) — type properly; security-adjacent code first.
+6. react-hooks/set-state-in-effect (33) — the 17 pre-existing sites noted
+   at T-1.4 plus drift; each needs an effect-vs-event design decision.
+7. no-non-null-assertion (160) — batch by module; each `!` is a potential
+   production crash. Pair with tests; largest single chunk of the debt.
+8. no-console (370) — LAST: many live in scripts/ + logger calls where
+   console is legitimate. Split eslint config: relax for scripts/, fix
+   src/ to route through log.ts. Target: src/ at 0.
+
+Rule: the census is re-run at every sprint close and recorded here; the
+error count must stay 0 and the warning count must never rise.

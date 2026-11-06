@@ -55,20 +55,39 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
 // The gate's global state — the probe resets it between sections.
 const spendState = (globalThis as typeof globalThis & {
   __tfSpend?: {
-    booted: boolean;
     bootFailed: boolean;
-    bootPromise: Promise<void> | null;
     recordedMicro: number;
     holds: Map<string, number>;
-    nextHoldId: number;
+    localOnly: Set<string>;
   };
 }).__tfSpend!;
-function resetGate(recordedMicro = 0) {
-  spendState.booted = true;
+
+// S47 — the gate's decision input is the DATABASE (a serialized per-admit
+// read), so resetting the world now means wiping SpendReservation and — for
+// a nonzero baseline — seeding a settled row that the next admit's shared
+// read will count. The in-process mirror is a read-model; poking it no
+// longer influences admission (that was the S32 boot-snapshot semantics).
+async function resetGate(recordedMicro = 0) {
   spendState.bootFailed = false;
-  spendState.bootPromise ??= Promise.resolve();
-  spendState.recordedMicro = recordedMicro;
+  spendState.recordedMicro = 0;
   spendState.holds.clear();
+  spendState.localOnly.clear();
+  await prisma.spendReservation.deleteMany({});
+  if (recordedMicro > 0) {
+    await prisma.spendReservation.create({
+      data: {
+        id: `spend-reset-${SUFFIX}-${Math.random().toString(36).slice(2, 8)}`,
+        organizationId: orgId,
+        userId,
+        provider: "openai",
+        model: "gpt-6.1-sol",
+        estimatedMicroUsd: recordedMicro,
+        actualCostMicroUsd: recordedMicro,
+        status: "settled",
+        settledAt: new Date(),
+      },
+    });
+  }
 }
 const recorded = () => spendState.recordedMicro;
 const outstanding = () => {
@@ -91,9 +110,11 @@ console.log("\n§1 pricing provenance");
   check("PRICING_SOURCES covers every gpt-6 model in the registry",
     ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-cyber", "gpt-6-rosalind", "gpt-rosalind-research", "gpt-rosalind-discovery", "gpt-6-astra-law"]
       .every((m) => PRICING_SOURCES[0].covers.includes(m as never)));
-  // The S34 re-fetch (2026-11-06) reconciled every current-generation row.
-  check("the OpenAI source retrievedAt is 2026-11-06 (the S34 re-fetch that reconciled every row)",
-    PRICING_SOURCES[0].retrievedAt === "2026-11-06", PRICING_SOURCES[0].retrievedAt);
+  // The S34 re-fetch reconciled every current-generation row. retrievedAt
+  // is stamped as the UTC day per the provenance convention at the top of
+  // spend.ts (the re-fetch ran 2026-11-06 Asia/Shanghai = 2026-11-05 UTC).
+  check("the OpenAI source retrievedAt is the UTC day of the S34 re-fetch (2026-11-05)",
+    PRICING_SOURCES[0].retrievedAt === "2026-11-05", PRICING_SOURCES[0].retrievedAt);
 
   // S34 reconciliation aftermath: the legacy gpt-4.1/gpt-4o rows are GONE
   // (their cited source 404s and OpenAI's live page no longer lists them —
@@ -121,7 +142,7 @@ console.log("\n§2 pricing-unverified block");
 {
   const saved = process.env.TUBEFORGE_PRICING_VERIFIED;
   delete process.env.TUBEFORGE_PRICING_VERIFIED;
-  resetGate();
+  await resetGate();
   let blocked: unknown = null;
   try {
     await admitDispatch({ provider: "openai", model: "gpt-6.1-sol", estimatedMicro: 1 });
@@ -156,7 +177,7 @@ console.log("\n§3 durable reservations");
   orgId = org.id;
 
   await withCtx({ userId, organizationId: orgId, role: "owner" }, async () => {
-    resetGate();
+    await resetGate();
     // §3.1 — admit creates a pending row
     const hold = await admitDispatch({ provider: "openai", model: "gpt-6.1-sol", estimatedMicro: 81_944 });
     check("admit returns a hold", hold !== null);
@@ -191,10 +212,10 @@ console.log("\n§3 durable reservations");
     // §3.4 — a crash mid-call leaves a pending row that survives a re-boot
     const hold2 = await admitDispatch({ provider: "openai", model: "gpt-6.1-sol", estimatedMicro: 50_000 });
     check("a second admit is in flight (pending)", hold2 !== null);
-    // Simulate a crash: drop the in-memory hold WITHOUT settling, then re-boot.
+    // Simulate a crash: drop the in-process mirror WITHOUT settling — the
+    // next admit's shared read rebuilds outstanding from the DB pending row
+    // (the S47 mechanism; there is no boot latch to reset anymore).
     spendState.holds.clear();
-    spendState.booted = false;
-    spendState.bootPromise = null;
     spendState.bootFailed = false;
     // The next admitDispatch calls bootRecorded, which rebuilds holds from pending rows.
     await admitDispatch({ provider: "openai", model: "gpt-6.1-sol", estimatedMicro: 1 })
@@ -217,7 +238,6 @@ console.log("\n§3 durable reservations");
     // Force a boot failure by pointing the tenant-db at a dead datasource.
     // Simpler: set bootFailed directly and verify admitDispatch throws.
     spendState.bootFailed = true;
-    spendState.booted = true;
     let bootBlocked: unknown = null;
     try {
       await admitDispatch({ provider: "openai", model: "gpt-6.1-sol", estimatedMicro: 1 });
@@ -237,7 +257,7 @@ console.log("\n§3 durable reservations");
 console.log("\n§4 budget gate (pricing verified via env)");
 {
   await withCtx({ userId, organizationId: orgId, role: "owner" }, async () => {
-    resetGate(4_500_000); // already at the stop line
+    await resetGate(4_500_000); // already at the stop line
     let blocked: unknown = null;
     try {
       await admitDispatch({ provider: "openai", model: "gpt-6.1-sol", estimatedMicro: 1 });

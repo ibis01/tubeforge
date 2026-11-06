@@ -8,10 +8,12 @@ lets you edit the timeline, renders the MP4, runs a 12-check QC battery, and
 publishes to a connected YouTube channel — all inside a multi-user web
 application with metered AI spending and Stripe billing underneath.
 
-**Status:** studio stage S32 — the production loop is feature-complete at the
-code level. The remaining distance to a paid launch is operational, tracked in
-the S33+ backlog in [`TASKS.md`](TASKS.md) and summarized in the improvement
-roadmap (November 2026).
+**Status:** studio stage S46 (2026-11-06) — the production loop is
+feature-complete and the foundation proofs are in: cross-tenant
+isolation, a durable DB-backed queue, DB-backed login lockout (S46) and
+shared multi-instance spend admission (S47). The remaining distance to a
+paid launch is operational, tracked in the S47 “Production Integrity and
+Acceptance” ledger in [`TASKS.md`](TASKS.md).
 
 ## What's inside
 
@@ -27,7 +29,7 @@ roadmap (November 2026).
 - **The money** — Stripe checkout + customer portal, signature-verified
   webhooks (fail-closed), a transactional microCredit ledger with
   crash-durable reservations, versioned pricing, and a hard spend ceiling.
-- **The evidence discipline** — every stage S1→S32 shipped with a unit probe
+- **The evidence discipline** — every stage S1→S46 shipped with a unit probe
   and/or route-e2e script under `scripts/` so its claims can be re-verified
   mechanically. See the S-series index in [`TASKS.md`](TASKS.md).
 
@@ -87,7 +89,7 @@ full Playwright e2e job.
 | [`DEPLOYMENT.md`](DEPLOYMENT.md) | the one deployment topology (Fly + Neon + R2), staging spec, release checklist |
 | [`SECURITY.md`](SECURITY.md) | security requirements + audit findings |
 | [`ROADMAP.md`](ROADMAP.md) / [`MASTER_PLAN.md`](MASTER_PLAN.md) | the original development programme (Stages 1–7, all closed at the code level) |
-| [`TASKS.md`](TASKS.md) | task ledgers per stage **+ the S-series index (S1→S32) and the S33+ backlog** |
+| [`TASKS.md`](TASKS.md) | task ledgers per stage **+ the S-series index (S1→S46) and the S47 integrity ledger** |
 | [`RISK_REGISTER.md`](RISK_REGISTER.md) | technical debt and risk register |
 | `worklog.md` | the audit-trail worklog — every stage's final gate, in order |
 

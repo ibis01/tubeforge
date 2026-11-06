@@ -1,107 +1,149 @@
 # TubeForge — Architecture
 
-**Status:** Current state documented by Stage 1 audit; target state defined.
-**Last updated:** 2026-11-01
-**Source for current state:** `FOUNDATION_AUDIT.md`
+**Status:** reconciled against the live source at S47 (2026-11-06 UTC).
+**Last updated:** 2026-11-06
+**Source for current state:** `prisma/schema.prisma`, `prisma/migrations/`, `src/lib/tubeforge/`, `src/app/api/`
 
 ---
 
-## 1. Current architecture (post-audit)
+## 1. Current architecture (reconciled at S47, 2026-11-06 UTC)
+
+**Source of truth:** `prisma/schema.prisma` (31 models), `prisma/migrations/`
+(18 migrations), `src/lib/tubeforge/` (97 modules), `src/app/api/` (103 route
+files). This section was rewritten from those sources during S47 — the
+Stage-1-era snapshot that lived here before described a single-user,
+11-model system that no longer exists anywhere in the repo.
 
 ### 1.1 High-level
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│ Browser (single user)                                              │
-│   └─ Next.js 16 App Router (/) — Zustand store, TanStack Query     │
+│ Browser (per user, per organization)                               │
+│   └─ Next.js 16 App Router — Zustand store, TanStack Query         │
 └────────────────────────────────────────────────────────────────────┘
-                │ HTTPS (cookie session OR Bearer token)
+                │ HTTPS (session cookie OR Bearer API token)
                 ▼
 ┌────────────────────────────────────────────────────────────────────┐
-│ Next.js 16 standalone server (Node 20)                             │
-│   ├─ src/middleware.ts — opt-in API gatekeeper                     │
-│   ├─ src/app/api/* — 71 route files, 110 endpoints                  │
-│   └─ src/lib/tubeforge/* — 53 modules, 8 provider adapters         │
+│ Next.js 16 standalone server (Node 20) + independent workers       │
+│   ├─ src/middleware.ts — DEFAULT-DENY gatekeeper                   │
+│   │     (6 public auth endpoints + YouTube OAuth callback)         │
+│   ├─ src/app/api/* — 103 route files, tenant-scoped via ALS        │
+│   ├─ src/lib/tubeforge/* — 97 modules, 10 provider adapters        │
+│   └─ scripts/worker.mts — DB-backed queue consumer                 │
+│         (Compose/Fly run web and worker from one image)            │
 └────────────────────────────────────────────────────────────────────┘
                 │
         ┌───────┼───────┬────────────┬─────────────┐
         ▼       ▼       ▼            ▼             ▼
    PostgreSQL  Local   AI providers  YouTube     Pexels/Pixabay
-   (Prisma)   uploads  (chat/tts/    Data API    (stock
-              (uploads image/video/  + OAuth     footage)
-              dir)    asr/vision)    + Analytics)
+   (Prisma +   disk or (chat/tts/    Data API    (stock
+   migrations) S3/R2    image/video/  + OAuth     footage)
+               (presig) asr/vision)  + Analytics)
 ```
 
 ### 1.2 Database
 
-- **Engine:** PostgreSQL in production, SQLite for local dev. Two parallel schemas (`schema.prisma`, `schema.sqlite.prisma`) maintained by hand. No `prisma/migrations/` directory — schema management is `prisma db push` only.
-- **Models (11):** `Channel`, `Character`, `Video`, `Activity`, `ResearchSession`, `ScheduleSlot`, `VideoStat`, `Setting`, `VoiceProfile`, `MusicTrack`, `Job`.
-- **Tenant isolation:** none. Every model lacks `userId`/`tenantId`. The `Setting` table is a singleton per key.
-- **Secrets storage:** `Setting` table holds the owner password hash, all provider API keys, the YouTube OAuth client ID/secret, the YouTube refresh token, channel title/thumb, privacy status, category ID. One TubeForge install = one owner.
+- **Engine:** PostgreSQL in production, SQLite for local dev. ONE source
+  schema (`schema.prisma`, 31 models); the SQLite mirror is GENERATED from
+  it (`scripts/sync-sqlite-schema.mjs`) — it cannot drift. Schema changes
+  ship as versioned `prisma/migrations/` (18 today; SQLite provisions via
+  `db push` in the setup path).
+- **Tenancy:** `User` / `Organization` / `Membership` (owner, admin,
+  editor, viewer); every content model carries `organizationId` with
+  cascade delete and an index. Scoping is enforced in `tenant-db.ts` (a
+  Prisma `$extends` client injecting `organizationId` from the request's
+  async-local-storage context); raw `@/lib/db` imports in route code are
+  lint-blocked. Cross-tenant isolation is pinned by `e2e/isolation.spec.ts`
+  and per-stage route probes.
+- **Secrets at rest:** `ProviderCredential.apiKey` and YouTube tokens are
+  AES-256-GCM encrypted per record (`crypto.ts`, `v1.` format). Settings
+  are per-user (`UserSetting`), not singleton rows.
 
 ### 1.3 Authentication & authorization
 
-- **Mechanism:** self-rolled HMAC-SHA256 signed cookies (`tf_session`) + Bearer tokens. PBKDF2-SHA256 120k iterations for the owner password.
-- **Gate model:** opt-in. Studio is OPEN by default. The gate activates only when Setting `auth.enabled = "true"` AND `TUBEFORGE_AUTH_SECRET` is set (mirrored to a flag file at `db/auth.lock` for the middleware to hot-check without DB access).
-- **Public routes:** `/api/auth/{status,setup,login,logout}`. Plus `/api/auth/lock` during a production fail-safe window. Plus `/api/youtube/callback` (the OAuth code-exchange landing — session cookie travels with the browser redirect).
-- **Per-IP rate limit:** 600 reads/min, 90 writes/min, sliding window, in-memory (`__tfRateBuckets` on `globalThis`).
-- **Login lockout:** 5 failed logins per IP per 10 minutes → 10-minute lockout, in-memory (`__tfAuthLimit` on `globalThis`).
-- **CSRF:** session-authenticated mutations with a mismatching `Origin` are rejected (plus `SameSite=Lax`).
-- **SSRF:** `safeFetch` in `net-guard.ts` blocks private/loopback/link-local/CGNAT/metadata hosts, re-resolves DNS per connection, manually follows redirects with each hop re-validated, byte cap, timeout. Opt-out via `TUBEFORGE_ALLOW_PRIVATE_HOSTS=1` (provider calls only; voice/media URLs stay locked).
-- **Authorization granularity:** none beyond "is authenticated". Once through the gate, every endpoint trusts the caller to be the owner.
+- **Mechanism:** PBKDF2 password hashes; server-side `Session` rows
+  (7-day, revocable) behind signed cookies; 90-day scoped `ApiToken`
+  bearer tokens; email verification + password reset; GDPR export/delete.
+- **Gate model:** DEFAULT-DENY middleware with a public allow-list (the
+  auth endpoints + `/api/youtube/callback`); a production fail-safe
+  refuses to serve when `TUBEFORGE_AUTH_SECRET` is missing.
+- **Login lockout (S46):** rolling 10-minute window, 5 in-window failures
+  → lockout, backed by the `AuthAttempt` TABLE and verified through a
+  second Prisma client — deployments and multi-instance rolls can no
+  longer forget it. Fail-open on a lockout-read error is a documented,
+  announced availability choice.
+- **CSRF / SSRF:** Origin-check on mutations (`SameSite=Lax` beneath);
+  `net-guard.ts#safeFetch` blocks private/looplink/CGNAT/metadata targets,
+  re-resolves DNS per hop, caps bytes and time.
+- **Rate limits:** per-IP buckets remain in-process (Redis deferred — the
+  one §2.1 target row still open in letter).
 
 ### 1.4 Job execution
 
-- **Mechanism:** in-process fire-and-forget. `lib/tubeforge/jobs.ts#startJob()` creates a `Job` DB row for persistence, then runs the job body via `void fn().then(...).catch(...).finally(...)` inside the same Node process. Live state is the in-memory `state.running: Map<string, RunningEntry>` (`__tfJobs` on `globalThis`).
-- **Persistence:** the `Job` table is the source of truth for history and boot recovery. Live progress is in memory.
-- **Crash recovery:** `runRecovery()` runs lazily on the next `startJob` or `jobHistory` call. Any `running` Job row whose `startedAt < state.bootTs` is from a dead process; marked `interrupted`; the owning video/character gets a visible error so polling clients stop waiting.
-- **Concurrency:** deduped via `globalThis` map (one running job per `entityId + kind`).
-- **Cancellation:** cooperative. `POST /api/jobs/cancel` sets a flag; the job body checks `isJobCancelled` at its next checkpoint.
-- **What dies on restart:** every in-flight job. The DB row is marked `interrupted`, but the actual computation is lost. Recovery requires the user to re-trigger the stage.
+- **Mechanism:** the Stage-3 DB-backed queue (`queue.ts` +
+  `queue-handlers.ts` + `scripts/worker.mts`): jobs are claimed atomically
+  (`UPDATE ... WHERE status = 'pending'` — correct on SQLite AND Postgres),
+  retried with exponential backoff, cancellable across processes, capped
+  per organization, and re-enqueued after process death when their kind
+  can be rebuilt from DB state. The fire-and-forget model described by
+  earlier versions of this document is gone.
 
-### 1.5 Filesystem & binary dependencies
+### 1.5 Storage & binaries
 
-- **Artifact store:** `process.cwd()/uploads/<entityId>/…` — every stage writes here: `scene-NN.png`, `scene-NN.wav`, `voiceover.wav`, `final.mp4`, `preview.mp4`, `subtitles.srt`, `short.mp4`, `shot-NN-k.png`, `slide-NN.png`, `slides.json`, `stock-NN.mp4`, `render-tmp/*`, `brand-logo.*`, `thumbnail.png`, `variant-<style>.png`. Cross-video caches: `uploads/_sfx/`, `uploads/_music/`. Character art: `uploads/characters/<id>/`.
-- **Binary tools:** FFmpeg + ffprobe via the zombie-aware `runProcess` wrapper in `proc.ts:48-142`. Linux-only `/proc/<pid>/stat` zombie watchdog (lines 37-46) — will not work on macOS/Windows hosts. Playwright/Chromium for keynote slides (`slides.ts:883`).
-- **Serverless incompatibility:** `output: "standalone"` in `next.config.ts:4` targets a Node server, NOT Vercel serverless. Even so, routes still call `fs.writeFileSync` directly which serverless would reject at runtime.
+- **Artifact store:** `storage.ts` key-API abstraction — LocalDisk (the
+  historical `uploads/` layout, zero data migration) or any
+  S3-compatible store (zero-dep SigV4 signer, path-style, R2/MinIO
+  compatible; presigned delivery for `GET mp4`). Per-org quota via the
+  `StorageUsage` counter.
+- **Binaries:** FFmpeg/ffprobe via the zombie-aware `runProcess` wrapper
+  (Linux `/proc` watchdog); Playwright/Chromium for slide rendering;
+  Node 20 standalone server — not Vercel serverless.
 
 ### 1.6 Provider integrations
 
-- **Adapter pattern:** `src/lib/tubeforge/providers/` has 8 modules: `chat.ts`, `tts.ts`, `image.ts`, `video.ts`, `asr.ts`, `vision.ts`, `http.ts`, `settings.ts`, `registry.ts`, `config.ts`.
-- **Dispatch:** `registry.ts` picks a provider per capability based on Setting rows.
-- **HTTP layer:** `http.ts#providerFetch` → `net-guard.ts#safeFetch`. 5-minute timeout via `AbortSignal.timeout`.
-- **Budget layer:** `budget.ts#aiCall` wraps every AI call with pacing (per-minute budget), concurrency caps (`MAX_CONCURRENT`), shared 429 cool-downs (`noteRateLimit`), 3-attempt exponential backoff. State lives in `__tfBudget` on `globalThis` — resets on restart (D-22).
-- **8 image providers:** zai/openai/stability/fal/replicate/ideogram/recraft/pollinations. Identity-locked edits via `imageEdit` only on zai + gpt-image-1.
-- **4 TTS providers:** zai (SDK), zhipu (GLM-TTS, also accepts cloned voice ids), openai-compatible (`audio/speech`), selfhost (Chatterbox on user's PC).
-- **Voice cloning:** Zhipu GLM-TTS-Clone API (zhipu) or self-hosted Chatterbox (selfhost with `sampleWav` re-sent per synthesis).
-- **ASR:** providers/asr for narration verification.
-- **Vision (VLM):** providers/vision for thumbnail quality gate (fails open).
-- **Stock:** Pexels + Pixabay (hardcoded endpoints).
-- **YouTube:** Google OAuth + YouTube Data API. All credentials in the `Setting` table (single-tenant blocker). **The `uploadToYouTube` function is implemented but never called** (D-06, D-07).
+- **Adapters:** `providers/` — chat, tts, image, video, asr, vision,
+  http, settings, registry, config. Capability dispatch resolves from
+  per-user `ProviderCredential`s; the acting user's encrypted Z.ai key
+  wins over the platform gateway; providers are mixable per task.
+- **Budget/gate:** `budget.ts` paces every AI call (per-minute budgets,
+  concurrency caps, shared 429 cool-downs). `spend.ts` is the paid-USD
+  law: worst-case reservation BEFORE dispatch, the est ≥ actual
+  invariant, a versioned pricing registry (provisional until an operator
+  verifies it — paid dispatches are REFUSED while `PRICING_STATUS` is
+  `"provisional"`), and — since S47 — shared admission across ALL
+  instances (see 1.7).
 
-### 1.7 In-memory state (won't survive restart)
+### 1.7 Shared state across instances
 
-| Symbol | Purpose | Restart risk |
+| Concern | Mechanism | Since |
 | --- | --- | --- |
-| `__tfJobs` | Running job Map | In-flight work dies |
-| `__tfBudget` | AI rate-budget pacing, concurrency, 429 cool-downs | Thundering-herd on fresh process |
-| `__tfAuthLimit` | Login throttle buckets | **Security regression** — brute-force counters reset |
-| `__tfRateBuckets` | API rate-limit buckets | **DoS protection resets** |
-| `__tfCancel` | Cancellable-sleep state | Cancellation signal lost |
-| `__tfLLM`, `__tfTTS`, `__tfYtToken`, `zaiInstance` | Settings/token caches | Safe; re-read or re-refresh from DB |
+| Login lockout | `AuthAttempt` table, rolling window | S46 |
+| Paid-spend gate | `SpendReservation` + ONE serialized READ-check-RESERVE transaction per paid admit (Serializable on Postgres; single-writer SQLite) | S47 |
+| Job queue | DB rows claimed atomically; workers recover after death | Stage 3 |
+| Sessions | `Session` rows, server-side revocation | Stage 2 |
+| Rate-limit buckets | in-process (deferred to Redis) | open |
+| Budget pacing / 429 cool-downs | in-process, per-instance (advisory only) | open |
 
-### 1.8 What's missing from the target pipeline
+### 1.8 Known gaps vs the §2 target
 
-1. **AI Director stage** — the LLM emits per-scene flat fields inside the script JSON. The only "director-like" passes are heuristic, render-time (`shots.ts#planShots`, `motion.ts#planSceneMovements`). There is no LLM-driven shot-list / camera / lens / coverage pass.
-2. **Export/Publish stage** — `uploadToYouTube` is implemented but never called. There is no `POST /api/videos/[id]/publish` route. `Video.youtubeUrl` is never written.
-3. **Server-side Auto-Pilot pipeline DAG** — each stage is a separate API endpoint; the client must poll + chain manually (`poll.ts:82-459`). No server-side orchestration chains idea → script → storyboard → voice → render → QC → export → publish.
-4. **QC as a separate stage** — `qcForVideo` runs inline inside the render job. There is no independent QC re-run endpoint.
-5. **Scene Assembly / Editing as a separate stage** — scene assembly + transition stitching + music + captions + loudnorm are rolled into the monolithic `renderVideo` orchestrator. There is no preview-assembly stage where the user can reorder scenes, trim timing, or substitute assets before the final render commits.
-6. **Multi-tenant data isolation** — every model lacks `userId`/`tenantId`. The `Setting` table is singleton per key.
+1. Redis-backed session/rate-limit state — Sessions are DB rows; the
+   per-IP rate buckets remain in-process.
+2. Server-side Auto-Pilot DAG — orchestration is client-chained (poll.ts)
+   plus the Director's stage orchestration; no single server-side DAG.
+3. BullMQ/Redis queue — replaced by the DB-backed queue on purpose; the
+   §2.1 durability goal is met in substance, not in letter.
 
 ---
 
 ## 2. Target architecture
+
+> **S47 status note:** this target section (and the §2.1 diff
+> table) was written at Stage 1 against the pre-tenant snapshot.
+> Most of its rows have since landed — tenancy, default-deny auth,
+> zod validation, encrypted per-user secrets, the durable queue,
+> the storage abstraction, the Director, assemble, QC, publish —
+> with the remaining deltas listed in §1.8. Read §2 as history;
+> §1 is the current state.
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐

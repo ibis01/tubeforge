@@ -1799,7 +1799,7 @@ preview.mp4 through qcForPreview proving scope + the absent duration/
 captions checks) · queue PASS · billing 40/40 · s30 41/41 · s36 38/38 ·
 s40 102/102 · s34 ALL PASS · s35 17/17 · s4 ALL PASS · s5 ALL PASS.
 
-## S46 (2026-11-07 UTC) — the lockout that forgot every deploy
+## S46 (2026-11-06 UTC) — the lockout that forgot every deploy
 
 Roadmap P1-6, the last P1 item that was pure in-repo engineering:
 "Stateful rate limiting + login lockout — the in-process Map wipes on
@@ -1895,3 +1895,62 @@ deleted · queue PASS (real worker restart) · billing 40/40 · s30 route
 e2e ALL PASS against a live dev server (auth gate + origin trust
 unchanged) · **e2e 26/26** (register/login/rotation flows through the
 real routes — the async throttle is transparent to every caller).
+
+## S47 (2026-11-06 UTC) — the counter that forgot it had siblings
+
+External-audit day. The "Fresh Repository Check" scored 8.7/10 and put
+feature sprints on hold until production integrity is PROVEN: four
+findings, five next actions. Tranche 1 took the two Highs and the two
+verifiables in one sitting.
+
+T-47.1 — shared spend admission (High). The S32 gate booted its recorded
+total and holds ONCE per process; a second instance would admit against
+a snapshot that never hears the first instance's settlements — the exact
+hole the audit flagged ("the spending counter still assumes one daemon
+process", spend.ts's own words until today). The boot is gone: every
+paid admit runs READ-check-RESERVE inside ONE transaction — Serializable
+on Postgres (the DB itself serializes the race; the P2034 loser retries
+once), single-writer SQLite as-is — against SpendReservation. Holds are
+UUID-keyed (no cross-instance PK collision). bootFailed is fail-closed
+WITH self-heal: refuse one dispatch, clear the flag, let the next admit
+re-try the read (the S32 latch never retried, contradicting its own
+error's contract). ctx-null holds (probes) live in a `localOnly` set the
+DB re-sync must carry — s27 caught the wipe, and the projection now
+counts them explicitly inside the transaction.
+
+The probes were PART of the old mechanism: s27/s32 seeded by poking the
+in-process mirror, which only worked because admit trusted a boot-time
+snapshot. They now seed the DB — resetGate wipes SpendReservation and
+creates settled rows — the S32-precedented update, and the only seeding
+that proves anything about a DB-decision gate. s32 §1 carried a
+PRE-EXISTING failure on main: it expected retrievedAt 2026-11-06 while
+the source stamps the UTC day 2026-11-05 per its own provenance
+convention — the audit's "commit-reported results are not independently
+executed" found in the wild; the probe now expects the UTC day.
+
+T-47.3 — CI evidence (Medium, resolved with a twist). The authenticated
+API shows 87 Actions runs; S45's run succeeded; S46's run had gitleaks
+PASS but `Typecheck · Lint · Unit` was CANCELLED mid-run and E2E
+skipped — 30281a8 has NO green CI. The substance is independently
+reproduced here (tsc 0 · 194/194 unit · s27 ALL CHECKS PASS · s32 ALL
+PASS · s34 ALL PASS · SpendReservation empty after teardowns), and the
+S47 push re-runs CI on the reconciled tree as the green reference. The
+audit's "could not independently retrieve" was the unauthenticated API
+rate limit, not missing CI. Tracked follow-up: why the run cancelled
+(T-47.10).
+
+T-47.4 — the date discrepancy: S46's commit is 2026-11-06T20:12:40Z
+(04:12 Nov 7 Asia/Shanghai — the worklog header took the local day);
+header corrected to 2026-11-06 UTC. The audit's Nov 6 dating was right.
+T-47.5 — lint baseline frozen: 0 errors / 670 warnings / 402 files
+(no-console 370, no-non-null-assertion 160, no-unused-vars 69,
+set-state-in-effect 33) in docs/baselines/s47-lint-baseline-2026-11-06.txt.
+T-47.6 — README/ARCHITECTURE/ROADMAP reconciled against the real source:
+31 models, 18 migrations, tenancy, DB queue, shared gate; §1 rewritten
+from schema+migrations+code with a §1.7 shared-state table; §2 marked as
+Stage-1 history.
+
+Gate: tsc 0 · eslint 0 errors / 670 warnings (unchanged) · 194/194 unit
+· s27 + s32 + s34 ALL PASS. The feature roadmap stays on hold until
+T-47.7 (director acceptance), T-47.8 (visual continuity) and T-47.9
+(dependency triage) close.
