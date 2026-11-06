@@ -1,0 +1,15 @@
+S47 visual continuity benchmark — recorded 2026-11-06T23:20:51.524Z
+Character: Nova (fixed anchor, byte-identical to seed-director-smoke) · 3 host scenes ·
+path: portrait (CogView) → approved narrative director plan (glm-4.6) → identity-locked
+scene paints (portrait-seeded imageEdit) → production VLM continuity check.
+
+scene  bytes    sha256-16          score  verdict      issues
+    1   93894 2e96c49de79ede6f      85  consistent   Character appears in her 50s-60s, not late-20s as stated (though consistent with the reference image
+    2   77005 221b932c7279c33c      88  consistent   Depicted woman appears ~55-65, not late-20s as stated (matches reference, so likely reference incons
+    3   92637 9aa81fd14f82cf3f      92  consistent   Character appears mid-50s+, older than stated late-20s age (consistent with reference, so likely a r
+
+Overall continuity score: 88/100 across 3 scenes.
+
+BASELINE, not a threshold claim: the acceptance threshold (and the human review
+protocol behind it) is an S54 decision. This file exists so S54 has a measured
+starting point, and so regressions in the continuity path have a number to beat.

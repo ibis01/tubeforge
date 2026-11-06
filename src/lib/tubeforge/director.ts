@@ -316,6 +316,16 @@ export async function runDirectorPass(
         );
         if (!plan || plan.scenes.length === 0)
           throw new Error("Director pass returned no usable scenes — try again");
+        // S47 — the plan must cover EVERY seeded scene. The acceptance
+        // benchmark caught the model closing the root early (scene 1, then
+        // sibling objects as trailing junk); the parser recovers the leading
+        // object honestly, but a 1-of-3 plan is a truncated suggestion that
+        // silently stops steering scenes 2+ — it costs one fresh generation,
+        // not a degraded plan the human then has to notice.
+        if (plan.scenes.length !== scenes.length)
+          throw new Error(
+            `Director pass covered ${plan.scenes.length} of ${scenes.length} scenes — try again`
+          );
         return plan;
       },
     }

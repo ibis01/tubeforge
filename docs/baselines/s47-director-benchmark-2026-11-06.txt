@@ -1,0 +1,40 @@
+S47 director acceptance benchmark — recorded 2026-11-06T23:16:24.043Z
+Repeats per genre: 2. Live path: Z.ai platform gateway (ungated, metered-only).
+Model note: the benchmark pins chat to zai/glm-4.6 (saveCapability, per s27 §6
+precedent). The platform default glm-4.5-flash was measured on the first run and
+failed the narrative RE-RUN 3/3 attempts (2 non-JSON, 1 scene-less object) — a
+recorded finding for S48: director-grade model selection / prompt hardening.
+
+§A malformed-JSON recovery: 9/9 corpus cases recovered through parseJsonLoose +
+   parsePlan; 2/2 must-fail cases (truncated payload, empty scenes) failed honestly.
+§A2 retry closure: garbage-then-good recovered on attempt 2 of 3; all-garbage
+   exhausted 2 retries and threw. (Deterministic — re-provable offline.)
+
+§B director runs (schema-valid after aiCallJson validate+retry):
+profile       run  ms    scenes shots shot0-framings findings planSec
+narrative       1  8789      3     7               3        0    15.5
+narrative       2  4394      3     3               3        0       8
+documentary     1  5126      3     6               2        0    14.2
+documentary     2 10973      3     4               3        0     9.1
+explainer       1  5962      3     5               2        0    12.8
+explainer       2  8540      3     9               2        0    15.8
+advertisement   1  8139      3     5               3        2     9.6
+advertisement   2  8974      3     5               2        2     9.6
+animation       1  6946      3     6               3        0    13.4
+animation       2 16074      3     7               2        1    16.2
+social          1 23135      3     6               3        1    14.2
+social          2 23041      3     6               3        1    14.2
+
+§B scene-1 paint + independent VLM re-score (0-10):
+profile       bytes    sha256-16    score  summary
+narrative      142368 9f182b856c0baed7     8  A host with a microphone stands on a neon-lit rainy street matching the intended moment, with only minor AI artifacts and weak ground reflections holding it bac
+documentary    175263 65c0cfb187023a4f     8  Strong story match with a clean camel caravan approaching ancient walls and no garbled text or major artifacts; minor rider detail and shadow inconsistencies ke
+explainer      137397 8d38f945afeb3070     8  A clean, realistic water-level view of a suspension bridge span matching the described moment, with only minor framing and cable-detail imperfections.
+advertisement  115717 c572ccc65b542120     9  Clean, on-brief hero shot of a matte-black portable espresso machine steaming on a dark surface with no visible AI artifacts or garbled text.
+animation      158748 90d0bb258c16ddc1     7  A clean, artifact-free striped lighthouse on a tiny island that matches the story moment, though the rendering style and dusk-like lighting deviate slightly fro
+social          75267 8d19a17362697726     9  Strong match: tired close-up face in dark bedroom with phone in hand, clean anatomy and no visible AI artifacts, only minor lighting nuance.
+
+Totals: 12/12 director runs schema-valid · 6/6 genres produced plans · mean director latency 10841 ms.
+
+BASELINE, not a threshold claim: genre/visual acceptance thresholds are set at S54
+with human review on record. This file exists so S54 has a measured starting point.

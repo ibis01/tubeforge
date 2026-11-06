@@ -1954,3 +1954,82 @@ Gate: tsc 0 · eslint 0 errors / 670 warnings (unchanged) · 194/194 unit
 · s27 + s32 + s34 ALL PASS. The feature roadmap stays on hold until
 T-47.7 (director acceptance), T-47.8 (visual continuity) and T-47.9
 (dependency triage) close.
+
+## S47 tranche 2 (2026-11-06 UTC) — the ledger closes: the cancelled run, the 18 alerts, and the director's audition
+
+T-47.10 — the CI concurrency audit, resolved with evidence and a twist. The
+authenticated jobs API tells the whole story of run #81 (S46): its
+`Typecheck · Lint · Unit` job died inside the "Install ffmpeg" apt step,
+which STALLED for the full twenty minutes (20:18:49Z → 20:38:52Z) and was
+killed by the job's own `timeout-minutes: 20` — a death GitHub records as
+conclusion "cancelled" (E2E then skipped via `needs: check`). The S47 push
+(run #82, created 20:56:44Z) arrived EIGHTEEN MINUTES AFTER the
+cancellation: the concurrency group was never the killer. But the audit it
+prompted still changed two things in ci.yml. `cancel-in-progress` is now
+PR-only — on main, the group WOULD have eaten a slower sibling's complete
+evidence, and this repo's law is that every main commit earns full CI — and
+both ffmpeg steps carry `timeout-minutes: 5`, so an apt stall now fails
+fast and visibly instead of consuming the whole job budget as a confusing
+"cancelled".
+
+T-47.9 — the dependency triage, done by reachability rather than severity.
+Dependabot's 18 (11 high / 4 moderate / 3 low) reconciles against npm
+audit's 17 (5 high / 12 moderate) once you see both read the same advisory
+DB and only differ in enumeration (per-alert vs per-package+range). Three
+runtime facts mattered: `sharp` — the ONE runtime-reachable advisory
+(libvips CVEs on provider-returned bytes, `image.ts`'s dynamic import for
+the Pollinations JPEG→PNG path) — is now 0.35.5; `@mdxeditor/editor` and
+`react-syntax-highlighter` turned out to be declared-but-NEVER-imported
+dead weight (zero references repo-wide, static or dynamic) and are REMOVED;
+everything left (prisma config chain, the eslint toolchain) is dev/build
+surface that parses our own files. Post-fix: 11 advisories, zero runtime.
+Full table + cadence in docs/audits/s47-dependency-triage.md.
+
+T-47.7 — the director acceptance benchmark, and the sprint's real story:
+the benchmark FAILED TWICE before it passed, and both failures were
+production defects worth more than a green run. Run one: the platform
+default glm-4.5-flash failed the narrative RE-RUN 3/3 attempts (prose, a
+scene-less object, prose) — recorded as a finding, benchmark pinned to
+glm-4.6 (s27 §6 precedent). Run two: glm-4.6 ALSO failed — and the raw
+dumps showed why: the model emits `"lens":100mm` — an UNQUOTED scalar —
+inside an otherwise brace-balanced document, a class S45's repair ladder
+never covered. Fix landed in `parseJsonLoose`: a string-aware structural
+repair rung that quotes unquoted scalars, appends missing closers and drops
+unmatched trailing ones, runs BEFORE the balanced scan (which would
+otherwise win a truncated payload with a lossy inner object), and bails
+honestly on mid-string truncation and mismatched closers — pinned by three
+new unit tests. The third failure mode — the model closing the root after
+scene 1 and the parser recovering an honest 1-of-3 prefix that validate
+then ACCEPTED — closed with a one-line law: the plan must cover EVERY
+seeded scene or the attempt is retried. Final run: §A 9/9 corpus recovered
++ 2/2 honest failures; §A2 the S45 retry closure proved against the real
+aiCall loop; §B 12/12 full-coverage schema-valid plans across six genres
+(five profiles + the narrative control, two runs each), 6/6 scene-1 paints
+with independent VLM re-scores 7–9/10, mean director latency 10.8 s.
+Baseline in docs/baselines/s47-director-benchmark-2026-11-06.txt —
+thresholds are S54's business, with human review on record.
+
+T-47.8 — the continuity benchmark on the fixed Nova anchor, through the
+FULL production path: portrait (CogView) → approved narrative plan
+(glm-4.6, per-scene outfits logged) → three identity-locked paints
+(portrait-seeded imageEdit) → the production VLM continuity check.
+Recorded baseline: 88/100 overall, 3/3 scenes "consistent" (85/88/92) —
+and the checker's issues column is the honest part: all three scenes note
+the character reads older than the stated late-20s anchor, while matching
+each OTHER and the portrait — i.e. the PORTRAIT renders old, cross-scene
+identity holds. That is an S48 character-bible prompt fix candidate, filed
+in the baseline, not papered over. The run also exercised the quality
+gate's designed 429 fail-open under gateway rate limits, visible in the
+evidence. Baseline in
+docs/baselines/s47-continuity-benchmark-2026-11-06.txt.
+
+Gate: tsc 0 · eslint 0 errors / 671 warnings — stash A/B proves this
+sprint's changes add ZERO of them (the +1 vs the frozen 670 is
+environmental: one no-unused-vars at test-unit.mts:4030 that counts at
+S47 HEAD in this sandbox; the next census freezes this environment's
+number) · 197/197 unit (3 new S47 parser tests) · s47 director benchmark
+ALL CHECKS PASS · s47 continuity benchmark ALL CHECKS PASS · sharp 0.35.5
+smoke-tested · npm audit 11 remaining, all dev-chain. The S47 ledger is
+CLOSED; the feature roadmap un-holds. Next: S48 (Cinematic AI Director)
+with the two recorded findings in hand — the default-model reliability gap
+and the portrait-age drift.

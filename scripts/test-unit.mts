@@ -4339,6 +4339,45 @@ await test("S45 parseJsonLoose: braces inside string values never break the scan
   eq(parsed.n, 2, "sibling fields survive");
 });
 
+await test("S47 parseJsonLoose: unquoted scalar values are quoted (the live glm-4.6 killer)", async () => {
+  const { parseJsonLoose } = await import("../src/lib/tubeforge/ai.ts");
+  // THE live director-benchmark shape: the whole payload is brace-balanced,
+  // so the balanced scan finds it, but `\"lens\":100mm` is not JSON. Every
+  // pre-S47 rung failed and the job died after 3 attempts.
+  const shot = '{"shotIndex":0,"framing":"wide","camera":"push-in","lens":100mm,"composition":"rule of thirds","duration":2.5,"imagePrompt":"a rope"}';
+  const parsed = parseJsonLoose(`{"concept":"bridges","scenes":[{"sceneIndex":1,"shots":[${shot}]}]}`) as {
+    scenes: { shots: { lens: string; duration: number; imagePrompt: string }[] }[];
+  };
+  eq(parsed.scenes[0].shots[0].lens, "100mm", "bare token quoted as a string");
+  eq(parsed.scenes[0].shots[0].duration, 2.5, "real numbers stay numbers");
+  eq(parsed.scenes[0].shots[0].imagePrompt, "a rope", "quoted strings untouched");
+  // multi-word bare tokens (\"24mm wide\") quote as one string
+  const multi = parseJsonLoose('{"lens":24mm wide,"n":1}');
+  eq(multi.lens, "24mm wide", "bare token with a space quoted whole");
+  eq(multi.n, 1, "sibling number untouched");
+});
+
+await test("S47 parseJsonLoose: missing closers are appended, unmatched trailing closers dropped", async () => {
+  const { parseJsonLoose } = await import("../src/lib/tubeforge/ai.ts");
+  const truncated = parseJsonLoose('{"title":"T","items":[{"n":1}');
+  eq(truncated.title, "T", "truncated tail repaired by appending closers");
+  eq((truncated.items as { n: number }[])[0].n, 1, "nested content survives the append");
+  const overclosed = parseJsonLoose('{"title":"O"}}');
+  eq(overclosed.title, "O", "trailing unmatched closer dropped");
+});
+
+await test("S47 parseJsonLoose: truncation INSIDE a string value still fails honestly", async () => {
+  const { parseJsonLoose } = await import("../src/lib/tubeforge/ai.ts");
+  let err: unknown;
+  try {
+    parseJsonLoose('{"concept":"a lone signal in the noise, cut mid-va');
+  } catch (e) {
+    err = e;
+  }
+  ok(err instanceof Error, "mid-string truncation throws (no fabricated value)");
+  ok(/did not return valid JSON/i.test((err as Error).message), "readable message");
+});
+
 await test("S45 parseJsonLoose: unparseable input throws the READABLE error, never a SyntaxError", async () => {
   const { parseJsonLoose } = await import("../src/lib/tubeforge/ai.ts");
   let err: unknown;

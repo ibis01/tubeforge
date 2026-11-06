@@ -129,6 +129,129 @@ function largestBalancedJson(text: string): string | null {
   return best;
 }
 
+/** S47 — true when the token is already a legal JSON scalar (number, true,
+ * false, null). Bare tokens like `100mm` are NOT and get quoted. */
+function isJsonScalarToken(token: string): boolean {
+  return (
+    token === "true" ||
+    token === "false" ||
+    token === "null" ||
+    /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(token)
+  );
+}
+
+/** S47 — string-aware structural repair for the malformed-JSON classes the
+ * director acceptance benchmark (T-47.7) caught in the wild on the live
+ * gateway:
+ *
+ *   1. unquoted scalar values — `"lens":100mm` (glm-4.6, live) — get quoted;
+ *   2. truncated tails — missing closers are appended at the end;
+ *   3. over-closed tails — closers with nothing left to close are dropped.
+ *
+ * Edits never land inside "…" literals. The repair BAILS (returns null) when
+ * the text ends inside a string literal (a truncated value must fail
+ * honestly, never be fabricated) or when a closer mismatches a non-empty
+ * opener stack (structural confusion — the balanced-scan rung already
+ * recovers the leading object of that class, and a blind edit could
+ * fabricate a shifted structure). Applied only after every quieter strategy
+ * has failed, so well-formed documents are never rewritten. */
+function structuralRepairJson(text: string): string | null {
+  type Edit = { kind: "quote"; start: number; end: number } | { kind: "delete"; at: number };
+  const edits: Edit[] = [];
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  let valueStart = -1;
+
+  const endValue = (end: number) => {
+    if (valueStart < 0) return;
+    const token = text.slice(valueStart, end);
+    const trimmed = token.trim();
+    if (
+      trimmed.length > 0 &&
+      !trimmed.startsWith('"') &&
+      !trimmed.startsWith("{") &&
+      !trimmed.startsWith("[") &&
+      !trimmed.includes('"') &&
+      !isJsonScalarToken(trimmed)
+    ) {
+      const lead = token.length - token.trimStart().length;
+      edits.push({ kind: "quote", start: valueStart + lead, end: valueStart + lead + trimmed.length });
+    }
+    valueStart = -1;
+  };
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inString) {
+      if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === ":") {
+      valueStart = i + 1;
+      continue;
+    }
+    if (ch === ",") {
+      endValue(i);
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      endValue(i);
+      if (stack.length === 0) {
+        edits.push({ kind: "delete", at: i }); // over-close — nothing left to close
+        continue;
+      }
+      const open = stack[stack.length - 1] ?? "";
+      if ((open === "{" && ch === "}") || (open === "[" && ch === "]")) stack.pop();
+      else return null; // mismatched closer — bail (see header)
+      continue;
+    }
+    if (ch === "{") {
+      stack.push("{");
+      valueStart = -1;
+      continue;
+    }
+    if (ch === "[") {
+      stack.push("[");
+      valueStart = -1;
+      continue;
+    }
+    if (ch === "\n" || ch === "\r") {
+      endValue(i);
+      continue;
+    }
+  }
+  if (inString) return null; // truncated mid-value — do not fabricate
+  endValue(text.length);
+
+  // Apply edits right-to-left so earlier offsets stay valid.
+  let out = text;
+  for (let e = edits.length - 1; e >= 0; e--) {
+    const edit = edits[e];
+    if (edit.kind === "delete") {
+      out = out.slice(0, edit.at) + out.slice(edit.at + 1);
+    } else {
+      const token = out.slice(edit.start, edit.end).replace(/\\/g, "\\\\");
+      out = out.slice(0, edit.start) + `"${token}"` + out.slice(edit.end);
+    }
+  }
+  const missingClosers = stack
+    .slice()
+    .reverse()
+    .map((open) => (open === "{" ? "}" : "]"))
+    .join("");
+  return out + missingClosers;
+}
+
 /** Extract JSON from an LLM response that may contain markdown fences, prose,
  * trailing commas or curly quotes. Throws the readable "Model did not return
  * valid JSON" only after every strategy fails — never a raw SyntaxError. */
@@ -144,6 +267,17 @@ export function parseJsonLoose(raw: string): Record<string, unknown> {
     tryJsonParse(cleaned),
     tryJsonParse(repairCommonJson(cleaned)),
   ];
+  // S47 — the structural rung (quotes unquoted scalar values, appends missing
+  // closers, drops unmatched trailing closers) runs BEFORE the balanced scan:
+  // when it yields a parse it covers the WHOLE document, while the balanced
+  // scan of a truncated payload would win with a lossy inner object. The
+  // balanced scan remains the fallback for prose-wrapped payloads (structural
+  // repair never makes prose parseable as a whole document).
+  const structural = structuralRepairJson(cleaned);
+  if (structural !== null) {
+    strategies.push(tryJsonParse(structural));
+    strategies.push(tryJsonParse(repairCommonJson(structural)));
+  }
   const balanced = largestBalancedJson(cleaned);
   if (balanced !== null) {
     strategies.push(tryJsonParse(balanced));
