@@ -260,9 +260,15 @@ export function assembleTimeline(scenes: Scene[], opts: AssembleOptions = {}): A
     const source: SceneSource =
       renderMode === "slides" ? "slides" : renderMode === "stock" && scene.stock ? "stock" : "ai";
 
-    const caption: TimelineCaption | null = scene.caption
-      ? { text: scene.caption, startSec, endSec }
-      : null;
+    // S43 — seed the doc's caption slot ONLY from human-edited captions
+    // (captionUser, set by the Scene Studio PATCH). The script LLM fills
+    // `caption` on every scene; seeding those here made every assembled doc
+    // override the word-synced narration chunks with one frozen LLM line per
+    // scene, and froze the assembly snapshot against later row edits.
+    const caption: TimelineCaption | null =
+      scene.captionUser && scene.caption
+        ? { text: scene.caption, startSec, endSec }
+        : null;
 
     return {
       index: scene.index,

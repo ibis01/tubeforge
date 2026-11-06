@@ -93,10 +93,17 @@ export async function getMusicSettings(): Promise<MusicSettings> {
   };
 }
 
-/** Sound-effect cues on/off (Settings → Sound; default on, conservative mix). */
+/**
+ * Sound-effect cues on/off (Settings → Sound). S43: default OFF — matches
+ * settings-public's DEFAULT_SETTINGS ("sfx.enabled": "false"); the synthesized
+ * boom/sting cues surprised viewers more than they retained them. Existing
+ * installs that explicitly saved a value keep it; only never-touched rows
+ * flip. The Timeline Studio's per-scene picker is unaffected (it rides the
+ * doc, not this switch).
+ */
 export async function getSfxEnabled(): Promise<boolean> {
   const v = await getSetting("sfx.enabled");
-  return v === null ? true : v === "true";
+  return v === null ? false : v === "true";
 }
 
 /**

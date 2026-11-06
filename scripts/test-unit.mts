@@ -1292,6 +1292,105 @@ await test("S42 serializeScenes: the art URL carries ?v= and rotates when art is
 });
 
 // ---------------------------------------------------------------------------
+// S43 — HEIC uploads, the caption override chain, the sfx default
+// ---------------------------------------------------------------------------
+
+await test("S43 sniffImageFormat: HEIC brands pass, non-HEIC ftyp boxes do not", async () => {
+  const { sniffImageFormat } = await import("../src/lib/tubeforge/story.ts");
+  const heicFile = (brand: string) =>
+    Buffer.concat([
+      Buffer.alloc(4), // size placeholder
+      Buffer.from("ftyp"),
+      Buffer.from(brand),
+      Buffer.alloc(2048, 7),
+    ]);
+  ok(sniffImageFormat(heicFile("heic")) === "heic", "heic brand sniffed");
+  ok(sniffImageFormat(heicFile("mif1")) === "heic", "mif1 (iPhone collections) sniffed");
+  ok(sniffImageFormat(heicFile("hevc")) === "heic", "hevc brand sniffed");
+  ok(sniffImageFormat(heicFile("isom")) === null, "an MP4's ftyp/isom is NOT an image");
+  ok(sniffImageFormat(heicFile("avc1")) === null, "avc1 brand refused");
+  // The committed real fixture (generated with libheif via pillow-heif).
+  const fixture = fs.readFileSync(path.join(import.meta.dirname, "fixtures", "scene-upload.heic"));
+  ok(sniffImageFormat(fixture) === "heic", "real iPhone-style HEIC fixture sniffed");
+});
+
+await test("S43 replaceSceneImage: a real HEIC decodes, cover-crops and lands as scene art", async () => {
+  const { replaceSceneImage } = await import("../src/lib/tubeforge/story.ts");
+  delete process.env.TUBEFORGE_STORAGE_DRIVER; // local driver — real bytes on disk
+  const probe = `s43-heic-probe-${Date.now()}`;
+  const fixture = fs.readFileSync(path.join(import.meta.dirname, "fixtures", "scene-upload.heic"));
+  ok(fixture.length > 1000, "fixture is a real file");
+  // The old failure mode: the sniff rejected HEIC outright ("Unsupported
+  // image — upload a PNG, JPEG or WebP file").
+  const bytes = await replaceSceneImage(probe, 1, fixture);
+  ok(bytes >= 1000, `cropped PNG written (${bytes} bytes)`);
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const probeOut = await promisify(execFile)("ffprobe", [
+    "-v", "error", "-show_entries", "stream=width,height",
+    "-of", "csv=p=0", path.join(process.cwd(), "uploads", probe, "scene-01.png"),
+  ]);
+  const dims = probeOut.stdout.trim().split(",").map(Number).filter((n) => Number.isFinite(n));
+  eq(dims[0], 1344, "cover-crop width = pipeline canvas");
+  eq(dims[1], 768, "cover-crop height = pipeline canvas");
+  fs.rmSync(path.join(process.cwd(), "uploads", probe), { recursive: true, force: true });
+});
+
+await test("S43 captionOverridesFor: doc caption > user-edited row caption > word-synced chunks", async () => {
+  const { captionOverridesFor } = await import("../src/lib/tubeforge/captions.ts");
+  const scenes = [
+    { caption: "LLM line 1", captionUser: false }, // LLM-seeded — must NOT override
+    { caption: "My caption", captionUser: true },   // human edit — overrides
+    { caption: "", captionUser: true },             // human edit, then cleared → chunks
+    { caption: "doc wins", captionUser: true },     // doc caption outranks the row
+  ];
+  const out = captionOverridesFor(scenes, [null, null, null, "studio edit"]);
+  eq(out[0], null, "LLM caption never overrides the word-synced chunks");
+  eq(out[1], "My caption", "user-edited row caption overrides");
+  eq(out[2], null, "cleared caption falls back to chunks");
+  eq(out[3], "studio edit", "doc (Timeline Studio) caption outranks the row");
+  // No doc at all — the user edit still works (the S43 row-flag path).
+  const noDoc = captionOverridesFor(scenes, null);
+  eq(noDoc[1], "My caption", "user edit works without a saved doc");
+  eq(noDoc[0], null, "without a doc, LLM captions still never override");
+});
+
+await test("S43 parseScenes: captionUser survives the row round-trip (legacy rows default false)", async () => {
+  const { parseScenes } = await import("../src/lib/tubeforge/story.ts");
+  const parsed = parseScenes(
+    JSON.stringify([
+      {
+        index: 1, title: "A", narration: "First scene narration here.", visual: "v", camera: "static",
+        mood: "m", caption: "human line", captionUser: true, hostInScene: false, rehook: false, sfx: "none",
+      },
+      {
+        index: 2, title: "B", narration: "Second scene narration here.", visual: "v", camera: "static",
+        mood: "m", caption: "llm line", hostInScene: false, rehook: true, sfx: "sting",
+      },
+    ])
+  );
+  eq(parsed[0].captionUser, true, "the flag round-trips");
+  eq(parsed[1].captionUser, false, "absent flag (legacy/LLM rows) reads false");
+});
+
+await test("S43 assembleTimeline: doc captions seed ONLY from user-edited rows", async () => {
+  const { assembleTimeline } = await import("../src/lib/tubeforge/timeline.ts");
+  const scenes = [
+    {
+      index: 1, title: "A", narration: "First scene narration here.", visual: "v", camera: "static",
+      mood: "m", caption: "llm line", captionUser: false, hostInScene: false, rehook: false, sfx: "none",
+    },
+    {
+      index: 2, title: "B", narration: "Second scene narration here.", visual: "v", camera: "static",
+      mood: "m", caption: "my line", captionUser: true, hostInScene: false, rehook: true, sfx: "sting",
+    },
+  ];
+  const doc = assembleTimeline(scenes, { sceneDurationsSec: [5, 5] });
+  eq(doc.scenes[0].caption, null, "LLM caption does not seed the doc (word-sync stays)");
+  ok(doc.scenes[1].caption?.text === "my line", "user-edited caption seeds the doc");
+});
+
+// ---------------------------------------------------------------------------
 // Stage 3 — email adapter (T-3.9)
 // ---------------------------------------------------------------------------
 
@@ -2021,7 +2120,7 @@ await test("timeline: estimateNarrationSec clamps + scales with TTS speed", asyn
 await test("timeline: assembleTimeline derives per-scene start/end + caption timing", async () => {
   const { assembleTimeline } = await import("../src/lib/tubeforge/timeline.ts");
   const scenes = [
-    { index: 1, title: "Open", narration: "Welcome to the show.", visual: "studio", camera: "pan-right", mood: "warm", caption: "Welcome", hostInScene: true, rehook: false, sfx: "none" },
+    { index: 1, title: "Open", narration: "Welcome to the show.", visual: "studio", camera: "pan-right", mood: "warm", caption: "Welcome", captionUser: true, hostInScene: true, rehook: false, sfx: "none" },
     { index: 2, title: "Body", narration: "Here is the substance of the episode you came for.", visual: "b-roll", camera: "static", mood: "neutral", caption: "The substance", hostInScene: false, rehook: false, sfx: "whoosh" },
     { index: 3, title: "Close", narration: "Subscribe for more.", visual: "studio", camera: "zoom-in", mood: "warm", caption: "Subscribe", hostInScene: true, rehook: false, sfx: "sting" },
   ] as never[];
@@ -2032,9 +2131,13 @@ await test("timeline: assembleTimeline derives per-scene start/end + caption tim
   // Scenes are contiguous — scene 2 starts where scene 1 ends.
   eq(timeline.scenes[0].endSec, timeline.scenes[1].startSec, "scenes are contiguous");
   eq(timeline.scenes[1].endSec, timeline.scenes[2].startSec, "scenes are contiguous");
-  // Caption timing matches the scene window.
-  eq(timeline.scenes[0].caption?.text, "Welcome", "caption text propagated");
+  // S43 — caption timing matches the scene window, but ONLY user-edited
+  // captions seed the doc (the script LLM's caption is display metadata,
+  // not the render's subtitle contract).
+  eq(timeline.scenes[0].caption?.text, "Welcome", "user-edited caption propagated");
   eq(timeline.scenes[0].caption?.startSec, timeline.scenes[0].startSec, "caption starts at scene start");
+  eq(timeline.scenes[1].caption, null, "LLM caption does NOT seed the doc (S43)");
+  eq(timeline.scenes[2].caption, null, "LLM caption does NOT seed the doc (S43)");
   // SFX enabled only on scenes that asked for one.
   eq(timeline.scenes[0].audio.sfx.enabled, false, "scene 1 has no SFX (sfx:none)");
   eq(timeline.scenes[1].audio.sfx.enabled, true, "scene 2 has SFX (whoosh)");

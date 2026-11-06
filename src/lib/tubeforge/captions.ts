@@ -278,6 +278,28 @@ export interface SmartCaptionOpts {
   captionOverrides?: (string | null)[] | null;
 }
 
+/** S43 — the caption override chain, one source of truth for BOTH caption
+ *  paths (smart/ASR + one-per-scene fallback):
+ *
+ *    doc caption (Timeline Studio edit)
+ *      > row caption WITH captionUser (Scene Studio edit — PATCH sets the flag)
+ *      > null (word-synced narration chunks)
+ *
+ *  The script LLM seeds `caption` on EVERY scene, so a non-empty row caption
+ *  alone must never override the chunks — that regressed Phase 4's word-sync
+ *  into one frozen line per scene. Only HUMAN edits are the contract.
+ *  Pure — unit-pinned. */
+export function captionOverridesFor(
+  scenes: { caption: string; captionUser?: boolean }[],
+  docCaptions: (string | null)[] | null
+): (string | null)[] {
+  return scenes.map((s, i) => {
+    const doc = docCaptions?.[i] ?? null;
+    if (typeof doc === "string" && doc.trim()) return doc;
+    return s.captionUser && s.caption.trim() ? s.caption : null;
+  });
+}
+
 /**
  * Build a word-synced SRT for the whole video. Times land on the composited
  * timeline: segmentStart + LEAD + time-inside-scene-WAV (mirrors the adelay

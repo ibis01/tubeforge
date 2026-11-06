@@ -81,6 +81,9 @@ export function parseScenes(json: string | null | undefined): Scene[] {
         camera: CAMERAS.some((c) => c.id === s.camera) ? String(s.camera) : "zoom-in",
         mood: String(s.mood ?? "").trim(),
         caption: String(s.caption ?? "").trim().slice(0, 60),
+        // S43 — the human-edited marker rides the row (absent on legacy rows
+        // and LLM-authored captions: only the PATCH sets it).
+        captionUser: Boolean(s.captionUser),
         hostInScene: Boolean(s.hostInScene),
         rehook: s.rehook != null ? Boolean(s.rehook) : i === 0, // legacy rows: scene 1 is the hook
         sfx: (SFX_KINDS as readonly string[]).includes(String(s.sfx ?? ""))
@@ -221,6 +224,7 @@ export function normalizeScene(s: Record<string, unknown>, i: number): Scene {
     camera: CAMERAS.some((c) => c.id === s.camera) ? String(s.camera) : "zoom-in",
     mood: String(s.mood ?? "").trim().slice(0, 200),
     caption: String(s.caption ?? "").trim().slice(0, 60),
+    captionUser: Boolean(s.captionUser),
     hostInScene: Boolean(s.hostInScene),
     rehook: Boolean(s.rehook),
     sfx: (SFX_KINDS as readonly string[]).includes(sfx) ? sfx : "none",
@@ -908,8 +912,16 @@ export async function editSceneImage(opts: {
 const MAX_SCENE_UPLOAD_BYTES = 15 * 1024 * 1024;
 
 /** Magic-byte sniffing — extensions lie, file signatures don't. (S4 export:
- *  pinned by the unit probe; the upload guard's first line of defense.) */
-export function sniffImageFormat(buf: Buffer): "png" | "jpeg" | "webp" | null {
+ *  pinned by the unit probe; the upload guard's first line of defense.)
+ *
+ *  S43: HEIC/HEIF joins the catalog (iPhone default photo format). The ftyp
+ *  box carries the brand: bytes 4-8 "ftyp", brand at 8-12 — heic/heix/hevc
+ *  (photos), mif1/msf1 (image collections iPhone photos also use), heim/heis
+ *  (media collections). Decoding is NOT ffmpeg's job here — stock builds
+ *  ship without libheif — but the WASM heic-convert pass in replaceSceneImage. */
+const HEIF_BRANDS = new Set(["heic", "heix", "hevc", "heim", "heis", "mif1", "msf1"]);
+
+export function sniffImageFormat(buf: Buffer): "png" | "jpeg" | "webp" | "heic" | null {
   if (buf.length > 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47)
     return "png";
   if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "jpeg";
@@ -919,7 +931,31 @@ export function sniffImageFormat(buf: Buffer): "png" | "jpeg" | "webp" | null {
     buf.subarray(8, 12).toString("ascii") === "WEBP"
   )
     return "webp";
+  if (
+    buf.length > 12 &&
+    buf.subarray(4, 8).toString("ascii") === "ftyp" &&
+    HEIF_BRANDS.has(buf.subarray(8, 12).toString("ascii"))
+  )
+    return "heic";
   return null;
+}
+
+/** Decode HEIC/HEIF bytes to PNG via the WASM libheif build (heic-convert).
+ *  Stock ffmpeg ships without libheif on most distros (including the CI
+ *  image), so the decode rides a pure-WASM pass instead — same output
+ *  everywhere, no native dependency. Returns PNG bytes.
+ *
+ *  API note (v2.1.0): convert() resolves to the encoded image Buffer
+ *  DIRECTLY — there is no {buffer} wrapper. Reaching for `.buffer` on it
+ *  grabs the Buffer-pool ArrayBuffer behind it (64 KB of unrelated memory),
+ *  which once aliased the input HEIC and produced a "PNG" that was still
+ *  HEIC bytes. */
+async function decodeHeicPng(upload: Buffer): Promise<Buffer> {
+  // Lazy import: the WASM module only enters the process graph when a HEIC
+  // actually arrives (cold start stays free for everyone else).
+  const convert = (await import("heic-convert")).default;
+  const out = await convert({ buffer: upload, format: "PNG" });
+  return Buffer.isBuffer(out) ? out : Buffer.from(out);
 }
 
 /**
@@ -938,14 +974,19 @@ export async function replaceSceneImage(
   if (upload.length < 1000) throw new Error("That file is too small to be a real image");
   if (upload.length > MAX_SCENE_UPLOAD_BYTES)
     throw new Error(`Image exceeds the ${MAX_SCENE_UPLOAD_BYTES / 1024 / 1024} MB limit`);
-  if (!sniffImageFormat(upload))
-    throw new Error("Unsupported image — upload a PNG, JPEG or WebP file");
+  const sniffed = sniffImageFormat(upload);
+  if (!sniffed)
+    throw new Error("Unsupported image — upload a PNG, JPEG, WebP or HEIC file");
+
+  // S43 — iPhone photos: decode HEIC to PNG first (WASM libheif), then run
+  // the same cover-crop geometry every other format takes.
+  const input = sniffed === "heic" ? await decodeHeicPng(upload) : upload;
 
   const dir = videoDir(videoId);
   fs.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `upload-tmp-${Date.now()}`);
   const outPath = path.join(dir, sceneImageFile(index));
-  fs.writeFileSync(tmp, upload);
+  fs.writeFileSync(tmp, input);
 
   try {
     // Cover-crop: scale up to fill 1344x768, center-crop the overflow, lock

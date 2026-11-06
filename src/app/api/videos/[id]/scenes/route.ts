@@ -3,6 +3,7 @@ import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseScenes, serializeScenes } from "@/lib/tubeforge/story";
 import { CAMERAS, sanitizeSceneStyle } from "@/lib/tubeforge/types";
+import { parseTimeline, serializeTimeline } from "@/lib/tubeforge/timeline";
 import * as storage from "@/lib/tubeforge/storage";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -14,6 +15,12 @@ type Ctx = { params: Promise<{ id: string }> };
  *  (its text did not change, its read is still current) — survive. */
 const NARRATION_STALE =
   /\/(voiceover\.wav|voice-source\.\w+|final\.mp4|preview\.mp4|subtitles\.srt|short\.mp4|short-thumb\.png)$/;
+
+/** S43 — a caption edit bakes into the NEXT render: the burned subtitles are
+ *  stale, but the voiceover/WAVs are untouched (captions never touch audio).
+ *  Only rendered artifacts die; re-render is cheap (no re-TTS). */
+const CAPTION_STALE =
+  /\/(final\.mp4|preview\.mp4|subtitles\.srt|short\.mp4|short-thumb\.png)$/;
 
 /** The edited scene's own artifacts: its read (scene-XX.wav) and its render
  *  intermediate (scene-XX.mp4). Other scenes' files are NOT stale — wiping
@@ -79,6 +86,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   // Field-by-field validation — every present field must earn its way in.
   let changed = false;
   let narrationChanged = false;
+  let captionChanged = false;
 
   if (body?.narration !== undefined) {
     const narration = String(body.narration).trim();
@@ -107,7 +115,14 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     changed = true;
   }
   if (body?.caption !== undefined) {
-    scene.caption = String(body.caption).trim().slice(0, 60);
+    const caption = String(body.caption).trim().slice(0, 60);
+    if (caption !== scene.caption) {
+      scene.caption = caption;
+      // S43 — a human touched this line: the render treats it as THE caption
+      // for this scene (one whole-scene cue) instead of narration chunks.
+      scene.captionUser = true;
+      captionChanged = true;
+    }
     changed = true;
   }
   if (body?.camera !== undefined) {
@@ -127,6 +142,30 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 
   const updated = scenes.map((s) => (s.index === index ? scene : s));
 
+  // S43 — write the caption through to the saved timeline doc TOO: the render
+  // reads caption overrides from the doc (S2 chain), and the Timeline Studio
+  // displays doc captions. Without this, a Scene Studio caption edit sat on
+  // the row while the render kept the doc's stale snapshot — the "edited the
+  // caption, nothing changed" trap. Matched by scene INDEX inside the doc;
+  // absent/misaligned docs are skipped (the row flag still carries the edit).
+  if (captionChanged) {
+    const doc = parseTimeline(video.timeline);
+    const docScene = doc?.scenes.find((s) => s.index === index) ?? null;
+    if (doc && docScene) {
+      docScene.caption = scene.caption
+        ? {
+            text: scene.caption,
+            startSec: docScene.caption?.startSec ?? docScene.startSec,
+            endSec: docScene.caption?.endSec ?? docScene.endSec,
+          }
+        : null;
+      await db.video.update({
+        where: { id },
+        data: { timeline: serializeTimeline(doc) },
+      });
+    }
+  }
+
   // A narration change makes the spoken audio stale — drop voiceover +
   // renders the same way the classic script edit does (T-4.4).
   let invalidated = false;
@@ -145,6 +184,27 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
         shortScene: null,
       },
     });
+  } else if (captionChanged && (video.hasVideo || video.hasShort)) {
+    // S43 — the burned subtitles no longer match, but the audio is current:
+    // drop ONLY the rendered artifacts (voiceover + per-scene WAVs survive,
+    // so the re-render re-mixes without re-TTS). The response reports
+    // `captionsEdited` so the client can say what to do next.
+    try {
+      const keys = await storage.list(id);
+      const stale = keys.filter((k) => CAPTION_STALE.test(k));
+      await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));
+    } catch {
+      // prefix absent — nothing to invalidate
+    }
+    await db.video.update({
+      where: { id },
+      data: {
+        hasVideo: false,
+        hasShort: false,
+        shortDuration: null,
+        shortScene: null,
+      },
+    });
   }
 
   await db.video.update({ where: { id }, data: { scenes: JSON.stringify(updated) } });
@@ -152,5 +212,6 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   return NextResponse.json({
     scene: (await serializeScenes(id, updated)).find((s) => s.index === index) ?? null,
     invalidated,
+    captionsEdited: captionChanged,
   });
 }

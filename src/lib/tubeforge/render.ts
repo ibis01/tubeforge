@@ -18,7 +18,7 @@ import path from "path";
 import { promisify } from "util";
 import type { Scene } from "./types";
 import { sceneImageFile, sceneWavFile, buildSrtFromSegments } from "./story";
-import { buildSmartSrt } from "./captions";
+import { buildSmartSrt, captionOverridesFor } from "./captions";
 import { videoDir } from "./ai";
 import { zaiClientFor } from "./zai-client";
 import { zaiVideoViaClient } from "./providers/zai-video-core";
@@ -1642,16 +1642,18 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         ? segments
         : shiftSegmentsForBlendMulti(segments, boundary);
 
-    // S2 — the doc's edited captions override the row's field (text only;
-    // timing stays the render's blended windows). Applies to the smart path
-    // (one whole-scene cue replaces that scene's chunks) and the fallback.
-    const docCaptions = docScenes ? docScenes.map((d) => d.caption) : null;
-    const capScenes = docCaptions
-      ? scenes.map((s, i) => {
-          const edited = docCaptions[i];
-          return edited ? { ...s, caption: edited } : s;
-        })
-      : scenes;
+    // S2/S43 — the caption override chain: the doc's studio-edited caption
+    // first, then a human-edited row caption (captionUser), else the smart
+    // path's word-synced narration chunks. One helper feeds BOTH caption
+    // paths (smart + fallback) so they can never drift.
+    const docCaptions = captionOverridesFor(
+      scenes,
+      docScenes ? docScenes.map((d) => d.caption) : null
+    );
+    const capScenes = scenes.map((s, i) => {
+      const edited = docCaptions[i];
+      return edited ? { ...s, caption: edited } : s;
+    });
 
     let srtPath: string | null = null;
     if (opts.burnSubtitles) {

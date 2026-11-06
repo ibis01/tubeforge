@@ -215,13 +215,19 @@ export function SceneEditorDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const d = (await res.json()) as { error?: string; invalidated?: boolean };
+      const d = (await res.json()) as { error?: string; invalidated?: boolean; captionsEdited?: boolean };
       if (!res.ok) throw new Error(d.error ?? "Could not save scene changes");
       if (!silent) toast.success(`Scene ${scene.index} updated`);
       if (d.invalidated) {
         toast.warning("Voiceover cleared", {
           description:
             "The narration changed — re-render the voiceover so the audio matches.",
+        });
+      } else if (d.captionsEdited) {
+        // S43 — captions ride the next render; the voice is NEVER touched.
+        toast.info("Caption saved", {
+          description:
+            "It becomes this scene's on-screen subtitle on the next render — the voice is untouched.",
         });
       }
       onUpdated();
@@ -572,7 +578,7 @@ export function SceneEditorDialog({
             </div>
             <div className="space-y-1.5">
               <Label htmlFor={`caption-${scene.index}`} className="text-xs text-muted-foreground">
-                Caption — the on-screen subtitle
+                Caption — this scene&apos;s on-screen subtitle (next render)
               </Label>
               <Input
                 id={`caption-${scene.index}`}
@@ -582,6 +588,10 @@ export function SceneEditorDialog({
                 disabled={anyBusy}
                 className="h-8 text-xs"
               />
+              <p className="text-[10px] text-muted-foreground/80 leading-snug">
+                One line shown across this scene — the voice never reads it. Empty
+                falls back to the word-synced narration captions.
+              </p>
             </div>
           </div>
 
@@ -743,15 +753,15 @@ export function SceneEditorDialog({
               <Label className="text-xs">Use your own image</Label>
             </div>
             <p className="text-[10px] text-muted-foreground">
-              PNG / JPEG / WebP up to 15 MB. It&apos;s center-cropped to the
-              video canvas (16:9) automatically. Replacing art removes existing
-              renders — render again afterwards.
+              PNG / JPEG / WebP / HEIC (iPhone photos) up to 15 MB. It&apos;s
+              center-cropped to the video canvas (16:9) automatically.
+              Replacing art removes existing renders — render again afterwards.
             </p>
             <div className="flex items-center gap-2">
               <input
                 ref={fileRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp"
+                accept="image/png,image/jpeg,image/webp,image/heic,image/heif"
                 className="hidden"
                 onChange={(e) => setPendingFile(e.target.files?.[0] ?? null)}
               />

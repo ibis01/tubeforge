@@ -38,8 +38,13 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   "music.fadeOutSec": "2.5",
   "music.ducking": "true", // auto-duck the bed under the voice
   "music.duckingIntensity": "standard", // subtle | standard | strong
-  // Sound-effect cues (sfx.ts synthesis; conservative mix levels by design)
-  "sfx.enabled": "true",
+  // Sound-effect cues (sfx.ts synthesis; conservative mix levels by design).
+  // S43: default OFF — the synthesized boom/sting cues on scene 1 and every
+  // rehook read as "unnecessary sounds" to viewers (field report b.mp4:
+  // scene-1 boom was the loudest sub-bass event of the whole video, 12 dB
+  // above the floor). Users who want them flip Settings → Sound back on;
+  // the Timeline Studio's per-scene cue picker still overrides per scene.
+  "sfx.enabled": "false",
 };
 
 const PUBLIC_SETTING_KEYS = new Set(Object.keys(DEFAULT_SETTINGS));

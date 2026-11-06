@@ -239,6 +239,11 @@ export interface Scene {
   camera: string; // ken burns direction / i2v motion intent
   mood: string; // color + lighting keywords
   caption: string; // punchy on-screen subtitle (<= 45 chars)
+  // S43 — true when a HUMAN edited this caption (Scene Studio PATCH). Only
+  // user-edited captions override the word-synced narration chunks at render
+  // time; the script LLM seeds `caption` on every scene, so "non-empty"
+  // alone can't mean "the user wants this exact line on screen".
+  captionUser?: boolean;
   hostInScene: boolean; // does the recurring host appear in this scene?
   rehook: boolean; // attention pivot — punch-zoom + sting at scene start
   sfx: string; // one of SFX_KINDS or "none"
