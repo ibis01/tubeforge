@@ -800,3 +800,20 @@ model ProcessedWebhookEvent {
   receivedAt DateTime @default(now())
 }
 
+// S46 — durable auth throttling (roadmap P1-6). One row per FAILED
+// credential proof (login wrong-password + change-password wrong-current),
+// the sliding window counted in SQL. Replaces the process-local Map that
+// wiped on every deploy and disagreed across instances: state in the DB
+// survives restarts and is shared by every web/worker process. Inserts are
+// independent rows, so concurrent failures cannot lose counts (the old
+// counter could race); the (key, at) index serves the window count. Rows
+// are pruned opportunistically once older than the 10-minute window —
+// see src/lib/tubeforge/auth-throttle.ts for the law.
+model AuthAttempt {
+  id  Int      @id @default(autoincrement())
+  key String // throttle key: the caller's IP (login + change-password share it — a wrong current password IS a login attempt)
+  at  DateTime // the failure instant (explicit, never defaulted — the window math depends on it)
+
+  @@index([key, at])
+}
+

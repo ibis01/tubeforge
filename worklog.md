@@ -1798,3 +1798,100 @@ parseQcReport round-trip, previewQcPatch both ways, and a real-ffmpeg
 preview.mp4 through qcForPreview proving scope + the absent duration/
 captions checks) · queue PASS · billing 40/40 · s30 41/41 · s36 38/38 ·
 s40 102/102 · s34 ALL PASS · s35 17/17 · s4 ALL PASS · s5 ALL PASS.
+
+## S46 (2026-11-07 UTC) — the lockout that forgot every deploy
+
+Roadmap P1-6, the last P1 item that was pure in-repo engineering:
+"Stateful rate limiting + login lockout — the in-process Map wipes on
+every deploy."
+
+**The finding, precisely.** Two Maps guarded credentials, both
+process-local. The live one (tenant.ts, wired into /api/auth/login and
+/api/auth/change-password since S16): 5 failures per fixed 10-minute
+counter window → 10-minute lock, keyed by IP. The dead one (auth.ts): a
+byte-identical copy sharing the same `__tfAuthLimit` globalThis key that
+nothing ever imported — a drift hazard, because importing the wrong copy
+would have throttled exactly nothing. Both failed the deployed reality
+two ways: every deploy/restart forgave all attackers mid-lockout, and
+P0-6's landed topology (Fly web+worker) is multi-process — each instance
+kept its own window, so a credential stuffer rotating between instances
+got 4 free failures per instance per window, forever. And a third,
+subtler hole in the law itself: the counter was FIXED-window, so 4
+failures at T−9:54 plus 4 more seconds later sat in different counter
+windows — 8 failures inside one rolling 10 minutes without ever tripping
+the lock.
+
+**The fix — one row per failure, one law, no new infrastructure.** The
+roadmap note said "Postgres sliding window"; the answer that fits this
+repo adds no Redis and no new service, just a table the app already
+owns:
+
+1. `AuthAttempt` (id, key, at, composite `(key, at)` index; migration
+   `20261107000000_s46_auth_attempt` for the Postgres chain, `db push`
+   for SQLite — postinstall/`prisma migrate deploy` carry it to
+   production). `recordLoginFailure` INSERTS a row — independent rows
+   cannot lose counts under concurrency (the old counter's
+   read-modify-write could), and a true sliding window falls out for
+   free: count the key's rows newer than `now − 10 min`.
+2. The law lives in ONE pure function, `loginWindowDecision()` (new
+   `src/lib/tubeforge/auth-throttle.ts`): ≥5 in-window failures block
+   until the OLDEST ages out; `retryAfterSec` floors at 1 (a 0s
+   Retry-After header would be a lie). Burst behavior is identical to
+   the S16 era (5 rapid failures → ~10-min lock); the straddle hole is
+   closed because the window slides instead of resetting. The DB shell
+   reads the in-window rows and applies the pure law — the same math for
+   every caller, restart, and instance, pinned by unit tests so it can
+   never disagree with itself.
+3. Success clears the key's whole history (deleteMany on the key — the
+   honest-actor recovery path, unchanged). Rows older than the window
+   are pruned opportunistically on the next failure anywhere: they can
+   never affect a decision again, so the table tracks the active attack
+   surface, not the attack history.
+4. **Fail OPEN, loudly.** The throttle is a brute-force damper, not an
+   authentication control — allowing an ATTEMPT never authenticates
+   anyone, and if the DB is truly down the password proof cannot
+   succeed either. So a broken/unmigrated AuthAttempt table degrades to
+   no-lockout with a once-per-process stderr announcement naming the
+   fix (the spendOverrides() observability pattern), never a 500 on
+   sign-in. Silent fail-open is the one outcome the design refuses.
+5. **The dead duplicate died.** auth.ts's copy deleted (with a tombstone
+   comment naming the hazard), tenant.ts's in-memory block deleted, the
+   two routes now import the one law from auth-throttle. `clientIp`
+   stays in tenant.ts where the routes already import it from.
+
+**Scoped deliberately, not lazily.** The middleware's per-IP read/write
+buckets (rate-limit.ts, 600/90 per min) stay in-memory: middleware is
+architecture-banned from the DB (it verifies token signatures edge-safe
+and must stay WebCrypto-only), and those tiers are coarse load shedding,
+not security state — per-instance limits still shed. Register and
+reset-password get no DB window either: a per-IP signup window is an
+account-creation DoS gift (lock every NAT'd office out of registering by
+spamming failures from a spoofed XFF), and the middleware tier already
+caps volume abuse. The durable tier is exactly the credential-stuffing
+surface, where every attempt must count. Revisit on evidence of real
+signup abuse.
+
+**Files:** `prisma/schema.prisma` + regenerated `schema.sqlite.prisma`
+(AuthAttempt), `prisma/migrations/20261107000000_s46_auth_attempt/`
+(Postgres), `src/lib/tubeforge/auth-throttle.ts` (NEW — law + shell),
+`src/lib/tubeforge/tenant.ts` + `src/lib/tubeforge/auth.ts` (both
+in-memory lockouts removed), `src/app/api/auth/login/route.ts` +
+`src/app/api/auth/change-password/route.ts` (await the async shell),
+`scripts/test-unit.mts` (+3), `scripts/s16-unit-probe.mts` (layer 2
+rewritten as the real-DB proof, +cleanup checks).
+
+**Verification:** tsc 0 · eslint 0 errors (670 warnings, the exact
+pre-change baseline) · **194/194 unit** (191 + 3 new: the law + the
+constants nobody may silently retune; stale/boundary semantics — a hit
+exactly at the cutoff is OUT, unlock follows the oldest IN-WINDOW hit;
+the straddle closure — 4+4 across a border locks with retryAfter=6s,
+the same hits aged 30s more do not) · **s16 probe ALL PASS** — layer 2
+now proves the REAL shell against the real SQLite: the four failures
+are rows visible through a SECOND PrismaClient (state a restart keeps —
+the S46 point), the 5th locks with retryAfter in (9min, 10min], the
+opportunistic prune drops an 11-minute-old row while the fresh row and
+the locked key's window survive, success clears, and probe residue is
+deleted · queue PASS (real worker restart) · billing 40/40 · s30 route
+e2e ALL PASS against a live dev server (auth gate + origin trust
+unchanged) · **e2e 26/26** (register/login/rotation flows through the
+real routes — the async throttle is transparent to every caller).

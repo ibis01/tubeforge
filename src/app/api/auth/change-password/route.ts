@@ -3,18 +3,20 @@ import { z } from "zod";
 import { rawDatabase as rawDb } from "@/lib/tubeforge/tenant-db";
 import {
   MIN_PASSWORD_LEN,
-  checkLoginAllowed,
   clientIp,
   createSessionRecord,
   createSessionToken,
   hashPassword,
-  recordLoginFailure,
-  recordLoginSuccess,
   requireUser,
   sessionIdFromRequest,
   sessionCookie,
   verifyPassword,
 } from "@/lib/tubeforge/tenant";
+import {
+  checkLoginAllowed,
+  recordLoginFailure,
+  recordLoginSuccess,
+} from "@/lib/tubeforge/auth-throttle";
 
 // POST /api/auth/change-password — rotate the account password from the
 // studio (S16). The security card has promised "you can change it later from
@@ -49,7 +51,7 @@ export async function POST(req: NextRequest) {
   // The current-password proof is a login attempt wearing a different coat —
   // the limiter runs BEFORE anything else, exactly like /login.
   const ip = clientIp(req.headers);
-  const { allowed, retryAfterSec } = checkLoginAllowed(ip);
+  const { allowed, retryAfterSec } = await checkLoginAllowed(ip);
   if (!allowed)
     return NextResponse.json(
       { error: `Too many attempts — try again in ${Math.ceil(retryAfterSec / 60)} min` },
@@ -89,7 +91,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Account not found" }, { status: 404 });
 
     if (!(await verifyPassword(currentPassword, user.passwordHash))) {
-      recordLoginFailure(ip); // a wrong current password burns the IP window like a failed login
+      await recordLoginFailure(ip); // a wrong current password burns the IP window like a failed login
       return NextResponse.json({ error: "The current password is wrong" }, { status: 401 });
     }
 
@@ -124,7 +126,7 @@ export async function POST(req: NextRequest) {
     const token = await createSessionToken(user.id, session.id);
     if (!token) return NextResponse.json({ error: "Failed to create session" }, { status: 500 });
 
-    recordLoginSuccess(ip); // the proof succeeded — clear the IP's failure window
+    await recordLoginSuccess(ip); // the proof succeeded — clear the IP's failure window
 
     const res = NextResponse.json({
       ok: true,

@@ -6,9 +6,11 @@
 //      bearers, state markers, garbage and no-token callers are all null —
 //      the route 403s everyone but a real session, so a leaked 90-day script
 //      token can never rotate the password.
-//   2. PURE — the limiter law: a wrong CURRENT password is a login attempt
-//      wearing a different coat — 5 failures lock the IP for 10 minutes and
-//      a success clears the window (the route wires the same /login limiter).
+//   2. DB — the limiter law (S46): the lockout now lives in the AuthAttempt
+//      table (roadmap P1-6) — durable across restarts/deploys, shared across
+//      instances, and a TRUE sliding window (the old fixed-window counter
+//      could be straddled). Proven here against the real SQLite through the
+//      live shell; the pure window math is pinned by the unit suite.
 //   3. PURE — the hash law: PBKDF2 round-trip, wrong-password rejection,
 //      malformed-hash rejection (verifyPassword is the proof the route runs).
 //   4. ROUTE — the real POST handler against the real SQLite: a throwaway
@@ -31,16 +33,18 @@ import {
 } from "../src/lib/tubeforge/auth-token";
 import {
   MIN_PASSWORD_LEN,
-  checkLoginAllowed,
   createApiToken,
   hashPassword,
-  recordLoginFailure,
-  recordLoginSuccess,
   resolveRequestUser,
   sessionIdFromRequest,
   createSessionToken,
   verifyPassword,
 } from "../src/lib/tubeforge/tenant";
+import {
+  checkLoginAllowed,
+  recordLoginFailure,
+  recordLoginSuccess,
+} from "../src/lib/tubeforge/auth-throttle";
 import { POST as changePassword } from "../src/app/api/auth/change-password/route";
 
 const prisma = new PrismaClient();
@@ -84,25 +88,52 @@ const reqWith = (opts: RequestInit) => new NextRequest(URL_, { method: "POST", .
 }
 
 // =====================================================================
-// 2. the limiter law — the current-password proof rides /login's limiter
+// 2. the limiter law — DB-backed since S46 (roadmap P1-6). The window
+//    lives in the AuthAttempt table: it survives restarts and deploys
+//    (the process-local Map wiped on every one), and every web/worker
+//    instance counts the same failures. The pure math is pinned by the
+//    unit suite; this layer proves the REAL shell against the real DB.
 // =====================================================================
 {
-  const ip = "10.16.0.16"; // probe-synthetic; the map is process-local anyway
-  recordLoginSuccess(ip); // start clean (a prior layer's success clears nothing here)
+  const ip = "10.46.0.46"; // probe-synthetic, unique to this layer
+  await recordLoginSuccess(ip); // start clean (clearing an empty key is a no-op)
 
-  check("2.1  a fresh IP is allowed", checkLoginAllowed(ip).allowed === true);
+  check("2.1  a fresh key is allowed", (await checkLoginAllowed(ip)).allowed === true);
 
-  for (let i = 1; i <= 4; i++) recordLoginFailure(ip);
-  check("2.2  four failures still allowed (the lock arms on the 5th)", checkLoginAllowed(ip).allowed === true);
+  for (let i = 1; i <= 4; i++) await recordLoginFailure(ip);
+  check("2.2  four failures still allowed (the lock arms on the 5th)", (await checkLoginAllowed(ip)).allowed === true);
 
-  recordLoginFailure(ip); // the 5th — arms the lock
-  const afterLock = checkLoginAllowed(ip);
-  check("2.3  the 5th failure locks the IP for ~10 minutes",
+  // DURABILITY — the S46 point: the failures are visible through a
+  // DIFFERENT PrismaClient than the module's singleton, i.e. the state
+  // is in the DATABASE. A second process — or this one restarted — reads
+  // the same window instead of starting from zero.
+  const rows = await prisma.authAttempt.count({ where: { key: ip } });
+  check("2.3  the four failures are AuthAttempt ROWS (state a restart keeps)", rows === 4, rows);
+
+  await recordLoginFailure(ip); // the 5th — arms the lock
+  const afterLock = await checkLoginAllowed(ip);
+  check("2.4  the 5th failure locks the key for ~10 minutes",
     afterLock.allowed === false && afterLock.retryAfterSec > 9 * 60 && afterLock.retryAfterSec <= 600,
     afterLock);
 
-  recordLoginSuccess(ip);
-  check("2.4  a success clears the window", checkLoginAllowed(ip).allowed === true);
+  // PRUNE — rows older than the window can never affect a decision
+  // again; the next failure anywhere sweeps them. An 11-minute-old row
+  // for another key must vanish while the fresh row (and the locked
+  // key's window) survives.
+  await prisma.authAttempt.create({
+    data: { key: `${ip}-ancient`, at: new Date(Date.now() - 11 * 60_000) },
+  });
+  await recordLoginFailure(`${ip}-ancient`); // a fresh failure triggers the opportunistic prune
+  const survivors = await prisma.authAttempt.count({ where: { key: `${ip}-ancient` } });
+  check("2.5  the opportunistic prune drops out-of-window rows (1 fresh survivor)", survivors === 1, survivors);
+  check("2.6  another key's prune leaves the locked window untouched",
+    (await checkLoginAllowed(ip)).allowed === false);
+
+  await recordLoginSuccess(ip);
+  check("2.7  a success clears the window", (await checkLoginAllowed(ip)).allowed === true);
+
+  // layer residue — never leak probe rows into the dev DB
+  await prisma.authAttempt.deleteMany({ where: { key: { in: [ip, `${ip}-ancient`] } } });
 }
 
 // =====================================================================
@@ -224,6 +255,12 @@ const reqWith = (opts: RequestInit) => new NextRequest(URL_, { method: "POST", .
   await prisma.organization.delete({ where: { id: org.id } });
   const leftover = await prisma.session.count({ where: { userId: user.id } });
   check("4.16 cleanup — no probe sessions linger", leftover === 0, leftover);
+  // the route law burned AuthAttempt rows for the probe IP (4.1's wrong
+  // current password, cleared by 4.6's success) — clear them regardless of
+  // how far the layer got, so no probe residue throttles a synthetic IP.
+  await prisma.authAttempt.deleteMany({ where: { key: "10.16.1.16" } });
+  check("4.17 cleanup — no probe throttle rows linger",
+    (await prisma.authAttempt.count({ where: { key: "10.16.1.16" } })) === 0);
 }
 
 await prisma.$disconnect();

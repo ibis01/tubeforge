@@ -72,6 +72,11 @@ import {
 } from "../src/lib/tubeforge/arthash";
 import { sceneQueries } from "../src/lib/tubeforge/stock-query";
 import { selfhostEndpoint, sharedVoiceServer } from "../src/lib/tubeforge/shared-voice";
+import {
+  LOGIN_MAX_FAILURES,
+  LOGIN_WINDOW_MS,
+  loginWindowDecision,
+} from "../src/lib/tubeforge/auth-throttle";
 import type { AssembledTimeline, TimelineScene } from "../src/lib/tubeforge/timeline";
 import {
   cameraAt,
@@ -4530,6 +4535,71 @@ await test("S45 qcForPreview: scoped battery on a real preview.mp4 — no narrat
     await storage.remove(`${probe}/preview.mp4`).catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// S46 — durable login throttling (roadmap P1-6): the PURE sliding-window
+// law. The DB shell around it (AuthAttempt table) is proven against the
+// real SQLite by scripts/s16-unit-probe.mts layer 2 — this layer pins the
+// math every caller shares, so the window can never disagree between
+// routes, restarts or instances.
+await test("S46 loginWindowDecision: the law is unchanged — 5 in-window failures lock until the OLDEST ages out", () => {
+  eq(LOGIN_WINDOW_MS, 10 * 60 * 1000, "the window stays 10 minutes (the S16-era law)");
+  eq(LOGIN_MAX_FAILURES, 5, "the lock still arms on the 5th failure");
+
+  const now = 1_700_000_000_000;
+  const min = 60_000;
+  eq(loginWindowDecision([], now).allowed, true, "no failures → allowed");
+
+  const four = [now - 9 * min, now - 5 * min, now - 2 * min, now - 1 * min];
+  eq(loginWindowDecision(four, now).allowed, true, "four failures → still allowed (arms on the 5th)");
+
+  const five = [...four, now];
+  const locked = loginWindowDecision(five, now);
+  eq(locked.allowed, false, "the 5th in-window failure locks");
+  eq(locked.retryAfterSec, 60, "the lock lasts until the OLDEST hit ages out (now−9min sits 1min from the window edge)");
+  eq(loginWindowDecision([...five].reverse(), now).retryAfterSec, 60, "unsorted input is sorted internally (the DB feeds ascending, the law trusts nothing)");
+});
+
+await test("S46 loginWindowDecision: stale hits are invisible — the window slides, it does not reset", () => {
+  const now = 1_700_000_000_000;
+  const min = 60_000;
+  // Five failures all OLDER than the window: the window slid past them.
+  const stale = Array.from({ length: 5 }, (_, i) => now - 11 * min - i * 1000);
+  eq(loginWindowDecision(stale, now).allowed, true, "five stale failures → allowed again");
+
+  // Boundary: a hit EXACTLY at the cutoff is OUTSIDE (the law is t > cutoff).
+  const atCutoff = [now - 10 * min, now - 4 * min, now - 3 * min, now - 2 * min, now - 1 * min];
+  eq(loginWindowDecision(atCutoff, now).allowed, true, "a hit exactly at the cutoff does not count (4 inside)");
+
+  // The 5th inside arms the lock, and the retry counts from the oldest
+  // IN-WINDOW hit — the stale one is already gone from the math.
+  const locked = loginWindowDecision([...atCutoff, now], now);
+  eq(locked.allowed, false, "five in-window hits lock even with a stale sixth");
+  eq(locked.retryAfterSec, 6 * 60, "unlock follows the oldest IN-WINDOW hit (now−4min + 10min window = 6min), not the stale one");
+
+  // A barely-locked key never reports 0 (Retry-After must stay ≥ 1s).
+  const barely = [now - (LOGIN_WINDOW_MS - 1), ...Array.from({ length: 4 }, (_, i) => now - i * 1000)];
+  const barelyLocked = loginWindowDecision(barely, now);
+  eq(barelyLocked.allowed, false, "locked with the oldest hit 1ms from aging out");
+  eq(barelyLocked.retryAfterSec, 1, "retryAfterSec floors at 1 — a 0s Retry-After header would be a lie");
+});
+
+await test("S46 loginWindowDecision: the straddle hole is closed (4+4 across a window border locks)", () => {
+  const now = 1_700_000_000_000;
+  // The S16-era fixed-window counter could be straddled: 4 failures at
+  // T−9:54 + 4 more seconds later sat in DIFFERENT counter windows, so 8
+  // failures in 10 minutes never tripped it. The hit-log law counts them
+  // all — they are inside ONE rolling window.
+  const straddle = [
+    ...Array.from({ length: 4 }, () => now - 594_000), // 9:54 old
+    ...Array.from({ length: 4 }, () => now - 6_000), // 0:06 old
+  ];
+  const decision = loginWindowDecision(straddle, now);
+  eq(decision.allowed, false, "8 failures inside one rolling window (the straddle) lock");
+  eq(decision.retryAfterSec, 6, "unlock when the OLDEST straddle hit ages out (6s)");
+  // And the same 8 hits spread past the window edge are fine again.
+  const spread = straddle.map((t) => t - 30_000);
+  eq(loginWindowDecision(spread, now).allowed, true, "the same failures aged 30s more → only 4 in window");
 });
 
 console.log(`\n${"─".repeat(56)}`);

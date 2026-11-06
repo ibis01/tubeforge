@@ -415,53 +415,12 @@ export function clearedSessionCookie() {
 }
 
 // ---------------------------------------------------------------------------
-// Login rate limiting (per IP, in-memory; Redis-backed bucket lands in Stage 3)
-
-interface Attempt {
-  count: number;
-  windowStart: number;
-  lockUntil: number;
-}
-
-const g = globalThis as typeof globalThis & { __tfAuthLimit?: Map<string, Attempt> };
-const attempts: Map<string, Attempt> = (g.__tfAuthLimit ??= new Map());
-
-const WINDOW_MS = 10 * 60 * 1000;
-const MAX_FAILURES = 5;
-const LOCK_MS = 10 * 60 * 1000;
-
-export function checkLoginAllowed(ip: string): { allowed: boolean; retryAfterSec: number } {
-  const now = Date.now();
-  const a = attempts.get(ip);
-  if (!a) return { allowed: true, retryAfterSec: 0 };
-  if (a.lockUntil > now)
-    return { allowed: false, retryAfterSec: Math.ceil((a.lockUntil - now) / 1000) };
-  if (now - a.windowStart > WINDOW_MS) {
-    attempts.delete(ip);
-    return { allowed: true, retryAfterSec: 0 };
-  }
-  return { allowed: true, retryAfterSec: 0 };
-}
-
-export function recordLoginFailure(ip: string): void {
-  const now = Date.now();
-  const a = attempts.get(ip) ?? { count: 0, windowStart: now, lockUntil: 0 };
-  if (now - a.windowStart > WINDOW_MS) {
-    a.count = 0;
-    a.windowStart = now;
-  }
-  a.count += 1;
-  if (a.count >= MAX_FAILURES) {
-    a.lockUntil = now + LOCK_MS;
-    a.count = 0;
-    a.windowStart = now;
-  }
-  attempts.set(ip, a);
-}
-
-export function recordLoginSuccess(ip: string): void {
-  attempts.delete(ip);
-}
+// Login throttling MOVED (S46): the per-IP failure lockout now lives in
+// auth-throttle.ts, backed by the AuthAttempt table — durable across
+// restarts/deploys and shared across instances. It lived here as a
+// process-local Map from S16 until S46 ("Redis-backed bucket lands in
+// Stage 3" never happened; the DB table is the no-new-infrastructure
+// answer). Routes import it from auth-throttle; clientIp stays here.
 
 /** Client IP for rate limiting (best effort behind the preview proxy). */
 export function clientIp(headers: Headers): string {

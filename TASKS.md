@@ -1207,7 +1207,7 @@ and operations, not product redesign.
 | P1-3 `next build` in CI (7 GB runners can build; the 4 GB sandbox cannot) | ⏳ | Catches build-only failures before the platform |
 | P1-4 Warning burn-down (0 errors / ~295+) — structured logger first (deletes the largest class), then react-hooks in high-exposure views | ⏳ | Rides P0-7 |
 | P1-5 Coverage baseline (c8) on the money paths: billing / spend / render | ⏳ | |
-| P1-6 Stateful rate limiting + login lockout (Postgres sliding window; the in-process Map wipes on every deploy) | ⏳ | R-X risk; invisible until multi-instance |
+| P1-6 Stateful rate limiting + login lockout (Postgres sliding window; the in-process Map wipes on every deploy) | ✅ S46 · scoped | The credential-failure lockout (login + change-password current-proof) is DB-backed: one `AuthAttempt` row per failure, a TRUE 10-min sliding window counted in SQL — durable across deploys, shared across every web/worker instance, and it closes the fixed-window straddle hole (4+4 failures across a border never tripped the old counter). auth.ts's dead duplicate (same `__tfAuthLimit` key, zero importers — a drift hazard) deleted. The middleware per-IP read/write tier stays in-memory BY DESIGN: middleware is architecture-banned from the DB (src/middleware.ts), and its 600/90 tiers are coarse shedding, not security state — per-instance limits still shed. Register/reset keep the middleware tier only (a DB window there gifts attackers an account-creation DoS against NAT'd legit users; revisit on evidence of signup abuse). |
 | P1-7 Release engineering: tag v0.1.0 at staging cutover, v0.9.0 at beta, v1.0.0 at paid launch; GitHub Releases cut from worklog entries; Dependabot weekly | 🟡 started | Dependabot SECURITY updates ON (2026-11-05) — 18 alerts surfaced (11H/4M/3L: python-multipart ×7, sharp ×3, js-yaml ×4, deepmerge-ts, minimatch, prismjs). Weekly version-bump PRs still need `.github/dependabot.yml`; tags at the milestones above. |
 
 ### Priority 2 — product growth & monetization (Sprint 3)
@@ -1641,3 +1641,52 @@ qcReport.
 Gate: tsc 0 · eslint 0 errors (670 warnings = baseline) · 191/191 unit
 (+10) · queue PASS · billing 40/40 · s30 41/41 · s36 38/38 · s40 102/102
 · s34/s4/s5 ALL PASS · s35 17/17. Full narrative in the worklog ("S45").
+
+## S46 (2026-11-07 UTC) — the lockout that forgot every deploy
+
+Closes roadmap P1-6: the login lockout lived in a process-local Map, so
+every deploy/restart forgave all attackers mid-lockout, and the
+multi-instance Fly topology (P0-6's landed decision) gave each instance
+its own idea of "too many attempts" — an attacker could trip 4 failures
+on instance A, then 4 more on instance B, forever.
+
+1. **One row per failure, the window counted in SQL.** New `AuthAttempt`
+   table (id, key, at + composite index): `recordLoginFailure` inserts a
+   row (independent inserts cannot lose counts — the old counter's
+   read-modify-write could race), `checkLoginAllowed` reads the in-window
+   rows and applies the ONE pure law `loginWindowDecision()` (5 failures
+   per rolling 10 min; unlock when the oldest ages out; Retry-After
+   floors at 1s). The law is UNCHANGED for the burst case (5 rapid
+   failures → ~10-min lock) but is now a TRUE sliding window: the old
+   fixed-window counter could be straddled (4 at T−9:54 + 4 seconds
+   later = 8 failures in 10 min, never tripped — unit-pinned as the
+   "straddle hole"). Success clears the key. Failures older than the
+   window are pruned opportunistically (they can never affect a
+   decision). Surfaces: /api/auth/login + /api/auth/change-password's
+   current-password proof (the same law, as since S16).
+2. **Fail OPEN, loudly.** The throttle is a damper, not an auth control —
+   a broken table (e.g. a deploy that skipped the migration) degrades to
+   no-lockout with a once-per-process stderr announcement
+   (the spendOverrides observability pattern), never a 500 on sign-in.
+   Silent fail-open is the one refused outcome.
+3. **The dead duplicate died.** auth.ts carried a byte-identical lockout
+   sharing the same `__tfAuthLimit` globalThis key that NOTHING imported
+   — a drift hazard (import the wrong copy, throttle nothing). Removed;
+   tenant.ts's in-memory version removed; the one law is
+   `auth-throttle.ts`.
+4. **Scoped deliberately.** The middleware per-IP read/write tier stays
+   in-memory (middleware is architecture-banned from the DB; its tiers
+   are coarse shedding). Register/reset get no DB window: it would gift
+   attackers an account-creation DoS against NAT'd legit users; the
+   middleware tier covers volume abuse. Revisit on evidence.
+
+Verification: +3 unit tests (the law, the boundary/stale semantics, the
+straddle closure); s16 probe layer 2 rewritten as the REAL-DB proof —
+the failures are rows visible through a SECOND PrismaClient (state a
+restart keeps), the opportunistic prune drops only out-of-window rows,
+another key's prune leaves the locked window untouched, probe residue
+cleaned. Gate: tsc 0 · eslint 0 errors (670 warnings = exact baseline) ·
+194/194 unit (+3) · s16 probe ALL PASS · queue PASS · billing 40/40 ·
+s30 route e2e ALL PASS (live server) · e2e 26/26. Migration
+20261107000000_s46_auth_attempt (Postgres chain; SQLite via db push).
+Full narrative in the worklog ("S46").

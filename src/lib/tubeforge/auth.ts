@@ -188,59 +188,10 @@ export function clearedSessionCookie() {
   return { ...sessionCookie(""), maxAge: 0 };
 }
 
-// ----- Login rate limiting (per IP, in-memory) -----
+// S46 — the login lockout that used to live here is DEAD CODE REMOVED.
+// It was a duplicate of tenant.ts's in-memory version sharing the same
+// globalThis key (__tfAuthLimit) that no route ever imported — a drift
+// hazard: importing the wrong copy would have silently throttled nothing
+// (nothing called it). The live law is auth-throttle.ts (AuthAttempt
+// table, DB-backed since S46); clientIp for routes lives in tenant.ts.
 
-interface Attempt {
-  count: number;
-  windowStart: number;
-  lockUntil: number;
-}
-
-const g = globalThis as typeof globalThis & { __tfAuthLimit?: Map<string, Attempt> };
-const attempts: Map<string, Attempt> = (g.__tfAuthLimit ??= new Map());
-
-const WINDOW_MS = 10 * 60 * 1000; // sliding 10-minute window
-const MAX_FAILURES = 5;
-const LOCK_MS = 10 * 60 * 1000; // lock for 10 minutes
-
-export function checkLoginAllowed(ip: string): { allowed: boolean; retryAfterSec: number } {
-  const now = Date.now();
-  const a = attempts.get(ip);
-  if (!a) return { allowed: true, retryAfterSec: 0 };
-  if (a.lockUntil > now)
-    return { allowed: false, retryAfterSec: Math.ceil((a.lockUntil - now) / 1000) };
-  if (now - a.windowStart > WINDOW_MS) {
-    attempts.delete(ip);
-    return { allowed: true, retryAfterSec: 0 };
-  }
-  return { allowed: true, retryAfterSec: 0 };
-}
-
-export function recordLoginFailure(ip: string): void {
-  const now = Date.now();
-  const a = attempts.get(ip) ?? { count: 0, windowStart: now, lockUntil: 0 };
-  if (now - a.windowStart > WINDOW_MS) {
-    a.count = 0;
-    a.windowStart = now;
-  }
-  a.count += 1;
-  if (a.count >= MAX_FAILURES) {
-    a.lockUntil = now + LOCK_MS;
-    a.count = 0;
-    a.windowStart = now;
-  }
-  attempts.set(ip, a);
-}
-
-export function recordLoginSuccess(ip: string): void {
-  attempts.delete(ip);
-}
-
-/** Client IP for rate limiting (best effort behind the preview proxy). */
-export function clientIp(headers: Headers): string {
-  return (
-    headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    headers.get("x-real-ip") ||
-    "local"
-  );
-}

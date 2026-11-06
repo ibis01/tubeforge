@@ -7,11 +7,13 @@ import {
   sessionCookie,
   sweepExpiredSessions,
   verifyPassword,
+  clientIp,
+} from "@/lib/tubeforge/tenant";
+import {
   checkLoginAllowed,
   recordLoginFailure,
   recordLoginSuccess,
-  clientIp,
-} from "@/lib/tubeforge/tenant";
+} from "@/lib/tubeforge/auth-throttle";
 
 const bodySchema = z.object({
   email: z.string().trim().toLowerCase().email(),
@@ -21,7 +23,7 @@ const bodySchema = z.object({
 /** POST — sign in with email + password (sets the HttpOnly session cookie). */
 export async function POST(req: NextRequest) {
   const ip = clientIp(req.headers);
-  const { allowed, retryAfterSec } = checkLoginAllowed(ip);
+  const { allowed, retryAfterSec } = await checkLoginAllowed(ip);
   if (!allowed)
     return NextResponse.json(
       { error: `Too many attempts — try again in ${Math.ceil(retryAfterSec / 60)} min` },
@@ -37,11 +39,11 @@ export async function POST(req: NextRequest) {
     const user = await rawDb.user.findUnique({ where: { email } });
     const ok = user ? await verifyPassword(password, user.passwordHash) : false;
     if (!user || !ok) {
-      recordLoginFailure(ip);
+      await recordLoginFailure(ip);
       return NextResponse.json({ error: "Wrong email or password" }, { status: 401 });
     }
 
-    recordLoginSuccess(ip);
+    await recordLoginSuccess(ip);
     await sweepExpiredSessions().catch(() => {});
 
     const membership = await rawDb.membership.findFirst({
