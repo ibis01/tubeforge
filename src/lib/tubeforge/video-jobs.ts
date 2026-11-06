@@ -60,6 +60,7 @@ import {
 import { qcForVideo } from "./qc";
 import { expectedCutsForTimeline } from "./render-qc";
 import type { ExpectedCuts } from "./render-qc";
+import { applyQcPolicy, qcEnforcementMode } from "./qc-policy";
 import { parsePlan, getApprovedAudioMap } from "./director-plan";
 import { parseTimeline, docSceneSettings, type DocSceneSettings } from "./timeline";
 import type { ExportQuality, MusicPick, PosterPick, ShortPick } from "./studio-doc";
@@ -667,7 +668,12 @@ export async function runRenderJob(
             `${music ? (resolved ? `music: ${resolved.why}` : "music: synthesized bed") : "no music"}, ` +
             `${music && resolved ? `ducking ${resolved.duckIntensity}, ` : ""}` +
             `${transitionSummary(transition.style, transition.durationSec)}, ` +
-            `QC ${report.passed ? "passed" : "flagged " + report.checks.filter((c) => !c.pass).length + " check(s)"}`,
+            `QC ${report.passed ? "passed" : "flagged " + report.checks.filter((c) => !c.pass).length + " check(s)"}` +
+            // S40 — the ship verdict at the moment the render lands, so the
+            // operator learns about a hold HERE, not at export time.
+            (applyQcPolicy(report, { mode: qcEnforcementMode() }).blocked
+              ? " — EXPORT ON HOLD (blocking finding; see QC card)"
+              : ""),
         },
       });
 
@@ -1411,9 +1417,15 @@ export async function runQcJob(videoId: string): Promise<void> {
         userId: ctx.userId,
         videoId,
         stage: "qc",
-        message: report.passed
-          ? `QC re-run passed — ${report.checks.length} checks clean`
-          : `QC re-run flagged ${report.checks.filter((c) => c.status !== "pass").length} issue(s)`,
+        message:
+          report.passed
+            ? `QC re-run passed — ${report.checks.length} checks clean`
+            : `QC re-run flagged ${report.checks.filter((c) => c.status !== "pass").length} issue(s)` +
+              // S40 — same ship verdict as the render path: a hold surfaces
+              // the moment the measurement lands.
+              (applyQcPolicy(report, { mode: qcEnforcementMode() }).blocked
+                ? " — EXPORT ON HOLD (blocking finding; accept findings in the QC card to ship anyway)"
+                : ""),
       },
     });
   } catch (err) {

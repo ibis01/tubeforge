@@ -441,6 +441,9 @@ export interface VideoDTO {
   brandLogoOn: boolean; // false only when the badge was explicitly switched off
   // Post-render quality gate (qc.ts) — parsed report or null
   qc: QcReportDTO | null;
+  // S40 — the ship-gate verdict over that report (null when no final.mp4
+  // ships: nothing to gate). Computed by serialize from the row + qc-policy.
+  qcGate: QcGateDTO | null;
   // Stage 5 (module A) — web sources captured from the research idea this
   // video was greenlit from (or attached at create). The Script tab links
   // out to them — the fact-check surface. Empty array when none.
@@ -577,6 +580,35 @@ export interface QcReportDTO {
   checkedAt: string;
   durationSec: number;
   checks: QcCheckDTO[];
+}
+
+/** S40 — the ship-gate verdict computed server-side from the standing QC
+ * report + the enforcement matrix + any override (one source of truth:
+ * qc-policy.ts; the UI only renders this). Present only when a final.mp4
+ * ships (hasVideo) — there is nothing to gate otherwise. */
+export interface QcPolicyFindingDTO {
+  id: string;
+  label: string;
+  status: QcStatusDTO;
+  value: string;
+  detail?: string;
+  severity: "block" | "report";
+  /** The matrix's one-line rationale for the severity call. */
+  why: string;
+}
+
+export interface QcGateDTO {
+  mode: "enforce" | "report";
+  policyVersion: string;
+  /** Export/publish must refuse while true. */
+  blocked: boolean;
+  missingReport: boolean;
+  /** A human accepted exactly this report's findings — the gate stands down
+   * until the next report lands. */
+  overridden: boolean;
+  overrideNote: string | null;
+  blockers: QcPolicyFindingDTO[];
+  advisories: QcPolicyFindingDTO[];
 }
 
 export interface ChannelDTO {

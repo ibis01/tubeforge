@@ -23,6 +23,7 @@ import { isJobRunning, lastJobError, jobProgress, startJob } from "@/lib/tubefor
 import { runUploadJob, type PublishJobOptions } from "@/lib/tubeforge/video-jobs";
 import { isConnected, getPublishDefaults } from "@/lib/tubeforge/youtube";
 import { parseJson, publishSchema, ApiValidationError } from "@/lib/tubeforge/validation";
+import { applyQcPolicy, parseQcReport, qcEnforcementMode, qcOverrideValid } from "@/lib/tubeforge/qc-policy";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -87,6 +88,26 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (video.youtubeUrl && !isJobRunning(id, "upload"))
     return NextResponse.json(
       { error: "This video is already published — clear the existing YouTube URL before re-publishing" },
+      { status: 409 }
+    );
+
+  // S40 — the ship gate, same policy as the export bundle: a blocking QC
+  // finding (or no standing report) holds the upload until fixed or
+  // explicitly accepted (POST /api/videos/[id]/export with a note — the
+  // override is shared, not per-surface: one acceptance unlocks both ships
+  // for exactly this report). TUBEFORGE_QC_ENFORCEMENT=report turns this
+  // advisory for operators who want the pre-S40 behavior.
+  const qcReport = parseQcReport(video.qcReport);
+  const gate = applyQcPolicy(qcReport, { mode: qcEnforcementMode() });
+  if (gate.blocked && !qcOverrideValid(video, qcReport))
+    return NextResponse.json(
+      {
+        error: gate.missingReport
+          ? "Publish on hold — no QC report stands behind this render. Re-run QC first."
+          : `Publish on hold — ${gate.blockers.length} blocking QC finding${gate.blockers.length === 1 ? "" : "s"}. Fix and re-run QC, or accept the findings (Export → Ship anyway) to publish.`,
+        blocked: true,
+        gate,
+      },
       { status: 409 }
     );
 

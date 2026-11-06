@@ -42,6 +42,16 @@ import {
 import { isMusicMoodId, moodTags, NICHE_MOODS } from "../src/lib/tubeforge/music";
 import { parseSrt, runQcReport } from "../src/lib/tubeforge/qc";
 import {
+  applyQcPolicy,
+  parseQcReport,
+  qcEnforcementMode,
+  qcOverrideValid,
+  QC_BLOCKING_COUNT,
+  QC_ENFORCEMENT_MATRIX,
+  QC_POLICY_VERSION,
+  type QcReportLike,
+} from "../src/lib/tubeforge/qc-policy";
+import {
   describeVoiceHealth,
   isClonedVoiceId,
   sanitizeVoice,
@@ -3930,6 +3940,179 @@ await test("S39 tenant ALS: module-graph duplication shares one storage", async 
     a.currentCtx() === null && b.currentCtx() === null,
     "outside any scope, both copies read null"
   );
+});
+
+// ---------- S40 — QC enforcement policy: the ship gate ----------
+
+// The battery's full emission set — every check id qc.ts can push. The policy
+// matrix must classify exactly these, no more, no less: an id missing here is
+// a check nobody decided on; an extra id is a classification for a check
+// that never runs (drift the day a check is renamed).
+const S40_EMITTED_IDS = [
+  "playable", "duration", "black-frames", "frozen-frames", "aspect",
+  "loudness", "true-peak", "loudness-range", "dead-air", "static-shots",
+  "flicker", "stutter", "cut-alignment", "tail-fade", "captions",
+] as const;
+
+const s40Check = (id: string, status: "pass" | "fail" | "unmeasured") => ({
+  id,
+  label: `S40 ${id}`,
+  status,
+  value: "s40-fixture",
+  pass: status === "pass",
+});
+const s40Report = (
+  checks: ReturnType<typeof s40Check>[],
+  checkedAt = "2026-11-06T00:00:00.000Z"
+): QcReportLike & { checkedAt: string } => ({
+  passed: checks.every((c) => c.status === "pass"),
+  checkedAt,
+  durationSec: 60,
+  checks,
+});
+
+await test("S40 matrix: every battery check classified exactly once — 9 block, 6 report", () => {
+  const matrixIds = Object.keys(QC_ENFORCEMENT_MATRIX).sort();
+  const emitted = [...S40_EMITTED_IDS].sort();
+  eq(matrixIds, emitted, "matrix ids == battery emission set (both directions)");
+  eq(new Set(matrixIds).size, matrixIds.length, "no duplicate ids in the matrix");
+  for (const [id, entry] of Object.entries(QC_ENFORCEMENT_MATRIX)) {
+    oneOf(entry.severity, ["block", "report"], `${id} severity`);
+    ok(entry.why.length > 10, `${id} carries a readable rationale`);
+  }
+  eq(QC_BLOCKING_COUNT, 9, "nine blocking checks (a flip here is a deliberate act)");
+  eq(
+    Object.values(QC_ENFORCEMENT_MATRIX).filter((e) => e.severity === "report").length,
+    6,
+    "six report-severity checks"
+  );
+  ok(QC_POLICY_VERSION.length > 0, "policy version stamped");
+});
+
+await test("S40 applyQcPolicy: the fail-closed decision table", () => {
+  // All-pass → clean ship.
+  const clean = applyQcPolicy(s40Report(S40_EMITTED_IDS.map((id) => s40Check(id, "pass"))));
+  eq(clean.blocked, false, "all-pass report does not block");
+  eq(clean.blockers.length, 0, "no blockers");
+  eq(clean.missingReport, false, "report stands");
+
+  // Report-severity fail → advisory, never a hold.
+  const polish = applyQcPolicy(
+    s40Report(S40_EMITTED_IDS.map((id) => s40Check(id, id === "loudness" ? "fail" : "pass")))
+  );
+  eq(polish.blocked, false, "loudness fail alone does not block (YouTube normalizes)");
+  eq(polish.advisories.length, 1, "the failing check lands in advisories");
+  eq(polish.advisories[0].id, "loudness", "advisory names the check");
+
+  // Block-severity fail → hold.
+  const flicker = applyQcPolicy(
+    s40Report(S40_EMITTED_IDS.map((id) => s40Check(id, id === "flicker" ? "fail" : "pass")))
+  );
+  eq(flicker.blocked, true, "flicker fail blocks the ship");
+  eq(flicker.blockers[0].severity, "block", "finding carries blocking severity");
+  ok(flicker.blockers[0].why.length > 0, "blocker carries the policy rationale");
+
+  // Unmeasured BLOCKING check → hold (a lens that never ran cannot certify).
+  const unmeasured = applyQcPolicy(
+    s40Report(S40_EMITTED_IDS.map((id) => s40Check(id, id === "cut-alignment" ? "unmeasured" : "pass")))
+  );
+  eq(unmeasured.blocked, true, "unmeasured cut-alignment blocks");
+  eq(unmeasured.blockers[0].status, "unmeasured", "blocker keeps the three-state status");
+
+  // Unmeasured REPORT check → advisory only.
+  const unmeasuredPolish = applyQcPolicy(
+    s40Report(S40_EMITTED_IDS.map((id) => s40Check(id, id === "tail-fade" ? "unmeasured" : "pass")))
+  );
+  eq(unmeasuredPolish.blocked, false, "unmeasured tail-fade does not block");
+
+  // Unknown id (a future battery lens) → fail-closed BLOCK.
+  const future = applyQcPolicy(s40Report([s40Check("hologram-sync", "fail")]));
+  eq(future.blocked, true, "unknown check id blocks (fail-closed)");
+  eq(future.blockers[0].why, "not in the S40 policy matrix — classify this check in qc-policy.ts");
+
+  // No report at all → hold.
+  const none = applyQcPolicy(null);
+  eq(none.blocked, true, "null report blocks (nothing stands behind the file)");
+  eq(none.missingReport, true, "missingReport flagged");
+
+  // Zero-checks report → hold (the battery always emits ≥1; empty is eaten).
+  const empty = applyQcPolicy(s40Report([]));
+  eq(empty.blocked, true, "zero-checks report blocks");
+  eq(empty.missingReport, true, "zero-checks counts as missing");
+});
+
+await test("S40 override: the human accepted THIS report or nobody", () => {
+  const report = s40Report([s40Check("flicker", "fail")], "2026-11-06T12:00:00.000Z");
+  const stamped = {
+    qcOverrideAt: new Date("2026-11-06T12:30:00.000Z"),
+    qcOverrideNote: "deadline ship — flicker is in the source clip",
+    qcOverrideForCheckedAt: "2026-11-06T12:00:00.000Z",
+  };
+  eq(qcOverrideValid(stamped, report), true, "matching checkedAt stands");
+  eq(
+    qcOverrideValid(
+      { ...stamped, qcOverrideForCheckedAt: "2026-11-06T18:00:00.000Z" },
+      report
+    ),
+    false,
+    "a newer report (QC re-run / re-render) re-arms the gate"
+  );
+  eq(
+    qcOverrideValid(stamped, s40Report([s40Check("flicker", "fail")], "2026-11-06T18:00:00.000Z")),
+    false,
+    "same override, newer standing report → stale"
+  );
+  eq(qcOverrideValid(stamped, null), false, "no standing report → no valid override");
+  eq(
+    qcOverrideValid({ ...stamped, qcOverrideNote: null }, report),
+    false,
+    "a stamp without a note is not an acceptance"
+  );
+  eq(qcOverrideValid(null, report), false, "no override at all");
+});
+
+await test("S40 report mode: the gate never blocks, findings stay visible", () => {
+  const prev = process.env.TUBEFORGE_QC_ENFORCEMENT;
+  try {
+    process.env.TUBEFORGE_QC_ENFORCEMENT = "report";
+    eq(qcEnforcementMode(), "report", "exact 'report' switches the mode");
+    const held = applyQcPolicy(
+      s40Report(S40_EMITTED_IDS.map((id) => s40Check(id, id === "stutter" ? "fail" : "pass"))),
+      { mode: qcEnforcementMode() }
+    );
+    eq(held.blocked, false, "report mode never blocks");
+    eq(held.blockers.length, 1, "the would-block finding stays visible");
+
+    process.env.TUBEFORGE_QC_ENFORCEMENT = "enforce";
+    eq(qcEnforcementMode(), "enforce", "explicit enforce");
+    process.env.TUBEFORGE_QC_ENFORCEMENT = "junk-value";
+    eq(qcEnforcementMode(), "enforce", "junk fails CLOSED to enforce");
+    process.env.TUBEFORGE_QC_ENFORCEMENT = "";
+    eq(qcEnforcementMode(), "enforce", "empty fails closed");
+    process.env.TUBEFORGE_QC_ENFORCEMENT = "REPORT";
+    eq(qcEnforcementMode(), "enforce", "case-sensitive — 'REPORT' is junk, not the switch");
+  } finally {
+    if (prev === undefined) delete process.env.TUBEFORGE_QC_ENFORCEMENT;
+    else process.env.TUBEFORGE_QC_ENFORCEMENT = prev;
+  }
+  // And the null-report case still routes through the mode:
+  eq(applyQcPolicy(null, { mode: "report" }).blocked, false, "report mode releases even a missing report");
+});
+
+await test("S40 parseQcReport: tolerance matches the serializer (bad payloads never read as clean)", () => {
+  const good = JSON.stringify(s40Report([s40Check("playable", "pass")]));
+  ok(parseQcReport(good) !== null, "valid stored report parses");
+  eq(parseQcReport(null), null, "null raw → null");
+  eq(parseQcReport(undefined), null, "undefined raw → null");
+  eq(parseQcReport("not json at all"), null, "garbage → null");
+  eq(parseQcReport("[1,2,3]"), null, "non-object JSON → null");
+  eq(parseQcReport('{"checks":[]}'), null, "missing passed flag → null (legacy shape)");
+  eq(parseQcReport('{"passed":true,"checks":"nope"}'), null, "checks not an array → null");
+  // A parsed-but-empty report is the caller's fail-closed case, not the
+  // parser's: applyQcPolicy treats it as missingReport.
+  const empty = parseQcReport('{"passed":false,"checkedAt":"t","durationSec":1,"checks":[]}');
+  ok(empty !== null, "empty-checks report still parses");
+  eq(applyQcPolicy(empty).missingReport, true, "…and the gate treats it as missing");
 });
 
 // ---------- summary ----------

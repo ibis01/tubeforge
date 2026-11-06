@@ -98,6 +98,9 @@ import {
   Play,
   Square,
   Package,
+  ShieldAlert,
+  ShieldCheck,
+  Unlock,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -223,6 +226,13 @@ export function VideoDetailDialog({
   // the standing render WITHOUT paying for a re-render; the scorecard shows
   // the fresh report when the job lands.
   const [qcRerunning, setQcRerunning] = useState(false);
+
+  // S40 — the ship gate's human side: accepting the standing report's
+  // blocking findings (a note is mandatory; the acceptance expires with the
+  // next report). Open/note/busy for the "Ship anyway" panel.
+  const [overrideOpen, setOverrideOpen] = useState(false);
+  const [overrideNote, setOverrideNote] = useState("");
+  const [overriding, setOverriding] = useState(false);
 
   // Bring-your-own-voice state — swap TTS voices for uploaded / internet audio
   const [voicePanelOpen, setVoicePanelOpen] = useState(false);
@@ -908,6 +918,41 @@ export function VideoDetailDialog({
       });
     } finally {
       setQcRerunning(false);
+    }
+  };
+
+  // ---------- S40: Ship anyway — accept the standing report's blocking
+  // findings and unlock export/publish. The note is the audit trail; the
+  // acceptance is anchored to THIS report (a re-run or re-render re-arms
+  // the gate automatically). On success, hand the user the download they
+  // were reaching for.
+  const shipAnyway = async () => {
+    if (overriding || !video?.hasVideo) return;
+    setOverriding(true);
+    try {
+      const res = await fetch(`/api/videos/${video.id}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: overrideNote }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { accepted?: boolean; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Could not accept the findings");
+      await refreshVideo(video.id); // the refreshed row carries qcGate.overridden
+      setOverrideOpen(false);
+      setOverrideNote("");
+      toast({
+        title: "Findings accepted — export unlocked",
+        description: "Recorded in the activity log; the acceptance travels with the exported bundle.",
+      });
+      window.location.href = `/api/videos/${video.id}/export`;
+    } catch (e) {
+      toast({
+        title: "Could not accept findings",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setOverriding(false);
     }
   };
 
@@ -1968,6 +2013,147 @@ export function VideoDetailDialog({
         )}
       </div>
 
+      {/* S40 — the ship gate: the enforcement verdict over the standing QC
+          report (qc-policy.ts matrix, computed server-side in the DTO).
+          Present whenever a final.mp4 ships — including when the report
+          itself is missing (that case blocks too: nothing stands behind the
+          file). The scorecard below stays the full measurement; this is the
+          verdict on shipping it. */}
+      {video.qcGate && (
+        <div
+          className={clsx(
+            "rounded-xl border p-4",
+            video.qcGate.blocked && !video.qcGate.overridden
+              ? "border-red-500/25 bg-red-500/[0.06]"
+              : video.qcGate.overridden || video.qcGate.blockers.length > 0
+                ? "border-amber-500/25 bg-amber-500/[0.06]"
+                : "border-emerald-500/20 bg-emerald-500/[0.05]"
+          )}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
+              {video.qcGate.blocked && !video.qcGate.overridden ? (
+                <ShieldAlert className="h-3.5 w-3.5 text-red-400 shrink-0" />
+              ) : (
+                <ShieldCheck className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+              )}
+              Ship gate
+              {video.qcGate.mode === "report" ? " · advisory (enforcement off)" : ` · ${video.qcGate.policyVersion}`}
+            </p>
+            <Badge
+              variant="outline"
+              className={clsx(
+                "text-[10px]",
+                video.qcGate.blocked && !video.qcGate.overridden
+                  ? "border-red-500/30 bg-red-500/10 text-red-200"
+                  : video.qcGate.overridden || video.qcGate.blockers.length > 0
+                    ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                    : "border-emerald-500/25 bg-emerald-500/10 text-emerald-200"
+              )}
+            >
+              {video.qcGate.blocked && !video.qcGate.overridden ? (
+                <>Export on hold · {video.qcGate.missingReport ? "no report" : `${video.qcGate.blockers.length} blocking`}</>
+              ) : video.qcGate.overridden ? (
+                <>
+                  <Unlock className="h-2.5 w-2.5 mr-1" /> Ships on accepted findings
+                </>
+              ) : video.qcGate.blockers.length > 0 ? (
+                <>Flagged · {video.qcGate.blockers.length} (advisory)</>
+              ) : (
+                "Clear to ship"
+              )}
+            </Badge>
+          </div>
+
+          {/* What holds the ship — each blocking finding with the policy's
+              rationale, so the call is arguable in the open. */}
+          {(video.qcGate.blocked || video.qcGate.overridden) && !video.qcGate.missingReport && (
+            <ul className="mt-2 space-y-1.5">
+              {video.qcGate.blockers.map((b) => (
+                <li key={b.id} className="text-[11px]">
+                  <span className="text-foreground/90 font-medium">{b.label}</span>
+                  <span className="text-muted-foreground">
+                    {" "}— {b.value}
+                    {b.status === "unmeasured" ? " (not measured)" : ""}
+                  </span>
+                  <p className="text-muted-foreground/70 text-[10px]">{b.why}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+          {video.qcGate.missingReport && (
+            <p className="mt-2 text-[11px] text-foreground/85">
+              No QC report stands behind this render — run the QC battery (no re-render needed) before shipping.
+            </p>
+          )}
+
+          {/* The two ways through a hold: re-measure, or accept on record. */}
+          {video.qcGate.blocked && !video.qcGate.overridden && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px] px-2.5 border-white/15 bg-white/4"
+                disabled={qcRerunning || Boolean(busy) || pubBusy}
+                onClick={() => void rerunQc()}
+                title="Re-run the QC battery against the standing render — no re-render needed"
+              >
+                {qcRerunning ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                {qcRerunning ? "Re-checking…" : "Re-run QC"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px] px-2.5 border-amber-500/30 bg-amber-500/10 text-amber-200 hover:bg-amber-500/15"
+                disabled={overriding || video.qcGate.missingReport}
+                onClick={() => setOverrideOpen((o) => !o)}
+                title={
+                  video.qcGate.missingReport
+                    ? "Run QC first — you can only accept findings that exist"
+                    : "Record why this ships despite the findings"
+                }
+              >
+                <Unlock className="h-3 w-3" />
+                Ship anyway…
+              </Button>
+            </div>
+          )}
+          {video.qcGate.blocked && !video.qcGate.overridden && overrideOpen && (
+            <div className="mt-2 space-y-2">
+              <Textarea
+                rows={2}
+                maxLength={500}
+                value={overrideNote}
+                onChange={(e) => setOverrideNote(e.target.value)}
+                placeholder="Why this ships anyway (required, 3–500 characters) — recorded in the activity log and inside the exported bundle"
+                disabled={overriding}
+                aria-label="Override note"
+                className="text-xs"
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  className="bg-brand-gradient hover:opacity-90 text-white font-semibold h-7 text-[11px]"
+                  disabled={overriding || overrideNote.trim().length < 3}
+                  onClick={() => void shipAnyway()}
+                >
+                  {overriding ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unlock className="h-3 w-3" />}
+                  Accept findings & export
+                </Button>
+                <Button variant="ghost" size="sm" className="h-7 text-[11px]" onClick={() => setOverrideOpen(false)} disabled={overriding}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+          {video.qcGate.overridden && video.qcGate.overrideNote && (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Accepted on record: “{video.qcGate.overrideNote}” — the gate re-arms automatically when a new QC report lands.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Quality-check scorecard (T-4.12) — grouped video/audio/sync,
           measured on every full render (qc.ts) */}
       {video.qc ? (
@@ -2233,9 +2419,13 @@ export function VideoDetailDialog({
             variant="outline"
             size="sm"
             asChild
-            disabled={!(video.script || video.hasVoiceover || video.hasThumbnail)}
+            disabled={!(video.script || video.hasVoiceover || video.hasThumbnail) || Boolean(video.qcGate?.blocked && !video.qcGate?.overridden)}
             className="border-white/15 bg-white/4 shrink-0"
-            title="Download script, metadata, voiceover, storyboard and video as a ZIP"
+            title={
+              video.qcGate?.blocked && !video.qcGate?.overridden
+                ? "Export on hold — blocking QC finding(s). Fix and re-run QC, or accept the findings in the QC card above."
+                : "Download script, metadata, voiceover, storyboard and video as a ZIP"
+            }
           >
             <a href={`/api/videos/${video.id}/export`} download>
               <Download className="h-3.5 w-3.5" />
@@ -3316,12 +3506,14 @@ export function VideoDetailDialog({
           variant="outline"
           size="sm"
           asChild
-          disabled={Boolean(busy)}
+          disabled={Boolean(busy) || Boolean(video.qcGate?.blocked && !video.qcGate?.overridden)}
           className="border-white/15 bg-white/4"
           title={
-            video.hasVoiceover || video.hasThumbnail || video.script
-              ? "Download script, metadata, voiceover, storyboard and video as a ZIP"
-              : "Run the pipeline first — nothing to export yet"
+            video.qcGate?.blocked && !video.qcGate?.overridden
+              ? "Export on hold — blocking QC finding(s). Fix and re-run QC, or accept the findings in the QC card."
+              : video.hasVoiceover || video.hasThumbnail || video.script
+                ? "Download script, metadata, voiceover, storyboard and video as a ZIP"
+                : "Run the pipeline first — nothing to export yet"
           }
         >
           <a href={`/api/videos/${video.id}/export`} download>
@@ -3457,11 +3649,22 @@ export function VideoDetailDialog({
               title="Leave empty to publish immediately — pick a time to schedule the release on YouTube"
             />
           </div>
+          {/* S40 — the ship gate reaches the publish surface with the same
+              policy: a hold here names its blockers and points at the two
+              ways through (fix + re-run QC, or the recorded acceptance). */}
+          {video.qcGate?.blocked && !video.qcGate.overridden && (
+            <p className="text-[11px] text-amber-200 bg-amber-500/10 border border-amber-500/25 rounded-lg px-3 py-2">
+              Publish on hold — {video.qcGate.missingReport
+                ? "no QC report stands behind this render (re-run QC first)"
+                : `${video.qcGate.blockers.length} blocking QC finding${video.qcGate.blockers.length === 1 ? "" : "s"} (${video.qcGate.blockers.map((b) => b.label).join("; ")})`}
+              . Fix and re-run QC, or accept the findings in the QC card to publish.
+            </p>
+          )}
           <div className="flex items-center gap-2 pt-1">
             <Button
               size="sm"
               onClick={() => void publishVideo()}
-              disabled={pubBusy || !pubTitle.trim()}
+              disabled={pubBusy || !pubTitle.trim() || Boolean(video.qcGate?.blocked && !video.qcGate?.overridden)}
               className="bg-brand-gradient hover:opacity-90 text-white font-semibold"
             >
               {pubBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}

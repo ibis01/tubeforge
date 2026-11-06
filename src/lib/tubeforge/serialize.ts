@@ -4,9 +4,10 @@
 // (auto-short state + latest synced YouTube performance).
 
 import type { Video } from "@prisma/client";
-import type { VideoDTO, VideoStatus } from "./types";
+import type { QcGateDTO, VideoDTO, VideoStatus } from "./types";
 import { parseScenes, serializeScenes } from "./story";
 import { hasBrandLogo } from "./slides";
+import { applyQcPolicy, parseQcReport, qcEnforcementMode, qcOverrideValid } from "./qc-policy";
 
 // Storage seam (T-3.7): asset presence now comes from DB flags
 // (hasVideo/hasPreview/hasShort) — correct on BOTH storage drivers. The old
@@ -97,6 +98,10 @@ export async function serializeVideo(
     brandHasLogo: isStory && (await hasBrandLogo(v.id)),
     brandLogoOn: v.brandLogoOn ?? true,
     qc: parseQc(v.qcReport),
+    // S40 — the ship gate, computed where the report is parsed so every
+    // consumer (dialog, routes) sees the same verdict. Only a rendered
+    // video has a ship to gate.
+    qcGate: v.hasVideo ? buildQcGate(v) : null,
     // Stage 5 (module A) — the research-source snapshot (legacy rows → []).
     researchSources: parseResearchSources(
       (v as { researchSources?: string | null }).researchSources
@@ -112,15 +117,31 @@ export async function serializeVideo(
   };
 }
 
-/** Parse the stored QC JSON safely (bad/legacy payloads → null). */
+/** Parse the stored QC JSON safely (bad/legacy payloads → null).
+ * S40: the parser lives in qc-policy.ts (parseQcReport) so the export and
+ * publish routes read the standing report through the SAME tolerance — one
+ * source of truth, no drift between badge and gate. */
 function parseQc(raw: string | null): import("./types").QcReportDTO | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as import("./types").QcReportDTO;
-    return parsed && typeof parsed.passed === "boolean" && Array.isArray(parsed.checks) ? parsed : null;
-  } catch {
-    return null;
-  }
+  return parseQcReport(raw);
+}
+
+/** S40 — the ship-gate verdict for one video row: the standing report through
+ * the enforcement matrix, plus the override's standing (a human accepted
+ * exactly this report, or nobody did). */
+function buildQcGate(v: Video): QcGateDTO {
+  const report = parseQcReport(v.qcReport);
+  const decision = applyQcPolicy(report, { mode: qcEnforcementMode() });
+  const overridden = qcOverrideValid(v, report);
+  return {
+    mode: decision.mode,
+    policyVersion: decision.policyVersion,
+    blocked: decision.blocked,
+    missingReport: decision.missingReport,
+    overridden,
+    overrideNote: overridden ? v.qcOverrideNote : null,
+    blockers: decision.blockers,
+    advisories: decision.advisories,
+  };
 }
 
 /** Parse the stored assembled-timeline JSON safely (bad/legacy → null).

@@ -1424,3 +1424,73 @@ recovery probe, header), TASKS.md (record), this entry.
 **Final gate:** tsc 0 · eslint 0 errors · **169/169 unit** (168 + 1) ·
 **queue PASS** (+5 render assertions) · s36 probe 38/38 · s30 probe
 41/41 · 40/40 billing.
+
+## S40 (2026-11-06 UTC) — the ship gate: which QC findings block, and the
+audited way past them
+
+**Problem.** The owner audit's open item: "QC enforcement policy (which of
+checks 1-13 must block export)". Since S33 the battery reported, the badge
+asked a human to look, and NOTHING enforced the looking — a video with
+unexplained black frames or a strobing i2v blend exported and published as
+smoothly as a clean one. The report also drew no line between damage
+(broken stitch, cut words, judder) and polish (LUFS off target, an abrupt
+ending) — every finding carried the same weight.
+
+**Fix.** A pure, versioned policy matrix in `qc-policy.ts` — 9 BLOCK
+(playable, duration, black-frames, frozen-frames, aspect, dead-air, flicker,
+stutter, cut-alignment) vs 6 REPORT (loudness, true-peak, loudness-range,
+tail-fade, static-shots, captions), each row carrying the one-line rationale
+the UI shows next to its findings. `applyQcPolicy` is the single decision
+function (routes and the DTO both call it): fail-closed on unmeasured
+blocking lenses, zero-checks reports, unknown check ids (a future lens
+blocks until classified), and missing reports. The human path is the
+override: a 3-500-char note POSTed to /export stamps
+qcOverrideForCheckedAt on the row — anchored to EXACTLY the report the
+human saw, so the next re-render or QC re-run re-arms the gate. The gate
+sits on the two ship surfaces (GET /export, POST /publish) and nowhere
+else; a valid override also writes a QC OVERRIDE line into the exported
+bundle's metadata. `TUBEFORGE_QC_ENFORCEMENT=report` (exact match; junk
+fails closed to enforce) restores the old advisory behavior for operators.
+The DTO carries a server-computed `qcGate` (serialize.ts, one source with
+the badge's parser — parseQcReport moved into qc-policy.ts), and the detail
+dialog renders it as a Ship-gate card: hold + blockers + rationales,
+Re-run QC, Ship anyway…, and the standing override note; both Export
+buttons and the publish panel respect the verdict.
+
+**Pinned forever.**
+- test-unit.mts +5: matrix classifies exactly the battery's 15 emitted ids
+  (9 block / 6 report, every rationale present); the fail-closed decision
+  table (all-pass clean, loudness-fail advisory, flicker-fail hold,
+  unmeasured cut-alignment hold, unmeasured tail-fade advisory, unknown id
+  hold, null/zero-checks hold); override staleness (anchor string-exact,
+  newer report re-arms, note required); report-mode env matrix (exact
+  "report", junk/empty/case-variant all enforce); parseQcReport tolerance.
+- scripts/s40-unit-probe.mts (new, 102 assertions): the partition walked
+  EXHAUSTIVELY — each of the 15 ids failing alone and unmeasured alone
+  blocks exactly per its severity; the maximal cases (6 advisories never
+  hold, 9 blockers all named); the staleness matrix (Date-vs-string,
+  trailing-space anchor, empty note, empty report); the injected-env
+  switch; parser edges (number `passed` rejected, detail fidelity).
+
+**Sandbox note (local only, not a repo defect):** the recycled sandbox
+exports its own DATABASE_URL, so postinstall's .env fallback never fired
+and the e2e webServer booted without TUBEFORGE_AUTH_SECRET (503s).
+Writing .env with the two provisioned secrets (exactly what postinstall
+does on a clean checkout / CI) took the suite to 26/26.
+
+**Files:** `src/lib/tubeforge/qc-policy.ts` (new — matrix, applyQcPolicy,
+override rule, mode switch, parseQcReport), `prisma/schema.prisma` +
+`schema.sqlite.prisma` + `migrations/20261106000000_s40_qc_enforcement/`
+(+3 nullable override columns), `src/lib/tubeforge/types.ts` (QcGateDTO),
+`src/lib/tubeforge/serialize.ts` (qcGate + shared parser),
+`src/app/api/videos/[id]/export/route.ts` (GET gate, POST override,
+bundle metadata line), `src/app/api/videos/[id]/publish/route.ts` (gate),
+`src/lib/tubeforge/video-jobs.ts` (render + QC-re-run activity name a
+hold), `src/components/tubeforge/video-detail-dialog.tsx` (Ship-gate card,
+Ship anyway flow, gated buttons), `.env.example` (S40 block),
+`scripts/test-unit.mts` (+5), `scripts/s40-unit-probe.mts` (new),
+TASKS.md (record), this entry.
+
+**Final gate:** tsc 0 · eslint 0 errors · **174/174 unit** (169 + 5) ·
+queue PASS · s36 probe 38/38 · s30 probe 41/41 · **s40 probe 102/102** ·
+billing 40/40 · e2e 26/26.

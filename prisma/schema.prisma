@@ -346,6 +346,14 @@ model Video {
   // loudness, peaks, black frames, SRT sanity.
   qcReport String?
 
+  // S40 — QC ship gate: the audited human override. Stamped only by POST
+  // /api/videos/[id]/export (a note is required); qcOverrideForCheckedAt
+  // anchors the acceptance to EXACTLY one report — a re-render or QC re-run
+  // writes a new report, the anchor stops matching, and the gate holds again.
+  qcOverrideAt           DateTime?
+  qcOverrideNote         String?
+  qcOverrideForCheckedAt String?
+
   // Stage 5 — AI Director. shotList is the JSON DirectorPlan (per-scene shot
   // list: framing / camera / lens / composition / durations / transition-in /
   // motion hint + per-scene visual mood) produced by the LLM director pass.

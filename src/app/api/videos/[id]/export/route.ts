@@ -12,11 +12,19 @@ import { resolveMusicForVideo, isMusicEnabledForVideo, musicBedActive } from "@/
 import { docMusicPick } from "@/lib/tubeforge/studio-doc";
 import { parseTimeline } from "@/lib/tubeforge/timeline";
 import { getApprovedAudioMap } from "@/lib/tubeforge/director-plan";
+import { applyQcPolicy, parseQcReport, qcEnforcementMode, qcOverrideValid } from "@/lib/tubeforge/qc-policy";
 import * as storage from "@/lib/tubeforge/storage";
 
  type Ctx = { params: Promise<{ id: string }> };
 
-/** GET — download the full upload-ready package as a ZIP. */
+/** GET — download the full upload-ready package as a ZIP.
+ *
+ * S40 — the ship gate: when a final.mp4 ships in the bundle, the standing QC
+ * report goes through the enforcement matrix (qc-policy.ts). Blocking
+ * findings (or no report at all) hold the export with 409 — the two ways
+ * through are fixing the finding (re-run QC / re-render) or POSTing an
+ * audited override below. TUBEFORGE_QC_ENFORCEMENT=report turns the gate
+ * advisory for operators who want the pre-S40 behavior. */
 export async function GET(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -31,6 +39,25 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     },
   });
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
+
+  // S40 — the ship gate. Only a bundle that ships final.mp4 is gated:
+  // script-only exports (no render) have nothing to measure.
+  const qcReport = video.hasVideo ? parseQcReport(video.qcReport) : null;
+  const gate = applyQcPolicy(qcReport, { mode: qcEnforcementMode() });
+  const overrideOk = qcOverrideValid(video, qcReport);
+  if (video.hasVideo && gate.blocked && !overrideOk) {
+    return NextResponse.json(
+      {
+        error: gate.missingReport
+          ? "Export on hold — no QC report stands behind this render. Re-run QC (one click, no re-render), then export."
+          : `Export on hold — ${gate.blockers.length} blocking QC finding${gate.blockers.length === 1 ? "" : "s"}. Fix and re-run QC, or accept the findings to ship anyway.`,
+        blocked: true,
+        gate,
+        override: { method: "POST", url: `/api/videos/${id}/export`, body: { note: "why this ships anyway (3-500 chars)" } },
+      },
+      { status: 409 }
+    );
+  }
 
   // Stage 3 (T-3.6, closes D-24): media assets STREAM from disk through the
   // data-descriptor ZIP builder — the whole package flows through a few MB of
@@ -93,6 +120,14 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       `AUDIO DURATION: ${video.audioDuration ? `${Math.round(video.audioDuration)} seconds` : "—"}`,
       video.hasVideo && video.videoDuration
         ? `RENDERED VIDEO: final.mp4 (${Math.round(video.videoDuration)} seconds, ${video.renderMode})`
+        : ``,
+      // S40 — the override travels WITH the artifact: anyone opening the
+      // bundle months later sees that it shipped on a human's explicit
+      // acceptance, which findings, and why.
+      video.hasVideo && overrideOk && video.qcOverrideNote
+        ? `QC OVERRIDE: shipped on accepted findings — ${video.qcOverrideNote} (accepted ${
+            video.qcOverrideAt ? video.qcOverrideAt.toISOString() : "unknown time"
+          } for the report checked at ${qcReport?.checkedAt ?? "unknown"})`
         : ``,
       video.youtubeUrl ? `UPLOADED TO YOUTUBE: ${video.youtubeUrl}` : ``,
       ``,
@@ -294,4 +329,78 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       "Cache-Control": "no-store",
     },
   });
+}
+
+/** POST — S40: the audited human override. Accept the STANDING report's
+ * blocking findings and unlock the ship. Body: { note } (3–500 chars — the
+ * audit trail must say why). The acceptance is anchored to the report's
+ * checkedAt: a re-render or QC re-run lands a new report and the override
+ * goes stale automatically, so this never becomes a permanent bypass.
+ *
+ * Refused (409) when there is nothing standing to accept — a human accepts
+ * FINDINGS, not the absence of a report; that case is one "Re-run QC" click. */
+export async function POST(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter();
+
+  const { id } = await ctx.params;
+  const video = await db.video.findUnique({ where: { id } });
+  if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
+  if (!video.hasVideo)
+    return NextResponse.json(
+      { error: "Cannot accept QC findings — render the video first" },
+      { status: 400 }
+    );
+
+  let body: { note?: unknown };
+  try {
+    body = (await req.json()) as { note?: unknown };
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+  const note = typeof body.note === "string" ? body.note.trim() : "";
+  if (note.length < 3 || note.length > 500)
+    return NextResponse.json(
+      { error: "An override note of 3–500 characters is required — the audit trail must say why this ships" },
+      { status: 400 }
+    );
+
+  const report = parseQcReport(video.qcReport);
+  // A null report IS the missingReport case (applyQcPolicy fails closed on
+  // it) — checked here explicitly so the anchor below is non-null.
+  if (!report)
+    return NextResponse.json(
+      { error: "No QC report stands behind this render — re-run QC first, then accept its findings if needed" },
+      { status: 409 }
+    );
+  const gate = applyQcPolicy(report, { mode: qcEnforcementMode() });
+  if (!gate.blocked)
+    return NextResponse.json(
+      { error: "Nothing to override — the standing QC report does not block this video" },
+      { status: 409 }
+    );
+
+  await db.video.update({
+    where: { id },
+    data: {
+      qcOverrideAt: new Date(),
+      qcOverrideNote: note,
+      qcOverrideForCheckedAt: report.checkedAt,
+    },
+  });
+  await db.activity.create({
+    data: {
+      organizationId: video.organizationId,
+      userId: auth.ctx.userId,
+      videoId: id,
+      stage: "qc",
+      level: "warn",
+      message:
+        `QC override accepted — shipping despite ${gate.blockers.length} blocking finding(s) ` +
+        `(${gate.blockers.map((b) => b.id).join(", ")}). Note: ${note}`,
+    },
+  });
+
+  return NextResponse.json({ accepted: true, unlocked: true, forCheckedAt: report.checkedAt });
 }

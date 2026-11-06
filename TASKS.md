@@ -1431,3 +1431,51 @@ JSON parse variance (parseJsonLoose already used; residual LLM output
 variance), preview renders write no qcReport. Gate: tsc 0 · eslint 0
 errors · 169/169 unit (+1) · queue PASS (+5 assertions) · s36 probe 38/38
 · s30 probe 41/41 · billing 40/40.
+
+### S40 record (2026-11-06 UTC)
+
+QC enforcement policy — closes the audit's roadmap candidate "which of checks
+1-13 must block export". Through S39 the battery's report was advisory (the
+render never failed because of QC; the badge asked a human to inspect, and
+nothing enforced that inspection). S40 keeps measurement and enforcement
+separate but makes the SHIP deliberate. Design: a pure, versioned policy
+matrix (qc-policy.ts) classifies every check id the battery can emit —
+BLOCK (9: playable, duration, black-frames, frozen-frames, aspect, dead-air,
+flicker, stutter, cut-alignment — the file is broken, misrepresents the
+script, or carries visible/audible structural damage) vs REPORT (6:
+loudness, true-peak, loudness-range, tail-fade, static-shots, captions —
+polish and editorial judgment, each with a one-line rationale the UI shows).
+Fail-closed rules: an unmeasured BLOCKING check blocks (a lens that never ran
+cannot certify); a zero-checks report blocks; an UNKNOWN check id blocks
+until classified (new lenses can't inherit advisory by silence); no standing
+report on a rendered video blocks (fix = one Re-run QC click); junk
+TUBEFORGE_QC_ENFORCEMENT values fail closed to enforce ("report" — exact,
+case-sensitive — restores the pre-S40 advisory behavior, documented in
+.env.example). The human escape hatch is the audited override: POST
+/api/videos/[id]/export with a 3-500-char note stamps
+qcOverrideAt/qcOverrideNote/qcOverrideForCheckedAt on the video row (new
+migration 20261106000000_s40_qc_enforcement, additive nullable columns) plus
+a warn-level activity entry; the acceptance is anchored to the report's
+checkedAt, so a re-render or QC re-run lands a new report and the gate re-arms
+automatically — new evidence always supersedes a human's acceptance of old
+evidence. There is nothing to accept when no report stands (409: re-run QC
+first). Enforcement surfaces: GET /export (409 + blockers + override
+instructions when held; a valid override also writes a QC OVERRIDE line into
+the bundle's upload-metadata.txt so the acceptance travels with the
+artifact), POST /publish (same gate before enqueue — one acceptance unlocks
+both ships for exactly this report), and the video DTO now carries a
+server-computed qcGate verdict (serialize.ts → QcGateDTO) that the detail
+dialog renders as a Ship-gate card: hold state, each blocker with its policy
+rationale, Re-run QC / Ship anyway… actions, and the override note when
+standing; both Export buttons and the publish panel respect the gate. Render
+and QC-re-run activity messages now name a hold the moment measurement
+lands. parseQcReport moved to qc-policy.ts as the single report parser
+(serialize reuses it — badge and gate can never disagree). Verification:
+unit 169 → 174 (matrix coverage pinned against the battery's emission set,
+the fail-closed decision table, override staleness, report-mode env
+behavior, parser tolerance); new scripts/s40-unit-probe.mts 102/102
+(exhaustive per-id partition — every one of the 15 ids failing and
+unmeasured alone blocks exactly per its severity; maximal cases; the
+staleness matrix; injected-env switch; parser edges). Gate: tsc 0 · eslint 0
+errors · 174/174 unit (+5) · queue PASS · s36 38/38 · s30 41/41 · s40 probe
+102/102 · billing 40/40 · e2e 26/26.
