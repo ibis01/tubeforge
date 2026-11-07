@@ -131,6 +131,153 @@
    "cameraViolations": 0,
    "findings": 1,
    "planSec": 14.2
+  },
+  {
+   "profile": "podcast",
+   "run": 1,
+   "ms": 8089,
+   "scenes": 3,
+   "shots": 5,
+   "v2Richness": "63%",
+   "cameraViolations": 0,
+   "findings": 0,
+   "planSec": 13.2
+  },
+  {
+   "profile": "podcast",
+   "run": 2,
+   "ms": 10573,
+   "scenes": 3,
+   "shots": 6,
+   "v2Richness": "68%",
+   "cameraViolations": 0,
+   "findings": 0,
+   "planSec": 15.9
+  },
+  {
+   "profile": "islamic-history",
+   "run": 1,
+   "ms": 21329,
+   "scenes": 3,
+   "shots": 7,
+   "v2Richness": "65%",
+   "cameraViolations": 0,
+   "findings": 0,
+   "planSec": 18.9
+  },
+  {
+   "profile": "islamic-history",
+   "run": 2,
+   "ms": 11628,
+   "scenes": 3,
+   "shots": 6,
+   "v2Richness": "68%",
+   "cameraViolations": 0,
+   "findings": 0,
+   "planSec": 15.9
   }
- ]
+ ],
+ "legB": {
+  "renderSec": 14.6,
+  "renderBytes": 3610773,
+  "checks": [
+   {
+    "id": "playable",
+    "status": "pass",
+    "value": "14.6s readable"
+   },
+   {
+    "id": "duration",
+    "status": "pass",
+    "value": "video 14.6s vs narration 12.0s"
+   },
+   {
+    "id": "black-frames",
+    "status": "pass",
+    "value": "none detected"
+   },
+   {
+    "id": "frozen-frames",
+    "status": "fail",
+    "value": "3 frozen runs"
+   },
+   {
+    "id": "aspect",
+    "status": "pass",
+    "value": "1920x1080"
+   },
+   {
+    "id": "loudness",
+    "status": "pass",
+    "value": "-16.0 LUFS"
+   },
+   {
+    "id": "true-peak",
+    "status": "pass",
+    "value": "-14.4 dBTP"
+   },
+   {
+    "id": "loudness-range",
+    "status": "pass",
+    "value": "LRA 1.5 LU"
+   },
+   {
+    "id": "dead-air",
+    "status": "pass",
+    "value": "none"
+   },
+   {
+    "id": "static-shots",
+    "status": "pass",
+    "value": "visual change throughout"
+   },
+   {
+    "id": "flicker",
+    "status": "pass",
+    "value": "none detected"
+   },
+   {
+    "id": "stutter",
+    "status": "pass",
+    "value": "even timing throughout"
+   },
+   {
+    "id": "cut-alignment",
+    "status": "fail",
+    "value": "2 unexpected, 0 missing"
+   },
+   {
+    "id": "tail-fade",
+    "status": "pass",
+    "value": "final 0.4s at -91.0 dB mean"
+   },
+   {
+    "id": "subject-continuity",
+    "status": "pass",
+    "value": "identity consistent across 3 subject frame(s) — 90/100"
+   },
+   {
+    "id": "text-artifacts",
+    "status": "pass",
+    "value": "8 frame(s) clean of artifact text"
+   }
+  ],
+  "subjectScore": 90,
+  "subjectStatus": "pass",
+  "textStatus": "pass",
+  "sceneRows": [
+   {
+    "index": 1,
+    "sha16": "6321a9bcbb052d25"
+   },
+   {
+    "index": 2,
+    "sha16": "99566154e7f52091"
+   },
+   {
+    "index": 3,
+    "sha16": "8338fc27ebbcff42"
+   }
+  ]
+ }
 }

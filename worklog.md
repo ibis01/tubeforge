@@ -2539,3 +2539,23 @@ no source changed) · 235/235 unit · queue restart-recovery PASS · billing
 40/40. TASKS.md T-54.3 now carries the forensics reference and the
 probe-hygiene law (≤1 probe/~45 min, watch the POOL counter, launch the owed
 chunks at remaining-daily ≥ 20). The legs remain owed, never claimed.
+
+## S54 completion run (2026-11-08 00:43 +08 / 2026-11-07 16:43 UTC) — the pool opened, the owed legs landed
+
+The autowatch (cron 512277) fired and its single probe found the shared pool
+de-saturated at last: status=200, poolRemaining=299 — the runbook's ≥20
+launch condition met on the first look. The owed chunks completed in the same
+firing. §A podcast: 11 shots, camDrift 0/11, findings 0, mean 9.3 s/pass;
+islamic-history: 13 shots, camDrift 0/13, findings 0, mean 16.5 s/pass — §A
+is now 8/8 profiles · 16 runs, all green, camera drift 0/93 shots total. §B
+the real-render matrix on the S51 anchor: 14/16 pass, subject-continuity
+90/100 vs the 70 floor (the calibration datapoint), frozen-frames (3 frozen
+runs) and cut-alignment (2 unexpected, 0 missing) recorded as the
+human-review evidence they are. State twin: 16 §A rows + full §B leg,
+oweA=oweB=False; report leg EXIT=0; baseline re-stamped coverage 8/8 with the
+full §B section. TASKS.md T-54.3 ⏸ → ✅ with the measured numbers. The
+probe-hygiene law did its job: one probe, zero races, zero wasted user-daily
+spend this firing. The cron watch is deleted;
+scripts/s54-autowatch.sh stays versioned in the tree. Open for human review:
+the 70 floor, the two §B fails, camera/text severity calibration; rotate the
+PAT after this push.
