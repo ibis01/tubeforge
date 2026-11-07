@@ -15,9 +15,11 @@
 //                 last line before pixels — sentence-level substitution + the
 //                 hard negative clause (+ ImageRequest.negativePrompt where the
 //                 provider supports one)
-//   L4 verify   — runRestrictedVisualScan: frames sampled from the rendered
-//                 final.mp4, VLM-judged, emitted as the QC check
-//                 "restricted-visual"
+//   L4 verify   — runRestrictedVisualScan: a DENSE frame grid from the
+//                 rendered final.mp4 — a local face-detection tripwire plus
+//                 batched VLM judgment — emitted as the QC check
+//                 "restricted-visual" (S55 T-55.4; the S49 8-frame even
+//                 sample could not see between its samples)
 //   L5 gate     — qc-policy.ts: severity BLOCK — fail OR unmeasured holds
 //                 export/publish like every other blocking check; the existing
 //                 audited human override remains the escape hatch
@@ -324,7 +326,39 @@ export function policySystemOverlay(policy: ContentPolicyId): string {
 }
 
 // ---------------------------------------------------------------------------
-// L4 — the restricted visual scan (frames from the rendered file, VLM-judged).
+// L4 — the restricted visual scan (S55 T-55.4: the dense rewrite).
+//
+// The S49 original sampled 8 frames evenly: a 60s render carried a 7.5s mean
+// gap, so a 1-3s flash of a restricted figure between samples read "pass" —
+// the audit's core safety point (sparse sampling cannot guarantee a brief
+// violation between frames is caught). The scan now runs a three-stage
+// funnel, fail-closed at every seam:
+//
+//   stage 1  dense grid    — one frame per 0.50s (2 fps), capped at 240, so
+//                            the LOCAL machinery sees the whole timeline.
+//                            Longer videos coarsen the interval honestly
+//                            (240 frames max) and the coverage note says so.
+//   stage 2  face tripwire — python3 + OpenCV haar cascades when the host
+//                            has them (probed per scan): frames carrying a
+//                            face ≥ RESTRICTED_FACE_MIN_AREA_FRAC of frame
+//                            area force themselves + immediate neighbors
+//                            into the judge set (top anchors by area). A
+//                            missing detector DEGRADES resolution (noted in
+//                            the detail), never the verdict — the judge
+//                            still measures every frame it is shown. Faces
+//                            are a tripwire, not a verdict: anonymous people
+//                            are allowed content; the VLM decides reverence.
+//   stage 3  VLM judge     — ≤ RESTRICTED_VLM_MAX_FRAMES frames in batches
+//                            of RESTRICTED_VLM_BATCH, labeled with GLOBAL
+//                            frame numbers + timestamps, temperature 0. The
+//                            first failing batch short-circuits (a fail
+//                            already blocks export — more calls buy nothing
+//                            the human can use); any unreadable batch makes
+//                            the whole scan unmeasured (fail-closed, never
+//                            silently clean).
+//
+// The coverage is REPORTED (grid size, interval, tripwire hits, batches run)
+// so the human reads the scan's actual resolution, not a bare "pass".
 // ---------------------------------------------------------------------------
 
 /** The VLM judge's system prompt. */
@@ -332,7 +366,7 @@ export const RESTRICTED_VISUAL_SYSTEM = `You are a visual-content compliance che
 
 Report a violation ONLY when a frame presents a human face or figure AS a revered religious figure — for example a haloed or light-crowned central figure, a figure the composition venerates, an angel with wings, or a figure clearly standing in for a named prophet. Ordinary anonymous people (a merchant, a scribe's hands, a distant crowd with indistinct faces), calligraphy, architecture, artifacts and landscapes are NOT violations.
 
-Respond with STRICT JSON only: {"depicted": true|false, "frames": [<1-based frame numbers showing the violation>], "note": "<one short sentence>"} — "depicted" false with empty frames when every frame complies.`;
+Respond with STRICT JSON only: {"depicted": true|false, "frames": [<the frame numbers as labeled>], "note": "<one short sentence>"} — "depicted" false with empty frames when every frame complies.`;
 
 export interface RestrictedScanOutcome {
   status: "pass" | "fail" | "unmeasured";
@@ -340,82 +374,361 @@ export interface RestrictedScanOutcome {
   detail?: string;
 }
 
-/** How many frames the scan samples from the rendered file. */
-export const RESTRICTED_SCAN_FRAMES = 8;
+// ---- the dense-scan constants (unit-pinned via the pure planners below) ----
+
+/** The local grid rate: one frame per 0.50s of timeline. */
+export const RESTRICTED_DENSE_FPS = 2;
+/** The grid cap — longer videos coarsen the interval (240 frames ≈ 2 min at
+ * 0.50s), and the coverage note discloses the coarsened interval. */
+export const RESTRICTED_DENSE_MAX_FRAMES = 240;
+/** Frames per VLM call — the judge's reliable attention span (the S49 law). */
+export const RESTRICTED_VLM_BATCH = 8;
+/** Total frames the VLM judges (≤ ceil(48/8) = 6 calls per scan — bounded,
+ * spend-honest; the dense grid below it is free). */
+export const RESTRICTED_VLM_MAX_FRAMES = 48;
+/** Face-tripwire anchors forced into the judge set (largest faces first). */
+export const RESTRICTED_FACE_MAX_ANCHORS = 12;
+/** A face at ≥1.5% of frame area is a real on-screen presence (mid-shot or
+ * closer); distant anonymous crowds — allowed content — sit far below. */
+export const RESTRICTED_FACE_MIN_AREA_FRAC = 0.015;
+
+/** The dense-grid plan for a duration: the extraction fps + frame count,
+ * coarsened at the cap. Pure (unit-pinned). */
+export function planDenseGrid(durationSec: number): { fps: number; count: number } {
+  const dur = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 1;
+  const fps = Math.min(RESTRICTED_DENSE_FPS, RESTRICTED_DENSE_MAX_FRAMES / dur);
+  const count = Math.max(1, Math.min(RESTRICTED_DENSE_MAX_FRAMES, Math.floor(dur * fps)));
+  return { fps, count };
+}
+
+/** Which dense-grid frames (0-based indices) the VLM judges: the forced
+ * (tripwire) frames keep their seats, an even grid fills the rest, and a
+ * largest-gap top-up lands EXACTLY the cap (every seat is a chance to catch
+ * a flash) whenever the grid has that many frames. Pure (unit-pinned). */
+export function selectVlmFrames(
+  denseCount: number,
+  forced: readonly number[],
+  max: number = RESTRICTED_VLM_MAX_FRAMES
+): number[] {
+  const n = Math.max(0, Math.floor(denseCount));
+  if (n === 0) return [];
+  if (n <= max) return Array.from({ length: n }, (_, i) => i);
+  const clean = [...new Set(forced)]
+    .filter((i) => Number.isInteger(i) && i >= 0 && i < n)
+    .sort((a, b) => a - b)
+    .slice(0, max);
+  const picks = new Set<number>(clean);
+  const fill = Math.max(0, max - clean.length);
+  if (fill === 1) {
+    picks.add(Math.floor((n - 1) / 2));
+  } else if (fill >= 2) {
+    for (let k = 0; k < fill; k++) {
+      picks.add(Math.round((k * (n - 1)) / (fill - 1)));
+    }
+  }
+  // The top-up: even-grid points that collide with forced seats open gaps —
+  // close them with the frame FARTHEST from everything already picked (ties
+  // → the lower index), until the cap or the grid runs out. Deterministic.
+  while (picks.size < max && picks.size < n) {
+    let bestIdx = -1;
+    let bestDist = -1;
+    for (let i = 0; i < n; i++) {
+      if (picks.has(i)) continue;
+      let dist = Infinity;
+      for (const p of picks) {
+        const d = Math.abs(i - p);
+        if (d < dist) dist = d;
+      }
+      if (dist > bestDist) {
+        bestDist = dist;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx < 0 || bestDist <= 0) break;
+    picks.add(bestIdx);
+  }
+  return [...picks].sort((a, b) => a - b);
+}
+
+/** One batch's judged outcome (global 1-based frame labels). */
+export interface RestrictedBatchOutcome {
+  status: "pass" | "fail" | "unmeasured";
+  frames: number[];
+  note: string;
+}
+
+/** The batch aggregation law (pure, unit-pinned): the first failing batch
+ * wins (the scan short-circuits at the call site), any unreadable batch is
+ * unmeasured — pass ONLY when every batch measured clean. */
+export function restrictedVerdictFromBatches(
+  batches: readonly RestrictedBatchOutcome[]
+): { status: "pass" | "fail" | "unmeasured"; frames: number[]; note: string } {
+  if (batches.length === 0) {
+    return { status: "unmeasured", frames: [], note: "no batches judged" };
+  }
+  const failed = batches.find((b) => b.status === "fail");
+  if (failed) return { status: "fail", frames: failed.frames, note: failed.note };
+  const unmeasured = batches.find((b) => b.status === "unmeasured");
+  if (unmeasured) return { status: "unmeasured", frames: [], note: unmeasured.note };
+  const notes = [...new Set(batches.map((b) => b.note).filter(Boolean))];
+  return { status: "pass", frames: [], note: notes.join(" · ").slice(0, 200) };
+}
+
+// ---- the face tripwire (python3 + OpenCV, probed per scan) ----
+
+/** The tripwire script: prints ONE JSON line — {"available": false, …} when
+ * the host has no cv2/cascades (degradation, not failure), else the frames
+ * (0-based, file order) whose largest detected face covers ≥ minAreaFrac of
+ * the frame. Frontal + profile cascades; the even grid backstops silhouettes
+ * and light-bodies (haar sees faces only — the documented margin). Exported
+ * so the unit suite judges the very bytes the scan writes. */
+export const FACE_TRIPWIRE_PY = `
+import json, os, sys
+try:
+    import cv2
+except Exception as e:
+    print(json.dumps({"available": False, "reason": "no cv2 (%s)" % type(e).__name__}))
+    sys.exit(0)
+d = sys.argv[1]
+min_frac = float(sys.argv[2])
+cascades = []
+for name in ("haarcascade_frontalface_alt2.xml", "haarcascade_profileface.xml"):
+    p = os.path.join(cv2.data.haarcascades, name)
+    if os.path.exists(p):
+        c = cv2.CascadeClassifier(p)
+        if not c.empty():
+            cascades.append(c)
+if not cascades:
+    print(json.dumps({"available": False, "reason": "cascade data missing"}))
+    sys.exit(0)
+files = sorted(f for f in os.listdir(d) if f.endswith(".jpg"))
+hits, scanned = [], 0
+for i, f in enumerate(files):
+    img = cv2.imread(os.path.join(d, f), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        continue
+    h, w = img.shape[:2]
+    if w > 640:
+        s = 640.0 / w
+        img = cv2.resize(img, (640, max(1, int(round(h * s)))), interpolation=cv2.INTER_AREA)
+    h, w = img.shape[:2]
+    scanned += 1
+    best = 0.0
+    min_side = max(1, int(round((min_frac ** 0.5) * min(w, h))))
+    for c in cascades:
+        for (x, y, fw, fh) in c.detectMultiScale(img, scaleFactor=1.1, minNeighbors=5, minSize=(min_side, min_side)):
+            best = max(best, (fw * fh) / float(w * h))
+        if best >= min_frac:
+            break
+    if best >= min_frac:
+        hits.append({"index": i, "areaFrac": round(best, 5)})
+print(json.dumps({"available": True, "cv2": cv2.__version__, "scanned": scanned, "hits": hits}))
+`;
+
+interface FaceTripwireResult {
+  available: boolean;
+  reason?: string;
+  cv2?: string;
+  scanned: number;
+  hits: { index: number; areaFrac: number }[];
+}
+
+/** Run the tripwire over an extracted frame dir. NEVER THROWS — a probe or
+ * detector failure is "unavailable" (the scan degrades to grid-only).
+ * Exported for the unit suite's real-detector controls and the T-55.5
+ * acceptance probe; production callers go through runRestrictedVisualScan. */
+export async function runFaceTripwire(
+  scriptPath: string,
+  framesDir: string,
+  minAreaFrac: number
+): Promise<FaceTripwireResult> {
+  try {
+    const { stdout } = await execFileAsync(
+      "python3",
+      [scriptPath, framesDir, String(minAreaFrac)],
+      { timeout: 180_000, maxBuffer: 16 * 1024 * 1024 }
+    );
+    const parsed = JSON.parse(stdout.toString().trim().split("\n").pop() ?? "") as FaceTripwireResult;
+    if (typeof parsed?.available !== "boolean") throw new Error("bad tripwire JSON");
+    return {
+      available: parsed.available,
+      reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 120) : undefined,
+      cv2: typeof parsed.cv2 === "string" ? parsed.cv2 : undefined,
+      scanned: Number.isFinite(parsed.scanned) ? parsed.scanned : 0,
+      hits: Array.isArray(parsed.hits)
+        ? parsed.hits
+            .filter((h) => Number.isInteger(h?.index) && Number.isFinite(h?.areaFrac))
+            .map((h) => ({ index: h.index, areaFrac: h.areaFrac }))
+        : [],
+    };
+  } catch (err) {
+    return {
+      available: false,
+      reason: errorText(err, "face tripwire error").slice(0, 120),
+      scanned: 0,
+      hits: [],
+    };
+  }
+}
+
+/** Extract the dense grid as JPEGs (f0001.jpg… — file number = index + 1).
+ * Returns the frame count actually written (0 on failure → unmeasured).
+ * Exported for the T-55.4/T-55.5 evidence probes; production callers go
+ * through runRestrictedVisualScan. */
+export async function extractDenseGrid(
+  mp4Path: string,
+  framesDir: string,
+  fps: number,
+  count: number
+): Promise<number> {
+  await execFileAsync("ffmpeg", [
+    "-hide_banner", "-loglevel", "error",
+    "-i", mp4Path,
+    "-vf", `fps=${fps.toFixed(4)}`,
+    "-frames:v", String(count),
+    "-q:v", "3",
+    path.join(framesDir, "f%04d.jpg"),
+  ]);
+  return fs.readdirSync(framesDir).filter((f) => f.endsWith(".jpg")).length;
+}
+
+const gridFile = (framesDir: string, index: number) =>
+  path.join(framesDir, `f${String(index + 1).padStart(4, "0")}.jpg`);
 
 /**
- * L4 — sample frames evenly across the rendered final.mp4 and ask the VLM
- * whether any depicts a restricted figure. NEVER THROWS: a failed scan
- * reports "unmeasured" (which the QC gate treats as blocking — fail-closed,
- * never silently clean). Returns the outcome for the QC battery to emit.
+ * L4 — the dense restricted-visual scan: extract a dense grid, tripwire it
+ * locally for faces, judge the selected frames in batches. NEVER THROWS: a
+ * failed scan reports "unmeasured" (which the QC gate treats as blocking —
+ * fail-closed, never silently clean). Returns the outcome for the QC
+ * battery to emit.
  */
 export async function runRestrictedVisualScan(opts: {
   mp4Path: string;
   durationSec: number;
 }): Promise<RestrictedScanOutcome> {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tf-restricted-"));
+  const framesDir = path.join(tmp, "frames");
+  const scriptPath = path.join(tmp, "tripwire.py");
   try {
+    fs.mkdirSync(framesDir);
+    fs.writeFileSync(scriptPath, FACE_TRIPWIRE_PY);
     const dur = Number.isFinite(opts.durationSec) && opts.durationSec > 0 ? opts.durationSec : 1;
-    // Even sampling: a frame every dur/N seconds, capped at N frames.
-    const fps = Math.min(RESTRICTED_SCAN_FRAMES / dur, 1);
-    await execFileAsync("ffmpeg", [
-      "-hide_banner", "-loglevel", "error",
-      "-i", opts.mp4Path,
-      "-vf", `fps=${fps.toFixed(4)}`,
-      "-frames:v", String(RESTRICTED_SCAN_FRAMES),
-      "-q:v", "3",
-      path.join(tmp, "f%02d.jpg"),
-    ]);
-    const files = fs
-      .readdirSync(tmp)
-      .filter((f) => f.endsWith(".jpg"))
-      .sort();
-    if (files.length === 0) {
+    const { fps, count } = planDenseGrid(dur);
+    const gridCount = await extractDenseGrid(opts.mp4Path, framesDir, fps, count);
+    if (gridCount === 0) {
       return { status: "unmeasured", value: "no frames sampled", detail: "ffmpeg produced no frames — the scan could not run" };
     }
-    const parts: unknown[] = [
-      {
-        type: "text",
-        text: `These are ${files.length} frames sampled evenly across a ${dur.toFixed(1)}s Islamic-history video. Check the content policy.`,
-      },
-    ];
-    for (let i = 0; i < files.length; i++) {
-      parts.push({ type: "text", text: `Frame ${i + 1}:` });
-      parts.push({
-        type: "image_url",
-        image_url: { url: `data:image/jpeg;base64,${fs.readFileSync(path.join(tmp, files[i])).toString("base64")}` },
-      });
+    // The honest grid stats (the coarsened interval at the cap included).
+    const interval = 1 / fps;
+
+    // Stage 2 — the face tripwire (optional machinery, probed per scan).
+    const trip = await runFaceTripwire(scriptPath, framesDir, RESTRICTED_FACE_MIN_AREA_FRAC);
+    let forced: number[] = [];
+    if (trip.available && trip.hits.length > 0) {
+      const anchors = [...trip.hits]
+        .sort((a, b) => b.areaFrac - a.areaFrac || a.index - b.index)
+        .slice(0, RESTRICTED_FACE_MAX_ANCHORS);
+      const seats = new Set<number>();
+      for (const a of anchors) {
+        for (const d of [-1, 0, 1]) {
+          const j = a.index + d;
+          if (j >= 0 && j < gridCount) seats.add(j);
+        }
+      }
+      forced = [...seats].sort((a, b) => a - b);
     }
-    const raw = await aiCall("llm", "restricted-visual VLM scan", () =>
-      llmVision({
-        messages: [
-          { role: "system", content: RESTRICTED_VISUAL_SYSTEM },
-          { role: "user", content: parts },
-        ],
-        temperature: 0,
-      })
-    );
-    const parsed = parseJsonLoose(raw.choices?.[0]?.message?.content ?? "") as {
-      depicted?: unknown;
-      frames?: unknown;
-      note?: unknown;
-    };
-    const depicted = parsed?.depicted === true;
-    const frames = Array.isArray(parsed?.frames)
-      ? (parsed.frames as unknown[]).filter((n) => typeof n === "number").slice(0, 8)
-      : [];
-    const note = typeof parsed?.note === "string" ? parsed.note.slice(0, 200) : "";
-    if (depicted) {
+
+    // Stage 3 — the batched VLM judgment over the selected frames.
+    const selected = selectVlmFrames(gridCount, forced);
+    if (selected.length === 0) {
+      return { status: "unmeasured", value: "no frames selected", detail: "the frame selection came up empty — the scan could not run" };
+    }
+    const totalBatches = Math.ceil(selected.length / RESTRICTED_VLM_BATCH);
+    const coverage =
+      `grid ${gridCount} @${interval.toFixed(2)}s · ` +
+      (trip.available
+        ? `tripwire ${trip.hits.length} hit(s) → ${forced.length} forced${trip.cv2 ? ` (cv2 ${trip.cv2})` : ""}`
+        : `tripwire unavailable${trip.reason ? ` (${trip.reason})` : ""}`) +
+      ` · judged ${selected.length} ≈${(dur / selected.length).toFixed(2)}s apart`;
+    const batches: RestrictedBatchOutcome[] = [];
+    for (let b = 0; b < totalBatches; b++) {
+      const slice = selected.slice(b * RESTRICTED_VLM_BATCH, (b + 1) * RESTRICTED_VLM_BATCH);
+      const parts: unknown[] = [
+        {
+          type: "text",
+          text:
+            `These are ${slice.length} frames from different moments of a ${dur.toFixed(1)}s Islamic-history video ` +
+            `(an even-coverage grid${forced.length > 0 ? " plus detector-flagged frames" : ""}). ` +
+            `Check the content policy.`,
+        },
+      ];
+      for (const idx of slice) {
+        parts.push({ type: "text", text: `Frame ${idx + 1} (t=${(idx / fps).toFixed(2)}s):` });
+        parts.push({
+          type: "image_url",
+          image_url: { url: `data:image/jpeg;base64,${fs.readFileSync(gridFile(framesDir, idx)).toString("base64")}` },
+        });
+      }
+      try {
+        const raw = await aiCall("llm", `restricted-visual VLM scan (batch ${b + 1}/${totalBatches})`, () =>
+          llmVision({
+            messages: [
+              { role: "system", content: RESTRICTED_VISUAL_SYSTEM },
+              { role: "user", content: parts },
+            ],
+            temperature: 0,
+          })
+        );
+        const parsed = parseJsonLoose(raw.choices?.[0]?.message?.content ?? "") as {
+          depicted?: unknown;
+          frames?: unknown;
+          note?: unknown;
+        };
+        if (typeof parsed?.depicted !== "boolean") {
+          batches.push({ status: "unmeasured", frames: [], note: `batch ${b + 1} verdict unreadable` });
+          break;
+        }
+        const frames = Array.isArray(parsed?.frames)
+          ? (parsed.frames as unknown[]).filter((n) => typeof n === "number").slice(0, RESTRICTED_VLM_BATCH)
+          : [];
+        const note = typeof parsed?.note === "string" ? parsed.note.slice(0, 200) : "";
+        batches.push({ status: parsed.depicted ? "fail" : "pass", frames, note });
+        if (parsed.depicted) break; // fail fast — the verdict already blocks export
+      } catch (err) {
+        batches.push({
+          status: "unmeasured",
+          frames: [],
+          note: `batch ${b + 1} error: ${errorText(err, "restricted-visual scan error").slice(0, 120)}`,
+        });
+        break;
+      }
+    }
+    const verdict = restrictedVerdictFromBatches(batches);
+    const batchesRan = batches.length;
+    if (verdict.status === "fail") {
+      const where = verdict.frames
+        .map((label) => {
+          const idx = selected[label - 1]; // the judge echoed a global label
+          return Number.isInteger(idx) ? `${label} (t=${(idx / fps).toFixed(2)}s)` : `${label}`;
+        })
+        .join(", ");
       return {
         status: "fail",
-        value: `restricted figure depicted in ${frames.length || 1} frame(s)`,
-        detail: `${frames.length ? `frames: ${frames.join(", ")}` : "unspecified frames"}${note ? ` — ${note}` : ""}`,
+        value: `restricted figure depicted in ${verdict.frames.length || 1} frame(s)`,
+        detail: `${where ? `frames: ${where}` : "unspecified frames"}${verdict.note ? ` — ${verdict.note}` : ""} · ${coverage} · ${batchesRan}/${totalBatches} batch(es)`,
+      };
+    }
+    if (verdict.status === "unmeasured") {
+      return {
+        status: "unmeasured",
+        value: "scan could not run",
+        detail: `${verdict.note || "the VLM response did not parse into a verdict"} · ${coverage} · ${batchesRan}/${totalBatches} batch(es)`,
       };
     }
     return {
       status: "pass",
-      value: `${files.length} frame(s) compliant`,
-      detail: note || undefined,
+      value: `${selected.length} frame(s) compliant across ${batchesRan} batch(es)`,
+      detail: [coverage, verdict.note].filter(Boolean).join(" · ").slice(0, 300) || undefined,
     };
   } catch (err) {
     return {

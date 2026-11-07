@@ -5953,6 +5953,113 @@ await test("S55 ambient-drift static: freezedetect-clean on a real render, the T
   }
 });
 
+suiteStart("S55 — Islamic dense-frame QC (T-55.4)");
+await test("S55 planDenseGrid: 0.50s grid, honest coarsening at the 240 cap, degenerate durations snap safe", async () => {
+  const { planDenseGrid, RESTRICTED_DENSE_FPS, RESTRICTED_DENSE_MAX_FRAMES } = await import("../src/lib/tubeforge/restricted-subjects.ts");
+  // The S49 gap this task closes: a 60s render now yields a 120-frame local
+  // grid (0.50s) instead of 8 evenly-sampled VLM frames (7.5s mean gap).
+  eq(planDenseGrid(20), { fps: RESTRICTED_DENSE_FPS, count: 40 }, "20s → 40 frames @0.50s");
+  eq(planDenseGrid(60), { fps: RESTRICTED_DENSE_FPS, count: 120 }, "60s → 120 frames @0.50s");
+  const long = planDenseGrid(300);
+  eq(long.count, RESTRICTED_DENSE_MAX_FRAMES, "300s hits the 240-frame cap");
+  approx(long.fps, RESTRICTED_DENSE_MAX_FRAMES / 300, 1e-9, "300s interval coarsens honestly");
+  approx(1 / long.fps, 1.25, 1e-6, "300s → 1.25s interval");
+  for (const bad of [0, -3, NaN, Infinity]) {
+    const g = planDenseGrid(bad);
+    ok(g.count >= 1 && g.fps > 0, `degenerate ${bad} still plans a sane grid`);
+  }
+});
+
+await test("S55 selectVlmFrames: forced seats kept, even grid fills the cap, deterministic + chronological", async () => {
+  const { selectVlmFrames, RESTRICTED_VLM_MAX_FRAMES } = await import("../src/lib/tubeforge/restricted-subjects.ts");
+  // Small grid → every frame judged (no selection needed).
+  eq(selectVlmFrames(10, []), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], "denseCount ≤ cap → all frames");
+  eq(selectVlmFrames(10, [3, 7]), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], "forced is a subset of an all-frames selection");
+  // No forced → an even grid of exactly the cap, both timeline ends included.
+  const even = selectVlmFrames(200, []);
+  eq(even.length, RESTRICTED_VLM_MAX_FRAMES, "cap honored");
+  eq(even[0], 0, "starts at frame 0");
+  eq(even[even.length - 1], 199, "ends at the last frame");
+  eq([...new Set(even)].length, even.length, "no duplicates");
+  eq([...even].sort((a, b) => a - b), even, "chronological");
+  // Forced seats survive; the grid fills the remainder.
+  const mixed = selectVlmFrames(200, [50, 51, 52]);
+  ok(mixed.includes(50) && mixed.includes(51) && mixed.includes(52), "forced frames keep their seats");
+  eq(mixed.length, RESTRICTED_VLM_MAX_FRAMES, "still exactly the cap");
+  eq([...new Set(mixed)].length, mixed.length, "deduped union");
+  eq([...mixed].sort((a, b) => a - b), mixed, "chronological union");
+  // Pathological forced set beyond the cap → deterministic truncation.
+  const flood = selectVlmFrames(200, Array.from({ length: 80 }, (_, i) => i));
+  eq(flood.length, RESTRICTED_VLM_MAX_FRAMES, "flood capped");
+  eq(flood, Array.from({ length: RESTRICTED_VLM_MAX_FRAMES }, (_, i) => i), "first-cap indices kept");
+  // Garbage indices never crash or leak in.
+  eq(selectVlmFrames(30, [-5, 999, 4.5, 4]), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29], "invalid forced filtered (denseCount ≤ cap anyway)");
+  const weird = selectVlmFrames(200, [-1, 200, 2.5, 100]);
+  ok(weird.every((i) => Number.isInteger(i) && i >= 0 && i < 200), "out-of-range/non-integer forced dropped");
+  ok(weird.includes(100), "the valid forced index kept its seat");
+});
+
+await test("S55 restrictedVerdictFromBatches: first fail wins, unmeasured beats pass, all-clean is the only pass", async () => {
+  const { restrictedVerdictFromBatches } = await import("../src/lib/tubeforge/restricted-subjects.ts");
+  eq(restrictedVerdictFromBatches([]).status, "unmeasured", "no batches → unmeasured (fail-closed)");
+  const fail = restrictedVerdictFromBatches([
+    { status: "pass", frames: [], note: "clean" },
+    { status: "fail", frames: [12], note: "haloed central figure" },
+    { status: "unmeasured", frames: [], note: "never reached" },
+  ]);
+  eq(fail.status, "fail", "the first failing batch wins");
+  eq(fail.frames, [12], "the failing batch's frames carry");
+  eq(fail.note, "haloed central figure", "the failing batch's note carries");
+  const unreadable = restrictedVerdictFromBatches([
+    { status: "pass", frames: [], note: "clean" },
+    { status: "unmeasured", frames: [], note: "batch 2 verdict unreadable" },
+    { status: "pass", frames: [], note: "clean" },
+  ]);
+  eq(unreadable.status, "unmeasured", "one unreadable batch → unmeasured (never silently clean)");
+  eq(unreadable.note, "batch 2 verdict unreadable", "the unreadable note surfaces");
+  const clean = restrictedVerdictFromBatches([
+    { status: "pass", frames: [], note: "all architecture" },
+    { status: "pass", frames: [], note: "all architecture" },
+    { status: "pass", frames: [], note: "" },
+  ]);
+  eq(clean.status, "pass", "all measured clean → pass");
+  eq(clean.note, "all architecture", "distinct notes joined, duplicates dropped");
+});
+
+await test("S55 face tripwire (real detector when present): solid frames are a false-positive control; absence degrades gracefully", async () => {
+  const { runFaceTripwire, RESTRICTED_FACE_MIN_AREA_FRAC, FACE_TRIPWIRE_PY } = await import("../src/lib/tubeforge/restricted-subjects.ts");
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "tf-s55-tripwire-"));
+  try {
+    // The probe script the scan itself writes (same bytes, same contract).
+    const scriptPath = path.join(tmp, "tripwire.py");
+    const framesDir = path.join(tmp, "frames");
+    await fsp.mkdir(framesDir);
+    await fsp.writeFile(scriptPath, FACE_TRIPWIRE_PY);
+    // Six solid-color frames — no faces anywhere near haar's vocabulary.
+    for (let i = 0; i < 6; i++) {
+      await genFixture(path.join(framesDir, `f${String(i + 1).padStart(4, "0")}.jpg`), [
+        "-f", "lavfi", "-i", `color=c=0x3a5a40:size=1280x720`, "-frames:v", "1",
+      ]);
+    }
+    const res = await runFaceTripwire(scriptPath, framesDir, RESTRICTED_FACE_MIN_AREA_FRAC);
+    if (res.available) {
+      eq(res.hits.length, 0, `cv2 ${res.cv2 ?? "?"}: solid frames carry no face hits (false-positive control)`);
+      eq(res.scanned, 6, "every frame was scanned");
+    } else {
+      // The CI/lean-host path: python3 or cv2 absent → graceful degradation,
+      // never a crash, never a silent verdict change.
+      ok(typeof res.reason === "string" && res.reason.length > 0, "unavailable carries a reason");
+      eq(res.hits.length, 0, "no hits without a detector");
+    }
+    // A garbage script path degrades the same way (never throws).
+    const broken = await runFaceTripwire(path.join(tmp, "nope.py"), framesDir, RESTRICTED_FACE_MIN_AREA_FRAC);
+    eq(broken.available, false, "a missing script is 'unavailable', not an error");
+    eq(broken.hits.length, 0, "no hits on a broken probe");
+  } finally {
+    await fsp.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 console.log(`\n${"─".repeat(56)}`);
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
