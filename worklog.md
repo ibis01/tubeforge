@@ -2511,3 +2511,31 @@ Gate: tsc 0 · eslint 0 errors / 669 warnings · 235/235 unit · queue
 restart-recovery PASS. Full per-alert record in
 docs/audits/s47-dependency-triage.md (2026-11-07 section). Dependabot
 closes all ten on its next main scan.
+
+## S54 follow-up session (2026-11-07 UTC) — the quota forensics, and the gate that waited
+
+The continuation session's first act was reconciling the stale handoff: the
+local tree was already at 4708be7 (S47 close → S48 → S49 → S50 → S51 → S52 →
+S53 → S54 → S54 follow-up → the 10-alert burn-down), origin/main identical,
+CI #87–#89 green, Dependabot **0 open alerts**. The entire approved sequence
+had landed; the only open item on the books was T-54.3 — the owed §A legs
+(podcast, islamic-history) and §B, blocked on gateway quota.
+
+That block is now understood from the wire, not guessed at
+(docs/audits/s54-gateway-quota-forensics.md): the binding constraint is the
+POOL-WIDE 300/day rolling budget shared across sandboxes — raw headers showed
+`remaining-daily: 0` while THIS user still had 133 left, in saturated steady
+state (the reset marker always ≈ now+1 s; a 20/20-lost race at the published
+epochs proved it is not a schedule). Every request costs 1 user-daily even
+when rejected — the diagnosis itself spent ~46 (133 → 107) and is recorded as
+such. This retroactively explains the first S54 session's "~35 min of
+cool-downs did not clear it": cool-downs address the per-user layers, which
+were never the constraint.
+
+The local verification gate was re-run on the unchanged tree: tsc 0 · eslint
+0 errors / 671 warnings (0 errors is the CI gate; the ±2 vs the recorded 669
+is a fresh-sandbox dependency resolution artifact on a byte-identical tree —
+no source changed) · 235/235 unit · queue restart-recovery PASS · billing
+40/40. TASKS.md T-54.3 now carries the forensics reference and the
+probe-hygiene law (≤1 probe/~45 min, watch the POOL counter, launch the owed
+chunks at remaining-daily ≥ 20). The legs remain owed, never claimed.
