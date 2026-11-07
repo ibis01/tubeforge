@@ -6,6 +6,7 @@
 
 import { db } from "./tenant-db";
 import { TRANSITIONS } from "./transitions";
+import { parseReferenceKeys } from "./references";
 
 // ---------------------------------------------------------------------------
 // Vocabularies — the LLM picks from these; the normalizer snaps to them.
@@ -620,6 +621,45 @@ export async function getApprovedWorldClause(
     .slice(0, 4)
     .map((h) => (h.description ? `${h.name}: ${h.description}` : h.name))
     .join("; ");
+}
+
+/**
+ * Render-side accessor (S51) — the scene's APPROVED location that carries
+ * reference images, newest reference key, or null. The storyboard's edit
+ * path seeds non-host scene paints with it so recurring PLACES keep their
+ * look the same way the cast's portrait keeps the host's face. Plan order
+ * decides (the first named location with refs wins — deterministic); props
+ * are deliberately excluded: they are held/worn set dressing, not the set,
+ * and keep riding the text clause above.
+ */
+export async function getApprovedLocationRefKey(
+  videoId: string,
+  sceneIndex: number
+): Promise<string | null> {
+  const video = await db.video.findUnique({
+    where: { id: videoId },
+    select: { shotList: true, directorState: true, organizationId: true },
+  });
+  if (!video || video.directorState !== "approved") return null;
+  const scene = parsePlan(video.shotList)?.scenes.find(
+    (s) => s.sceneIndex === sceneIndex
+  );
+  if (!scene) return null;
+  const names = scene.locations ?? [];
+  if (names.length === 0) return null;
+  const rows = await db.location.findMany({
+    where: { organizationId: video.organizationId, isActive: true, name: { in: names } },
+    select: { name: true, referenceImages: true },
+  });
+  for (const name of names) {
+    // Plan order wins over row order — the director's listed location is
+    // the scene's primary set.
+    const row = rows.find((r) => r.name === name);
+    if (!row) continue;
+    const keys = parseReferenceKeys(row.referenceImages);
+    if (keys.length > 0) return keys[keys.length - 1]; // newest = array tail
+  }
+  return null;
 }
 
 /**

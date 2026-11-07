@@ -2244,3 +2244,73 @@ again (this sprint adds zero; one prefer-const dissolved) · 221/221 unit
 (5 new S50, two real ffmpeg) · queue restart-recovery PASS. Next: S51
 (the visual continuity engine — the reference-images seam the audit
 flagged as dead schema, and the S47 benchmark's portrait-age finding).
+
+## S51 (2026-11-07 UTC) — the photos you bring, and the age the lens forgot
+
+S51 — the Visual Continuity Engine. The audit's dead schema finally pays rent:
+`Character.referenceImages` had a reader since Stage 5 (runContinuityCheck)
+and no writer; `Location.referenceImages` / `Prop.referenceImages` had
+neither. All three columns now have writers, consumers, and a UI — and the
+S47 benchmark's portrait-age finding is answered on the record.
+
+The seam is ONE module (references.ts) with the law pinned by tests: JSON
+arrays, oldest first; the array is the truth, keys are addresses; lowest-free
+slot allocation (pigeonhole keeps indices inside the cap forever — proven by
+a 50-round churn loop); upload validation reuses the S43 byte sniffer
+(PNG/JPEG/WebP/HEIC incl. iPhone collections), decodes HEIC through the WASM
+pass, and normalizes to ≤1024px PNG on real ffmpeg — small originals pass
+through at their own size, never upscaled. One HTTP factory (reference-
+routes.ts) serves all three libraries so the families can never drift: same
+caps (6 cast / 4 world), same traversal guard, same activity rows, same
+error shapes. The sniffer itself moved DOWN into image-upload.ts — the old
+home (story.ts) sits above characters.ts in the import graph, and the seam
+importing story would have closed a cycle the house explicitly forbids.
+
+Two consumers, both mirroring the cast pattern 1:1. The portrait DERIVES
+from the newest user reference via an imageEdit seed — the user's ground
+truth over the model's freehand, with the text-to-image fallback untouched
+for ref-less characters. And a NON-host scene whose approved plan names a
+location carrying refs seeds its edit with that location's newest reference:
+recurring places keep their look exactly the way the portrait keeps the
+host's face. Priority is explicit — cast likeness beats set-piece likeness,
+a host scene never spends its single edit seed on the backdrop. Props stay
+on the text clause by design: they're held/worn set dressing, not the set.
+
+The portrait-age fix is prompt mechanics, measured. The S47 baseline led
+the portrait prompt with the character's NAME — the age rode mid-prompt and
+CogView freehanded a 50-something, which the portrait-seeded edit then
+stamped onto every scene ("consistent with the reference" was the checker's
+exact diagnosis). The restructured prompt leads with the ANCHOR (primacy),
+carries an explicit apparent-age fidelity clause, and echoes the anchor
+verbatim before the close (recency) — the two positions image models weigh
+most. The live re-run (same fixed Nova anchor, byte-identical, glm-4.6
+pinned): **the age finding dissolved — zero age issues across all three
+scenes** (S47: 3/3 flagged "appears 50s-60s"). Overall 85/100 vs S47's 88;
+the residual is a new, different observation now on record: hair hue drifts
+warm/golden under warm scene lighting against the anchor's silver — a
+color-under-lighting drift, not identity drift, and S54's threshold work
+inherits it. Legs B and C proved the seam live end-to-end: a reference-
+seeded portrait the VLM scores same_person=true at apparent age "late-20s"
+(the stated window, confidence 82), and a location-seeded scene the VLM
+scores same_place=true (confidence 88 — "matching red lantern canopy, stall
+layout, signage, wet reflective pavement"). The benchmark's one "failed"
+check was my own unanchored regex reading g(old)en-blonde as an age flag —
+a false positive in the probe, not the pipeline; the word-bounded fix is in
+the script and the recorded issues prove the finding gone.
+
+Two defects found on the way, both fixed. The S50 palindrome test's
+`gradients` fixture is seed-random — on this sprint's second full-suite run
+it rendered near-static content and the last→first boundary jump had
+nothing to detect (MAD 0.5). The fixture is now a deterministic testsrc2
+linear pan (comma-free crop expression — ffmpeg's filter parser choked on
+min()'s comma), stable across three consecutive runs. And the world [id]
+DELETE routes never removed files: with references now landing under
+locations/<id>/ and props/<id>/, both deletes removePrefix like the cast's
+deleteCharacterFiles always did.
+
+Gate: tsc 0 · eslint 0 errors / 669 warnings — the S50 level, zero net ·
+227/227 unit (6 new S51, one real ffmpeg) · queue restart-recovery PASS ·
+live benchmark legs A/B/C recorded in
+docs/baselines/s51-continuity-benchmark-2026-11-07.txt. Next: S52 (the
+themed production profiles surface — the profile picker UI the islamic-
+history profile has been waiting for).

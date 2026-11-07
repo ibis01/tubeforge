@@ -1803,3 +1803,22 @@ this sprint adds zero)** · **221/221 unit** (216 + 5 S50, two of them real
 ffmpeg) · queue restart-recovery PASS. The live i2v path (generation cost)
 belongs to the S54 seven-genre benchmark; S50's deliverables are the graph/prompt
 contracts, pinned above.
+
+## S51 — the Visual Continuity Engine (opened 2026-11-07 UTC)
+
+Sprint goal: land the reference-images seam the audit flagged as dead schema —
+`Character.referenceImages` had a reader (runContinuityCheck) but NO writer;
+`Location.referenceImages` / `Prop.referenceImages` had neither — and answer
+the S47 continuity benchmark's portrait-age finding (anchor says late-20s,
+CogView freehand paints 50s-60s, and the portrait-seeded edit propagates the
+drift to every scene). No schema change: the columns shipped in
+`20261101110000_stage5_director` and have been waiting since.
+
+| Task | Status | Notes |
+|---|---|---|
+| T-51.1 cast reference writers | ✅ Done | `src/lib/tubeforge/references.ts` (shared seam) + `image-upload.ts` (the S43 sniff/HEIC decode moved DOWN out of story.ts so the seam can't cycle) + `reference-routes.ts` (ONE handler factory — cap, key validation, activity rows — so the three families can't drift) + 6 thin route files. Keys `characters|locations|props/<id>/ref-<n>.png`, oldest-first JSON arrays, caps 6/4/4; world `[id]` DELETEs now `removePrefix` (the orphan-file gap). `serializeCharacter` + the world list routes surface `referenceCount`/`referenceUrls`. |
+| T-51.2 references ride identity + the portrait-age fix | ✅ Done | `buildPortraitPrompt` (pure, unit-pinned): anchor LEADS (primacy — the S47 prompt led with the NAME), apparent-age fidelity clause mid-prompt, anchor ECHO before the close (recency). `generateCharacterPortrait` derives from the NEWEST user reference via imageEdit when refs exist (T2I fallback byte-identical when absent). `runPortraitJob` passes the column through. |
+| T-51.3 world reference writers + the set-piece seed | ✅ Done | Same seam for Location/Prop + `getApprovedLocationRefKey` (director-plan, plan-order wins, newest = array tail, props deliberately excluded) + `generateSceneImage` seeds NON-host scene edits with the location's newest ref under an approved plan (cast likeness > set-piece likeness; single fail-through law). No plan / no refs / edit-capable provider absent → byte-identical pre-S51 behavior. |
+| T-51.4 the live re-measurement | ✅ Done | `scripts/s51-continuity-benchmark.mts`, live on the Z.ai metered path. **Leg A (the S47 audition re-run, byte-identical anchor): the portrait-age finding DISSOLVED — zero age issues** (S47: 3/3 scenes flagged "appears 50s-60s"); overall 85/100 (78/85/93) vs S47's 88; the residual is a NEW recorded observation: hair hue drifts warm/golden under warm scene lighting vs the anchor's silver. **Leg B: reference-seeded portrait — VLM same_person=true, apparent_age="late-20s" (stated window), confidence 82.** **Leg C: location-seeded scene — VLM same_place=true, confidence 88** ("matching red lantern canopy, stall layout, signage, wet reflective pavement"). The run's 1 "failed" check was the script's own unanchored regex matching g(old)en-blonde — a false positive, fixed (word-bounded) post-run; the recorded issues prove no age flag. Baseline: `docs/baselines/s51-continuity-benchmark-2026-11-07.txt`. |
+| T-51.5 UI | ✅ Done | Cast Studio: Reference-photos panel (upload + thumbnails + hover-remove, cap-aware). World view: per-card thumbnail strip + Add-photo label (lazy lists only for carriers). |
+| T-51.6 tests + compatibility | ✅ Done | 6 new tests (227/227): parse fail-open, lowest-free pigeonhole cap (50-churn loop), traversal guard, REAL-ffmpeg normalization (2000→1024x512 downscale, 400x300 no-upscale, garbage/oversize throws, storage round-trip + cleanup), portrait prompt contract, the plan-order selection law. **Bonus fix: the S50 palindrome test's `gradients` fixture is seed-random and flaked on this sprint's 2nd run — replaced with a deterministic testsrc2 linear pan (3/3 stable runs).** |

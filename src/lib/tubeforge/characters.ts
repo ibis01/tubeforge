@@ -13,6 +13,7 @@ import { chatComplete } from "./providers/chat";
 import { imageEdit, imageGenerate, imageEditSupported } from "./providers/image";
 import { getCapability } from "./providers/settings";
 import { voiceCatalog } from "./providers/tts";
+import { parseReferenceKeys, CHARACTER_REFERENCE_CAP } from "./references";
 import * as storage from "./storage";
 
 // Character assets live under the characters/<id>/ prefix in object storage
@@ -71,6 +72,12 @@ export async function serializeCharacter(
       label: p.label,
       url: `/api/characters/${c.id}/poses/${p.id}`,
     })),
+    // S51 — the reference-photo library (user uploads; the portrait derives
+    // from the newest when present, the continuity check reads up to three).
+    referenceCount: parseReferenceKeys(c.referenceImages).length,
+    referenceUrls: parseReferenceKeys(c.referenceImages).map(
+      (k) => `/api/characters/${c.id}/references/${k.split("/").pop()}`
+    ),
     generating: characterJobSnapshot(c.id),
     error: lastJobError(c.id, "portrait") ?? lastJobError(c.id, "poses"),
     recentVideos,
@@ -176,28 +183,83 @@ Return JSON with exactly these keys:
   return bible;
 }
 
-/** Reference portrait via CogView (1024x1024) — the canonical look of the character. */
+/** The portrait prompt, extracted pure so the unit suite can pin the S51
+ *  contract: anchor LEADS (primacy), the apparent-age fidelity clause rides
+ *  the middle, the anchor ECHOES right before the close (recency) — the two
+ *  positions image models weigh most, answering the S47 benchmark's
+ *  portrait-age finding (anchor said late-20s, freehand painted 50s-60s). */
+export function buildPortraitPrompt(opts: {
+  name: string;
+  anchor: string;
+  style: string;
+}): string {
+  return `${opts.anchor}. ${opts.style}. Official character reference portrait of "${opts.name}" — head-and-shoulders framing, facing camera, neutral studio backdrop, crisp detail, personality visible in the expression. The subject's apparent age MUST match the age stated in the description above exactly — paint them that age, not older, not younger. Identity lock, verbatim: ${opts.anchor}. Absolutely no text, no letters, no watermarks.`;
+}
+
+/** Reference portrait (1024x1024) — the canonical look of the character.
+ *
+ *  S51 — two changes, both answering the S47 continuity benchmark:
+ *
+ *  1. THE PORTRAIT-AGE FIX. The benchmark's VLM flagged every scene as
+ *     "appears 50s-60s, not late-20s as stated" — CogView freehand drifted
+ *     the anchor's age, and the portrait-seeded edit propagated the drift to
+ *     every paint ("consistent with the reference" was the checker's exact
+ *     diagnosis). The prompt now leads with the anchor (primacy), carries an
+ *     explicit apparent-age fidelity clause, and echoes the anchor right
+ *     before the close (recency) — see buildPortraitPrompt.
+ *
+ *  2. REFERENCES RIDE IDENTITY. When the character carries user-uploaded
+ *     reference photos, the portrait is DERIVED from the newest one via an
+ *     imageEdit seed (the user's ground truth over the model's freehand) —
+ *     the same likeness lock scene paints get. Fails back to text-to-image
+ *     when there are no refs, edits are unsupported, or the edit errors. */
 export async function generateCharacterPortrait(opts: {
   characterId: string;
   name: string;
   appearance: string | null;
   identityAnchor: string | null;
   artStyle: string;
+  /** The character row's referenceImages JSON (user uploads), oldest first. */
+  referenceImages?: string | null;
 }): Promise<{ fileBytes: number }> {
   const anchor = opts.identityAnchor?.trim() || buildAnchorFallback(opts.appearance, opts.artStyle);
   const style =
     ART_STYLES.find((s) => s.id === opts.artStyle)?.prompt ?? ART_STYLES[0].prompt;
 
-  const buffer = await aiCall(
-    "image",
-    "character portrait",
-    () =>
-      imageGenerate({
-        prompt: `Official character reference portrait of "${opts.name}". ${anchor}. ${style}. Head-and-shoulders framing, facing camera, neutral studio backdrop, crisp detail, personality visible in the expression. Absolutely no text, no letters, no watermarks.`,
-        size: "1024x1024",
-      }),
-    { attempts: 4, baseDelayMs: 5000 }
-  );
+  const prompt = buildPortraitPrompt({ name: opts.name, anchor, style });
+
+  const refKeys = parseReferenceKeys(opts.referenceImages).slice(0, CHARACTER_REFERENCE_CAP);
+  const newestRef =
+    refKeys.length > 0
+      ? await storage.get(refKeys[refKeys.length - 1]).catch(() => null)
+      : null;
+
+  let buffer: Buffer | null = null;
+  if (newestRef && (await imageEditSupported())) {
+    buffer = await aiCall(
+      "image",
+      "character portrait (reference-seeded)",
+      () =>
+        imageEdit({
+          prompt: `Portrait of this exact person — keep their face, hairstyle, skin tone and physical build perfectly recognizable. ${prompt}`,
+          imagePngBase64: newestRef.toString("base64"),
+          size: "1024x1024",
+        }).then((b) => {
+          if (!b) throw new Error("Reference-seeded portrait edit returned no data");
+          return b;
+        }),
+      { attempts: 4, baseDelayMs: 5000 }
+    ).catch(() => null);
+  }
+
+  if (!buffer) {
+    buffer = await aiCall(
+      "image",
+      "character portrait",
+      () => imageGenerate({ prompt, size: "1024x1024" }),
+      { attempts: 4, baseDelayMs: 5000 }
+    );
+  }
 
   if (buffer.length < 1000) throw new Error("Generated portrait is empty");
 

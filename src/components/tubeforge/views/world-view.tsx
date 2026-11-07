@@ -32,6 +32,7 @@ import {
   Trash2,
   CheckCircle2,
   Plus,
+  ImagePlus,
 } from "lucide-react";
 
 interface WorldItem {
@@ -39,7 +40,16 @@ interface WorldItem {
   name: string;
   description: string | null;
   isActive: boolean;
+  /** S51 — count from the list route; drives the thumbnail strip. */
+  referenceCount: number;
   createdAt: string;
+}
+
+/** One reference photo as the routes return it (key, url, bytes). */
+interface RefInfo {
+  key: string;
+  url: string;
+  bytes: number;
 }
 
 type WorldKind = "location" | "prop";
@@ -70,16 +80,24 @@ function WorldSection({
   kind,
   items,
   busyId,
+  refMap,
+  refBusyId,
   onCreate,
   onToggle,
   onDelete,
+  onAddReference,
+  onRemoveReference,
 }: {
   kind: WorldKind;
   items: WorldItem[];
   busyId: string | null;
+  refMap: Record<string, RefInfo[]>;
+  refBusyId: string | null;
   onCreate: (kind: WorldKind) => void;
   onToggle: (kind: WorldKind, item: WorldItem) => void;
   onDelete: (kind: WorldKind, item: WorldItem) => void;
+  onAddReference: (kind: WorldKind, item: WorldItem, file: File) => void;
+  onRemoveReference: (kind: WorldKind, item: WorldItem, ref: RefInfo) => void;
 }) {
   const meta = KIND_META[kind];
   return (
@@ -126,6 +144,61 @@ function WorldSection({
                   {it.description}
                 </p>
               )}
+
+              {/* S51 — reference photos: recurring places/objects keep their
+                  look (locations even seed the storyboard edit). */}
+              <div className="mt-3 space-y-2">
+                {(refMap[it.id]?.length ?? 0) > 0 && (
+                  <div className="flex gap-1.5 flex-wrap">
+                    {refMap[it.id].map((ref) => (
+                      <div
+                        key={ref.key}
+                        className="relative h-12 w-12 rounded-lg overflow-hidden bg-white/5 border border-white/10 group"
+                        title={`Reference photo (${Math.round(ref.bytes / 1024)} KB)`}
+                      >
+                        <img src={ref.url} alt={`${it.name} reference`} className="h-full w-full object-cover" />
+                        <button
+                          type="button"
+                          disabled={refBusyId === it.id}
+                          onClick={() => onRemoveReference(kind, it, ref)}
+                          className="absolute inset-0 bg-background/70 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+                          title="Remove this reference"
+                        >
+                          <Trash2 className="h-3.5 w-3.5 text-red-300" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <label
+                  className={`inline-flex items-center gap-1.5 text-[11px] rounded-md border border-white/10 bg-white/4 px-2 py-1 cursor-pointer hover:bg-white/8 transition-colors ${
+                    it.referenceCount >= 4 ? "opacity-50 pointer-events-none" : ""
+                  }`}
+                  title={
+                    kind === "location"
+                      ? "The newest reference seeds scene edits set here (under an approved plan)"
+                      : "Reference photos document the prop for review"
+                  }
+                >
+                  {refBusyId === it.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <ImagePlus className="h-3 w-3" />
+                  )}
+                  {it.referenceCount >= 4 ? "4/4 refs" : `Add photo (${it.referenceCount}/4)`}
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/heic,.heic"
+                    className="hidden"
+                    disabled={refBusyId === it.id || it.referenceCount >= 4}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) onAddReference(kind, it, file);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
               <div className="mt-auto pt-3.5 border-t border-white/6 flex items-center justify-between">
                 <span
                   className={`text-[11px] inline-flex items-center gap-1 ${
@@ -166,6 +239,10 @@ export function WorldView() {
   const [props, setProps] = useState<WorldItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // S51 — per-item reference lists (key, url, bytes), loaded only for items
+  // the list route reports as carrying refs.
+  const [refMap, setRefMap] = useState<Record<string, RefInfo[]>>({});
+  const [refBusyId, setRefBusyId] = useState<string | null>(null);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogKind, setDialogKind] = useState<WorldKind>("location");
@@ -177,9 +254,24 @@ export function WorldView() {
       fetch("/api/locations").then((r) => r.json()),
       fetch("/api/props").then((r) => r.json()),
     ])
-      .then(([l, p]) => {
-        setLocations(l.locations ?? []);
-        setProps(p.props ?? []);
+      .then(async ([l, p]) => {
+        const locs: WorldItem[] = l.locations ?? [];
+        const prps: WorldItem[] = p.props ?? [];
+        setLocations(locs);
+        setProps(prps);
+        // Lazy reference lists — only for carriers (zero extra requests for
+        // the common empty case).
+        const carriers = [...locs, ...prps].filter((it) => it.referenceCount > 0);
+        const entries = await Promise.all(
+          carriers.map(async (it) => {
+            const kind = locs.includes(it) ? "locations" : "props";
+            const refs = await fetch(`/api/${kind}/${it.id}/references`)
+              .then((r) => (r.ok ? r.json() : { references: [] }))
+              .catch(() => ({ references: [] }));
+            return [it.id, refs.references ?? []] as const;
+          })
+        );
+        setRefMap(Object.fromEntries(entries));
       })
       .catch(() => {
         setLocations([]);
@@ -263,6 +355,70 @@ export function WorldView() {
     }
   };
 
+  // S51 — reference photos: POST the file, take the response's list as the
+  // new truth (no full reload needed).
+  const addReference = async (kind: WorldKind, item: WorldItem, file: File) => {
+    if (file.size > 10 * 1024 * 1024) {
+      toast({ title: "Photo too large", description: "Reference photos are capped at 10 MB.", variant: "destructive" });
+      return;
+    }
+    setRefBusyId(item.id);
+    try {
+      const body = new FormData();
+      body.set("file", file);
+      const res = await fetch(`/api/${kind}s/${item.id}/references`, { method: "POST", body });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Upload failed");
+      const refs: RefInfo[] = data.references ?? [];
+      setRefMap((m) => ({ ...m, [item.id]: refs }));
+      const bump = (list: WorldItem[]) =>
+        list.map((it) => (it.id === item.id ? { ...it, referenceCount: refs.length } : it));
+      if (kind === "location") setLocations(bump);
+      else setProps(bump);
+      toast({
+        title: "Reference photo added",
+        description:
+          kind === "location"
+            ? "Scene edits set here will keep this place's look."
+            : "The prop's look is on record for review.",
+      });
+    } catch (e) {
+      toast({
+        title: "Could not add reference photo",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setRefBusyId(null);
+    }
+  };
+
+  const removeReference = async (kind: WorldKind, item: WorldItem, ref: RefInfo) => {
+    setRefBusyId(item.id);
+    try {
+      const res = await fetch(
+        `/api/${kind}s/${item.id}/references?key=${encodeURIComponent(ref.key)}`,
+        { method: "DELETE" }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Remove failed");
+      const refs: RefInfo[] = data.references ?? [];
+      setRefMap((m) => ({ ...m, [item.id]: refs }));
+      const bump = (list: WorldItem[]) =>
+        list.map((it) => (it.id === item.id ? { ...it, referenceCount: refs.length } : it));
+      if (kind === "location") setLocations(bump);
+      else setProps(bump);
+    } catch (e) {
+      toast({
+        title: "Could not remove reference photo",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setRefBusyId(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Page header */}
@@ -292,17 +448,25 @@ export function WorldView() {
             kind="location"
             items={locations}
             busyId={busyId}
+            refMap={refMap}
+            refBusyId={refBusyId}
             onCreate={openCreate}
             onToggle={toggleActive}
             onDelete={remove}
+            onAddReference={addReference}
+            onRemoveReference={removeReference}
           />
           <WorldSection
             kind="prop"
             items={props}
             busyId={busyId}
+            refMap={refMap}
+            refBusyId={refBusyId}
             onCreate={openCreate}
             onToggle={toggleActive}
             onDelete={remove}
+            onAddReference={addReference}
+            onRemoveReference={removeReference}
           />
         </div>
       )}

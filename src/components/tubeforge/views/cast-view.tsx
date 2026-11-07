@@ -41,6 +41,7 @@ import {
   Trash2,
   Sparkles,
   ImageIcon,
+  ImagePlus,
   RefreshCw,
   Film,
   Mic,
@@ -661,6 +662,78 @@ function CharacterStudio({
     }
   };
 
+  // S51 — the reference-photo library: user uploads are ground truth. The
+  // portrait derives from the newest; the continuity check reads up to
+  // three alongside the portrait.
+  const [refBusy, setRefBusy] = useState(false);
+  const refInputRef = useRef<HTMLInputElement | null>(null);
+
+  const refreshCharacter = async () => {
+    const res = await fetch(`/api/characters/${c.id}`, { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok || !data.character) throw new Error(data.error ?? "Refresh failed");
+    applyUpdate(data.character);
+  };
+
+  const uploadReference = async (file: File) => {
+    if (refBusy) return;
+    if (file.size > 10 * 1024 * 1024) {
+      toast({
+        title: "Photo too large",
+        description: "Reference photos are capped at 10 MB.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setRefBusy(true);
+    try {
+      const form = new FormData();
+      form.set("file", file);
+      const res = await fetch(`/api/characters/${c.id}/references`, {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Upload failed");
+      await refreshCharacter();
+      toast({
+        title: "Reference photo added",
+        description: `The next portrait derives from it (${data.references?.length ?? 0}/6).`,
+      });
+    } catch (e) {
+      toast({
+        title: "Could not add reference photo",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setRefBusy(false);
+      if (refInputRef.current) refInputRef.current.value = "";
+    }
+  };
+
+  const removeReference = async (file: string) => {
+    if (refBusy) return;
+    setRefBusy(true);
+    try {
+      const res = await fetch(
+        `/api/characters/${c.id}/references?key=${encodeURIComponent(`characters/${c.id}/${file}`)}`,
+        { method: "DELETE" }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Remove failed");
+      await refreshCharacter();
+    } catch (e) {
+      toast({
+        title: "Could not remove reference photo",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setRefBusy(false);
+    }
+  };
+
   const dirty =
     form.name !== c.name ||
     form.role !== (c.role ?? "") ||
@@ -792,6 +865,74 @@ function CharacterStudio({
               <p className="text-[10px] text-muted-foreground leading-relaxed">
                 Image-editing re-renders the exact same face in 3 canonical poses —
                 the storyboard bricks for scene generation.
+              </p>
+            </div>
+
+            {/* S51 — the reference-photo library (user ground truth) */}
+            <div className="rounded-xl border border-white/10 p-3 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium flex items-center gap-1.5">
+                  <ImagePlus className="h-3.5 w-3.5 text-sky-300" />
+                  Reference photos
+                </p>
+                {c.referenceCount > 0 && (
+                  <span className="text-[10px] text-sky-300">{c.referenceCount}/6</span>
+                )}
+              </div>
+
+              {c.referenceCount > 0 && (
+                <div className="grid grid-cols-3 gap-1.5">
+                  {c.referenceUrls.map((url) => {
+                    const file = url.split("/").pop() ?? "";
+                    return (
+                      <div
+                        key={url}
+                        className="relative aspect-square rounded-lg overflow-hidden bg-white/5 border border-white/10 group"
+                        title="Reference photo (the newest seeds the portrait)"
+                      >
+                        <img
+                          src={mediaUrl(c, url)}
+                          alt={`${c.name} reference photo`}
+                          className="h-full w-full object-cover"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeReference(file)}
+                          disabled={refBusy}
+                          className="absolute top-1 right-1 rounded-md bg-background/80 p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                          title="Remove this reference photo"
+                        >
+                          <Trash2 className="h-3 w-3 text-red-300" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <input
+                ref={refInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/heic,.heic"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) uploadReference(file);
+                }}
+              />
+              <Button
+                onClick={() => refInputRef.current?.click()}
+                disabled={refBusy || c.referenceCount >= 6}
+                variant="outline"
+                size="sm"
+                className="w-full border-white/15 bg-white/4"
+              >
+                {refBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImagePlus className="h-3.5 w-3.5" />}
+                {c.referenceCount >= 6 ? "Limit reached (6)" : "Add a photo"}
+              </Button>
+              <p className="text-[10px] text-muted-foreground leading-relaxed">
+                Your photos are ground truth: the portrait is derived from the
+                newest one, and the continuity checker reads them alongside it.
               </p>
             </div>
           </div>

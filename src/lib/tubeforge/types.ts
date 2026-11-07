@@ -815,6 +815,11 @@ export interface CharacterDTO {
   poseCount: number;
   portraitUrl: string | null;
   poseUrls: { pose: string; label: string; url: string }[];
+  /** S51 — the user-uploaded reference-photo library (oldest first). The
+   *  portrait derives from the newest; the continuity check reads up to
+   *  three alongside the portrait. */
+  referenceCount: number;
+  referenceUrls: string[];
   generating: { portrait: boolean; poses: boolean };
   error: string | null;
   /** T-4.9 — the ≤4 newest videos casting this character ("Cast in" section

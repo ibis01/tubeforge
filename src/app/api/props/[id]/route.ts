@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
+import * as storage from "@/lib/tubeforge/storage";
 
 /**
  * Stage 5 (module C) — the World library, PROPS half, the [id] half.
@@ -70,5 +71,8 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "Prop not found" }, { status: 404 });
 
   await db.prop.delete({ where: { id } });
+  // S51 — reference photos live under props/<id>/ in storage; the row's
+  // cascade can't reach them, so the delete does (mirrors deleteCharacterFiles).
+  await storage.removePrefix(`props/${id}`).catch(() => {});
   return NextResponse.json({ success: true });
 }

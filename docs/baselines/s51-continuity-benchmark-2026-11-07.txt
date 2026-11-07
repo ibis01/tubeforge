@@ -1,0 +1,27 @@
+S51 visual continuity benchmark — recorded 2026-11-07T05:20:25.679Z
+Leg A re-runs the S47 audition under the restructured portrait prompt (same fixed
+Nova anchor, byte-identical). Legs B/C exercise the new reference-photo seam on the
+live Z.ai metered path. BASELINE, not a threshold claim — thresholds are S54.
+
+Leg A — portrait (no refs, anchor-primacy prompt) → approved narrative plan (glm-4.6)
+        → 3 identity-locked paints → production VLM continuity check:
+  scene  bytes    sha256-16          score  verdict      issues
+     1  114803 c85c4645f0258f91     78  drift        Hair appears warm golden-blonde/orange instead of silver (partly sunset lighting, but hue is clearly
+     2   97409 8dbc55b77833dda0     85  consistent   Eyes read blue-grey rather than the stated sharp green | Hair appears more blonde/warm in the scene 
+     3   76793 a539976126b0a42a     93  consistent   Hair tone reads warmer/blonder than the reference's silver-grey, likely due to warm lighting
+  Overall continuity score: 85/100 across 3 scenes.
+  S47 finding (portrait renders 50s-60s vs stated late-20s): not flagged this run
+
+Leg B — synthetic user reference (CogView) → saveReferenceImage → portrait job:
+  reference: characters/cmw5ydr5g002jou9zwyt6rtgh/ref-1.png
+  portrait:  sha256-16 2b9372f765062588
+  VLM verdict: {"same_person":true,"apparent_age":"late-20s","confidence":82,"notes":"Matching freckle pattern, blue eyes, messy auburn bun, sunglasses on head, and dark hooded jacket strongly suggest the same individual, though the generated portrait is slightly smoother-skinned and more idealized."}
+
+Leg C — location reference (CogView) → saveReferenceImage → approved plan names it
+        → non-host scene paint (the set-piece edit seed):
+  reference: locations/cmw5yfas9002zou9z8cnjwxvl/ref-1.png
+  painted:   sha256-16 bea0f5ce3ee6ab0e
+  VLM verdict: {"same_place":true,"confidence":88,"notes":"Both frames depict the same lantern-lined night market with matching red lantern canopy, stall layout, signage, and wet reflective pavement, though the generated frame adds pink/cyan neon reflections and a foreground figure."}
+
+1 check(s) failed. The seam's code-path contracts are pinned by the unit
+suite (227/227); this file records the LIVE behavior on the metered gateway.

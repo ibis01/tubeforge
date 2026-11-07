@@ -2,11 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
+import { parseReferenceKeys } from "@/lib/tubeforge/references";
 
 /**
  * Stage 5 (module C) — the World library, PROPS half.
  *
- * GET  — the org's active props (name + description), oldest first.
+ * GET  — the org's active props (name + description + S51 reference
+ *        count), oldest first.
  * POST — create one. The AI Director sees this list in its pass and may
  *        reference names per scene; under an approved plan the descriptions
  *        weave into scene image prompts (set continuity).
@@ -25,9 +27,14 @@ export async function GET(req: NextRequest) {
   const rows = await db.prop.findMany({
     where: { isActive: true },
     orderBy: { createdAt: "asc" },
-    select: { id: true, name: true, description: true, createdAt: true },
+    select: { id: true, name: true, description: true, referenceImages: true, createdAt: true },
   });
-  return NextResponse.json({ props: rows });
+  return NextResponse.json({
+    props: rows.map(({ referenceImages, ...row }) => ({
+      ...row,
+      referenceCount: parseReferenceKeys(referenceImages).length,
+    })),
+  });
 }
 
 export async function POST(req: NextRequest) {

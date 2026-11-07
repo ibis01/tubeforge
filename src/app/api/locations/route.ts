@@ -2,14 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
+import { parseReferenceKeys } from "@/lib/tubeforge/references";
 
 /**
  * Stage 5 (module C) — the World library, LOCATIONS half.
  *
- * GET  — the org's active locations (name + description), oldest first.
+ * GET  — the org's active locations (name + description + S51 reference
+ *        count), oldest first.
  * POST — create one. The AI Director sees this list in its pass and may
  *        reference names per scene; under an approved plan the descriptions
- *        weave into scene image prompts (set continuity).
+ *        weave into scene image prompts (set continuity) and reference
+ *        photos seed the storyboard edits.
  */
 
 const createSchema = z.object({
@@ -25,9 +28,14 @@ export async function GET(req: NextRequest) {
   const rows = await db.location.findMany({
     where: { isActive: true },
     orderBy: { createdAt: "asc" },
-    select: { id: true, name: true, description: true, createdAt: true },
+    select: { id: true, name: true, description: true, referenceImages: true, createdAt: true },
   });
-  return NextResponse.json({ locations: rows });
+  return NextResponse.json({
+    locations: rows.map(({ referenceImages, ...row }) => ({
+      ...row,
+      referenceCount: parseReferenceKeys(referenceImages).length,
+    })),
+  });
 }
 
 export async function POST(req: NextRequest) {

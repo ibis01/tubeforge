@@ -23,6 +23,7 @@ export async function runPortraitJob(characterId: string): Promise<void> {
       appearance: character.appearance,
       identityAnchor: character.identityAnchor,
       artStyle: character.artStyle,
+      referenceImages: character.referenceImages,
     });
     await db.character.update({
       where: { id: characterId },

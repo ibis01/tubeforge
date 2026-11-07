@@ -5310,13 +5310,19 @@ await test("S50 PALINDROME_LOOP_GRAPH: the loop the renderer runs really loops s
   const { PALINDROME_LOOP_GRAPH } = await import("../src/lib/tubeforge/motion.ts");
   const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "tf-s50-loop-"));
   try {
-    // A 2s clip with continuous SMOOTH motion (an animated gradient sweep —
-    // compression-friendly, so the same-frame re-encode noise stays tiny
-    // while frame-to-frame motion stays visible).
+    // A 2s clip with continuous GUARANTEED motion: a linear PAN across a
+    // deterministic testsrc2 canvas (the `gradients` source this test
+    // originally used is seed-random and occasionally renders near-static
+    // content, making the last→first boundary jump undetectable: a flake
+    // caught on S51's second full-suite run; testsrc2 alone moved too
+    // little). The pan makes frame 0 (left edge) and frame N−1 (right edge)
+    // genuinely different content; gblur keeps frames smooth so the
+    // same-frame re-encode noise stays tiny.
     const fps = 12;
     const clip = path.join(tmp, "scene-01.mp4");
     await genFixture(clip, [
-      "-f", "lavfi", "-i", "gradients=size=320x180:n=2:speed=0.2:rate=" + fps, "-t", "2",
+      "-f", "lavfi", "-i", "testsrc2=size=640x180:rate=" + fps, "-t", "2",
+      "-vf", "crop=w=320:h=180:x=120*t:y=0,gblur=sigma=3",
       ...FFMPEG_COMMON,
     ]);
     // The exact command ensureSceneLoop runs.
@@ -5377,6 +5383,177 @@ await test("S50 PALINDROME_LOOP_GRAPH: the loop the renderer runs really loops s
   } finally {
     await fsp.rm(tmp, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// S51 — the Visual Continuity Engine: the reference-photo seam (the writer
+// for the dead-schema columns), the portrait-age fix, and the location seed.
+// ---------------------------------------------------------------------------
+
+await test("S51 parseReferenceKeys: the JSON column's fail-open contract", async () => {
+  const { parseReferenceKeys } = await import("../src/lib/tubeforge/references.ts");
+  eq(parseReferenceKeys(null), [], "null column → no refs");
+  eq(parseReferenceKeys(undefined), [], "undefined column → no refs");
+  eq(parseReferenceKeys(""), [], "empty string → no refs");
+  eq(parseReferenceKeys("{corrupt"), [], "corrupt JSON → no refs, never a crash");
+  eq(parseReferenceKeys("[1,true,\"x\"]"), ["x"], "non-string entries filtered");
+  eq(parseReferenceKeys("\"flat\""), [], "a bare string is not a ref list");
+  eq(
+    parseReferenceKeys(JSON.stringify(["characters/a/ref-1.png", "characters/a/ref-2.png"])),
+    ["characters/a/ref-1.png", "characters/a/ref-2.png"],
+    "the real shape round-trips, oldest first"
+  );
+});
+
+await test("S51 nextReferenceKey: lowest-free allocation stays inside the cap forever", async () => {
+  const { nextReferenceKey } = await import("../src/lib/tubeforge/references.ts");
+  const P = "characters/x";
+  eq(nextReferenceKey(P, []), `${P}/ref-1.png`, "empty library → slot 1");
+  eq(
+    nextReferenceKey(P, [`${P}/ref-1.png`, `${P}/ref-2.png`]),
+    `${P}/ref-3.png`,
+    "contiguous library → the next slot"
+  );
+  eq(
+    nextReferenceKey(P, [`${P}/ref-1.png`, `${P}/ref-3.png`]),
+    `${P}/ref-2.png`,
+    "a deleted slot is REUSED (gap-free)"
+  );
+  // Pigeonhole: with length < cap the lowest free index is ≤ cap — churn
+  // (delete + re-add forever) can never grow the numbers past the cap.
+  const cap = 6;
+  const keys = Array.from({ length: cap }, (_, i) => `${P}/ref-${i + 1}.png`);
+  for (let churn = 0; churn < 50; churn++) {
+    keys.splice(Math.floor(Math.random() * keys.length), 1);
+    const next = nextReferenceKey(P, keys);
+    const idx = Number(next.match(/ref-(\d+)\.png/)?.[1] ?? 0);
+    ok(idx <= cap, `churn ${churn}: allocated slot ${idx} stays ≤ cap ${cap}`);
+    keys.push(next);
+    eq(keys.length, cap, "the library returns to full");
+  }
+});
+
+await test("S51 isReferenceKey: the DELETE route's path-traversal guard", async () => {
+  const { isReferenceKey } = await import("../src/lib/tubeforge/references.ts");
+  const P = "characters/x";
+  ok(isReferenceKey(P, `${P}/ref-1.png`), "a real key passes");
+  ok(!isReferenceKey(P, `${P}/portrait.png`), "the portrait is not a reference");
+  ok(!isReferenceKey(P, `${P}/ref-1.png/../../secret.png`), "traversal inside the tail dies");
+  ok(!isReferenceKey(P, "../../etc/passwd"), "bare traversal dies");
+  ok(!isReferenceKey(P, `locations/x/ref-1.png`), "another library's key dies");
+  ok(!isReferenceKey(P, `${P}/ref-abc.png`), "non-numeric slot dies");
+  ok(!isReferenceKey(P, `${P}/ref-1.jpg`), "non-PNG suffix dies");
+});
+
+await test("S51 saveReferenceImage: real ffmpeg normalization + the storage seam", async () => {
+  const {
+    saveReferenceImage,
+    removeReferenceFile,
+    MAX_REFERENCE_BYTES,
+    REFERENCE_LONG_EDGE,
+  } = await import("../src/lib/tubeforge/references.ts");
+  const storage = await import("../src/lib/tubeforge/storage.ts");
+  const FFOPT = { timeout: 60_000, maxBuffer: 4 * 1024 * 1024 } as const;
+  const expectThrow = async (p: Promise<unknown>, needle: string) => {
+    try {
+      await p;
+    } catch (err) {
+      ok(String((err as Error).message).includes(needle), `the error names "${needle}"`);
+      return;
+    }
+    throw new Error(`expected a throw containing "${needle}", got success`);
+  };
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "s51-refs-"));
+  const P = `characters/s51-unit-${Date.now().toString(36)}`;
+  try {
+    // A 2000x1000 PNG → long edge scaled DOWN to 1024 (aspect preserved).
+    const big = path.join(tmp, "big.png");
+    await execFileAsync("ffmpeg", [
+      "-y", "-f", "lavfi", "-i", "color=c=red:s=2000x1000:d=1",
+      "-frames:v", "1", big,
+    ], FFOPT);
+    const savedBig = await saveReferenceImage(P, [], await fsp.readFile(big));
+    eq(savedBig.key, `${P}/ref-1.png`, "first upload takes slot 1");
+    ok(savedBig.bytes > 1000, "the normalized PNG is real");
+    const dims = await execFileAsync("ffprobe", [
+      "-v", "error", "-select_streams", "v:0",
+      "-show_entries", "stream=width,height", "-of", "csv=p=0", path.join("uploads", savedBig.key),
+    ], FFOPT);
+    const [w, h] = dims.stdout.trim().split(",").map(Number);
+    eq(w, REFERENCE_LONG_EDGE, `2000-wide input scales down to ${REFERENCE_LONG_EDGE}`);
+    eq(h, 512, "aspect preserved (2000x1000 → 1024x512)");
+    ok(await storage.exists(savedBig.key), "the file landed in the storage driver");
+
+    // A small 400x300 PNG passes through at its OWN size (no upscale).
+    const small = path.join(tmp, "small.png");
+    await execFileAsync("ffmpeg", [
+      "-y", "-f", "lavfi", "-i", "color=c=blue:s=400x300:d=1",
+      "-frames:v", "1", small,
+    ], FFOPT);
+    const savedSmall = await saveReferenceImage(P, [savedBig.key], await fsp.readFile(small));
+    eq(savedSmall.key, `${P}/ref-2.png`, "second upload takes slot 2");
+    const dimsS = await execFileAsync("ffprobe", [
+      "-v", "error", "-select_streams", "v:0",
+      "-show_entries", "stream=width,height", "-of", "csv=p=0", path.join("uploads", savedSmall.key),
+    ], FFOPT);
+    const [sw, sh] = dimsS.stdout.trim().split(",").map(Number);
+    eq(sw, 400, "small input is NOT upscaled (width)");
+    eq(sh, 300, "small input is NOT upscaled (height)");
+
+    // Guards: garbage bytes and the size ceiling.
+    const garbage = Buffer.alloc(2048, 0x41); // "AAAA…" — big enough, but not an image
+    await expectThrow(saveReferenceImage(P, [], garbage), "Unsupported image");
+    const fat = Buffer.alloc(MAX_REFERENCE_BYTES + 1024, 0x89);
+    fat[1] = 0x50; fat[2] = 0x4e; fat[3] = 0x47; // PNG magic, over the cap
+    await expectThrow(saveReferenceImage(P, [], fat), "exceeds");
+
+    // Cleanup through the seam itself.
+    await removeReferenceFile(savedBig.key);
+    await removeReferenceFile(savedSmall.key);
+    ok(!(await storage.exists(savedBig.key)), "removeReferenceFile deletes the file");
+  } finally {
+    await storage.removePrefix(P).catch(() => {});
+    await fsp.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+await test("S51 buildPortraitPrompt: the age-fidelity contract (anchor primacy + echo)", async () => {
+  const { buildPortraitPrompt, buildAnchorFallback } = await import("../src/lib/tubeforge/characters.ts");
+  const anchor = "nova: late-20s presenter, short silver hair, sharp green eyes";
+  const prompt = buildPortraitPrompt({ name: "Nova", anchor, style: "cinematic realism" });
+  // Primacy: the ANCHOR is the first thing the model reads (the S47 baseline
+  // led with the character NAME — the age rode mid-prompt and drifted).
+  ok(prompt.startsWith(anchor), "the anchor LEADS the prompt");
+  ok(prompt.includes("apparent age MUST match the age stated"), "the age-fidelity clause rides the middle");
+  ok(prompt.includes(`Identity lock, verbatim: ${anchor}`), "the anchor ECHOES before the close (recency)");
+  ok(prompt.includes('"Nova"'), "the name still identifies the subject");
+  ok(prompt.endsWith("Absolutely no text, no letters, no watermarks."), "the no-text clause still closes");
+  // The fallback anchor (no GLM bible yet) keeps the same shape.
+  const fallback = buildAnchorFallback("late-20s presenter, short silver hair", "cinematic");
+  const p2 = buildPortraitPrompt({ name: "X", anchor: fallback, style: "s" });
+  ok(p2.startsWith(fallback), "the fallback anchor leads identically");
+});
+
+await test("S51 getApprovedLocationRefKey's selection law, pinned at the seam it shares with the world clause", async () => {
+  // The DB-backed accessor is exercised live by the S51 benchmark; here we
+  // pin the pure law it enforces: PLAN ORDER wins, the NEWEST (array tail)
+  // ref seeds, and props are excluded by design. The seam: parseReferenceKeys
+  // feeding the same selection the accessor runs.
+  const { parseReferenceKeys } = await import("../src/lib/tubeforge/references.ts");
+  const planOrder = ["the neon market", "the rooftop"];
+  const rows = [
+    { name: "the rooftop", referenceImages: JSON.stringify(["locations/r/ref-1.png"]) },
+    { name: "the neon market", referenceImages: JSON.stringify(["locations/n/ref-1.png", "locations/n/ref-2.png"]) },
+  ];
+  let picked: string | null = null;
+  for (const name of planOrder) {
+    const row = rows.find((r) => r.name === name);
+    if (!row) continue;
+    const keys = parseReferenceKeys(row.referenceImages);
+    if (keys.length > 0) picked = keys[keys.length - 1];
+    if (picked) break;
+  }
+  eq(picked, "locations/n/ref-2.png", "plan order wins over row order, newest (tail) seeds");
 });
 
 console.log(`\n${"─".repeat(56)}`);

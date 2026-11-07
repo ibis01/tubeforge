@@ -21,7 +21,7 @@ import { ttsSynthesize } from "./providers/tts";
 import { imageEdit, imageGenerate, imageEditSupported } from "./providers/image";
 import * as storage from "./storage";
 import { db } from "./tenant-db";
-import { getApprovedAddendum, getApprovedAppearanceClause, getApprovedWorldClause, pacingSpeedFactor } from "./director-plan";
+import { getApprovedAddendum, getApprovedAppearanceClause, getApprovedWorldClause, getApprovedLocationRefKey, pacingSpeedFactor } from "./director-plan";
 import {
   policyVisualRules,
   resolveContentPolicy,
@@ -767,6 +767,20 @@ export async function generateSceneImage(opts: {
       ? await readPortrait(opts.character.id)
       : null;
 
+  // S51 — the set-piece seed: a scene NOT anchored on the cast's likeness
+  // whose APPROVED plan names a location carrying reference photos seeds
+  // its edit with that location's newest ref (recurring places keep their
+  // look, the same law the cast's portrait enforces for faces). Priority:
+  // cast likeness > set-piece likeness — a host scene with a portrait never
+  // spends its single edit seed on the backdrop.
+  const locationRef =
+    !(scene.hostInScene && opts.character?.id && portrait)
+      ? await (async () => {
+          const key = await getApprovedLocationRefKey(opts.videoId, scene.index).catch(() => null);
+          return key ? await storage.get(key).catch(() => null) : null;
+        })()
+      : null;
+
   const imagePath = path.join(videoDir(opts.videoId), sceneImageFile(scene.index));
   const canEdit = await imageEditSupported();
 
@@ -794,6 +808,26 @@ export async function generateSceneImage(opts: {
           imageEdit({
             prompt: `Place this exact person into the described scene, keeping their face, hairstyle, glasses, facial hair and signature outfit perfectly recognizable. Scene: ${artPrompt}`,
             imagePngBase64: portrait.toString("base64"),
+            size: "1344x768",
+          }).then((b) => {
+            if (!b) throw new Error("Image edit returned no data");
+            return b;
+          }),
+        { attempts: 4, baseDelayMs: 5000 }
+      ).catch(() => null);
+    }
+
+    if (!buffer && locationRef && canEdit) {
+      // Set-piece-locked (S51): seed the edit with the location's reference so
+      // the recurring place keeps its architecture and look. Same fail-through
+      // law as the host seed above.
+      buffer = await aiCall(
+        "image",
+        `scene ${scene.index} edit (location seed)`,
+        () =>
+          imageEdit({
+            prompt: `Set the described scene in this exact place, keeping its architecture, layout and distinctive features recognizable. Scene: ${artPrompt}`,
+            imagePngBase64: locationRef.toString("base64"),
             size: "1344x768",
           }).then((b) => {
             if (!b) throw new Error("Image edit returned no data");
@@ -956,52 +990,12 @@ export async function editSceneImage(opts: {
 
 const MAX_SCENE_UPLOAD_BYTES = 15 * 1024 * 1024;
 
-/** Magic-byte sniffing — extensions lie, file signatures don't. (S4 export:
- *  pinned by the unit probe; the upload guard's first line of defense.)
- *
- *  S43: HEIC/HEIF joins the catalog (iPhone default photo format). The ftyp
- *  box carries the brand: bytes 4-8 "ftyp", brand at 8-12 — heic/heix/hevc
- *  (photos), mif1/msf1 (image collections iPhone photos also use), heim/heis
- *  (media collections). Decoding is NOT ffmpeg's job here — stock builds
- *  ship without libheif — but the WASM heic-convert pass in replaceSceneImage. */
-const HEIF_BRANDS = new Set(["heic", "heix", "hevc", "heim", "heis", "mif1", "msf1"]);
-
-export function sniffImageFormat(buf: Buffer): "png" | "jpeg" | "webp" | "heic" | null {
-  if (buf.length > 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47)
-    return "png";
-  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "jpeg";
-  if (
-    buf.length > 12 &&
-    buf.subarray(0, 4).toString("ascii") === "RIFF" &&
-    buf.subarray(8, 12).toString("ascii") === "WEBP"
-  )
-    return "webp";
-  if (
-    buf.length > 12 &&
-    buf.subarray(4, 8).toString("ascii") === "ftyp" &&
-    HEIF_BRANDS.has(buf.subarray(8, 12).toString("ascii"))
-  )
-    return "heic";
-  return null;
-}
-
-/** Decode HEIC/HEIF bytes to PNG via the WASM libheif build (heic-convert).
- *  Stock ffmpeg ships without libheif on most distros (including the CI
- *  image), so the decode rides a pure-WASM pass instead — same output
- *  everywhere, no native dependency. Returns PNG bytes.
- *
- *  API note (v2.1.0): convert() resolves to the encoded image Buffer
- *  DIRECTLY — there is no {buffer} wrapper. Reaching for `.buffer` on it
- *  grabs the Buffer-pool ArrayBuffer behind it (64 KB of unrelated memory),
- *  which once aliased the input HEIC and produced a "PNG" that was still
- *  HEIC bytes. */
-async function decodeHeicPng(upload: Buffer): Promise<Buffer> {
-  // Lazy import: the WASM module only enters the process graph when a HEIC
-  // actually arrives (cold start stays free for everyone else).
-  const convert = (await import("heic-convert")).default;
-  const out = await convert({ buffer: upload, format: "PNG" });
-  return Buffer.isBuffer(out) ? out : Buffer.from(out);
-}
+// S51 — the byte sniffer + HEIC decode moved DOWN into image-upload.ts so
+// the reference-photo seam can share them without an import cycle
+// (references.ts sits below story.ts in the graph). Re-exported here: the
+// Scene Studio upload and the unit probes keep their import surface.
+export { sniffImageFormat, decodeHeicPng } from "./image-upload";
+import { sniffImageFormat, decodeHeicPng } from "./image-upload";
 
 /**
  * Replace a scene's image with a user-supplied file (Scene Studio upload).
