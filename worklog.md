@@ -2424,3 +2424,51 @@ Gate: tsc 0 · eslint 0 errors / 669 warnings — zero net · 235/235 unit
 both pushes this session (e40cfd9 S48–S51, 98a5faf S52). Next: S54 — the
 seven-genre benchmark, which exercises all 8 profiles and the full 18-check
 matrix live, and calibrates the 70 floor against the S51 anchor re-run.
+
+## S54 (2026-11-07 UTC) — eight voices measured, six on the record, two owed
+
+S54 — the seven-genre benchmark, the closing measurement the S47 baseline
+explicitly deferred ("thresholds are set at S54 with human review on
+record"). The harness (scripts/s54-genre-benchmark.mts) extends the S47/S51
+probe tradition: §A runs all 8 production profiles × 2 through the REAL
+runDirectorPass (glm-4.6 pinned, the S47 six seeds VERBATIM for
+comparability plus podcast and islamic-history), pinning per run the
+schema-valid plan, the profile stamp, and the S48 19-field contract, and
+recording v2 richness, camera-vocabulary drift, profile findings, and
+latency. §B renders the S51 anchor case (Nova, byte-identical anchor) through
+the REAL renderVideo — ffmpeg-synthesized narration WAVs standing in for
+TTS — then runs the S53 lenses (subject-continuity with the 70 floor,
+text-artifacts) into the full battery: the calibration datapoint for the
+floor the S51 finding inherited.
+
+The session's measured result: 12 runs across 6 profiles, ALL green — 100%
+schema-valid, profile-stamped, 19-field complete; **camera drift 0/69
+shots** across every narrowed profile (the S48 verbatim law holds live, not
+just in unit fixtures); v2 richness 58–79% (the LLM actively directs with
+the new fields rather than riding parser defaults); the profile advisories
+fire as designed (advertisement's open+CTA rules, social's shot discipline);
+latency 8–17s per pass.
+
+Two engineering saves on the way, both now part of the harness's contract.
+The first one-shot run was reaped silently seven minutes in — teardown never
+reached, scratch rows leaked (cleaned by hand). The harness is now
+chunk-resilient: legs and profiles run as foreground chunks
+(S54_LEG/S54_PROFILES), state persists PER PROFILE with replace semantics
+(a killed chunk loses nothing; a re-run overwrites, never double-appends —
+a bug the first chunk run exposed and the dedupe fixed), and gateway 429s
+retry once after a 75s cool-down before failing honestly without crashing
+the chunk. The report leg assembles the accumulated state and stamps the
+coverage line — the baseline can never silently claim more than ran.
+
+Which is exactly how the session ended: the Z.ai metered gateway began
+hard-429ing (single minimal calls rejected; ~35 minutes of cool-downs did
+not clear it — today's cumulative traffic includes the S47/S51 benchmarks
+plus this session's passes). podcast + islamic-history §A and the §B render
+leg are OWED, not claimed: the baseline carries "coverage: 6/8 profiles —
+NOT measured (gateway quota): podcast, islamic-history", and the completion
+commands are one paste away when the quota window resets
+(S54_LEG=A S54_PROFILES=podcast,islamic-history, then B, then report).
+
+Gate: tsc 0 · eslint 0 errors / 669 warnings · 235/235 unit · queue
+restart-recovery PASS (S54 touches no production code — the deliverable is
+the harness + the measured baseline). CI green through S53 (8beecab).

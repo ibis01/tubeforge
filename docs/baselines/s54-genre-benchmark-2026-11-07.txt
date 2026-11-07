@@ -1,0 +1,33 @@
+S54 seven-genre benchmark — recorded 2026-11-07T06:43:30.966Z
+Live path: Z.ai platform gateway (ungated, metered-only). glm-4.6 pinned (saveCapability).
+
+§A the eight-profile director contract (repeats per genre: 2):
+coverage: 6/8 profiles — measured: narrative, documentary, explainer, advertisement, animation, social; NOT measured (gateway quota): podcast, islamic-history
+profile         run   ms  scenes shots v2-rich camDrift findings planSec
+narrative         1  9163      3     6     64%       0        0   16.2
+narrative         2 10872      3     6     61%       0        0   16.2
+documentary       1  9728      3     5     60%       0        0   14.2
+documentary       2 10850      3     6     58%       0        0   14.2
+explainer         1 13512      3     6     58%       0        0   15.8
+explainer         2  7674      3     5     58%       0        0   12.8
+advertisement     1 12939      3     5     72%       0        2    7.8
+advertisement     2 16464      3     5     72%       0        2    9.6
+animation         1 10898      3     7     75%       0        0   16.2
+animation         2 17497      3     7     79%       0        0   16.2
+social            1 13663      3     5     68%       0        1     12
+social            2 14058      3     6     74%       0        1   14.2
+
+§A per-profile aggregates:
+  narrative      shots= 12 camDrift= 0/12 findings=0 meanMs=10018
+  documentary    shots= 11 camDrift= 0/11 findings=0 meanMs=10289
+  explainer      shots= 11 camDrift= 0/11 findings=0 meanMs=10593
+  advertisement  shots= 10 camDrift= 0/10 findings=4 meanMs=14702
+  animation      shots= 14 camDrift= 0/14 findings=0 meanMs=14198
+  social         shots= 11 camDrift= 0/11 findings=2 meanMs=13861
+
+
+Threshold statement (S54's mandate, with evidence for human review):
+  - director contract: 100% schema-valid + profile-stamped + 19-field complete — HELD as law (this run).
+  - camera vocabulary: ≤25% drift per narrowed profile — the measured level is the review baseline.
+  - subject-continuity floor 70: the §B score is the calibration datapoint; keep or move it on review.
+  - text-artifacts: REPORT severity stands until this run's verdict accumulates calibration evidence.

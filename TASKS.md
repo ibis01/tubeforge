@@ -1870,3 +1870,24 @@ unit** (229 + 6 S53, one real ffmpeg) · queue restart-recovery PASS. The live
 VLM calibration (do the judges agree with the S51 benchmark's findings at the
 70 floor?) belongs to S54's seven-genre benchmark, which now exercises the
 full matrix per genre.
+
+## S54 — the seven-genre benchmark (opened 2026-11-07 UTC)
+
+Sprint goal: the closing measurement of the Cinematic Video Quality
+Transformation — the S47 baseline's own mandate ("thresholds are set at S54
+with human review on record"). Two legs: §A the eight-profile director
+contract (the S47 six seeds verbatim + podcast + islamic-history, 2 runs
+each), §B the full 18-check matrix live on a real render of the S51 anchor
+case (the subject-continuity floor's calibration datapoint).
+
+| Task | Status | Notes |
+|---|---|---|
+| T-54.1 the benchmark harness | ✅ Done | `scripts/s54-genre-benchmark.mts`, the S47/S51 probe tradition extended: §A per run pins schema-valid + profile stamp + the 19-field contract, records v2 richness / camera-vocabulary drift / profile findings / latency; §B renders the S51 anchor case through the REAL renderVideo (ffmpeg-synthesized narration WAVs) and runs the S53 lenses + battery. **Chunk-resilient by necessity**: the first one-shot run was reaped silently 7 min in (teardown never reached) — the harness now runs per-leg/per-profile chunks (`S54_LEG`/`S54_PROFILES`), persists state per profile (replace semantics, a killed chunk loses nothing), retries gateway 429s with 75s cool-downs, and a final `S54_LEG=report` assembles the baseline with an honest coverage stamp. |
+| T-54.2 §A measured (6/8 profiles) | ✅ Done | 12 runs, ALL green: 100% schema-valid, 100% profile-stamped, 100% 19-field complete. **Camera drift 0/69 shots** across every narrowed profile — the S48 verbatim law holds live. v2 richness 58–79% (the LLM actively directs with the new fields). Profile advisories fire as designed (advertisement 2/run on the open+CTA rules, social 1/run on shot discipline). Latency 8–17s/pass. |
+| T-54.3 §A remaining (podcast, islamic-history) + §B | ⏸ Blocked (gateway quota) | The Z.ai metered gateway began hard-429ing ~06:05 UTC (single minimal calls rejected; ~35 min of cool-downs did not clear it — today's cumulative benchmark traffic: the S47/S51 runs + this session's 12 passes). NOT claimed, NOT fabricated — the baseline carries the coverage stamp. Completion (when the quota window resets): `S54_LEG=A S54_PROFILES=podcast,islamic-history node --import tsx scripts/s54-genre-benchmark.mts`, then `S54_LEG=B …`, then `S54_LEG=report …` (state file `/tmp/s54-state.json` must survive, or re-run all §A chunks first). |
+| T-54.4 the baseline record | ✅ Done | `docs/baselines/s54-genre-benchmark-2026-11-07.txt` — coverage 6/8 stamped, per-run table, per-profile aggregates, threshold statement WITH evidence (director contract held as law; camera vocabulary measured at zero drift; the 70 floor and REPORT severities marked for human review). |
+
+Verification: the 6 measured profiles' 12 runs ALL PASS (recorded above);
+the remaining legs are explicitly NOT claimed. tsc 0 · eslint 0 errors/669
+warnings · 235/235 unit · queue PASS (unchanged this sprint — S54 adds the
+harness + baseline only, no production code).
