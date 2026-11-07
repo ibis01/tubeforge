@@ -34,6 +34,11 @@ import { TRANSITIONS } from "./transitions";
 import type { Scene } from "./types";
 import { readPortrait } from "./characters";
 import {
+  policySystemOverlay,
+  resolveContentPolicy,
+  sanitizePromptForPolicy,
+} from "./restricted-subjects";
+import {
   FRAMINGS,
   CAMERA_MOVES,
   COMPOSITIONS,
@@ -159,9 +164,16 @@ Cinematic shot fields (S48 — every shot carries ALL of them):
 export const DIRECTOR_MODEL_HINT = "glm-4.6";
 
 /** The system message for a given profile: its opening (the format's voice)
- *  followed by the format-neutral Rules + JSON schema. Pure. */
-export function directorSystemPrompt(profile: ProductionProfile): string {
-  return `${profile.systemOverlay}\n\n${BASE_SYSTEM_PROMPT}`;
+ *  followed by the format-neutral Rules + JSON schema. Pure. S49: under a
+ *  restricted content policy, the policy overlay (the compose-around doctrine)
+ *  is appended — the profile's own voice and the policy's rules stack, they
+ *  do not replace each other. */
+export function directorSystemPrompt(
+  profile: ProductionProfile,
+  contentPolicy?: string | null
+): string {
+  const overlay = policySystemOverlay(resolveContentPolicy(contentPolicy));
+  return `${profile.systemOverlay}\n\n${BASE_SYSTEM_PROMPT}${overlay ? `\n\n${overlay}` : ""}`;
 }
 
 function sceneBrief(scene: Scene, estSeconds: number | null): string {
@@ -329,7 +341,7 @@ export async function runDirectorPass(
     async () =>
       (await llmChat({
         messages: [
-          { role: "system", content: directorSystemPrompt(profile) },
+          { role: "system", content: directorSystemPrompt(profile, video.contentPolicy) },
           { role: "user", content: userPrompt },
         ],
         temperature: 0.6,
@@ -360,13 +372,67 @@ export async function runDirectorPass(
     ...normalized,
     version: 2,
     profile: profile.id,
+    // S49 — record the policy this plan was authored under (provenance for
+    // the QC gate + audit; enforcement reads Video.contentPolicy).
+    contentPolicy: resolveContentPolicy(video.contentPolicy),
     generatedAt: new Date().toISOString(),
   };
+
+  // S49 (L2) — sanitize the plan itself: any shot imagePrompt/subject that
+  // named a restricted figure is rewritten to a compliant composition BEFORE
+  // the plan is persisted, and the substitution is ANNOUNCED in the activity
+  // feed so the human sees exactly what the policy touched before approving.
+  // The plan never applies itself — the human stays the approval gate.
+  const contentPolicy = resolveContentPolicy(video.contentPolicy);
+  let policySubstitutions = 0;
+  const policyHits = new Set<string>();
+  if (contentPolicy === "islamic-history") {
+    for (const scene of plan.scenes) {
+      for (const shot of scene.shots) {
+        for (const field of ["imagePrompt", "subject"] as const) {
+          const raw = shot[field] ?? "";
+          if (!raw) continue;
+          // subject is short metadata — substitute WITHOUT the full negative
+          // clause (it rides the imagePrompt, which carries it below).
+          const res = sanitizePromptForPolicy(raw, contentPolicy, {
+            appendNegative: field === "imagePrompt",
+          });
+          if (res.substituted > 0) {
+            shot[field] = res.prompt;
+            policySubstitutions += res.substituted;
+            for (const m of res.matches) policyHits.add(m.entry);
+          }
+        }
+      }
+    }
+  }
 
   await db.video.update({
     where: { id: videoId },
     data: { shotList: serializePlan(plan), directorState: "proposed", error: null },
   });
+
+  // S49 — visibility is UNCONDITIONAL under the policy: the human always sees
+  // a policy outcome row on the director activity (warn when the sanitizer
+  // rewrote something, info when the model arrived fully compliant — the
+  // layered design worked and no rewrite was needed). Silent compliance is
+  // still silence; the policy's touch must always be visible.
+  if (contentPolicy === "islamic-history") {
+    await db.activity.create({
+      data: {
+        organizationId: video.organizationId,
+        userId: ctx.userId,
+        videoId,
+        stage: "director",
+        level: policySubstitutions > 0 ? "warn" : "info",
+        message:
+          policySubstitutions > 0
+            ? `Content policy (islamic-history) rewrote ${policySubstitutions} shot prompt field(s) that named restricted subject(s): ` +
+              `${[...policyHits].slice(0, 5).join(", ")} — the compositions now steer around them. Review before approving.`.slice(0, 500)
+            : "Content policy (islamic-history): the proposed plan is fully compliant — no restricted-subject depiction in any shot prompt.",
+      },
+    });
+  }
 
   // Cast appearance log — upsert one row per (scene, character) for scenes
   // where the host is present and the plan described a look.

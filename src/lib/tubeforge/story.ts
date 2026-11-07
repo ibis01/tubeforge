@@ -22,6 +22,12 @@ import { imageEdit, imageGenerate, imageEditSupported } from "./providers/image"
 import * as storage from "./storage";
 import { db } from "./tenant-db";
 import { getApprovedAddendum, getApprovedAppearanceClause, getApprovedWorldClause, pacingSpeedFactor } from "./director-plan";
+import {
+  policyVisualRules,
+  resolveContentPolicy,
+  sanitizePromptForPolicy,
+  type ContentPolicyId,
+} from "./restricted-subjects";
 
 const execFileAsync = promisify(execFile);
 
@@ -437,11 +443,14 @@ export const TOPIC_FIDELITY_AUDIT_RULE =
  *  the expensive storyboard stage (45s+ per image on the free tier). One
  *  chat call per script; surgical fixes only; FAIL-OPEN by contract: any
  *  verifier error propagates to the caller, which logs + continues with the
- *  unverified plan rather than blocking script generation. */
+ *  unverified plan rather than blocking script generation. S49: under a
+ *  restricted policy the audit ALSO rewrites any visual that names a
+ *  restricted figure into a compliant composition. */
 export async function verifyScenePlan(opts: {
   topic: string;
   scenes: Scene[];
   character?: { name: string } | null;
+  contentPolicy?: string | null;
 }): Promise<{ fixes: number; notes: string[] }> {
   if (opts.scenes.length < 2) return { fixes: 0, notes: [] };
 
@@ -474,6 +483,7 @@ AUDIT RULES:
 5. "hostInScene" is true ONLY when the visual clearly shows the recurring host. Flip it when the narration/visual do not feature the host.
 ${TOPIC_FIDELITY_AUDIT_RULE}
 7. Never touch title, camera, mood, tone, pacing, scene order, or rehook structure.
+${resolveContentPolicy(opts.contentPolicy) === "islamic-history" ? `8. ISLAMIC VISUAL PROTECTION: rewrite any "visual" that depicts the Prophet Muhammad, his family, the Companions, the prophets, the angels, or God (a face, figure, silhouette or light-body) into a compliant composition — calligraphy, sacred architecture, artifacts, light, landscape, or an anonymous distant crowd. The narration stays untouched.` : ""}
 
 Return JSON exactly: {"scenes": [ ...ONLY the scenes that need fixes, each: {"index": N, "reason": "short why", then ONLY the fields to replace: "visual" and/or "caption" and/or "narration" and/or "hostInScene"} ], "ok": true}
 Return {"scenes": [], "ok": true} when every scene already matches its narration.`,
@@ -511,6 +521,9 @@ export async function generateSceneScriptPackage(opts: {
     personality: string | null;
     identityAnchor: string | null;
   } | null;
+  /** S49 — the video's content policy (restricted-subjects.ts vocabulary);
+  * absent = "standard", the pre-S49 behavior byte-for-byte. */
+  contentPolicy?: string | null;
 }): Promise<SceneScriptPackage> {
   const sceneCount = SCENE_COUNTS[opts.length] ?? 6;
   const words = { short: 250, medium: 450, long: 700 }[opts.length] ?? 450;
@@ -534,6 +547,17 @@ ${opts.character.personality ? `Personality: ${opts.character.personality}` : ""
 Write the narration in their voice. Mark scenes where they appear with "hostInScene": true. In those scenes' visual prompts, describe WHERE and HOW the host appears so the art stays consistent.`
     : "";
 
+  // S49 (L1) — the content policy rides the script pass: visuals are composed
+  // AROUND restricted subjects from the start (and the human-presence
+  // preference is inverted — faces are exactly what the policy must not
+  // paint for revered figures). Standard policy: both injections vanish.
+  const policy = resolveContentPolicy(opts.contentPolicy);
+  const policyRules = policyVisualRules(policy);
+  const visualFieldRule =
+    policy === "islamic-history"
+      ? `detailed image prompt for the scene art: main subject, setting, action, composition, time of day. Depict the exact moment the narration describes — the image must show what the viewer is hearing about, not a generic stand-in. Compose AROUND revered figures per the ISLAMIC VISUAL PROTECTION rules — never describe them on screen. NO camera or lighting words here`
+      : `detailed image prompt for the scene art: main subject, setting, action, composition, time of day. Depict the exact moment the narration describes — the image must show what the viewer is hearing about, not a generic stand-in. When people are involved, describe real human presence: facial expression, emotion, body language. Prefer concrete human-scale moments (hands, faces, crowds reacting) over abstract symbols. NO camera or lighting words here`;
+
   const raw = await aiCall("llm", "scene script LLM", () =>
     chatComplete({
       system:
@@ -556,7 +580,7 @@ VISUAL RULES (each scene art is painted by an AI image model):
 - Name the main subject with concrete nouns and give it a physical anchor — "a lighthouse keeper hauling a rope in a storm", never an abstract concept ("the idea of risk", "global markets in chaos") with nothing solid to paint.
 - NEVER ask for charts, graphs, formulas, floating numbers, letters, documents, contracts, UI screens or anything that contains writing — image models render those as garbled gibberish. Express the idea with physical objects and people instead (rising stacks of coins instead of a growth chart).
 - NEVER describe a transformation or morph ("aging from young to old", "dissolving into numbers") — pick the single most striking end-state and paint that.
-${TOPIC_FIDELITY_RULES}
+${TOPIC_FIDELITY_RULES}${policyRules ? `\n${policyRules}` : ""}
 
 RETENTION RULES:
 - Scene 1 is the HOOK: open in mid-action, with a shocking number, or by dropping the viewer into the single most dramatic moment. Name something concrete in the first 5 words. The hook must create an open loop the video only closes at the end. NEVER open with background or context.
@@ -573,7 +597,7 @@ Return JSON with exactly these keys:
     {
       "title": "short scene label (2-4 words)",
       "narration": "the spoken narration for this scene (${wordsPerScene} words, gripping and rhythmic; scene 1 opens with the hook, the last scene closes with a call-to-action)",
-      "visual": "detailed image prompt for the scene art: main subject, setting, action, composition, time of day. Depict the exact moment the narration describes — the image must show what the viewer is hearing about, not a generic stand-in. When people are involved, describe real human presence: facial expression, emotion, body language. Prefer concrete human-scale moments (hands, faces, crowds reacting) over abstract symbols. NO camera or lighting words here",
+      "visual": "${visualFieldRule}",
       "camera": "one of: zoom-in, zoom-out, pan-left, pan-right, push-in",
       "mood": "color palette + lighting mood keywords, e.g. 'teal shadows, cold moonlight, volumetric haze'",
       "caption": "punchy on-screen subtitle under 45 characters (no quotes, no emojis)",
@@ -614,6 +638,7 @@ Return JSON with exactly these keys:
       topic: opts.topic,
       scenes: finalScenes,
       character: opts.character ? { name: opts.character.name } : null,
+      contentPolicy: opts.contentPolicy,
     });
   } catch (err) {
     console.warn("[story] scene-plan verification skipped:", err);
@@ -668,12 +693,26 @@ export function topicWorldClause(
   );
 }
 
+/** S49 — the video's content policy in one read (restricted-subjects.ts owns
+ * the vocabulary; "standard" for absent/unknown values). The same accessor
+ * seam the director clauses use. */
+export async function getVideoContentPolicy(videoId: string): Promise<ContentPolicyId> {
+  const video = await db.video.findUnique({
+    where: { id: videoId },
+    select: { contentPolicy: true },
+  });
+  return resolveContentPolicy(video?.contentPolicy);
+}
+
 /**
  * Render one scene's storyboard image.
  * Host scenes + cast portrait → identity-locked image EDIT (keeps the face).
  * Everything else → fresh CogView generation from the visual prompt.
  * After the VLM quality gate, a dHash dedupe pass re-rolls once when the
  * frame is near-identical to a sibling scene's art.
+ * S49: under a restricted content policy the composed prompt is sanitized
+ * (restricted-figure sentences → alternative compositions) and the hard
+ * negative clause rides every generation — the last line before pixels.
  */
 export async function generateSceneImage(opts: {
   videoId: string;
@@ -710,12 +749,18 @@ export async function generateSceneImage(opts: {
   // director clauses above; an absent world means an absent anchor.
   const topicWorld = await getVideoTopicWorld(opts.videoId);
   const topicClause = topicWorldClause(topicWorld);
-  // Photorealistic-by-default look (Battle Yamuk feedback): the base
-  // language steers the image model toward documentary-cinema photography
-  // with real human emotion, not the illustrated/digital-art look generic
-  // "highly detailed" prompts drift into. Explicit per-scene styles
-  // (anime, watercolor, …) still override via styleClause.
-  const artPrompt = `${scene.visual}.${topicClause ? ` ${topicClause}.` : ""}${styleClause ? ` ${styleClause}.` : ""}${directorClause ? ` ${directorClause}.` : ""}${continuityClauses ? ` ${continuityClauses}` : ""} ${scene.mood}. Wide 16:9 cinematic frame, ultra-realistic photograph shot on a full-frame cinema camera with a 35mm lens, natural depth of field, physically accurate lighting for the time of day, lifelike skin, fabric and material textures, authentic human emotion and natural body language on every person in frame, documentary realism, ONE dominant subject filling the frame, professional cinematic color grading, storytelling composition. The frame must depict exactly the moment described — the named subject is the single dominant element, and the whole frame belongs to the video's story world. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
+  // S49 (L3) — the content policy: sanitize the composed prompt + append the
+  // hard negative clause. Standard policy = identity (the prompt is
+  // untouched, byte-identical to the pre-S49 composition).
+  const contentPolicy = await getVideoContentPolicy(opts.videoId);
+  const artPromptRaw = `${scene.visual}.${topicClause ? ` ${topicClause}.` : ""}${styleClause ? ` ${styleClause}.` : ""}${directorClause ? ` ${directorClause}.` : ""}${continuityClauses ? ` ${continuityClauses}` : ""} ${scene.mood}. Wide 16:9 cinematic frame, ultra-realistic photograph shot on a full-frame cinema camera with a 35mm lens, natural depth of field, physically accurate lighting for the time of day, lifelike skin, fabric and material textures, authentic human emotion and natural body language on every person in frame, documentary realism, ONE dominant subject filling the frame, professional cinematic color grading, storytelling composition. The frame must depict exactly the moment described — the named subject is the single dominant element, and the whole frame belongs to the video's story world. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
+  const sanitized = sanitizePromptForPolicy(artPromptRaw, contentPolicy);
+  if (sanitized.substituted > 0) {
+    console.warn(
+      `[story] scene ${scene.index}: content policy substituted ${sanitized.substituted} sentence(s) naming restricted subject(s): ${sanitized.matches.map((m) => m.entry).join(", ")}`
+    );
+  }
+  const artPrompt = sanitized.prompt;
 
   const portrait =
     scene.hostInScene && opts.character?.id

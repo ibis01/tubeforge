@@ -80,6 +80,7 @@ export async function runScriptJob(
           tone: video.tone,
           length: video.length,
           brief: opts.brief,
+          contentPolicy: video.contentPolicy,
           character: video.character
             ? {
                 name: video.character.name,

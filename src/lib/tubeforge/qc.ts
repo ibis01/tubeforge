@@ -246,6 +246,13 @@ export async function runQcReport(opts: {
   expectedCuts?: ExpectedCuts | null;
   /** Frame rate the render shipped at (stutter lens); default 30. */
   frameRate?: number;
+  /** S49 — the restricted-visual scan outcome (restricted-subjects.ts
+   *  runRestrictedVisualScan). Provided ONLY under a restricted content
+   *  policy — the caller owns the decision (and the fail-closed rule: a
+   *  policy-mode scan that could not run reports "unmeasured", never
+   *  silence). Absent (standard policy) = the check is not emitted, exactly
+   *  as before S49. */
+  restrictedScan?: { status: "pass" | "fail" | "unmeasured"; value: string; detail?: string };
 }): Promise<QcReport> {
   const aspect: QcAspect =
     opts.expectedAspect === "9:16" ? "9:16" : opts.expectedAspect === "1:1" ? "1:1" : "16:9";
@@ -623,6 +630,21 @@ export async function runQcReport(opts: {
     }
   }
 
+  // S49 — the restricted-visual check rides the report when (and only when)
+  // the caller ran the policy scan. It counts toward `passed` like every
+  // other check — a fail or unmeasured scan keeps the report red.
+  if (opts.restrictedScan) {
+    checks.push(
+      check(
+        "restricted-visual",
+        "No depiction of restricted religious figures (content policy)",
+        opts.restrictedScan.status,
+        opts.restrictedScan.value,
+        opts.restrictedScan.detail
+      )
+    );
+  }
+
   return {
     // The report is clean only when EVERY check actually ran AND passed —
     // an unmeasured check keeps the overall badge red/amber for a human.
@@ -643,7 +665,8 @@ export async function qcForVideo(
   shotPlan?: DirectorPlan | null,
   pacingExemptions?: { i2vEverywhere?: boolean; stockEverywhere?: boolean },
   expectedCuts?: ExpectedCuts | null,
-  frameRate?: number
+  frameRate?: number,
+  restrictedScan?: { status: "pass" | "fail" | "unmeasured"; value: string; detail?: string }
 ): Promise<QcReport> {
   // Storage seam (T-3.7): ffprobe/readFile need real paths — materialize
   // returns the uploads path locally, a cached download under s3.
@@ -660,6 +683,7 @@ export async function qcForVideo(
     shotPlanStockEverywhere: pacingExemptions?.stockEverywhere,
     expectedCuts,
     frameRate,
+    restrictedScan,
   });
 }
 

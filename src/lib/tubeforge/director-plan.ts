@@ -141,6 +141,7 @@ export const PROFILE_IDS = [
   "animation",
   "podcast",
   "social",
+  "islamic-history",
 ] as const;
 
 // Module E — audio direction vocabularies. pacing modulates the narration
@@ -238,6 +239,12 @@ export interface DirectorPlan {
    *  value). Absent on legacy/pre-M1 plans — consumers normalize via
    *  resolveProfile(plan.profile). Additive: never changes parse shape. */
   profile?: string;
+  /** S49: the content policy the plan was authored under (a
+   *  restricted-subjects.ts ContentPolicyId — "islamic-history" when the
+   *  policy was active at generation). Provenance for the QC gate + audit;
+   * enforcement ALWAYS reads Video.contentPolicy, never this field. Plain
+   * string passthrough so this module stays dependency-free. */
+  contentPolicy?: string;
   musicMood?: string; // module E: music.ts mood preset id (consumer-sanitized)
   ducking?: string; // module E: audiomix DuckIntensity id (consumer-sanitized)
   scenes: DirectorScene[];
@@ -366,6 +373,9 @@ export function parsePlan(json: string | null | undefined): DirectorPlan | null 
     // (music.ts / audiomix.ts) own the vocabularies and sanitize on use.
     musicMood: asString(obj.musicMood).slice(0, 40) || undefined,
     ducking: asString(obj.ducking).slice(0, 16) || undefined,
+    // S49 — provenance only (see the interface note); consumers resolve via
+    // restricted-subjects.resolveContentPolicy.
+    contentPolicy: asString(obj.contentPolicy).slice(0, 40) || undefined,
     scenes,
   };
 }

@@ -67,6 +67,13 @@ export interface ImageRequest {
    *  or per video+scene to keep a recurring host recognizable across scenes —
    *  the closest a text-to-image-only provider gets to identity locking. */
   seed?: number;
+  /** S49 — optional negative prompt (content-policy exclusions). Rides the
+   *  providers whose APIs take one (stability, fal, replicate, ideogram,
+   *  recraft); z.ai / openai / pollinations have no such parameter and
+   *  ignore it — the SANITIZED POSITIVE prompt carries the policy there
+   *  (restricted-subjects.ts appends the hard negative clause to the prompt
+   *  itself, so no provider is protected only by this field). */
+  negativePrompt?: string;
 }
 
 export interface ImageEditRequest extends ImageRequest {
@@ -290,6 +297,8 @@ async function stabilityImage(
   form.append("prompt", req.prompt);
   form.append("output_format", "png");
   form.append("aspect_ratio", aspectRatio);
+  // S49 — Stability's core + sd3 endpoints both take negative_prompt.
+  if (req.negativePrompt) form.append("negative_prompt", req.negativePrompt);
 
   const endpoint = model.includes("sdxl") ? "core" : "sd3";
   const response = await providerFetch(
@@ -335,6 +344,7 @@ async function falImage(
       },
       body: JSON.stringify({
         prompt: req.prompt,
+        ...(req.negativePrompt ? { negative_prompt: req.negativePrompt } : {}),
         image_size: sizeMap[req.size] || "landscape_16_9",
         num_images: 1,
       }),
@@ -371,6 +381,7 @@ async function replicateImage(
       prompt: req.prompt,
       aspect_ratio: aspectRatio,
       output_format: "png",
+      ...(req.negativePrompt ? { negative_prompt: req.negativePrompt } : {}),
     },
   };
 
@@ -429,6 +440,7 @@ async function ideogramImage(
       body: JSON.stringify({
         prompt: req.prompt,
         aspect_ratio: aspectRatio,
+        ...(req.negativePrompt ? { negative_prompt: req.negativePrompt } : {}),
       }),
     },
   );
@@ -472,6 +484,7 @@ async function recraftImage(
         size,
         style: "realistic_image",
         model,
+        ...(req.negativePrompt ? { negative_prompt: req.negativePrompt } : {}),
       }),
     },
   );

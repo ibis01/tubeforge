@@ -381,6 +381,16 @@ model Video {
   frameRate    Int?
   burnCaptions Boolean?
 
+  // S49 — content policy (Islamic visual protection). null/absent = the
+  // "standard" policy (no restrictions). "islamic-history" activates the
+  // layered restricted-subject enforcement across the pipeline: script-pass
+  // composition rules, director-pass overlay + plan sanitization, image-prompt
+  // substitution + hard negative clause, and the post-render restricted-visual
+  // QC check (severity block). Set at create time; the islamic-history
+  // production profile (S52 UI) defaults it on — enforcement ALWAYS reads this
+  // column, never the profile.
+  contentPolicy String?
+
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)

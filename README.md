@@ -4,7 +4,8 @@ TubeForge is an AI video production studio for YouTube creators. One idea goes
 in; a finished video comes out: it researches the topic, writes the script,
 plans the shots with an AI Director, paints the scene art, records the
 voiceover (stock, cloned, or self-hosted voices), lays the music and sound,
-lets you edit the timeline, renders the MP4, runs a 12-check QC battery, and
+lets you edit the timeline, renders the MP4, runs a 16-check QC battery (15
+standard + the content-policy visual scan under a restricted policy), and
 publishes to a connected YouTube channel — all inside a multi-user web
 application with metered AI spending and Stripe billing underneath.
 

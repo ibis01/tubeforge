@@ -1866,8 +1866,8 @@ await test("M1: legacy plan parsing — profile field stays absent (byte-identic
 
   // The parse-snap set must match the catalog exactly (the runtime assert
   // in production-profiles.ts already enforces this; the test pins it).
-  eq(Array.from(PROFILE_IDS).sort().join(","), ["narrative","documentary","explainer","advertisement","animation","podcast","social"].sort().join(","),
-    "PROFILE_IDS lists every profile the catalog can resolve");
+  eq(Array.from(PROFILE_IDS).sort().join(","), ["narrative","documentary","explainer","advertisement","animation","podcast","social","islamic-history"].sort().join(","),
+    "PROFILE_IDS lists every profile the catalog can resolve (S49 added islamic-history)");
 });
 
 await test("M1: profile overlay — system + user prompts include the overlay and narrow vocabularies", async () => {
@@ -2088,12 +2088,12 @@ await test("M1: format gate — empty-scenes check still throws; profiles resolv
 
   // resolveProfile — every profile the spec names resolves, unknown → narrative.
   const { resolveProfile, PRODUCTION_PROFILES } = await import("../src/lib/tubeforge/director.ts");
-  for (const id of ["narrative","documentary","explainer","advertisement","animation","podcast","social"]) {
+  for (const id of ["narrative","documentary","explainer","advertisement","animation","podcast","social","islamic-history"]) {
     eq(resolveProfile(id).id, id, `${id} resolves`);
   }
   eq(resolveProfile("documentary").id, "documentary", "documentary accepted (was blocked pre-M1)");
   eq(resolveProfile("explainer").id, "explainer", "explainer accepted (was blocked pre-M1)");
-  eq(Object.keys(PRODUCTION_PROFILES).length, 7, "exactly seven profiles defined");
+  eq(Object.keys(PRODUCTION_PROFILES).length, 8, "exactly eight profiles defined (S49 added islamic-history)");
 });
 
 // ---------------------------------------------------------------------------
@@ -4125,11 +4125,14 @@ await test("S39 tenant ALS: module-graph duplication shares one storage", async 
 // The battery's full emission set — every check id qc.ts can push. The policy
 // matrix must classify exactly these, no more, no less: an id missing here is
 // a check nobody decided on; an extra id is a classification for a check
-// that never runs (drift the day a check is renamed).
+// that never runs (drift the day a check is renamed). S49 added
+// "restricted-visual" — emitted only when the caller ran the content-policy
+// scan, but it IS part of the battery's emission set and carries a severity.
 const S40_EMITTED_IDS = [
   "playable", "duration", "black-frames", "frozen-frames", "aspect",
   "loudness", "true-peak", "loudness-range", "dead-air", "static-shots",
   "flicker", "stutter", "cut-alignment", "tail-fade", "captions",
+  "restricted-visual",
 ] as const;
 
 const s40Check = (id: string, status: "pass" | "fail" | "unmeasured") => ({
@@ -4149,7 +4152,7 @@ const s40Report = (
   checks,
 });
 
-await test("S40 matrix: every battery check classified exactly once — 9 block, 6 report", () => {
+await test("S40 matrix: every battery check classified exactly once — 10 block, 6 report", () => {
   const matrixIds = Object.keys(QC_ENFORCEMENT_MATRIX).sort();
   const emitted = [...S40_EMITTED_IDS].sort();
   eq(matrixIds, emitted, "matrix ids == battery emission set (both directions)");
@@ -4158,7 +4161,7 @@ await test("S40 matrix: every battery check classified exactly once — 9 block,
     oneOf(entry.severity, ["block", "report"], `${id} severity`);
     ok(entry.why.length > 10, `${id} carries a readable rationale`);
   }
-  eq(QC_BLOCKING_COUNT, 9, "nine blocking checks (a flip here is a deliberate act)");
+  eq(QC_BLOCKING_COUNT, 10, "ten blocking checks — S49 added restricted-visual deliberately (a flip here is a deliberate act)");
   eq(
     Object.values(QC_ENFORCEMENT_MATRIX).filter((e) => e.severity === "report").length,
     6,
@@ -4909,6 +4912,206 @@ await test("S48 planStaticRuns: the pacing gate survives the v2 schema untouched
   const fast = JSON.parse(JSON.stringify(plan));
   fast.scenes[0].shots.forEach((s: { moveSpeed: string }) => { s.moveSpeed = "fast"; });
   eq(planStaticRuns(fast, {})[0].length, 3, "fast moveSpeed on a static camera is still flat pacing");
+});
+
+// ---------------------------------------------------------------------------
+// S49 — Islamic visual protection (restricted subjects, layered enforcement).
+// ---------------------------------------------------------------------------
+
+await test("S49 resolveContentPolicy: unknown/absent/garbage → standard, never silent activation", async () => {
+  const { resolveContentPolicy } = await import("../src/lib/tubeforge/restricted-subjects.ts");
+  eq(resolveContentPolicy(null), "standard", "null → standard");
+  eq(resolveContentPolicy(undefined), "standard", "undefined → standard");
+  eq(resolveContentPolicy(""), "standard", "empty → standard");
+  eq(resolveContentPolicy("Islamic-History "), "islamic-history", "trimmed + case-insensitive snap");
+  eq(resolveContentPolicy("islamic-history"), "islamic-history", "exact");
+  eq(resolveContentPolicy("gibberish"), "standard", "garbage → standard (fail-open direction is safe)");
+});
+
+await test("S49 scanRestrictedSubjects: the registry detects every tier, word-bounded", async () => {
+  const { scanRestrictedSubjects } = await import("../src/lib/tubeforge/restricted-subjects.ts");
+  const hits = (text: string) => scanRestrictedSubjects(text, "islamic-history").map((m) => m.entry);
+  // The Prophet (transliterations, honorifics, the definite reference).
+  ok(hits("Muhammad receives the first revelation in the cave of Hira").includes("the Prophet Muhammad ﷺ"), "Muhammad");
+  ok(hits("The Prophet prays in silence as dawn breaks").includes("the Prophet Muhammad ﷺ"), "the definite reference");
+  ok(hits("the Messenger of Allah turns toward Mecca").includes("the Prophet Muhammad ﷺ"), "messenger honorific");
+  // Possessives name ARTIFACTS and PLACES, not the figure — they pass (the
+  // alternative-composition library itself leans on "the Prophet's mosque",
+  // "the Prophet's green mantle"); the L4 pixel scan backstops abuse.
+  eq(hits("the Prophet's mosque at Medina, palm-trunk columns, empty courtyard").length, 0, "possessive place reference passes");
+  eq(hits("Muhammad's cloak rests folded on a stool").length, 0, "possessive artifact reference passes");
+  // The Ten + family + prophets + angels + God.
+  ok(hits("Abu Bakr speaks beside the mosque").includes("Abu Bakr"), "Abu Bakr");
+  ok(hits("Umar enters the courtyard").includes("Umar ibn al-Khattab"), "Umar");
+  ok(hits("Ali lifts the banner").includes("Ali ibn Abi Talib"), "Ali");
+  ok(hits("Khadijah listens at the door").includes("Khadijah"), "Khadijah");
+  ok(hits("Musa raises his staff toward the sea").includes("Musa"), "Musa");
+  ok(hits("Jesus teaches in the market").includes("Isa"), "Isa/Jesus");
+  ok(hits("the angel Jibril descends").includes("the angels"), "Jibril");
+  ok(hits("Gabriel appears in a dream").includes("the angels"), "Gabriel");
+  ok(hits("the mercy of Allah descends as golden light").includes("God (Allah)"), "Allah");
+  eq(hits("Allah's mercy fills the night sky as light").length, 0, "possessive divine-reference passes (light is the compliant rendering)");
+  // Word boundaries: substrings of ordinary words never fire.
+  eq(hits("the adamant merchant refuses the deal").length, 0, "'adamant' does not match Adam");
+  eq(hits("muhammadan-era calligraphy").length, 0, "'muhammadan' does not match (boundary)");
+  eq(hits("his job as a scribe in Damascus").length, 0, "common noun 'job' never matched (only 'prophet job')");
+  // What stays ALLOWED (the policy's whole point — compose around, don't ban).
+  eq(hits("gilded Arabic calligraphy on aged parchment, lamplight catching gold leaf").length, 0, "calligraphy allowed");
+  eq(hits("the open mushaf rests on its carved wooden rehal").length, 0, "the mushaf allowed");
+  eq(hits("the Prophet's mosque at Medina — palm-trunk columns, empty courtyard").length, 0, "sacred architecture allowed");
+  eq(hits("a distant caravan crosses the dunes, faces indistinct").length, 0, "anonymous distant crowds allowed");
+  // Standard policy: no restrictions at all.
+  eq(scanRestrictedSubjects("Muhammad in the cave of Hira", "standard").length, 0, "standard policy scans nothing");
+});
+
+await test("S49 sanitizePromptForPolicy: substitution, negative clause, identity", async () => {
+  const { sanitizePromptForPolicy, policyNegativeClause, ALTERNATIVE_COMPOSITIONS } =
+    await import("../src/lib/tubeforge/restricted-subjects.ts");
+  // Standard policy = the exact identity transform.
+  const standard = "The Prophet Muhammad stands in the cave of Hira. Wide 16:9 cinematic frame.";
+  eq(sanitizePromptForPolicy(standard, "standard").prompt, standard, "standard policy is identity (byte-for-byte)");
+  // Clean prompt under the policy → unchanged + the hard negative clause.
+  const clean = "Gilded Arabic calligraphy on parchment. Wide 16:9 cinematic frame.";
+  const cleanRes = sanitizePromptForPolicy(clean, "islamic-history");
+  eq(cleanRes.prompt, `${clean} ${policyNegativeClause("islamic-history")}`, "clean prompt gains only the negative clause");
+  eq(cleanRes.substituted, 0, "nothing substituted");
+  // Restricted sentence → REPLACED (never deleted), sibling sentences intact.
+  const dirty = "The Prophet Muhammad stands in the cave of Hira. The desert night sky wheels overhead. Wide 16:9 cinematic frame.";
+  const dirtyRes = sanitizePromptForPolicy(dirty, "islamic-history");
+  eq(dirtyRes.substituted, 1, "one sentence substituted");
+  ok(dirtyRes.matches.some((m) => m.entry === "the Prophet Muhammad ﷺ"), "the match is reported");
+  // The name is gone from the POSITIVE portion (the negative clause that
+  // remains MENTIONS the name by design — that is what it forbids).
+  const positive = dirtyRes.prompt.replace(policyNegativeClause("islamic-history"), "");
+  ok(!/Prophet Muhammad/i.test(positive), "the restricted name is GONE from the positive prompt");
+  ok(dirtyRes.prompt.includes("The desert night sky wheels overhead."), "the clean sibling sentence survives");
+  ok(dirtyRes.prompt.includes("Wide 16:9 cinematic frame."), "the boilerplate survives");
+  // The replacement is drawn from the alternative-composition library.
+  ok(
+    ALTERNATIVE_COMPOSITIONS.some((alt) => dirtyRes.prompt.includes(alt)),
+    "the substituted clause comes from the alternative-composition library"
+  );
+  // Deterministic: the same input always maps to the same output.
+  eq(
+    sanitizePromptForPolicy(dirty, "islamic-history").prompt,
+    dirtyRes.prompt,
+    "deterministic substitution (hash-picked)"
+  );
+  // appendNegative: false — metadata fields substitute without the clause.
+  const meta = sanitizePromptForPolicy("The Prophet Muhammad", "islamic-history", { appendNegative: false });
+  ok(!meta.prompt.includes("Absolutely no depiction"), "no negative clause on metadata fields");
+  ok(ALTERNATIVE_COMPOSITIONS.some((alt) => meta.prompt === alt), "the whole phrase was replaced");
+});
+
+await test("S49 policy overlays: empty for standard, doctrine for islamic-history", async () => {
+  const { policyVisualRules, policySystemOverlay } = await import("../src/lib/tubeforge/restricted-subjects.ts");
+  eq(policyVisualRules("standard"), "", "no visual rules under standard");
+  eq(policySystemOverlay("standard"), "", "no system overlay under standard");
+  const vr = policyVisualRules("islamic-history");
+  ok(vr.includes("ISLAMIC VISUAL PROTECTION"), "visual rules carry the doctrine");
+  ok(vr.includes("never let the visual description read as depicting them"), "narration-free rule present");
+  const so = policySystemOverlay("islamic-history");
+  ok(so.includes("No face, figure, silhouette or light-body"), "system overlay carries the shot-level law");
+});
+
+await test("S49 directorSystemPrompt: the policy overlay stacks on the profile voice", async () => {
+  const { directorSystemPrompt } = await import("../src/lib/tubeforge/director.ts");
+  const { resolveProfile } = await import("../src/lib/tubeforge/production-profiles.ts");
+  const plain = directorSystemPrompt(resolveProfile("narrative"));
+  const withPolicy = directorSystemPrompt(resolveProfile("narrative"), "islamic-history");
+  ok(!plain.includes("ISLAMIC VISUAL PROTECTION"), "no overlay without a policy");
+  ok(withPolicy.includes("ISLAMIC VISUAL PROTECTION"), "overlay appended under the policy");
+  ok(withPolicy.startsWith(plain.slice(0, 200)), "the profile voice still opens the prompt (they stack, not replace)");
+});
+
+await test("S49 parsePlan: contentPolicy provenance rides the plan", async () => {
+  const { parsePlan } = await import("../src/lib/tubeforge/director-plan.ts");
+  const plan = parsePlan(JSON.stringify({
+    version: 2, concept: "c",
+    contentPolicy: "islamic-history",
+    scenes: [{ sceneIndex: 1, mood: "m", shots: [{ shotIndex: 0, framing: "wide", camera: "static", lens: "35mm", composition: "rule of thirds", duration: 2, imagePrompt: "x" }] }],
+  }));
+  if (!plan) throw new Error("plan must parse");
+  eq(plan.contentPolicy, "islamic-history", "provenance parses");
+  const bare = parsePlan(JSON.stringify({
+    version: 2, concept: "c",
+    scenes: [{ sceneIndex: 1, mood: "m", shots: [{ shotIndex: 0, framing: "wide", camera: "static", lens: "35mm", composition: "rule of thirds", duration: 2, imagePrompt: "x" }] }],
+  }));
+  eq(bare?.contentPolicy, undefined, "absent provenance stays absent");
+});
+
+await test("S49 qc battery: the restricted-visual check rides the report when the scan ran", async () => {
+  const { runQcReport } = await import("../src/lib/tubeforge/qc.ts");
+  const opts = {
+    mp4Path: "/nonexistent/tf-s49/final.mp4",
+    videoDuration: 10,
+    narrationSec: null,
+    srtPath: null,
+  };
+  // Absent scan (standard policy) → the check is NOT emitted.
+  const plain = await runQcReport(opts);
+  eq(plain.checks.some((c) => c.id === "restricted-visual"), false, "no scan → no check (pre-S49 behavior)");
+  // A passing scan → the check is present and passes.
+  const pass = await runQcReport({ ...opts, restrictedScan: { status: "pass", value: "8 frame(s) compliant" } });
+  const passCheck = pass.checks.find((c) => c.id === "restricted-visual");
+  ok(passCheck !== undefined, "scan pass → check emitted");
+  eq(passCheck?.status, "pass", "pass status rides");
+  eq(passCheck?.value, "8 frame(s) compliant", "value rides");
+  // A failed scan → the check fails and the REPORT fails (it counts toward passed).
+  const fail = await runQcReport({ ...opts, restrictedScan: { status: "fail", value: "restricted figure depicted", detail: "frame 3" } });
+  const failCheck = fail.checks.find((c) => c.id === "restricted-visual");
+  eq(failCheck?.status, "fail", "fail status rides");
+  eq(fail.passed, false, "a failed scan fails the report");
+  // An unmeasured scan → the check is unmeasured and the report is NOT clean.
+  const un = await runQcReport({ ...opts, restrictedScan: { status: "unmeasured", value: "scan could not run" } });
+  eq(un.checks.find((c) => c.id === "restricted-visual")?.status, "unmeasured", "unmeasured status rides");
+  eq(un.passed, false, "an unmeasured scan never reads as clean");
+});
+
+await test("S49 qc gate: restricted-visual blocks export/publish (fail-closed)", async () => {
+  const { applyQcPolicy, QC_ENFORCEMENT_MATRIX } = await import("../src/lib/tubeforge/qc-policy.ts");
+  eq(QC_ENFORCEMENT_MATRIX["restricted-visual"]?.severity, "block", "matrix classifies restricted-visual as BLOCK");
+  const mk = (status: "pass" | "fail" | "unmeasured") => ({
+    passed: status === "pass",
+    checkedAt: "2026-11-07T00:00:00.000Z",
+    durationSec: 60,
+    checks: [
+      { id: "playable", label: "Plays", status: "pass" as const, value: "ok" },
+      { id: "restricted-visual", label: "Restricted", status, value: "fixture" },
+    ],
+  });
+  eq(applyQcPolicy(mk("pass")).blocked, false, "a passing scan does not block");
+  eq(applyQcPolicy(mk("fail")).blocked, true, "a failing scan blocks the export");
+  eq(applyQcPolicy(mk("unmeasured")).blocked, true, "an unmeasured scan blocks (fail-closed — a lens that never ran cannot certify)");
+  const finding = applyQcPolicy(mk("fail")).blockers.find((b) => b.id === "restricted-visual");
+  ok(finding !== undefined && finding.why.length > 10, "the finding carries its rationale");
+});
+
+await test("S49 runRestrictedVisualScan: a scan that cannot run reports unmeasured, never throws", async () => {
+  const { runRestrictedVisualScan } = await import("../src/lib/tubeforge/restricted-subjects.ts");
+  // A nonexistent input file: ffmpeg fails → the scan must catch and report
+  // "unmeasured" (the fail-closed contract — the QC gate then holds export).
+  const outcome = await runRestrictedVisualScan({ mp4Path: "/nonexistent/tf-s49/final.mp4", durationSec: 10 });
+  eq(outcome.status, "unmeasured", "a failed ffmpeg reports unmeasured");
+  ok(outcome.value.length > 0, "the outcome carries a value string");
+  ok(outcome.detail !== undefined && outcome.detail.length > 0, "the outcome carries the failure detail");
+});
+
+await test("S49 islamic-history profile: 8th profile, catalog + parsePlan snap agree", async () => {
+  const { PRODUCTION_PROFILES, PROFILE_IDS_CATALOG, resolveProfile } = await import("../src/lib/tubeforge/production-profiles.ts");
+  const { PROFILE_IDS, parsePlan } = await import("../src/lib/tubeforge/director-plan.ts");
+  ok(PRODUCTION_PROFILES["islamic-history"] !== undefined, "the 8th profile exists");
+  eq(PROFILE_IDS.includes("islamic-history"), true, "PROFILE_IDS carries it (parsePlan snap set)");
+  eq(PROFILE_IDS_CATALOG.includes("islamic-history"), true, "the catalog carries it");
+  const p = resolveProfile("islamic-history");
+  eq(p.id, "islamic-history", "resolver finds it");
+  ok(p.systemOverlay.includes("NEVER depicted"), "the profile's doctrine is in its voice");
+  // And a plan stamped with it parses.
+  const plan = parsePlan(JSON.stringify({
+    version: 2, concept: "c", profile: "islamic-history",
+    scenes: [{ sceneIndex: 1, mood: "m", shots: [{ shotIndex: 0, framing: "wide", camera: "static", lens: "35mm", composition: "rule of thirds", duration: 2, imagePrompt: "x" }] }],
+  }));
+  eq(plan?.profile, "islamic-history", "the plan's profile field snaps to the 8th id");
 });
 
 console.log(`\n${"─".repeat(56)}`);

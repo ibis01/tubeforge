@@ -1749,3 +1749,34 @@ Verification: tsc 0 · eslint 0 errors / **671 warnings — this sprint adds
 ZERO** (first draft's 12 non-null assertions refactored to narrowing guards
 before commit) · **206/206 unit** (197 + 9 S48). No DB changes; no provider
 changes; v1 plans render byte-identically.
+
+## S49 — Islamic Visual Protection (opened 2026-11-07 UTC)
+
+Sprint goal: the layered restricted-subject system — no facial/bodily depiction
+of the Prophet Muhammad ﷺ, his family, the Ten Companions, the Quranic
+prophets, the angels, or God, enforced system-wide and VERIFIED before export.
+Design contract: `docs/design/s48-s49-schema.md` §3 (the joint schema — the ONE
+migration both sprints needed: `Video.contentPolicy`).
+
+| Task | Status | Notes |
+|---|---|---|
+| T-49.1 the policy module | ✅ Done | `src/lib/tubeforge/restricted-subjects.ts`: `ContentPolicyId` (standard \| islamic-history), the registry (the Prophet ﷺ with transliterations + honorifics + the definite reference; the Ten Promised Paradise; the family; the Quranic prophets; angels; God; collectives), a compiled word-boundary detector (longest-alias-first; POSSESSIVES EXCLUDE — "the Prophet's mosque" names an artifact/place, and the system's own alternative-composition library leans on those), the alternative-composition clause library (12 person-free deterministically-picked substitutions), `sanitizePromptForPolicy` (sentence REPLACE, never delete + the hard negative clause; `appendNegative:false` for metadata fields), `policyVisualRules`/`policySystemOverlay`, and `runRestrictedVisualScan` (8 evenly-sampled frames → VLM judge; NEVER throws — failure reports "unmeasured"). |
+| T-49.2 the schema | ✅ Done | `Video.contentPolicy String?` (null = standard) in schema.prisma + the generated sqlite mirror; migration `20261107000000_s49_content_policy`. Set at create (validated snap in POST /api/videos); enforcement ALWAYS reads the column, never the profile. |
+| T-49.3 L1 compose | ✅ Done | `generateSceneScriptPackage` takes `contentPolicy`: policy rules appended to the VISUAL RULES, the "prefer faces/human-presence" visual-field rule INVERTED in policy mode, and `verifyScenePlan` gains audit rule 8 (rewrite non-compliant visuals). Wired through script-job.ts + the script + batch routes. |
+| T-49.4 L2 direct | ✅ Done | `directorSystemPrompt(profile, contentPolicy)` stacks the policy overlay on the profile voice; the parsed plan's shot imagePrompt/subject are sanitized BEFORE persist, substitutions ANNOUNCED via a warn-level activity row ("review before approving"); the plan carries `contentPolicy` provenance (parsePlan passthrough). |
+| T-49.5 L3 paint | ✅ Done | `generateSceneImage` + `ensureShotImages` sanitize the composed prompt (standard = byte-identical to pre-S49) with a visible console warn naming the substituted entries; `ImageRequest.negativePrompt` rides stability/fal/replicate/ideogram/recraft (ignored by z.ai/openai/pollinations — the positive-prompt clause carries the policy everywhere, so no provider is protected only by the negative field). |
+| T-49.6 L4+L5 verify + gate | ✅ Done | video-jobs runs `runRestrictedVisualScan` on final.mp4 at BOTH QC sites (post-render + QC re-run) under the policy; `runQcReport`/`qcForVideo` emit the `restricted-visual` check when the scan ran (absent under standard = pre-S49 behavior); `qc-policy.ts` classifies it **block** (policy version `s49-v1`; QC_BLOCKING_COUNT 9→10 — the deliberate-act test updated). Fail-closed: fail OR unmeasured holds export/publish; the audited human override remains the escape hatch. |
+| T-49.7 islamic-history profile | ✅ Done | The 8th production profile (documentary-style voice carrying the compose-around doctrine; v2 camera vocabulary; slow-pacing validation advisory). PROFILE_IDS + catalog sync pinned both ways. The S52 UI picker will default the POLICY on; runtime stays decoupled (enforcement reads the column). |
+| T-49.8 compatibility | ✅ Done | Standard policy = identity everywhere (sanitize is byte-for-byte; no scan; no check emitted; no prompt changes). 10 new unit tests (216/216) pin: the detector tiers + word boundaries + possessives, substitution/negative/identity, the QC emission + fail-closed gate table, the unmeasured-scan contract (real ffmpeg failure path), the 8th profile, and the two deliberate pin updates (profile count 7→8, blocking 9→10). |
+
+Verification: tsc 0 · eslint 0 errors / **669 warnings (below the 671 sandbox
+baseline — this sprint adds zero, net −2)** · **216/216 unit** (197 + 9 S48 +
+10 S49) · queue restart-recovery PASS · **live probes ALL CHECKS PASS**:
+`s49-policy-probe.mts` (real L1 script pass 8/8 compliant visuals → L2 v2 plan
+25/25 19-field shots, contentPolicy stamped, hard contract held → L3 real
+CogView paint 172 KB through the sanitized prompt; the S48 model hint rode the
+gateway default) and `s49-l2-visibility-probe.mts` (deliberately noncompliant
+seeded visuals → the overlay steered the model fully compliant, the policy
+outcome row always visible, the human stays the approval gate). Baselines:
+`docs/baselines/s49-policy-probe-2026-11-07.txt`. The S54 seven-genre
+benchmark owns full-render L4/L5 + genre-level scoring.

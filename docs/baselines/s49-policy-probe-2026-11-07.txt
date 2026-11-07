@@ -1,0 +1,14 @@
+S49 Islamic-visual-protection live probe — recorded 2026-11-07T04:13:31.495Z
+Path: real Z.ai gateway (script pass + director pass glm, CogView paint).
+Topic: "The revelation at Hira: how the first verses of the Quran reached the Prophet Muhammad and changed Arabia forever"
+
+§A L1 compose: 8/8 scene visuals composed around restricted
+   subjects raw (no restricted mention). Leaks: 0 — the layered design hands them to L2/L3.
+§B L2 direct: v2 plan, 19-field shots 25/25, contentPolicy stamped,
+   HARD CONTRACT held (zero restricted mentions in the sanitized plan).
+   Substitutions announced via warn activity rows: 0 field rewrite(s).
+§C L3 paint: real CogView paint through the sanitized prompt — 172784 bytes.
+
+L4/L5 (VLM frame scan + export gate) require a full render — unit-pinned; the S54
+seven-genre benchmark owns the full-render path. This file is the S49 evidence
+baseline for that benchmark.

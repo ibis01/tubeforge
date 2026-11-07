@@ -2101,3 +2101,93 @@ Gate: tsc 0 · eslint 0 errors / 671 warnings — this sprint adds ZERO
 narrowing guards before commit) · 206/206 unit. Next: S49 (Islamic
 visual protection) on the shared schema — Video.contentPolicy + the
 layered restricted-subject enforcement.
+
+## S49 (2026-11-07 UTC) — the names that must never wear a face
+
+S49 — Islamic visual protection, the sprint the whole transformation
+exists to make safe. The doctrine (docs/design/s48-s49-schema.md §3):
+in islamic-history policy mode, TubeForge never paints a face (or
+figure) of the Prophet Muhammad ﷺ, his family, the Ten Promised
+Paradise, the Quranic prophets, the angels, or God — and no single
+layer is trusted alone.
+
+The registry and its one honest subtlety. The detector is a compiled
+word-boundary regex over a curated alias list — transliterations,
+honorifics, the definite reference ("the Prophet" is safe to restrict
+in this mode because every Quranic prophet is itself restricted),
+longest-alias-first. The subtlety the tests caught: POSSESSIVES. "The
+Prophet's mosque at Medina" was flagged on first run — but that is a
+NAMED BUILDING, the exact composition mainstream Islamic media paints
+freely, and the exact composition our own alternative-composition
+library emits. The fix is a possessive exclusion in the match lookahead
+("the Prophet's cloak" names an artifact; "the Prophet stands" still
+matches), with the L4 pixel scan as the backstop for anything a
+possessive phrasing might smuggle through. The asymmetric-risk rule
+governs everything else: over-matching costs a substituted composition
+(visible, reviewable); under-matching costs the exact harm the policy
+exists to prevent.
+
+Five layers, each fail-visible, the gate fail-closed. L1 compose: the
+script pass carries policy rules in the VISUAL RULES and — critically —
+INVERTS its own "prefer concrete human-scale moments (hands, faces,
+crowds reacting)" rule in policy mode, because faces are exactly what
+the policy must not paint for revered figures; the scene-plan auditor
+gains rule 8 to rewrite non-compliant visuals. L2 direct: the director
+system prompt stacks the policy overlay on the profile voice; the
+parsed plan's shot prompts are sanitized BEFORE persist and every
+substitution is announced in a warn-level activity row — the human
+approves with eyes open. L3 paint: generateSceneImage and
+ensureShotImages sanitize the composed prompt (sentence REPLACE, never
+delete — a hole where a person was described reads as an error) and the
+hard negative clause rides every generation; ImageRequest.negativePrompt
+rides the five providers whose APIs take one, while the positive-prompt
+clause carries the policy everywhere, so no provider is protected only
+by the negative field. L4 verify: runRestrictedVisualScan samples 8
+frames evenly across final.mp4 and asks the VLM whether any frame
+PRESENTS a revered figure (haloed central figure, venerated
+composition, winged angel) — ordinary anonymous people, calligraphy,
+architecture pass by design; the scan NEVER throws (a crashed scan
+reports "unmeasured"). L5 gate: the restricted-visual check rides the
+QC report, severity BLOCK, policy version s49-v1 — fail or unmeasured
+holds export/publish exactly like the other ten blocking checks, and
+the audited human override remains the escape hatch.
+
+The schema: one column, one migration — Video.contentPolicy (null =
+standard = today's behavior byte-for-byte; the migration is the single
+DB change the whole S48+S49 joint design needed). Set at create with a
+validated snap; read by every layer; enforcement NEVER derives from the
+production profile — the islamic-history profile (the 8th, with its
+compose-around doctrine in its voice) is a creative voice whose S52 UI
+picker will DEFAULT the policy on, but the column is the one truth.
+
+Two deliberate pin updates, both visible: the profile count 7→8 and
+QC_BLOCKING_COUNT 9→10 (restricted-visual) — the tests demand those be
+deliberate acts, and they were.
+
+The live probes (both ALL CHECKS PASS, baselines in
+docs/baselines/s49-policy-probe-2026-11-07.txt). The main probe ran the
+REAL path end to end on the revelation-at-Hira topic: the L1 script
+pass composed 8/8 scene visuals around the restricted subjects raw;
+the L2 director pass produced a v2 plan with 25/25 shots carrying all
+19 fields, the contentPolicy stamp, and the hard contract held (zero
+restricted mentions); the L3 paint produced a real 172 KB CogView
+image through the sanitized prompt — with the S48 model hint riding
+the gateway default (no operator pin, the pass clean on first ask).
+The visibility probe seeded DELIBERATELY noncompliant visuals ("The
+Prophet Muhammad sits alone... his face lit by a strange divine glow")
+and the outcome taught the final design change: the policy overlay
+steered the model fully compliant, so the sanitizer had nothing to
+rewrite — and the original warn-only visibility would have been SILENT.
+Visibility is now UNCONDITIONAL: under the policy, the director always
+writes a policy outcome row (warn when the sanitizer rewrites, info
+when the model arrived compliant). Silent compliance is still silence.
+
+Gate: tsc 0 · eslint 0 errors / 669 warnings — BELOW the 671 sandbox
+baseline (zero net new; two dissolved) · 216/216 unit (10 new S49
+tests: detector tiers + boundaries + possessives,
+substitution/negative/identity, QC emission + the fail-closed gate
+table, the real ffmpeg-failure unmeasured path, the 8th profile) ·
+queue restart-recovery PASS. Next: S50 (the motion engine — per-shot
+xfade execution of transitionOut and the liveliness work), with the
+seven-genre benchmark (S54) owning live genre-level scoring of both
+new systems.

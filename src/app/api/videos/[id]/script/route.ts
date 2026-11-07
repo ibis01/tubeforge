@@ -96,6 +96,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           niche: video.niche,
           tone: video.tone,
           length: video.length,
+          contentPolicy: video.contentPolicy,
           character: character
             ? {
                 name: character.name,

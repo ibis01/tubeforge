@@ -58,6 +58,10 @@ import {
   musicBedActive,
 } from "./music";
 import { qcForVideo, qcForPreview, type QcReport } from "./qc";
+import {
+  resolveContentPolicy,
+  runRestrictedVisualScan,
+} from "./restricted-subjects";
 import { expectedCutsForTimeline } from "./render-qc";
 import type { ExpectedCuts } from "./render-qc";
 import { applyQcPolicy, qcEnforcementMode } from "./qc-policy";
@@ -649,6 +653,18 @@ export async function runRenderJob(
       // "animated" (i2v) and "stock" move every scene whatever the plan says.
       const approvedPlan =
         video.directorState === "approved" ? parsePlan(video.shotList) : null;
+      // S49 (L4) — under a restricted content policy, the restricted-visual
+      // scan runs on the rendered file BEFORE the battery emits its report;
+      // runRestrictedVisualScan never throws (a crashed scan reports
+      // "unmeasured", which the gate holds — fail-closed, never silently
+      // clean). Standard policy: no scan, no check, exactly as before.
+      const restrictedScan =
+        resolveContentPolicy(video.contentPolicy) === "islamic-history"
+          ? await runRestrictedVisualScan({
+              mp4Path: await (await import("./storage")).materialize(`${videoId}/final.mp4`),
+              durationSec: result.durationSec,
+            })
+          : undefined;
       const report = await qcForVideo(
         videoId,
         result.durationSec,
@@ -663,7 +679,8 @@ export async function runRenderJob(
         // S36 — the render just computed the continuity expectation from the
         // exact durations + boundaries it stitched; hold the pixels to it.
         result.expectedCuts ?? null,
-        frameRate
+        frameRate,
+        restrictedScan
       );
       await db.video.update({
         where: { id: videoId },
@@ -1448,6 +1465,16 @@ export async function runQcJob(videoId: string): Promise<void> {
         expectedCuts = expectedCutsForTimeline(docDur, settings);
       }
     }
+    // S49 (L4) — the QC re-run honors the content policy exactly like the
+    // post-render battery: restricted policy → the visual scan re-runs on the
+    // standing final.mp4 (fail-closed on any scan failure).
+    const restrictedScan =
+      resolveContentPolicy(video.contentPolicy) === "islamic-history"
+        ? await runRestrictedVisualScan({
+            mp4Path: await (await import("./storage")).materialize(`${videoId}/final.mp4`),
+            durationSec: video.videoDuration ?? 1,
+          })
+        : undefined;
     const report = await qcForVideo(
       videoId,
       video.videoDuration,
@@ -1460,7 +1487,8 @@ export async function runQcJob(videoId: string): Promise<void> {
         stockEverywhere: video.renderMode === "stock",
       },
       expectedCuts,
-      video.frameRate === 24 || video.frameRate === 60 ? video.frameRate : 30
+      video.frameRate === 24 || video.frameRate === 60 ? video.frameRate : 30,
+      restrictedScan
     );
     await db.video.update({
       where: { id: videoId },

@@ -113,6 +113,15 @@ export async function POST(req: NextRequest) {
       ? String(body.renderMode)
       : "kenburns";
 
+    // S49 — the content policy (Islamic visual protection). Snapped against
+    // the real ids; unknown/absent = null (the "standard" policy — today's
+    // behavior). Deliberate human choice, recorded on the row, read by every
+    // enforcement layer.
+    const contentPolicy =
+      String(body.contentPolicy ?? "").trim().toLowerCase() === "islamic-history"
+        ? "islamic-history"
+        : null;
+
     // Stage 5 (module A) — research sources attached at create (the Classic
     // script path from a radar idea). Same validation as the greenlight
     // snapshot: http(s) URLs only, ≤6, field lengths capped.
@@ -208,6 +217,7 @@ export async function POST(req: NextRequest) {
         characterId,
         format,
         renderMode,
+        contentPolicy,
         researchSources,
         musicEnabled,
         musicTrackId,

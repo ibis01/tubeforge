@@ -12,9 +12,10 @@ import fs from "fs";
 import path from "path";
 import { imageGenerate } from "./providers/image";
 import { aiCall } from "./budget";
-import { getVideoTopicWorld, topicWorldClause } from "./story";
+import { getVideoTopicWorld, topicWorldClause, getVideoContentPolicy } from "./story";
 import { videoDir } from "./ai";
 import { focalFromToken } from "./motion";
+import { sanitizePromptForPolicy } from "./restricted-subjects";
 import type { Scene } from "./types";
 import type { MoveKind } from "./motion";
 import type { DirectorScene } from "./director-plan";
@@ -298,7 +299,9 @@ export function shotImageFile(sceneIndex: number, shot: number): string {
  *  executions carry their own prompts — imagePrompt leads). Shots whose
  *  generation fails are DEMOTED to pseudo (crop over the scene image) in the
  *  returned plan, so the render always has a full shot list. Returns the
- *  updated plan — the caller never mutates. */
+ *  updated plan — the caller never mutates. S49: under a restricted content
+ *  policy the composed prompt is sanitized (restricted-figure sentences →
+ *  alternative compositions + the hard negative clause rides along). */
 export async function ensureShotImages(opts: {
   videoId: string;
   scene: Scene;
@@ -309,6 +312,8 @@ export async function ensureShotImages(opts: {
   // art paints under (story.ts). Read once per scene; an absent world means
   // the shot prompt passes through untouched.
   const anchor = topicWorldClause(await getVideoTopicWorld(opts.videoId));
+  // S49 (L3) — the content policy for this video, read once per scene.
+  const contentPolicy = await getVideoContentPolicy(opts.videoId);
   const available: ShotExecution[] = [];
   for (const shot of opts.plan.available) {
     if (shot.source !== "extra" || !shot.prompt) {
@@ -320,13 +325,22 @@ export async function ensureShotImages(opts: {
       available.push(shot); // already generated (re-render / resume)
       continue;
     }
+    // Compose, then sanitize under the policy (standard = identity + no
+    // negative clause — byte-identical to the pre-S49 prompt).
+    const composed = anchor ? `${shot.prompt} ${anchor}.` : shot.prompt;
+    const sanitized = sanitizePromptForPolicy(composed, contentPolicy);
+    if (sanitized.substituted > 0) {
+      console.warn(
+        `[shots] scene ${opts.scene.index} shot ${shot.shotIndex}: content policy substituted ${sanitized.substituted} sentence(s) naming restricted subject(s): ${sanitized.matches.map((m) => m.entry).join(", ")}`
+      );
+    }
     try {
       const buffer = await aiCall(
         "image",
         `scene ${opts.scene.index} shot ${shot.shotIndex}`,
         () =>
           imageGenerate({
-            prompt: anchor ? `${shot.prompt!} ${anchor}.` : shot.prompt!,
+            prompt: sanitized.prompt,
             size: "1344x768",
           }),
         { attempts: 2, baseDelayMs: 4000 }

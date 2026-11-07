@@ -9,7 +9,7 @@
 ## 1. Current architecture (reconciled at S47, 2026-11-06 UTC)
 
 **Source of truth:** `prisma/schema.prisma` (31 models), `prisma/migrations/`
-(18 migrations), `src/lib/tubeforge/` (97 modules), `src/app/api/` (103 route
+(19 migrations), `src/lib/tubeforge/` (98 modules), `src/app/api/` (103 route
 files). This section was rewritten from those sources during S47 — the
 Stage-1-era snapshot that lived here before described a single-user,
 11-model system that no longer exists anywhere in the repo.
@@ -46,7 +46,7 @@ Stage-1-era snapshot that lived here before described a single-user,
 - **Engine:** PostgreSQL in production, SQLite for local dev. ONE source
   schema (`schema.prisma`, 31 models); the SQLite mirror is GENERATED from
   it (`scripts/sync-sqlite-schema.mjs`) — it cannot drift. Schema changes
-  ship as versioned `prisma/migrations/` (18 today; SQLite provisions via
+  ship as versioned `prisma/migrations/` (19 today; SQLite provisions via
   `db push` in the setup path).
 - **Tenancy:** `User` / `Organization` / `Membership` (owner, admin,
   editor, viewer); every content model carries `organizationId` with
@@ -119,10 +119,19 @@ Stage-1-era snapshot that lived here before described a single-user,
 | --- | --- | --- |
 | Login lockout | `AuthAttempt` table, rolling window | S46 |
 | Paid-spend gate | `SpendReservation` + ONE serialized READ-check-RESERVE transaction per paid admit (Serializable on Postgres; single-writer SQLite) | S47 |
+| Content policy | `Video.contentPolicy` column — the one switch every enforcement layer reads (script-pass rules, director overlay + plan sanitization, image-prompt substitution + negative clause, restricted-visual QC gate); "standard" when null | S49 |
 | Job queue | DB rows claimed atomically; workers recover after death | Stage 3 |
 | Sessions | `Session` rows, server-side revocation | Stage 2 |
 | Rate-limit buckets | in-process (deferred to Redis) | open |
 | Budget pacing / 429 cool-downs | in-process, per-instance (advisory only) | open |
+
+S48/S49 additions to the pipeline contract: the Director plan is schema v2
+(the 19-field cinematic shot; engine-verbatim camera vocabulary —
+`director-plan.ts`), the Director pass pins a director-grade model hint
+(`llm.ts#resolveChatModel`: operator pick > hint > gateway default), and the
+content-policy system (`restricted-subjects.ts`) provides the layered
+Islamic visual protection (compose → direct → paint → verify → gate;
+`docs/design/s48-s49-schema.md` §3).
 
 ### 1.8 Known gaps vs the §2 target
 

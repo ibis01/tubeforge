@@ -270,6 +270,44 @@ const PROFILES: ProductionProfile[] = [
       return issues;
     },
   },
+  {
+    id: "islamic-history",
+    label: "Islamic history",
+    // S49 — the 8th profile. It is a DOCUMENTARY-style voice whose creative
+    // doctrine composes around revered figures, AND the profile whose S52 UI
+    // picker will default Video.contentPolicy to "islamic-history". The two
+    // are deliberately decoupled at runtime: enforcement ALWAYS reads the
+    // Video.contentPolicy column (set by the human), never the profile — a
+    // narrative video about the seerah can carry the policy, and an
+    // islamic-history-profiled video about Andalusian architecture can run
+    // without it.
+    systemOverlay: `You are the AI Director of an Islamic-history production. Voice: reverent, evidence-led, unhurried — the dignity of the subject sets the pace. Compose EVERY shot around, never on, the revered figures of Islamic history: the Prophet Muhammad, his family, the Companions, the prophets, the angels and God are NEVER depicted — no faces, figures, silhouettes or light-bodies. Direct the eye to what carries the story instead: calligraphy, the Kaaba and sacred architecture, the mushaf and its rehal, a reed pen, a mantle, lamplight on stone, desert horizons, anonymous distant crowds with indistinct faces. needsI2V for weather, caravans and light; useStock only for present-day documentary b-roll of real places. Camera stays grounded and patient — slow zoom-in for reverence, pans across calligraphy and architecture. Pacing biases slow; the weight of the history earns the time.`,
+    defaultTone: {
+      transitionBias: "fade",
+      pacingBias: "slow",
+      shotDensity: "sparse",
+    },
+    vocabularies: {
+      framings: ["wide", "medium", "close-up", "extreme close-up", "aerial"],
+      cameras: ["static", "zoom-in", "zoom-out", "pan-left", "pan-right", "tilt-up", "tilt-down", "diag-br"],
+      transitions: TRANSITION_IDS.filter((id) => id === "fade" || id === "fadeblack" || id === "cut"),
+    },
+    validation: (plan) => {
+      // This profile's own discipline check is advisory (the human approves);
+      // the BLOCKING enforcement lives in the content policy layers
+      // (restricted-subjects.ts), not here.
+      const issues: string[] = [];
+      const calm = plan.scenes.filter(
+        (s) => s.shots.filter((sh) => sh.moveSpeed === "fast").length > s.shots.length / 2
+      );
+      if (calm.length > 0) {
+        issues.push(
+          `${calm.length} islamic-history scene(s) are majority fast moveSpeed — reverence reads better slow (scenes: ${calm.slice(0, 3).map((s) => s.sceneIndex).join(", ")}).`
+        );
+      }
+      return issues;
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
