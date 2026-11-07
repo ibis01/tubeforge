@@ -989,6 +989,11 @@ export interface GraphShotInput {
   /** S48 — per-shot intensity multiplier (Director moveSpeed; 1 = the
    *  video-level motion intensity, the pre-S48 behavior). */
   speed?: number;
+  /** S50 — the S48 deferred field, executing: "fade" crossfades THIS shot
+   *  into the next ("cut"/absent = the hard concat cut, the pre-S50
+   *  behavior). The LAST shot's hand-off is ignored — the scene-level
+   *  transitionIn governs scene boundaries. */
+  transitionOut?: string;
 }
 
 /** PSEUDO_CROPS coordinates are authored against the 16:9 work canvas. */
@@ -1033,14 +1038,32 @@ function fitFrames(raw: number[], total: number): number[] {
   return out;
 }
 
+/** S50 — the intra-scene shot hand-off duration (seconds) when the plan asks
+ * for transitionOut "fade". Capped at 1/4 of the shorter adjacent shot so a
+ * dissolve never eats a beat. Exported for the tests that pin the math. */
+export const SHOT_FADE_SEC = 0.4;
+
+/** S50 — the palindrome loop graph (render.ts#ensureSceneLoop executes it):
+ * forward + reverse joined, so a clip shorter than its scene loops with NO
+ * visible rewind (the raw forward loop's jump-cut every clip-length
+ * seconds). The two turning points duplicate one frame each — 33 ms at
+ * 30 fps, imperceptible — and looping the palindrome crosses the boundary
+ * with a 1-frame step. Exported so the real-ffmpeg test pins the exact graph
+ * the renderer runs. */
+export const PALINDROME_LOOP_GRAPH =
+  "[0:v]split=2[f][r];[r]reverse[rr];[f][rr]concat=n=2:v=1:a=0[v]";
+
 /**
  * M2 — the multi-image scene graph (the spec's ONE real render change).
  * Where sceneFilterGraph splits ONE image into N movement segments, this
  * gives every shot its OWN input image (the scene art for shot 0 and pseudo
  * crops, fresh AI renders for extras), runs each through its own zoompan
  * (d=1, pre-timed — the same shape the single-image graph uses, and the
- * slides compositor's no-looped-demuxer lesson), then concats. The frame
- * budget is exact: per-shot frame counts sum to round(dur*fps), so the cut
+ * slides compositor's no-looped-demuxer lesson), then joins them. S50: the
+ * join honors the plan's per-shot hand-off — "fade" pairs blend through an
+ * xfade chain (frame-budget compensated, below), everything else keeps the
+ * single hard concat. The frame budget stays EXACT either way: per-shot
+ * frame counts (minus the xfade overlaps) sum to round(dur*fps), so the cut
  * points land on the reconciled ShotExecution.sec boundaries and the audio
  * (mixed against the same timeline) never drifts.
  */
@@ -1067,10 +1090,53 @@ export function multiShotSceneGraph(opts: {
     return `[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},scale=${ow}:${oh},format=yuv420p${grade ? `,${grade}` : ""}[v]`;
   }
 
-  const frames = fitFrames(
-    list.map((s) => Math.max(s.sec, 0.01)),
-    totalFrames
+  // S50 — the per-shot hand-offs: "fade" crossfades into the next shot. The
+  // frame-budget law survives the xfade by construction: an xfade OVERLAPS
+  // its duration (the pair's output runs `fade` frames shorter), so the trim
+  // budget is EXTENDED by exactly the fade total — the visible timeline
+  // still lands on round(dur*fps) and the audio never drifts.
+  const wantsFade = (i: number) =>
+    i >= 0 && i < list.length - 1 && list[i].transitionOut === "fade";
+  const fadeRaw = list.map((s, i) =>
+    wantsFade(i)
+      ? Math.max(
+          2,
+          Math.round(
+            Math.min(
+              SHOT_FADE_SEC,
+              Math.min(Math.max(s.sec, 0.01), Math.max(list[i + 1].sec, 0.01)) / 4
+            ) * fps
+          )
+        )
+      : 0
   );
+  const fadeTotal = fadeRaw.reduce((a, b) => a + b, 0);
+
+  const secs = list.map((s) => Math.max(s.sec, 0.01));
+  const frames = fitFrames(secs, totalFrames + fadeTotal);
+  // Re-cap the fades against the FITTED allocation (a rounding edge could
+  // fit a neighbor tighter than its raw seconds) and pay any debt back from
+  // the largest shots so the OUTPUT total stays exactly totalFrames:
+  // output = Σframes − Σfades.
+  let debt = 0;
+  const fades = fadeRaw.map((f, i) => {
+    if (f <= 0) return 0;
+    const cap = Math.floor(Math.min(frames[i], frames[i + 1]) / 4);
+    const v = Math.min(f, cap);
+    debt += f - v;
+    return v;
+  });
+  if (debt > 0) {
+    const bySize = frames.map((f, i) => [f, i] as const).sort((a, b) => b[0] - a[0]);
+    for (let g = 0; debt > 0 && g < bySize.length * 4; g++) {
+      const i = bySize[g % bySize.length][1];
+      if (frames[i] > 2) {
+        frames[i] -= 1;
+        debt -= 1;
+      }
+    }
+  }
+
   const cover = `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}`;
 
   // One base chain per DISTINCT input; inputs feeding several shots (the
@@ -1106,10 +1172,37 @@ export function multiShotSceneGraph(opts: {
     );
   });
 
-  parts.push(
-    `${list.map((_, i) => `[v${i}]`).join("")}concat=n=${list.length}:v=1:a=0[vc]`,
-    `[vc]${grade ? grade : "null"}[v]`
-  );
+  if (fades.every((f) => f === 0)) {
+    // The pre-S50 join: one hard concat, byte-identical.
+    parts.push(
+      `${list.map((_, i) => `[v${i}]`).join("")}concat=n=${list.length}:v=1:a=0[vc]`,
+      `[vc]${grade ? grade : "null"}[v]`
+    );
+    return parts.join(";");
+  }
+
+  // S50 — the mixed join: fade pairs blend through xfade, cut pairs concat.
+  // accLen tracks the accumulated OUTPUT frames (xfade consumes its overlap)
+  // so every xfade offset lands exactly where the pair meets.
+  let accLen = frames[0];
+  let acc = "[v0]";
+  for (let k = 1; k < list.length; k++) {
+    const f = fades[k - 1];
+    const outLabel = k === list.length - 1 ? "[vc]" : `[x${k}]`;
+    if (f > 0) {
+      const offset = (accLen - f) / fps;
+      parts.push(
+        `${acc}[v${k}]xfade=transition=fade:duration=${fmt(f / fps, 4)}:offset=${fmt(Math.max(offset, 0), 4)}${outLabel}`
+      );
+      accLen = accLen - f + frames[k];
+    } else {
+      parts.push(`${acc}[v${k}]concat=n=2:v=1:a=0${outLabel}`);
+      accLen += frames[k];
+    }
+    acc = outLabel;
+  }
+  // Invariant: accLen === totalFrames (the audio-sync law).
+  parts.push(`[vc]${grade ? grade : "null"}[v]`);
   return parts.join(";");
 }
 

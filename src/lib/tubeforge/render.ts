@@ -56,6 +56,7 @@ import {
   sanitizeMotion,
   studioCameraPlan,
   MOTION_DEFAULTS,
+  PALINDROME_LOOP_GRAPH,
   OUTPUT_SIZES,
   type MotionScenePlan,
   type MotionSettings,
@@ -78,6 +79,8 @@ import {
 } from "./studio-doc";
 import { getApprovedMotionMap, getApprovedAudioMap, getApprovedPlan, type DirectorScene } from "./director-plan";
 import { buildSceneShots, ensureShotImages, PSEUDO_CROPS, type SceneShotPlan } from "./shots";
+import { sanitizePromptForPolicy } from "./restricted-subjects";
+import { getVideoContentPolicy } from "./story";
 // S35 — Universal Scene Liveliness: the per-scene channel selector + the
 // plan-aware i2v motion prompt. The renderer reads the world once (plan,
 // provider, stock files) and the PURE selector decides who plays.
@@ -302,6 +305,17 @@ async function ensureSceneClip(
   }
   const videoModel = videoConfig.model?.trim() || VIDEO_DEFAULT_MODEL;
 
+  // S50 — the i2v motion prompt rides the content policy like every other
+  // generation surface (the S49 L3 gap in the VIDEO path: the storyboard
+  // image was sanitized, but the motion prompt that animates it was not —
+  // a noncompliant scene.visual could steer the clip toward depicting a
+  // restricted figure). sanitizePromptForPolicy is the identity under the
+  // standard policy.
+  const motionPrompt = sanitizePromptForPolicy(
+    i2vMotionPrompt(scene, directorScene),
+    await getVideoContentPolicy(videoId)
+  ).prompt;
+
   const zai = await zaiClientFor("video");
   const clip = await aiCall(
     "video",
@@ -314,7 +328,7 @@ async function ensureSceneClip(
       const buf = await zaiVideoViaClient(
         zai,
         {
-          prompt: i2vMotionPrompt(scene, directorScene),
+          prompt: motionPrompt,
           imagePngBase64: imageB64,
         },
         {
@@ -333,6 +347,30 @@ async function ensureSceneClip(
   );
 
   return clip;
+}
+
+/**
+ * S50 — a seamless loop source for clips shorter than their scene. The raw
+ * `-stream_loop -1` forward loop REWINDS visibly every clip-length seconds —
+ * the 5s "groundhog day" jump-cut on any longer scene (most narration scenes
+ * run 8–18s). The palindrome (forward + reverse) never rewinds: its only
+ * artifacts are single duplicated frames at the two turning points (33 ms at
+ * 30 fps — imperceptible), and looping the palindrome crosses the boundary
+ * with a 1-frame step. Cached beside the clip; built once per clip.
+ */
+async function ensureSceneLoop(clipPath: string, fps: number): Promise<string> {
+  const loopPath = clipPath.replace(/(\.\w+)$/, "-loop.mp4");
+  if (fs.existsSync(loopPath) && fs.statSync(loopPath).size > 10_000) return loopPath;
+  await run("ffmpeg", [
+    "-i", clipPath,
+    "-filter_complex", PALINDROME_LOOP_GRAPH,
+    "-map", "[v]",
+    "-r", String(fps),
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+    "-pix_fmt", "yuv420p",
+    "-an", "-y", loopPath,
+  ]);
+  return loopPath;
 }
 
 // ---------- Per-niche music beds ----------
@@ -421,12 +459,13 @@ export function droneSource(profile: MusicProfile): string {
  *  went missing between generation and composition (cleaned scratch dir,
  *  interrupted re-render) demote to pseudo crops over the scene art — the
  *  render always receives a full shot list (spec §1.8 floor). S48: the
- *  per-shot focal anchor + moveSpeed multiplier ride through verbatim. */
+ *  per-shot focal anchor + moveSpeed multiplier ride through verbatim. S50:
+ *  the hand-off rides too (transitionOut → the shot graph's xfade). */
 function resolveShotInputs(
   dir: string,
   plan: SceneShotPlan,
   sceneImg: string
-): { file: string; moveKind: MoveKind; sec: number; crop?: { w: number; h: number; x: number; y: number }; focal?: { x: number; y: number }; speed?: number }[] {
+): { file: string; moveKind: MoveKind; sec: number; crop?: { w: number; h: number; x: number; y: number }; focal?: { x: number; y: number }; speed?: number; transitionOut?: string }[] {
   const out: {
     file: string;
     moveKind: MoveKind;
@@ -434,11 +473,12 @@ function resolveShotInputs(
     crop?: { w: number; h: number; x: number; y: number };
     focal?: { x: number; y: number };
     speed?: number;
+    transitionOut?: string;
   }[] = [];
   for (const sh of plan.available) {
     const file = path.join(dir, sh.imageFile);
     if (sh.source === "scene" || fs.existsSync(file)) {
-      out.push({ file, moveKind: sh.moveKind, sec: sh.sec, crop: sh.crop, focal: sh.focal, speed: sh.speed });
+      out.push({ file, moveKind: sh.moveKind, sec: sh.sec, crop: sh.crop, focal: sh.focal, speed: sh.speed, transitionOut: sh.transitionOut });
       continue;
     }
     out.push({
@@ -448,6 +488,7 @@ function resolveShotInputs(
       crop: sh.crop ?? PSEUDO_CROPS[sh.shotIndex % PSEUDO_CROPS.length],
       focal: sh.focal,
       speed: sh.speed,
+      transitionOut: sh.transitionOut,
     });
   }
   return out;
@@ -708,6 +749,7 @@ async function buildSegment(opts: {
           crop: sh.crop,
           focal: sh.focal,
           speed: sh.speed,
+          transitionOut: sh.transitionOut,
         })),
       });
       // The PIP logo rides AFTER the shot stills (input order: 0 = scene
@@ -751,8 +793,20 @@ async function buildSegment(opts: {
   if (chan === "i2v") {
     try {
       const clip = await ensureSceneClip(opts.videoId, scene, opts.directorScene ?? null);
+      // S50 — scenes longer than the generated clip loop a PALINDROME
+      // (forward + reverse) instead of the raw forward loop's visible
+      // rewind every clip-length seconds. Clips shorter than the scene keep
+      // their exact file (byte-identical legacy path).
+      let loopSrc = clip;
+      try {
+        const clipDur = await probeDuration(clip);
+        if (dur > clipDur - 0.2) loopSrc = await ensureSceneLoop(clip, fps);
+      } catch {
+        // A probe/palindrome failure never fails the render — the raw loop
+        // is the pre-S50 behavior and still plays.
+      }
       await run("ffmpeg", [
-        "-stream_loop", "-1", "-t", dur.toFixed(3), "-i", clip,
+        "-stream_loop", "-1", "-t", dur.toFixed(3), "-i", loopSrc,
         "-i", wav,
         ...audio.inputs,
         ...pipInputs,

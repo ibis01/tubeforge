@@ -5114,6 +5114,271 @@ await test("S49 islamic-history profile: 8th profile, catalog + parsePlan snap a
   eq(plan?.profile, "islamic-history", "the plan's profile field snaps to the 8th id");
 });
 
+// ---------------------------------------------------------------------------
+// S50 — the Motion Engine: per-shot hand-offs (the S48 deferred field
+// executing), the v2 vocabulary in the i2v prompt, and the palindrome loop.
+// ---------------------------------------------------------------------------
+
+await test("S50 multiShotSceneGraph: per-shot fade — the xfade chain with an EXACT frame budget", async () => {
+  const { multiShotSceneGraph, SHOT_FADE_SEC } = await import("../src/lib/tubeforge/motion.ts");
+  const settings = { mode: "smart", intensity: 40, curve: "smooth", vary: true } as never;
+  const fps = 30;
+  // 3 shots (4s/3s/3s), fade after shot 0, cut after shot 1 — the mixed join.
+  const g = multiShotSceneGraph({
+    dur: 10, settings, fps,
+    shots: [
+      { kind: "zoom-in", sec: 4, input: 0, transitionOut: "fade" },
+      { kind: "pan-right", sec: 3, input: 0, transitionOut: "cut" },
+      { kind: "zoom-out", sec: 3, input: 4 },
+    ] as never,
+  });
+  // The xfade join replaces the single concat.
+  ok(g.includes("xfade=transition=fade:"), "the fade pair blends through xfade");
+  ok(!g.includes("concat=n=3"), "the single hard concat is gone when a fade is present");
+  ok(g.includes("concat=n=2:v=1:a=0"), "the CUT pair still hard-concats (mixed join)");
+  // Frame budget: Σtrims − Σxfade-overlaps === round(dur*fps) — the audio-sync
+  // law survives the fades by compensation.
+  const frames = [...g.matchAll(/trim=end_frame=(\d+)/g)].map((m) => Number(m[1]));
+  const xfades = [...g.matchAll(/xfade=transition=fade:duration=([\d.]+):/g)].map((m) => Number(m[1]));
+  eq(frames.length, 3, "one trim per shot");
+  eq(xfades.length, 1, "one xfade (only the fade pair)");
+  const overlapFrames = xfades.reduce((a, d) => a + Math.round(d * fps), 0);
+  approx(frames.reduce((a, b) => a + b, 0) - overlapFrames, 300, 0.5,
+    "output frames = round(10s × 30fps) EXACTLY (fades compensated)");
+  // The fade duration obeys SHOT_FADE_SEC capped by 1/4 of the shorter shot.
+  ok(xfades[0] <= SHOT_FADE_SEC + 1e-6, "fade ≤ SHOT_FADE_SEC");
+  ok(xfades[0] <= Math.min(4, 3) / 4 + 1e-6, "fade ≤ 1/4 of the shorter adjacent shot");
+  // The xfade offset lands exactly where the pair meets: offset = (shot0
+  // frames − fade frames)/fps.
+  const off = Number(g.match(/xfade=transition=fade:[^:]*:offset=([\d.]+)/)?.[1] ?? -1);
+  approx(off, (frames[0] - overlapFrames) / fps, 0.01, "the xfade offset meets the pair boundary");
+
+  // "cut"/absent everywhere → the pre-S50 single-concat join, byte-identical.
+  const noFade = multiShotSceneGraph({
+    dur: 10, settings, fps,
+    shots: [
+      { kind: "zoom-in", sec: 4, input: 0 },
+      { kind: "pan-right", sec: 3, input: 0 },
+      { kind: "zoom-out", sec: 3, input: 4 },
+    ] as never,
+  });
+  ok(noFade.includes("concat=n=3:v=1:a=0[vc]") && !noFade.includes("xfade"),
+    "no fades → the legacy single concat (pre-S50 behavior)");
+  const nf = [...noFade.matchAll(/trim=end_frame=(\d+)/g)].map((m) => Number(m[1]));
+  approx(nf.reduce((a, b) => a + b, 0), 300, 0, "legacy path keeps the exact budget");
+
+  // The LAST shot's hand-off is ignored (scene boundaries belong to
+  // transitionIn) — no trailing xfade, budget exact.
+  const lastFade = multiShotSceneGraph({
+    dur: 6, settings, fps,
+    shots: [
+      { kind: "zoom-in", sec: 3, input: 0 },
+      { kind: "zoom-out", sec: 3, input: 0, transitionOut: "fade" },
+    ] as never,
+  });
+  ok(!lastFade.includes("xfade"), "the last shot's fade is ignored");
+  ok(lastFade.includes("concat=n=2"), "the pair hard-cuts");
+});
+
+await test("S50 multiShotSceneGraph fade render contract: the xfade chain renders with EXACT duration (real ffmpeg)", async () => {
+  const { multiShotSceneGraph } = await import("../src/lib/tubeforge/motion.ts");
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "tf-s50-"));
+  try {
+    const imgA = path.join(tmp, "scene-01.png");
+    const imgB = path.join(tmp, "shot-01-1.png");
+    const wav = path.join(tmp, "scene-01.wav");
+    await genFixture(imgA, ["-f", "lavfi", "-i", "testsrc2=size=1280x720", "-frames:v", "1"]);
+    await genFixture(imgB, ["-f", "lavfi", "-i", "smptebars=size=1280x720", "-frames:v", "1"]);
+    await genFixture(wav, ["-f", "lavfi", "-i", "sine=frequency=220:duration=4", "-ar", "48000", "-ac", "2"]);
+
+    const fps = 12;
+    const dur = 4;
+    const settings = { mode: "smart", intensity: 40, curve: "smooth", vary: true } as never;
+    // Two shots, fade hand-off between them — the smallest real fixture that
+    // exercises the xfade join buildSegment would assemble.
+    const graph = multiShotSceneGraph({
+      dur, settings, fps,
+      shots: [
+        { kind: "zoom-in", sec: 2, input: 0, transitionOut: "fade" },
+        { kind: "pan-right", sec: 2, input: 2 },
+      ] as never,
+    });
+    ok(graph.includes("xfade=transition=fade:"), "fixture graph carries the xfade");
+
+    const out = path.join(tmp, "seg.mp4");
+    await genFixture(out, [
+      "-loop", "1", "-framerate", String(fps), "-t", String(dur), "-i", imgA,
+      "-i", wav,
+      "-loop", "1", "-framerate", String(fps), "-t", "3", "-i", imgB,
+      "-filter_complex", `${graph};[1:a]anull[a]`,
+      "-map", "[v]", "-map", "[a]",
+      "-t", String(dur),
+      ...FFMPEG_COMMON,
+    ]);
+    const probe = await execFileAsync(
+      "ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", out],
+      { timeout: 60_000, maxBuffer: 1024 * 1024 }
+    );
+    approx(parseFloat(probe.stdout.trim()), dur, 0.2, "fade segment duration stays exact (compensated budget)");
+
+    // The blend really blends: a frame INSIDE the fade window is neither of
+    // its pure sources (a mix of testsrc2 and smptebars).
+    const fadeSec = Number(graph.match(/xfade=transition=fade:duration=([\d.]+):/)?.[1] ?? 0);
+    const offset = Number(graph.match(/xfade=transition=fade:[^:]*:offset=([\d.]+)/)?.[1] ?? 0);
+    const fPure = path.join(tmp, "pure.png");
+    const fBlend = path.join(tmp, "blend.png");
+    await genFixture(fPure, ["-ss", String(offset - fadeSec * 0.5), "-i", out, "-frames:v", "1"]);
+    await genFixture(fBlend, ["-ss", String(offset + fadeSec * 0.5), "-i", out, "-frames:v", "1"]);
+    const bPure = await fsp.readFile(fPure);
+    const bBlend = await fsp.readFile(fBlend);
+    ok(!bPure.equals(bBlend), "the fade window shows a blended frame (motion inside the hand-off)");
+  } finally {
+    await fsp.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+await test("S50 i2vMotionPrompt: the v2 vocabulary speaks, subjectAction leads, moveSpeed colors", async () => {
+  const { i2vMotionPrompt, I2V_CAMERA_PHRASES } = await import("../src/lib/tubeforge/liveliness.ts");
+  const { CAMERA_MOVES } = await import("../src/lib/tubeforge/director-plan.ts");
+  const scene = {
+    index: 1, title: "T", narration: "n",
+    visual: "the harbor at dawn, gulls wheeling over the mastheads",
+    camera: "static", mood: "cold morning light", caption: "c",
+    hostInScene: false, rehook: false, sfx: "none",
+  } as never;
+  // Every v2 engine verb has a phrase — the S50 split-brain closure.
+  for (const verb of CAMERA_MOVES) {
+    ok(I2V_CAMERA_PHRASES[verb] !== undefined, `v2 verb "${verb}" has an i2v phrase`);
+  }
+  // The plan's shot 0 steers: camera + moveSpeed + subjectAction.
+  const planScene = {
+    sceneIndex: 1, mood: "m", transitionIn: "", motion: "smart",
+    needsI2V: false, useStock: false, pacing: "normal", ambience: "none", sfx: "none",
+    shots: [{
+      shotIndex: 0, framing: "wide", camera: "diag-br", lens: "35mm", composition: "rule of thirds",
+      duration: 3, imagePrompt: "the quay", subjectAction: "gulls banking hard over the wake",
+      cameraHeight: "eye-level", angle: "front", depthOfField: "deep", focal: "",
+      moveSpeed: "slow", transitionOut: "cut", purpose: "establish", notes: "",
+    }],
+  } as never;
+  const p = i2vMotionPrompt(scene, planScene);
+  ok(p.startsWith("Slow, deliberate gentle diagonal camera drift"),
+    "moveSpeed colors the camera phrase (slow → 'Slow, deliberate …')");
+  ok(p.includes("Gulls banking hard over the wake"),
+    "the director's subjectAction REPLACES the generic subject clause");
+  ok(!p.includes("Natural ambient motion within the scene"),
+    "the generic per-kind clause stepped aside");
+  ok(p.includes("the harbor at dawn"), "the scene visual rides the prompt");
+  // Fallbacks: no plan → the scene camera + the per-kind clause.
+  const bare = i2vMotionPrompt(scene, null);
+  ok(bare.startsWith("Locked-off camera"), "no plan → the scene camera phrase");
+  ok(bare.includes("Natural ambient motion within the scene") || bare.includes("ambient"),
+    "no plan → the per-kind subject clause");
+  // fast modulation
+  const fastScene = JSON.parse(JSON.stringify(planScene));
+  fastScene.shots[0].moveSpeed = "fast";
+  const pf = i2vMotionPrompt(scene, fastScene);
+  ok(pf.startsWith("Quick, energetic "), "fast moveSpeed colors the phrase");
+  // An unknown verb still degrades to the generic drift (defensive; the
+  // moveSpeed prefix still rides on top of it).
+  const junk = JSON.parse(JSON.stringify(planScene));
+  junk.shots[0].camera = "not-a-verb";
+  const pj = i2vMotionPrompt(scene, junk);
+  ok(/subtle cinematic camera drift/i.test(pj), "unknown verb → generic drift (speed prefix may ride)");
+});
+
+await test("S50 buildSceneShots carries transitionOut into the execution", async () => {
+  const { buildSceneShots } = await import("../src/lib/tubeforge/shots.ts");
+  const scene = {
+    index: 1, title: "T", narration: "n", visual: "v", camera: "static",
+    mood: "m", caption: "c", hostInScene: false, rehook: false, sfx: "none",
+  } as never;
+  const planScene = {
+    sceneIndex: 1, mood: "m", transitionIn: "", motion: "smart",
+    needsI2V: false, useStock: false, pacing: "normal", ambience: "none", sfx: "none",
+    shots: [
+      { shotIndex: 0, framing: "wide", camera: "zoom-in", lens: "35mm", composition: "rule of thirds", duration: 2.5, imagePrompt: "a", transitionOut: "fade" },
+      { shotIndex: 1, framing: "medium", camera: "static", lens: "35mm", composition: "rule of thirds", duration: 2.5, imagePrompt: "b" },
+    ],
+  } as never;
+  const plan = buildSceneShots({ scene, planScene, measuredSec: 5 });
+  eq(plan.available[0].transitionOut, "fade", "shot 0's fade rides the execution");
+  eq(plan.available[1].transitionOut, undefined, "absent hand-off stays absent (no fade)");
+});
+
+await test("S50 PALINDROME_LOOP_GRAPH: the loop the renderer runs really loops seamlessly (real ffmpeg)", async () => {
+  const { PALINDROME_LOOP_GRAPH } = await import("../src/lib/tubeforge/motion.ts");
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "tf-s50-loop-"));
+  try {
+    // A 2s clip with continuous SMOOTH motion (an animated gradient sweep —
+    // compression-friendly, so the same-frame re-encode noise stays tiny
+    // while frame-to-frame motion stays visible).
+    const fps = 12;
+    const clip = path.join(tmp, "scene-01.mp4");
+    await genFixture(clip, [
+      "-f", "lavfi", "-i", "gradients=size=320x180:n=2:speed=0.2:rate=" + fps, "-t", "2",
+      ...FFMPEG_COMMON,
+    ]);
+    // The exact command ensureSceneLoop runs.
+    const loop = path.join(tmp, "scene-01-loop.mp4");
+    await genFixture(loop, [
+      "-i", clip,
+      "-filter_complex", PALINDROME_LOOP_GRAPH,
+      "-map", "[v]", "-r", String(fps),
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+      "-pix_fmt", "yuv420p", "-an",
+    ]);
+    // Duration ≈ 2× the clip (fwd + rev).
+    const probe = async (f: string) =>
+      parseFloat((await execFileAsync(
+        "ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", f],
+        { timeout: 60_000, maxBuffer: 1024 * 1024 }
+      )).stdout.trim());
+    const clipDur = await probe(clip);
+    const loopDur = await probe(loop);
+    approx(loopDur, clipDur * 2, 0.25, "palindrome duration ≈ 2× the clip");
+    // Seamlessness at the pixel level, by EXACT frame index (time-based -ss
+    // rounding straddles the turning frame unpredictably): the palindrome's
+    // frames N−1 and N are the duplicated turning pair (the SAME source
+    // frame — they differ only by re-encode noise), while the raw forward
+    // loop's frames N−1 and N jump from the clip's LAST frame to its FIRST
+    // (the rewind defect). Mean-absolute-difference on 64x64 gray decodes.
+    const countFrames = async (f: string): Promise<number> => {
+      const r = await execFileAsync(
+        "ffprobe",
+        ["-v", "error", "-count_packets", "-select_streams", "v:0", "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", f],
+        { timeout: 60_000, maxBuffer: 1024 * 1024 }
+      );
+      return parseInt(String(r.stdout).trim(), 10) || 0;
+    };
+    const gray = async (f: string, idx: number): Promise<Buffer> => {
+      const r = await execFileAsync(
+        "ffmpeg",
+        ["-i", f, "-vf", `select=eq(n\\,${idx}),scale=64x64,format=gray`, "-frames:v", "1", "-f", "rawvideo", "pipe:1"],
+        { timeout: 60_000, maxBuffer: 1024 * 1024, encoding: "buffer" }
+      );
+      return r.stdout as unknown as Buffer;
+    };
+    const mad = (x: Buffer, y: Buffer): number => {
+      const n = Math.min(x.length, y.length);
+      let s = 0;
+      for (let i = 0; i < n; i++) s += Math.abs(x[i] - y[i]);
+      return n ? s / n : 255;
+    };
+    const N = await countFrames(clip);
+    ok(N >= 20, `the fixture clip has a sane frame count (${N})`);
+    const rawLoop = path.join(tmp, "raw-loop.mp4");
+    await genFixture(rawLoop, ["-stream_loop", "1", "-i", clip, "-t", String(clipDur * 2), ...FFMPEG_COMMON]);
+    const palMad = mad(await gray(loop, N - 1), await gray(loop, N));
+    const rawMad = mad(await gray(rawLoop, N - 1), await gray(rawLoop, N));
+    ok(palMad < 5, `palindrome turning pair is the SAME frame (MAD ${palMad.toFixed(1)} < 5 — re-encode noise only)`);
+    ok(rawMad > Math.max(12, palMad * 3),
+      `the raw forward loop's boundary jumps last→first (MAD ${rawMad.toFixed(1)} ≫ ${palMad.toFixed(1)}) — the defect S50 fixes`);
+  } finally {
+    await fsp.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 console.log(`\n${"─".repeat(56)}`);
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);

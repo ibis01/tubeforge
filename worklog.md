@@ -2191,3 +2191,56 @@ queue restart-recovery PASS. Next: S50 (the motion engine — per-shot
 xfade execution of transitionOut and the liveliness work), with the
 seven-genre benchmark (S54) owning live genre-level scoring of both
 new systems.
+
+## S50 (2026-11-07 UTC) — the hand-off that finally dissolves, and the loop that stops rewinding
+
+S50 — the Motion Engine. The design doc's one deliberately deferred field
+executes, and studying the engine for it surfaced three more real defects,
+all fixed.
+
+The deferred field, executed. multiShotSceneGraph now honors the plan's
+per-shot transitionOut: a "fade" hand-off blends the pair through an xfade
+chain while cut pairs keep their hard concat — mixed joins compose (fade,
+cut, fade in one scene works). The hard part was the frame-budget law: an
+xfade OVERLAPS its duration, so a naive chain shortens the scene against
+its narration — audio drift, the one thing the render never does. The fix
+is compensation by construction: the trim budget is extended by exactly the
+fade total (fades capped at 0.4s and 1/4 of the shorter adjacent shot,
+recapped against the fitted allocation, any rounding debt repaid from the
+largest shots), so the OUTPUT frame count stays exactly round(dur·fps).
+Pinned offline (offset math + the invariant) and on real ffmpeg (exact
+duration + a genuinely blended frame inside the fade window). No fades
+anywhere → the single hard concat, byte-identical to pre-S50 — v1 plans
+and default "cut" hands render exactly as before.
+
+The split-brain S48 killed for Ken Burns was still alive in the generative
+path: I2V_CAMERA_PHRASES covered the legacy verbs (push-in, crane-up,
+drone — which a generative model can genuinely honor, so they are NOT
+approximated there) but not the new v2 engine verbs — an approved
+camera:"diag-br" or "punch-in" on an i2v scene animated as generic drift.
+The table now covers the full v2 vocabulary, shot 0's moveSpeed colors the
+phrase (slow/fast), and shot 0's subjectAction — the director's specific
+motion ask — replaces the generic per-kind subject clause when present.
+
+Two integration fixes found while implementing. The content policy now
+rides video generation: ensureSceneClip sanitizes the i2v motion prompt
+under Video.contentPolicy — the S49 gap where the storyboard IMAGE was
+sanitized but the motion prompt that animates it was not. And the i2v
+"groundhog day" defect: scenes longer than the generated 5s clip looped
+with -stream_loop -1, a visible rewind jump every five seconds on the 8-18s
+scenes that are the norm. ensureSceneLoop builds a palindrome (forward +
+reverse) once per clip and loops THAT — the turning points duplicate a
+single 33ms frame, and the real-ffmpeg test proves the seam by exact frame
+index: the turning pair is the same frame (MAD = re-encode noise only)
+while the raw loop's boundary jumps last-to-first.
+
+One deliberate deferral, on record: aspect-aware i2v generation (9:16
+clips for 9:16 renders) waits for aspect-aware storyboards — the seeds
+are 16:9-only today, and a 9:16 clip from a 16:9 seed is geometrically
+dishonest. Documented in TASKS.md.
+
+Gate: tsc 0 · eslint 0 errors / 669 warnings — below the 671 baseline
+again (this sprint adds zero; one prefer-const dissolved) · 221/221 unit
+(5 new S50, two real ffmpeg) · queue restart-recovery PASS. Next: S51
+(the visual continuity engine — the reference-images seam the audit
+flagged as dead schema, and the S47 benchmark's portrait-age finding).

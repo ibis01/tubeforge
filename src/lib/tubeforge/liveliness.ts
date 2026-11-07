@@ -149,23 +149,36 @@ export function selectChannels(input: LivelinessInput): LivelinessDecision[] {
 /** Director/legacy camera id → generative-motion camera phrase. Ken Burns
  *  must approximate crane/drone/handheld with zooms and drifts (shots.ts's
  *  CAMERA_TO_MOVE); a generative model can actually DO them, so the phrases
- *  name the real move. */
+ *  name the real move. S50: the table now covers the FULL v2 engine-verbatim
+ *  vocabulary too — diag-tl/diag-br/punch-in used to degrade to generic
+ *  drift (the same split-brain S48 killed for Ken Burns, still alive here). */
 export const I2V_CAMERA_PHRASES: Readonly<Record<string, string>> = {
-  // The Director vocabulary (CAMERA_MOVES).
-  "push-in": "steady dramatic push in toward the subject",
-  "pull-out": "smooth slow pull-out revealing the wider scene",
+  // The v2 engine-verbatim vocabulary (S48 CAMERA_MOVES).
+  static: "locked-off camera — the motion lives in the subjects themselves",
+  "zoom-in": "slow cinematic zoom in",
+  "zoom-out": "slow cinematic zoom out revealing the scene",
   "pan-left": "smooth lateral camera pan to the left with natural parallax",
   "pan-right": "smooth lateral camera pan to the right with natural parallax",
   "tilt-up": "smooth camera tilt upward",
   "tilt-down": "smooth camera tilt downward",
+  "diag-tl": "gentle diagonal camera drift toward the upper left, natural parallax",
+  "diag-br": "gentle diagonal camera drift toward the lower right, natural parallax",
+  "punch-in": "fast punch-in that settles on the subject — hard emphasis, then stillness",
+  // The legacy Director verbs (pre-S48 plans; a generative model CAN honor
+  // them, so unlike Ken Burns they are NOT approximated here).
+  "push-in": "steady dramatic push in toward the subject",
+  "pull-out": "smooth slow pull-out revealing the wider scene",
   "dolly-in": "smooth dolly move in toward the subject with natural parallax",
   handheld: "organic handheld camera sway, subtle documentary shake",
   "crane-up": "smooth crane rise revealing the scene from above",
   drone: "slow aerial drone pull-back reveal",
-  static: "locked-off camera — the motion lives in the subjects themselves",
-  // The legacy storyboard ids (the old motionPrompt's five, kept verbatim).
-  "zoom-in": "slow cinematic zoom in",
-  "zoom-out": "slow cinematic zoom out revealing the scene",
+};
+
+/** S50 — moveSpeed modulation: the director's per-shot speed colors the
+ *  camera phrase (slow = weight and reverence, fast = energy). */
+const I2V_SPEED_PREFIX: Readonly<Record<string, string>> = {
+  slow: "slow, deliberate ",
+  fast: "quick, energetic ",
 };
 
 /** Scene kind → what should MOVE inside the frame. The per-kind split is the
@@ -195,14 +208,18 @@ function cap(s: string): string {
  *
  * Camera source: the approved plan's shot 0 (the scene image IS shot 0's
  * frame — the i2v seed), falling back to the scene's own legacy camera field,
- * then the generic drift. The subject-motion clause comes from the scene
- * kind (classifyScene — the same classifier the camera engine uses).
+ * then the generic drift. S50: shot 0's moveSpeed modulates the phrase, and
+ * shot 0's subjectAction — the director's specific motion ask — REPLACES the
+ * generic per-kind subject clause when present (the per-kind classifier
+ * stays the fallback).
  */
 export function i2vMotionPrompt(scene: Scene, planScene: DirectorScene | null): string {
   const kind = classifyScene(scene);
-  const camera = planScene?.shots?.[0]?.camera ?? scene.camera ?? null;
-  const camPhrase =
-    (camera && I2V_CAMERA_PHRASES[camera]) || I2V_DEFAULT_CAMERA;
-  const subject = I2V_SUBJECT_MOTION[kind];
-  return `${cap(camPhrase)}. ${subject} ${scene.visual}. ${scene.mood}. ${I2V_TAIL}`;
+  const shot0 = planScene?.shots?.[0] ?? null;
+  const camera = shot0?.camera ?? scene.camera ?? null;
+  let camPhrase = (camera && I2V_CAMERA_PHRASES[camera]) || I2V_DEFAULT_CAMERA;
+  const speedPrefix = shot0?.moveSpeed ? I2V_SPEED_PREFIX[shot0.moveSpeed] : undefined;
+  if (speedPrefix) camPhrase = speedPrefix + camPhrase;
+  const subject = shot0?.subjectAction?.trim() || I2V_SUBJECT_MOTION[kind];
+  return `${cap(camPhrase)}. ${cap(subject)} ${scene.visual}. ${scene.mood}. ${I2V_TAIL}`;
 }

@@ -1780,3 +1780,26 @@ seeded visuals → the overlay steered the model fully compliant, the policy
 outcome row always visible, the human stays the approval gate). Baselines:
 `docs/baselines/s49-policy-probe-2026-11-07.txt`. The S54 seven-genre
 benchmark owns full-render L4/L5 + genre-level scoring.
+
+## S50 — the Motion Engine (opened 2026-11-07 UTC)
+
+Sprint goal: execute the S48 deferred field (`transitionOut: "fade"`), close the v2
+vocabulary gap in the generative path, carry the content policy into video
+generation, and kill the i2v "groundhog day" rewind. Scope note: aspect-aware
+i2v generation was deliberately DEFERRED — the storyboard seeds are 16:9-only
+today (`story.ts` hardcodes 1344x768), so a 9:16 clip from a 16:9 seed is
+geometrically dishonest; it lands with aspect-aware storyboards, not here.
+
+| Task | Status | Notes |
+|---|---|---|
+| T-50.1 per-shot hand-offs execute | ✅ Done | `multiShotSceneGraph` honors `GraphShotInput.transitionOut`: "fade" pairs blend through an **xfade chain**, cut pairs keep hard concat (mixed joins compose). The frame-budget law survives BY CONSTRUCTION: an xfade overlaps its duration, so the trim budget is extended by exactly the fade total (recapped against the fitted allocation; any debt is repaid from the largest shots) — output frames === round(dur·fps) EXACTLY, the audio never drifts. `SHOT_FADE_SEC = 0.4` capped at 1/4 of the shorter adjacent shot; the LAST shot's hand-off is ignored (scene boundaries belong to transitionIn). No fades anywhere → the single hard concat, byte-identical to pre-S50. `buildSceneShots` + `resolveShotInputs` carry the field end to end. |
+| T-50.2 the v2 vocabulary in the generative path | ✅ Done | `I2V_CAMERA_PHRASES` now covers every v2 engine verb (diag-tl, diag-br, punch-in — previously degraded to generic drift, the same split-brain S48 killed for Ken Burns). `i2vMotionPrompt`: shot 0's `moveSpeed` colors the camera phrase (slow/fast prefixes), and shot 0's `subjectAction` — the director's specific motion ask — REPLACES the generic per-kind subject clause when present. |
+| T-50.3 the policy rides video generation | ✅ Done | `ensureSceneClip` sanitizes the i2v motion prompt under `Video.contentPolicy` (the S49 L3 gap in the VIDEO path: the storyboard image was sanitized, the motion prompt that animates it was not). Identity under the standard policy. |
+| T-50.4 the palindrome loop | ✅ Done | `ensureSceneLoop`: scenes longer than the generated clip loop a PALINDROME (forward + reverse, `PALINDROME_LOOP_GRAPH` in motion.ts) instead of the raw forward loop's visible rewind every clip-length seconds. Turning points duplicate one frame (33 ms @ 30 fps — imperceptible). Cached beside the clip; probe/palindrome failure never fails the render (raw loop = the pre-S50 behavior). |
+| T-50.5 compatibility + tests | ✅ Done | 5 new tests (221/221): the xfade chain offline (offset math, budget invariant, mixed joins, last-shot fade ignored, legacy byte-identity), a REAL-ffmpeg fade render (exact duration + a blended frame inside the fade window), the i2v prompt table/prompt contracts, the execution pass-through, and a REAL-ffmpeg palindrome test (exact frame-index extraction: the turning pair is the same frame — MAD re-encode-noise-only — vs the raw loop's last→first jump). |
+
+Verification: tsc 0 · eslint 0 errors / **669 warnings (below the 671 baseline;
+this sprint adds zero)** · **221/221 unit** (216 + 5 S50, two of them real
+ffmpeg) · queue restart-recovery PASS. The live i2v path (generation cost)
+belongs to the S54 seven-genre benchmark; S50's deliverables are the graph/prompt
+contracts, pinned above.

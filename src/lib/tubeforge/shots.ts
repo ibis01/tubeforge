@@ -86,6 +86,9 @@ export interface ShotExecution {
   /** S48 — moveSpeed → intensity multiplier (MOVE_SPEED_FACTOR); absent =
    *  1 (the video-level motion intensity, unchanged). */
   speed?: number;
+  /** S50 — the plan's hand-off into the next shot ("fade" executes as an
+   *  intra-scene xfade in the shot graph; "cut"/absent = the hard cut). */
+  transitionOut?: string;
 }
 
 /** All shots of one scene, ordered; durations sum ≈ the scene duration. */
@@ -169,6 +172,9 @@ export function buildSceneShots(input: {
       // execution verbatim (absent = the scene heuristic / video intensity).
       focal: focalFromToken(sh.focal) ?? undefined,
       speed: MOVE_SPEED_FACTOR[sh.moveSpeed ?? "normal"] ?? 1,
+      // S50: the hand-off rides too (parsePlan fills "cut" by default —
+      // v1 plans and the no-plan path never fade).
+      transitionOut: sh.transitionOut,
     };
   });
 
