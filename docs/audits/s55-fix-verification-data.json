@@ -1,0 +1,622 @@
+{
+ "recorded": "2026-11-07T20:30:04.773Z",
+ "commit": "1d79f9951ebbf288592de0ed4a332b616564b363",
+ "anchorScenes": [
+  {
+   "index": 1,
+   "title": "Rooftop",
+   "narration": "Every forecast starts somewhere high, dry, and windy — tonight, that's Nova's rooftop station.",
+   "visual": "host presenting beside a small rooftop weather station at dusk, city skyline behind",
+   "camera": "push-in",
+   "mood": "dusk skyline, cool blues with warm rim light",
+   "caption": "the station",
+   "hostInScene": true,
+   "rehook": false,
+   "sfx": "none"
+  },
+  {
+   "index": 2,
+   "title": "Street",
+   "narration": "And when the radar says run, Nova runs — umbrella first, questions second.",
+   "visual": "host walking a rain-slick street under a dark umbrella, streetlights reflecting on asphalt",
+   "camera": "pan-right",
+   "mood": "night rain, glossy reflections",
+   "caption": "the run",
+   "hostInScene": true,
+   "rehook": true,
+   "sfx": "whoosh"
+  },
+  {
+   "index": 3,
+   "title": "Wrap",
+   "narration": "By sunset the front has passed, and the park gets the calm Nova promised at the top of the show.",
+   "visual": "host standing in a calm park at golden hour, relaxed, closing the segment",
+   "camera": "pull-out",
+   "mood": "golden hour warmth, soft haze",
+   "caption": "the calm",
+   "hostInScene": true,
+   "rehook": false,
+   "sfx": "none"
+  }
+ ],
+ "planRaw": "{\"version\":2,\"generatedAt\":\"2026-11-07T20:25:30.833Z\",\"concept\":\"A warm, cinematic journey through Nova's field guide to city weather, following her from rooftop observations to street-level responses and finally to peaceful resolution. The visual narrative emphasizes the contrast between different weather conditions and Nova's consistent presence as a knowledgeable guide.\",\"profile\":\"narrative\",\"musicMood\":\"cinematic\",\"ducking\":\"standard\",\"contentPolicy\":\"standard\",\"scenes\":[{\"sceneIndex\":1,\"mood\":\"dusk skyline, cool blues with warm rim light\",\"transitionIn\":\"\",\"motion\":\"smart\",\"needsI2V\":false,\"useStock\":false,\"pacing\":\"normal\",\"ambience\":\"city\",\"sfx\":\"none\",\"outfit\":\"dark green flight jacket\",\"accessory\":\"small silver ear stud\",\"shots\":[{\"shotIndex\":0,\"framing\":\"wide\",\"camera\":\"static\",\"lens\":\"24mm wide\",\"composition\":\"rule of thirds\",\"duration\":2.8,\"imagePrompt\":\"Nova standing beside a small rooftop weather station at dusk, city skyline behind\",\"subject\":\"Nova\",\"subjectAction\":\"observing weather instruments\",\"cameraHeight\":\"eye-level\",\"angle\":\"front\",\"depthOfField\":\"deep\",\"lighting\":\"golden hour rim light\",\"colorGrade\":\"teal-orange\",\"focal\":\"center\",\"moveSpeed\":\"normal\",\"transitionOut\":\"cut\",\"purpose\":\"establish\",\"notes\":\"\"},{\"shotIndex\":1,\"framing\":\"medium\",\"camera\":\"zoom-in\",\"lens\":\"50mm\",\"composition\":\"leading lines\",\"duration\":2.6,\"imagePrompt\":\"Close-up of Nova's weather station with digital readouts\",\"subject\":\"weather station\",\"subjectAction\":\"displaying temperature and humidity data\",\"cameraHeight\":\"eye-level\",\"angle\":\"front\",\"depthOfField\":\"shallow\",\"lighting\":\"cool blue ambient with warm rim light\",\"colorGrade\":\"teal-orange\",\"focal\":\"center\",\"moveSpeed\":\"normal\",\"transitionOut\":\"cut\",\"purpose\":\"detail\",\"notes\":\"\"}]},{\"sceneIndex\":2,\"mood\":\"night rain, glossy reflections\",\"transitionIn\":\"cut\",\"motion\":\"smart\",\"needsI2V\":false,\"useStock\":false,\"pacing\":\"fast\",\"ambience\":\"rain\",\"sfx\":\"whoosh\",\"outfit\":\"dark green flight jacket\",\"accessory\":\"small silver ear stud\",\"shots\":[{\"shotIndex\":0,\"framing\":\"close-up\",\"camera\":\"punch-in\",\"lens\":\"85mm\",\"composition\":\"negative space\",\"duration\":1.8,\"imagePrompt\":\"Nova's face under umbrella, rain droplets visible\",\"subject\":\"Nova\",\"subjectAction\":\"looking determined under umbrella\",\"cameraHeight\":\"eye-level\",\"angle\":\"front\",\"depthOfField\":\"shallow\",\"lighting\":\"streetlamp glow with deep shadows\",\"colorGrade\":\"cool desaturated blues\",\"focal\":\"\",\"moveSpeed\":\"fast\",\"transitionOut\":\"cut\",\"purpose\":\"reveal\",\"notes\":\"Opening punch as requested\"},{\"shotIndex\":1,\"framing\":\"medium\",\"camera\":\"pan-right\",\"lens\":\"35mm\",\"composition\":\"rule of thirds\",\"duration\":1.7,\"imagePrompt\":\"Nova walking down rain-slick street with reflections\",\"subject\":\"Nova\",\"subjectAction\":\"walking confidently down wet street\",\"cameraHeight\":\"eye-level\",\"angle\":\"profile\",\"depthOfField\":\"deep\",\"lighting\":\"streetlamp reflections on wet asphalt\",\"colorGrade\":\"cool desaturated blues\",\"focal\":\"right\",\"moveSpeed\":\"normal\",\"transitionOut\":\"cut\",\"purpose\":\"contextualize\",\"notes\":\"\"},{\"shotIndex\":2,\"framing\":\"extreme close-up\",\"camera\":\"zoom-out\",\"lens\":\"100mm\",\"composition\":\"frame within frame\",\"duration\":1.5,\"imagePrompt\":\"Umbrella handle with rain droplets falling\",\"subject\":\"umbrella handle\",\"subjectAction\":\"rain droplets sliding off metal surface\",\"cameraHeight\":\"high-angle\",\"angle\":\"front\",\"depthOfField\":\"shallow\",\"lighting\":\"diffuse streetlamp glow\",\"colorGrade\":\"cool desaturated blues\",\"focal\":\"center\",\"moveSpeed\":\"slow\",\"transitionOut\":\"cut\",\"purpose\":\"detail\",\"notes\":\"\"}]},{\"sceneIndex\":3,\"mood\":\"golden hour warmth, soft haze\",\"transitionIn\":\"fade\",\"motion\":\"smart\",\"needsI2V\":false,\"useStock\":false,\"pacing\":\"slow\",\"ambience\":\"nature\",\"sfx\":\"boom\",\"outfit\":\"dark green flight jacket\",\"accessory\":\"small silver ear stud\",\"shots\":[{\"shotIndex\":0,\"framing\":\"medium\",\"camera\":\"static\",\"lens\":\":50mm\",\"composition\":\"golden ratio\",\"duration\":2.5,\"imagePrompt\":\"Nova standing relaxed in a calm park at golden hour\",\"subject\":\"Nova\",\"subjectAction\":\"smiling gently as sun sets\",\"cameraHeight\":\"eye-level\",\"angle\":\"three-quarter\",\"depthOfField\":\"deep\",\"lighting\":\"warm golden hour sun with soft haze\",\"colorGrade\":\"warm sepia\",\"focal\":\"center\",\"moveSpeed\":\"slow\",\"transitionOut\":\"cut\",\"purpose\":\"establish\",\"notes\":\"\"},{\"shotIndex\":1,\"framing\":\"wide\",\"camera\":\"tilt-up\",\"lens\":\"24mm wide\",\"composition\":\"leading lines\",\"duration\":2.6,\"imagePrompt\":\"Park setting with trees framing Nova at sunset\",\"subject\":\"park setting\",\"subjectAction\":\"bathed in warm golden light\",\"cameraHeight\":\"low-angle\",\"angle\":\"front\",\"depthOfField\":\"deep\",\"lighting\":\"soft warm sunset glow\",\"colorGrade\":\"warm sepia\",\"focal\":\"upper\",\"moveSpeed\":\"normal\",\"transitionOut\":\"cut\",\"purpose\":\"contextualize\",\"notes\":\"\"},{\"shotIndex\":2,\"framing\":\"close-up\",\"camera\":\"zoom-in\",\"lens\":\"85mm\",\"composition\":\"negative space\",\"duration\":2.6,\"imagePrompt\":\"Nova's face with soft golden hour lighting\",\"subject\":\"Nova\",\"subjectAction\":\"looking directly at camera with calm expression\",\"cameraHeight\":\"eye-level\",\"angle\":\"front\",\"depthOfField\":\"shallow\",\"lighting\":\"warm golden hour rim light\",\"colorGrade\":\"warm sepia\",\"focal\":\"\",\"moveSpeed\":\"slow\",\"transitionOut\":\"fade\",\"purpose\":\"payoff\",\"notes\":\"\"}]}]}",
+ "planParsed": {
+  "version": 2,
+  "generatedAt": "2026-11-07T20:25:30.833Z",
+  "concept": "A warm, cinematic journey through Nova's field guide to city weather, following her from rooftop observations to street-level responses and finally to peaceful resolution. The visual narrative emphasizes the contrast between different weather conditions and Nova's consistent presence as a knowledgeable guide.",
+  "profile": "narrative",
+  "musicMood": "cinematic",
+  "ducking": "standard",
+  "contentPolicy": "standard",
+  "scenes": [
+   {
+    "sceneIndex": 1,
+    "mood": "dusk skyline, cool blues with warm rim light",
+    "transitionIn": "",
+    "motion": "smart",
+    "needsI2V": false,
+    "useStock": false,
+    "pacing": "normal",
+    "ambience": "city",
+    "sfx": "none",
+    "outfit": "dark green flight jacket",
+    "accessory": "small silver ear stud",
+    "shots": [
+     {
+      "shotIndex": 0,
+      "framing": "wide",
+      "camera": "static",
+      "lens": "24mm wide",
+      "composition": "rule of thirds",
+      "duration": 2.8,
+      "imagePrompt": "Nova standing beside a small rooftop weather station at dusk, city skyline behind",
+      "subject": "Nova",
+      "subjectAction": "observing weather instruments",
+      "cameraHeight": "eye-level",
+      "angle": "front",
+      "depthOfField": "deep",
+      "lighting": "golden hour rim light",
+      "colorGrade": "teal-orange",
+      "focal": "center",
+      "moveSpeed": "normal",
+      "transitionOut": "cut",
+      "purpose": "establish",
+      "notes": ""
+     },
+     {
+      "shotIndex": 1,
+      "framing": "medium",
+      "camera": "zoom-in",
+      "lens": "50mm",
+      "composition": "leading lines",
+      "duration": 2.6,
+      "imagePrompt": "Close-up of Nova's weather station with digital readouts",
+      "subject": "weather station",
+      "subjectAction": "displaying temperature and humidity data",
+      "cameraHeight": "eye-level",
+      "angle": "front",
+      "depthOfField": "shallow",
+      "lighting": "cool blue ambient with warm rim light",
+      "colorGrade": "teal-orange",
+      "focal": "center",
+      "moveSpeed": "normal",
+      "transitionOut": "cut",
+      "purpose": "detail",
+      "notes": ""
+     }
+    ]
+   },
+   {
+    "sceneIndex": 2,
+    "mood": "night rain, glossy reflections",
+    "transitionIn": "cut",
+    "motion": "smart",
+    "needsI2V": false,
+    "useStock": false,
+    "pacing": "fast",
+    "ambience": "rain",
+    "sfx": "whoosh",
+    "outfit": "dark green flight jacket",
+    "accessory": "small silver ear stud",
+    "shots": [
+     {
+      "shotIndex": 0,
+      "framing": "close-up",
+      "camera": "punch-in",
+      "lens": "85mm",
+      "composition": "negative space",
+      "duration": 1.8,
+      "imagePrompt": "Nova's face under umbrella, rain droplets visible",
+      "subject": "Nova",
+      "subjectAction": "looking determined under umbrella",
+      "cameraHeight": "eye-level",
+      "angle": "front",
+      "depthOfField": "shallow",
+      "lighting": "streetlamp glow with deep shadows",
+      "colorGrade": "cool desaturated blues",
+      "focal": "",
+      "moveSpeed": "fast",
+      "transitionOut": "cut",
+      "purpose": "reveal",
+      "notes": "Opening punch as requested"
+     },
+     {
+      "shotIndex": 1,
+      "framing": "medium",
+      "camera": "pan-right",
+      "lens": "35mm",
+      "composition": "rule of thirds",
+      "duration": 1.7,
+      "imagePrompt": "Nova walking down rain-slick street with reflections",
+      "subject": "Nova",
+      "subjectAction": "walking confidently down wet street",
+      "cameraHeight": "eye-level",
+      "angle": "profile",
+      "depthOfField": "deep",
+      "lighting": "streetlamp reflections on wet asphalt",
+      "colorGrade": "cool desaturated blues",
+      "focal": "right",
+      "moveSpeed": "normal",
+      "transitionOut": "cut",
+      "purpose": "contextualize",
+      "notes": ""
+     },
+     {
+      "shotIndex": 2,
+      "framing": "extreme close-up",
+      "camera": "zoom-out",
+      "lens": "100mm",
+      "composition": "frame within frame",
+      "duration": 1.5,
+      "imagePrompt": "Umbrella handle with rain droplets falling",
+      "subject": "umbrella handle",
+      "subjectAction": "rain droplets sliding off metal surface",
+      "cameraHeight": "high-angle",
+      "angle": "front",
+      "depthOfField": "shallow",
+      "lighting": "diffuse streetlamp glow",
+      "colorGrade": "cool desaturated blues",
+      "focal": "center",
+      "moveSpeed": "slow",
+      "transitionOut": "cut",
+      "purpose": "detail",
+      "notes": ""
+     }
+    ]
+   },
+   {
+    "sceneIndex": 3,
+    "mood": "golden hour warmth, soft haze",
+    "transitionIn": "fade",
+    "motion": "smart",
+    "needsI2V": false,
+    "useStock": false,
+    "pacing": "slow",
+    "ambience": "nature",
+    "sfx": "boom",
+    "outfit": "dark green flight jacket",
+    "accessory": "small silver ear stud",
+    "shots": [
+     {
+      "shotIndex": 0,
+      "framing": "medium",
+      "camera": "static",
+      "lens": ":50mm",
+      "composition": "golden ratio",
+      "duration": 2.5,
+      "imagePrompt": "Nova standing relaxed in a calm park at golden hour",
+      "subject": "Nova",
+      "subjectAction": "smiling gently as sun sets",
+      "cameraHeight": "eye-level",
+      "angle": "three-quarter",
+      "depthOfField": "deep",
+      "lighting": "warm golden hour sun with soft haze",
+      "colorGrade": "warm sepia",
+      "focal": "center",
+      "moveSpeed": "slow",
+      "transitionOut": "cut",
+      "purpose": "establish",
+      "notes": ""
+     },
+     {
+      "shotIndex": 1,
+      "framing": "wide",
+      "camera": "tilt-up",
+      "lens": "24mm wide",
+      "composition": "leading lines",
+      "duration": 2.6,
+      "imagePrompt": "Park setting with trees framing Nova at sunset",
+      "subject": "park setting",
+      "subjectAction": "bathed in warm golden light",
+      "cameraHeight": "low-angle",
+      "angle": "front",
+      "depthOfField": "deep",
+      "lighting": "soft warm sunset glow",
+      "colorGrade": "warm sepia",
+      "focal": "upper",
+      "moveSpeed": "normal",
+      "transitionOut": "cut",
+      "purpose": "contextualize",
+      "notes": ""
+     },
+     {
+      "shotIndex": 2,
+      "framing": "close-up",
+      "camera": "zoom-in",
+      "lens": "85mm",
+      "composition": "negative space",
+      "duration": 2.6,
+      "imagePrompt": "Nova's face with soft golden hour lighting",
+      "subject": "Nova",
+      "subjectAction": "looking directly at camera with calm expression",
+      "cameraHeight": "eye-level",
+      "angle": "front",
+      "depthOfField": "shallow",
+      "lighting": "warm golden hour rim light",
+      "colorGrade": "warm sepia",
+      "focal": "",
+      "moveSpeed": "slow",
+      "transitionOut": "fade",
+      "purpose": "payoff",
+      "notes": ""
+     }
+    ]
+   }
+  ]
+ },
+ "render": {
+  "durationSec": 14.634,
+  "fileBytes": 4051470,
+  "expectedCuts": {
+   "cuts": [],
+   "windows": [
+    [
+     4.3999999999999995,
+     5.499999999999999
+    ],
+    [
+     9.099999999999998,
+     10.2
+    ],
+    [
+     2.4000000000000004,
+     3
+    ],
+    [
+     6.266666666666667,
+     6.866666666666666
+    ],
+    [
+     8.033333333333331,
+     8.633333333333333
+    ],
+    [
+     10.799999999999997,
+     11.399999999999999
+    ],
+    [
+     12.533333333333331,
+     13.133333333333333
+    ]
+   ]
+  },
+  "blackWindows": [],
+  "liveliness": [
+   {
+    "sceneIndex": 1,
+    "channel": "kenburns",
+    "reason": "Ken Burns camera plan"
+   },
+   {
+    "sceneIndex": 2,
+    "channel": "kenburns",
+    "reason": "Ken Burns camera plan"
+   },
+   {
+    "sceneIndex": 3,
+    "channel": "kenburns",
+    "reason": "Ken Burns camera plan"
+   }
+  ]
+ },
+ "timeline": {
+  "segSec": 5.199999999999999,
+  "durations": [
+   5.199999999999999,
+   5.199999999999999,
+   5.199999999999999
+  ],
+  "offsets": [
+   4.699999999999999,
+   9.399999999999999
+  ],
+  "sceneStart": [
+   0,
+   4.699999999999999,
+   9.399999999999999
+  ],
+  "flipTimes": [
+   2.6962962962962957,
+   6.5699999999999985,
+   8.339999999999998,
+   11.088311688311688,
+   12.844155844155843
+  ]
+ },
+ "shotTables": [
+  {
+   "sceneIndex": 1,
+   "available": [
+    {
+     "shotIndex": 0,
+     "source": "scene",
+     "imageFile": "scene-01.png",
+     "moveKind": "hold",
+     "sec": 2.8,
+     "focal": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "speed": 1,
+     "transitionOut": "cut"
+    },
+    {
+     "shotIndex": 1,
+     "source": "extra",
+     "imageFile": "shot-01-1.png",
+     "moveKind": "zoom-in",
+     "sec": 2.6,
+     "prompt": "host presenting beside a small rooftop weather station at dusk, city skyline behind. Close-up of Nova's weather station with digital readouts. weather station displaying temperature and humidity data. medium shot. 50mm. leading lines. shallow depth of field. cool blue ambient with warm rim light. teal-orange color grade. dusk skyline, cool blues with warm rim light. Wide 16:9 cinematic frame, ultra-realistic photograph shot on a full-frame cinema camera, natural depth of field, physically accurate lighting for the time of day, lifelike skin, fabric and material textures, documentary realism, ONE dominant subject filling the frame, professional cinematic color grading. Absolutely no text, no letters, no numbers, no charts, no watermarks.",
+     "focal": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "speed": 1,
+     "transitionOut": "cut"
+    }
+   ]
+  },
+  {
+   "sceneIndex": 2,
+   "available": [
+    {
+     "shotIndex": 0,
+     "source": "scene",
+     "imageFile": "scene-02.png",
+     "moveKind": "punch",
+     "sec": 1.87,
+     "speed": 1.35,
+     "transitionOut": "cut"
+    },
+    {
+     "shotIndex": 1,
+     "source": "extra",
+     "imageFile": "shot-02-1.png",
+     "moveKind": "pan-right",
+     "sec": 1.77,
+     "prompt": "host walking a rain-slick street under a dark umbrella, streetlights reflecting on asphalt. Nova walking down rain-slick street with reflections. Nova walking confidently down wet street. medium shot. profile view. streetlamp reflections on wet asphalt. cool desaturated blues color grade. night rain, glossy reflections. Wide 16:9 cinematic frame, ultra-realistic photograph shot on a full-frame cinema camera, natural depth of field, physically accurate lighting for the time of day, lifelike skin, fabric and material textures, documentary realism, ONE dominant subject filling the frame, professional cinematic color grading. Absolutely no text, no letters, no numbers, no charts, no watermarks.",
+     "focal": {
+      "x": 0.68,
+      "y": 0.5
+     },
+     "speed": 1,
+     "transitionOut": "cut"
+    },
+    {
+     "shotIndex": 2,
+     "source": "extra",
+     "imageFile": "shot-02-2.png",
+     "moveKind": "zoom-out",
+     "sec": 1.56,
+     "prompt": "host walking a rain-slick street under a dark umbrella, streetlights reflecting on asphalt. Umbrella handle with rain droplets falling. umbrella handle rain droplets sliding off metal surface. extreme close-up shot. 100mm. frame within frame. high-angle camera. shallow depth of field. diffuse streetlamp glow. cool desaturated blues color grade. night rain, glossy reflections. Wide 16:9 cinematic frame, ultra-realistic photograph shot on a full-frame cinema camera, natural depth of field, physically accurate lighting for the time of day, lifelike skin, fabric and material textures, documentary realism, ONE dominant subject filling the frame, professional cinematic color grading. Absolutely no text, no letters, no numbers, no charts, no watermarks.",
+     "focal": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "speed": 0.7,
+     "transitionOut": "cut"
+    }
+   ]
+  },
+  {
+   "sceneIndex": 3,
+   "available": [
+    {
+     "shotIndex": 0,
+     "source": "scene",
+     "imageFile": "scene-03.png",
+     "moveKind": "hold",
+     "sec": 2.5,
+     "focal": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "speed": 0.7,
+     "transitionOut": "cut"
+    },
+    {
+     "shotIndex": 1,
+     "source": "extra",
+     "imageFile": "shot-03-1.png",
+     "moveKind": "tilt-up",
+     "sec": 2.6,
+     "prompt": "host standing in a calm park at golden hour, relaxed, closing the segment. Park setting with trees framing Nova at sunset. park setting bathed in warm golden light. wide shot. 24mm wide. leading lines. low-angle camera. soft warm sunset glow. warm sepia color grade. golden hour warmth, soft haze. Wide 16:9 cinematic frame, ultra-realistic photograph shot on a full-frame cinema camera, natural depth of field, physically accurate lighting for the time of day, lifelike skin, fabric and material textures, documentary realism, ONE dominant subject filling the frame, professional cinematic color grading. Absolutely no text, no letters, no numbers, no charts, no watermarks.",
+     "focal": {
+      "x": 0.5,
+      "y": 0.35
+     },
+     "speed": 1,
+     "transitionOut": "cut"
+    },
+    {
+     "shotIndex": 2,
+     "source": "extra",
+     "imageFile": "shot-03-2.png",
+     "moveKind": "zoom-in",
+     "sec": 2.6,
+     "prompt": "host standing in a calm park at golden hour, relaxed, closing the segment. Nova's face with soft golden hour lighting. Nova looking directly at camera with calm expression. close-up shot. 85mm. negative space. shallow depth of field. warm golden hour rim light. warm sepia color grade. golden hour warmth, soft haze. Wide 16:9 cinematic frame, ultra-realistic photograph shot on a full-frame cinema camera, natural depth of field, physically accurate lighting for the time of day, lifelike skin, fabric and material textures, documentary realism, ONE dominant subject filling the frame, professional cinematic color grading. Absolutely no text, no letters, no numbers, no charts, no watermarks.",
+     "speed": 0.7,
+     "transitionOut": "fade"
+    }
+   ]
+  }
+ ],
+ "qcChecks": [
+  {
+   "id": "playable",
+   "status": "pass",
+   "value": "14.6s readable"
+  },
+  {
+   "id": "duration",
+   "status": "pass",
+   "value": "video 14.6s vs narration 12.0s",
+   "detail": "drift +2.6s (tolerance ±8s — scene lead-ins add a few seconds)"
+  },
+  {
+   "id": "black-frames",
+   "status": "pass",
+   "value": "none detected",
+   "detail": ""
+  },
+  {
+   "id": "frozen-frames",
+   "status": "pass",
+   "value": "none detected",
+   "detail": ""
+  },
+  {
+   "id": "aspect",
+   "status": "pass",
+   "value": "1920x1080"
+  },
+  {
+   "id": "loudness",
+   "status": "pass",
+   "value": "-16.0 LUFS",
+   "detail": "window -19.5…-13 LUFS"
+  },
+  {
+   "id": "true-peak",
+   "status": "pass",
+   "value": "-14.4 dBTP",
+   "detail": "0.2 dB tolerance covers AAC inter-sample overshoot"
+  },
+  {
+   "id": "loudness-range",
+   "status": "pass",
+   "value": "LRA 1.5 LU",
+   "detail": "flagged above 18 LU"
+  },
+  {
+   "id": "dead-air",
+   "status": "pass",
+   "value": "none",
+   "detail": ""
+  },
+  {
+   "id": "static-shots",
+   "status": "pass",
+   "value": "visual change throughout",
+   "detail": ""
+  },
+  {
+   "id": "flicker",
+   "status": "pass",
+   "value": "none detected",
+   "detail": ""
+  },
+  {
+   "id": "stutter",
+   "status": "pass",
+   "value": "even timing throughout",
+   "detail": ""
+  },
+  {
+   "id": "cut-alignment",
+   "status": "pass",
+   "value": "no stray cuts",
+   "detail": ""
+  },
+  {
+   "id": "tail-fade",
+   "status": "pass",
+   "value": "final 0.4s at -91.0 dB mean",
+   "detail": "flagged above -25 dB mean"
+  }
+ ],
+ "freezes100": [],
+ "freezes050": [
+  {
+   "start": 0,
+   "duration": 0.633333,
+   "end": 0.633333
+  }
+ ],
+ "cuts40": [
+  6.566667,
+  11.1
+ ],
+ "cuts20": [
+  2.7,
+  6.566667,
+  8.333333,
+  11.1,
+  12.833333
+ ],
+ "aligned": {
+  "unexpected": [],
+  "missing": []
+ },
+ "motionProfileStats": {
+  "frames": 437,
+  "p10": 0.20167,
+  "p50": 1.31638,
+  "p90": 5.36467
+ },
+ "sceneRows": [
+  {
+   "index": 1,
+   "sha16": "1e725b74dbd1a421"
+  },
+  {
+   "index": 2,
+   "sha16": "77b662727dc5856f"
+  },
+  {
+   "index": 3,
+   "sha16": "3b4c6b490d6b9a6b"
+  }
+ ],
+ "correlation": {
+  "cutVerdicts": [
+   {
+    "t": 6.566667,
+    "verdict": "booked blend window",
+    "nearestFlip": {
+     "ft": 6.5699999999999985,
+     "d": 0.003332999999998698
+    },
+    "nearestWindow": {
+     "d": 0,
+     "lo": 6.266666666666667,
+     "hi": 6.866666666666666
+    }
+   },
+   {
+    "t": 11.1,
+    "verdict": "booked blend window",
+    "nearestFlip": {
+     "ft": 11.088311688311688,
+     "d": 0.01168831168831197
+    },
+    "nearestWindow": {
+     "d": 0,
+     "lo": 10.799999999999997,
+     "hi": 11.399999999999999
+    }
+   }
+  ],
+  "freezeShots": []
+ }
+}

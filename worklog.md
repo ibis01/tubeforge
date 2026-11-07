@@ -2581,3 +2581,34 @@ docs/audits/s55-render-forensics.md with the evidence JSON. T-55.3 is
 staged with the fix design; the static-shot resolution carries three
 options with a recommendation (minimal ambient drift) awaiting the owner's
 call. No production code touched.
+
+## S55 T-55.3 (2026-11-08 UTC) — the two §B failures closed at the source
+
+The owner called it: option (ii), the minimal ambient drift. Both fixes
+landed (commit `1d79f99`) with the forensics as their map. (a) The
+render→QC contract now books the shot graph: the fitted allocation lives in
+one place (`allocateShotFrames`, extracted VERBATIM), `shotGraphJoins`
+walks the same accumulator the xfade chain uses, `buildSegment.onShotJoins`
+records what actually executed, and `expectedCutsForTimeline` merges the
+joins onto the blended clock. ONE deviation from the staged design,
+evidence-forced and on record: flips book as WINDOWS, not cuts — the
+verification plan's five flips yielded only two detections at the lens's
+0.40 threshold (the rest sit 0.20–0.40, the 13.25 s class), so a
+must-appear booking would keep failing faithful renders. Scene seams keep
+the must-appear side; strays still flag. (b) Declared statics execute
+z 1.00→1.03 (`STATIC_AMBIENT_DRIFT`), focal-anchored, eased; the user's
+stillness contract keeps the TRUE hold byte-identical — the real-ffmpeg
+unit test pins the differential (drifted static clean at n=0.004:d=1.00,
+TRUE hold still flagged). (c) The acceptance: the §B anchor re-rendered
+VERBATIM through the fixed path (fresh plan carrying TWO declared statics
+— the drift proven on real content, not fixtures): **frozen-frames PASS
+(0 runs), cut-alignment PASS (0 unexpected, 0 missing), the other 12
+structural checks green**; d=0.50 shows one 0.63 s head run (the honest
+margin, under the lens floor). Evidence:
+docs/audits/s55-fix-verification-data.json + /tmp/s55-verify/final.mp4;
+gateway pool was open (247/300, one probe, launch condition met first
+look). Gates: tsc 0 · eslint 0 errors/672 warnings (zero net vs HEAD) ·
+240/240 unit (+5 S55). Known limitation on record: the QC re-run path
+rebuilds scene-seam-only expectations (render-time joins not persisted —
+same class as its unstored blackWindows). S55 continues with T-55.4
+(Islamic dense-frame QC) next.

@@ -131,3 +131,86 @@ same class on that day's plan (three static/low-motion shots).
   (0.40/0.20), motion-profile stats, correlations, corrections note.
 - `/tmp/s55-evidence/final.mp4` + `scene-{1,2,3}.png` — the render and its
   paints (session-scope; the JSON carries everything durable).
+
+---
+
+# T-55.3 — the fixes, evidence-directed (landed 2026-11-08, commit `1d79f99`)
+
+The owner picked option (ii) for the statics. Both fixes landed with the
+forensics above as their map; the verification run below is the acceptance.
+
+## (a) cut-alignment — the contract now books the shot graph
+
+- `motion.ts`: the fitted allocation is extracted VERBATIM into
+  `allocateShotFrames`; `shotGraphJoins` walks the SAME accumulator the xfade
+  chain uses, so the boundary marks can never drift from the rendered graph
+  (pinned by a unit test that cross-checks the marks against the graph's own
+  `xfade offset` string).
+- `render.ts`: `buildSegment.onShotJoins` records the joins that ACTUALLY
+  executed per scene (i2v/stock/slides scenes carry none — their channels have
+  no intra-scene flips); `renderVideo` merges them via
+  `expectedCutsForTimeline(durations, boundary, shotJoinMarks)`.
+- `render-qc.ts`: the joins ride the expectation as WINDOWS on the blended
+  clock (scene i's local 0 sits at `offsets[i-1]` — the stitcher's own math).
+
+**One deviation from the staged design, on record.** The sketch said
+"hard-concat flips as `cuts`". The verification run itself proves why that
+would have failed: this plan's five fitted flips (2.70 / 6.57 / 8.34 / 11.09 /
+12.84 s) produced only TWO detections at the lens's 0.40 threshold (6.57,
+11.10) — the other three sit between 0.20 and 0.40, the same class as the
+13.25 s flip measured in the forensics. Booked as cuts, three would read
+"missing" and the lens would keep failing on faithful renders. Booked as
+windows, the flips keep the excuse side (no more "unexpected") without
+fabricating must-appear obligations the detector cannot see. Scene seams keep
+the must-appear side (a swallowed scene still flags); stray cuts anywhere
+else still flag.
+
+## (b) frozen/static — owner option (ii), the minimal ambient drift
+
+`STATIC_AMBIENT_DRIFT = 0.03` (exported, pinned by tests). A DECLARED static
+shot executes z 1.00→1.03 across its span — focal-anchored, standard eased
+progress (`movementForKind` splits the two cases; `shotZoompan`'s hold branch
+honors `zEnd > zStart`). The user's stillness contract (intensity < 1) keeps
+the TRUE hold with the byte-identical constant-zoom graph. The real-ffmpeg
+unit test pins the differential: the drifted static renders
+freezedetect-clean at n=0.004:d=1.00 while the TRUE hold still flags — the
+law keeps its teeth.
+
+## (c) the verification run — both failures read PASS on a real MP4
+
+Instrument: `scripts/s55-render-forensics.mts` (the §B anchor VERBATIM —
+same Nova anchor, scenes, profile, render params; fresh independent plan),
+run at gateway pool 247/300. Evidence:
+`docs/audits/s55-fix-verification-data.json` (commit `1d79f99`) +
+`/tmp/s55-verify/final.mp4`.
+
+- **Plan (fresh, independent): 8 shots / 3 scenes, INCLUDING two declared
+  statics** — scene 1 #0 `hold` 2.8 s, scene 3 #0 `hold` 2.5 s. The drift
+  path was exercised on real anchor content, not just fixtures.
+- Render: 14.634 s · 1080p · 4,051,470 bytes · 198 s wall.
+- **frozen-frames: PASS** — freezedetect n=0.004:d=1.00 finds **0 runs**
+  (the forensics measured 1–3 runs on the same anchor). The d=0.50
+  calibration view shows ONE 0.63 s run at the very head (the opening ease
+  plateau + scene fade-in) — under the lens's 1.00 s floor, recorded here as
+  the honest margin, not hidden. Motion profile: p10 0.20 luma units (the
+  forensics' holds sat at ≈ 0.00), p50 1.32, p90 5.36.
+- **cut-alignment: PASS** — 0 unexpected, 0 missing. Seven booked windows
+  (2 scene-seam blends + 5 intra-scene flips); both 0.40-threshold detections
+  (6.57, 11.10) land inside flip windows; all five flips visible at the 0.20
+  view sit within ±0.03 s of the booked marks.
+- The other 12 structural checks all green: −16.0 LUFS · TP −14.4 dBTP ·
+  LRA 1.5 LU · tail-fade −91.0 dB · no black frames / dead air / flicker /
+  stutter · static-shots "visual change throughout".
+- NOT run in this verification (the instrument's structural focus — gateway
+  budget discipline): the two S53 visual lenses. Both were green in §B
+  (subject-continuity 90/100 vs the 70 floor; text-artifacts clean) and are
+  untouched by a 3 % creep plus a booking change; T-55.6's human kit
+  re-renders anchors per profile regardless.
+
+## Known limitation, on record
+
+The QC RE-RUN path rebuilds its expectation from the timeline doc — scene
+seams only, no shot joins (the joins are render-time state, not persisted).
+Same lossiness class as that path's unstored blackWindows (its own comment
+says so). The render→QC contract — the path §B measures — carries the joins
+end to end.
