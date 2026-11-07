@@ -2472,3 +2472,42 @@ commands are one paste away when the quota window resets
 Gate: tsc 0 · eslint 0 errors / 669 warnings · 235/235 unit · queue
 restart-recovery PASS (S54 touches no production code — the deliverable is
 the harness + the measured baseline). CI green through S53 (8beecab).
+
+## Dependency burn-down (2026-11-07, S54 session) — ten for ten
+
+While the gateway quota held the S54 owed legs hostage, the session burned
+the remaining **10 Dependabot alerts (5 high / 2 moderate / 3 low)** to
+zero — including the two the S47 triage had ACCEPTED as dev-chain risks,
+because the forced overrides turned out to cost nothing.
+
+The headline was python-multipart: eight advisories (4 high — multipart DoS
+classes, an arbitrary-file-write under non-default config — 1 medium, 3
+low) against the preview app's pinned 0.0.17. This was the one RUNTIME
+surface in the batch: the preview app's `/clone` accepts user multipart
+uploads (auth-gated, content-type-checked, but the parser classes fire
+below that validation). Upgraded to 0.0.31 — which satisfies all eight at
+once — and smoke-tested LIVE on the real app, not just an import check:
+health 200, an authenticated multipart /clone upload landed the file and
+returned 200, a keyless request 401'd, a wrong content-type 400'd. The
+upgrade changes no request behavior; the old pin was two years of parser
+hardening behind.
+
+The other two were the S47 "accepted, with rationale" rows, both now forced
+past their acceptance. deepmerge-ts <8 (stack exhaustion on recursive
+merges) rode in via @prisma/config — the S47 table said "revisit when
+Prisma ships a fixed minor"; an `npm overrides` forcing 8.0.0 made the wait
+unnecessary, and the consumer proved it: the Prisma config layer (version,
+schema load, env load, binaryTarget, the sqlite-schema validate) runs
+through the merge path cleanly on 8.0.0. The Postgres validate's P1012
+looked like a casualty but was proven pre-existing by a stash round-trip —
+it is the sandbox's SQLite .env versus the Postgres schema.prisma, same
+before and after. minimatch 7–11 (globparts amplification) rode in via
+@typescript-eslint/typescript-estree; a SCOPED override pins exactly that
+edge to 11.0.1 while eslint's own minimatch@^3.1.5 instances stay
+untouched — a global override would have broken the v3 API consumers. The
+full lint pass: 0 errors / 669 warnings, unchanged.
+
+Gate: tsc 0 · eslint 0 errors / 669 warnings · 235/235 unit · queue
+restart-recovery PASS. Full per-alert record in
+docs/audits/s47-dependency-triage.md (2026-11-07 section). Dependabot
+closes all ten on its next main scan.

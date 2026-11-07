@@ -48,3 +48,26 @@ gone; `sharp` 0.35.5 in).
    census (same discipline as `docs/baselines/s47-lint-baseline-*`). A new
    **runtime-reachable** advisory is a sprint blocker; a new dev-chain one
    is a backlog item.
+
+---
+
+## 2026-11-07 (S54 session) — the 10-alert burn-down
+
+GitHub re-opened the count at **10 (5 high / 2 moderate / 3 low)** after the
+S47–S51 dependency bumps cleared 8 of the original 18. This pass resolves
+ALL TEN, including the two the S47 table had accepted as dev-chain risks —
+the forced overrides turned out to be free:
+
+| Alert | Severity | Where it lived | Verdict + action |
+| --- | --- | --- | --- |
+| `python-multipart` < 0.0.18 / < 0.0.22 / < 0.0.26 / < 0.0.27 / < 0.0.30 ×2 / < 0.0.31 (8 advisories: multipart DoS classes, arbitrary file write under non-default config, querystring quadratic parsing, RFC 2231 smuggling) | 4 high / 1 medium / 3 low | **runtime, Python side** — `preview/preview-app/requirements.txt` pinned 0.0.17; the preview app's `/clone` accepts user multipart uploads (auth-gated, content-type-checked) | **Upgraded 0.0.17 → 0.0.31** (satisfies all eight). Live smoke on the real app (uvicorn + FastAPI 0.115.5): `/health` 200 · authenticated multipart `/clone` upload 200 (file stored, size verified) · missing key 401 · wrong content-type 400. The parser upgrade changes no request behavior. |
+| `deepmerge-ts` < 8.0.0 (stack exhaustion merging recursive object graphs) | high | **transitive via `@prisma/config` 6.19.3** (the Prisma CLI's config layer — config files are repo-authored, never attacker-controlled) | S47 accepted; now **forced to 8.0.0 via `npm overrides`** — strictly better than waiting for Prisma. Verified the consumer: `prisma --version`, schema load, env load, binaryTarget computation, and `prisma validate --schema prisma/schema.sqlite.prisma` (valid) all run through the config merge path on 8.0.0. (The Postgres `prisma validate` P1012 is the pre-existing dev/SQLite `.env` split — proven present before the change via a stash round-trip.) |
+| `minimatch` >= 7.0.0, < 11.0.1 (globparts amplification DoS) | moderate | **dev-only** — `@typescript-eslint/typescript-estree → minimatch ^10.2.2` (lint-time glob handling of our own source) | S47 accepted; now **scoped override** `"@typescript-eslint/typescript-estree": { "minimatch": "11.0.1" }` — eslint's own minimatch@^3.1.5 instances are untouched (a global override would have broken the v3 API consumers). Verified by the full lint pass: 0 errors / 669 warnings, unchanged. |
+
+**Gate on the override set:** tsc 0 · eslint 0 errors / 669 warnings ·
+235/235 unit · queue restart-recovery PASS · prisma config layer verified on
+deepmerge-ts 8.0.0 · python-multipart 0.0.31 live-smoked end-to-end.
+
+**Expected result:** Dependabot closes all 10 alerts on its next manifest
+scan of `main` (the npm side clears via `package.json` overrides +
+`package-lock.json`; the Python side via the requirements pin).

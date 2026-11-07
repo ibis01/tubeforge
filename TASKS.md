@@ -1891,3 +1891,12 @@ Verification: the 6 measured profiles' 12 runs ALL PASS (recorded above);
 the remaining legs are explicitly NOT claimed. tsc 0 · eslint 0 errors/669
 warnings · 235/235 unit · queue PASS (unchanged this sprint — S54 adds the
 harness + baseline only, no production code).
+
+## Follow-up (2026-11-07, S54 session) — the 10-alert dependency burn-down
+
+| Task | Status | Notes |
+|---|---|---|
+| T-D.1 python-multipart ×8 (4H/1M/3L) | ✅ Done | `preview/preview-app/requirements.txt` 0.0.17 → **0.0.31** (satisfies every advisory: multipart DoS classes, arbitrary-file-write-under-non-default-config, quadratic querystring, RFC 2231 smuggling). LIVE smoke on the real app: health 200, authenticated multipart `/clone` 200 (file stored + size verified), no-key 401, wrong content-type 400 — the parser upgrade changes no request behavior. The `/clone` user-upload surface made this a REAL fix, not a pin-churn. |
+| T-D.2 deepmerge-ts (H, transitive via @prisma/config) | ✅ Done | Forced to **8.0.0** via `npm overrides` (S47 had accepted it pending a Prisma minor). Consumer verified: the Prisma config layer (version, schema load, env load, binaryTarget, sqlite-schema validate) runs clean on 8.0.0. |
+| T-D.3 minimatch ≥7 <11 (M, dev-only via @typescript-eslint) | ✅ Done | **Scoped override** on `@typescript-eslint/typescript-estree` → minimatch 11.0.1; eslint's own minimatch@^3.1.5 untouched (a global override would break the v3 API consumers). Full lint pass unchanged: 0 errors / 669 warnings. |
+| T-D.4 gate | ✅ Done | tsc 0 · eslint 0 errors/669 warnings · 235/235 unit · queue PASS · full record in `docs/audits/s47-dependency-triage.md` (2026-11-07 section). Dependabot closes the 10 on its next `main` scan. |
