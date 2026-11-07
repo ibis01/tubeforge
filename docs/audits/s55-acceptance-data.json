@@ -1,0 +1,540 @@
+{
+  "recordedAt": "2026-11-07T22:16:12.957Z",
+  "probe": "scripts/s55-acceptance-probe.mts",
+  "commit": "cbe90c2",
+  "spend": {
+    "gatewayQuotaSpent": 0,
+    "paidDispatches": 0,
+    "standinOnly": true,
+    "spendGate": "untouched (no TUBEFORGE_SPEND_GATE override)"
+  },
+  "ids": {
+    "userId": "cmw6ylo0k0000vgt2l0w0ylit",
+    "orgId": "cmw6ylo0m0001vgt2szkefond",
+    "videoId": "cmw6ylo0n0005vgt2dzl82lik"
+  },
+  "meta": {
+    "seed": {
+      "assetsDir": "/tmp/s55-acc-assets",
+      "vlm": "stand-in (clean)"
+    },
+    "render1": {
+      "renderMs": 93263,
+      "gridCount": 29,
+      "tripwireHits": 12,
+      "hitTimes": [
+        4,
+        4.5,
+        9.5,
+        10,
+        10.5,
+        11,
+        11.5,
+        12,
+        12.5,
+        13,
+        13.5,
+        14
+      ],
+      "scanVerdict": "stand-in (clean)"
+    },
+    "render2": {
+      "scanVerdict": "stand-in (violation)",
+      "blocked": true
+    },
+    "unmeasured": {
+      "scanVerdict": "stand-in (garbage)",
+      "blocked": true
+    }
+  },
+  "phases": {
+    "seed": {
+      "pass": 17,
+      "fail": 0
+    },
+    "render1": {
+      "pass": 19,
+      "fail": 0
+    },
+    "regen": {
+      "pass": 10,
+      "fail": 0
+    },
+    "render2": {
+      "pass": 7,
+      "fail": 0
+    },
+    "unmeasured": {
+      "pass": 5,
+      "fail": 0
+    }
+  },
+  "checks": [
+    {
+      "phase": "seed",
+      "name": "assets: paints + clip synthesized",
+      "ok": true,
+      "detail": {
+        "cave": 120521,
+        "traveler": 876751,
+        "clip": 1405217
+      }
+    },
+    {
+      "phase": "seed",
+      "name": "assets: i2v clip ≈5s @1080p",
+      "ok": true,
+      "detail": {
+        "clipDur": 5
+      }
+    },
+    {
+      "phase": "seed",
+      "name": "L2: stand-in director pass consumed (1 chat call)",
+      "ok": true,
+      "detail": {
+        "chatCalls": 1
+      }
+    },
+    {
+      "phase": "seed",
+      "name": "L2: plan parsed + 3 scenes + 9 shots",
+      "ok": true,
+      "detail": {
+        "scenes": 3
+      }
+    },
+    {
+      "phase": "seed",
+      "name": "L2: plan carries islamic-history provenance",
+      "ok": true
+    },
+    {
+      "phase": "seed",
+      "name": "L2: canned plan WAS adversarial (≥5 restricted fields pre-sanitize)",
+      "ok": true,
+      "detail": {
+        "adversarialFields": 5
+      }
+    },
+    {
+      "phase": "seed",
+      "name": "L2: PERSISTED plan sanitized — zero restricted refs outside the negative clause",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "phase": "seed",
+      "name": "L2: substitution ANNOUNCED in the activity feed (warn row)",
+      "ok": true,
+      "detail": {
+        "message": "Content policy (islamic-history) rewrote 9 shot prompt field(s) that named restricted subject(s): the Prophet Muhammad ﷺ"
+      }
+    },
+    {
+      "phase": "seed",
+      "name": "L2: plan approved (the human gate)",
+      "ok": true
+    },
+    {
+      "phase": "seed",
+      "name": "storyboard: 3 scene paints on storage",
+      "ok": true,
+      "detail": [
+        {
+          "i": 1,
+          "size": 120521
+        },
+        {
+          "i": 2,
+          "size": 114843
+        },
+        {
+          "i": 3,
+          "size": 876751
+        }
+      ]
+    },
+    {
+      "phase": "seed",
+      "name": "storyboard: 3 first paints dispatched to the stand-in (dedupe re-rolls tolerated)",
+      "ok": true,
+      "detail": {
+        "prompts": 4
+      }
+    },
+    {
+      "phase": "seed",
+      "name": "L3 (storyboard): every paint prompt sanitized on the wire",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "phase": "seed",
+      "name": "L3 (storyboard): hard negative clause rides every paint",
+      "ok": true
+    },
+    {
+      "phase": "seed",
+      "name": "storyboard: quality gate ran on every paint (3 vision calls)",
+      "ok": true
+    },
+    {
+      "phase": "seed",
+      "name": "storyboard: scene 3 paint is the anonymous traveler (real face for the tripwire)",
+      "ok": true,
+      "detail": {
+        "paintHashes": [
+          "7d115349",
+          "1b9ca16d",
+          "8c016820"
+        ]
+      }
+    },
+    {
+      "phase": "seed",
+      "name": "storyboard: hasStoryboard set",
+      "ok": true
+    },
+    {
+      "phase": "seed",
+      "name": "audio: 3 narration WAVs on disk (4s each)",
+      "ok": true
+    },
+    {
+      "phase": "render1",
+      "name": "render1: hasVideo + duration + final.mp4 on storage",
+      "ok": true,
+      "detail": {
+        "duration": 14.6,
+        "bytes": 4998970
+      }
+    },
+    {
+      "phase": "render1",
+      "name": "render1: QC report stands",
+      "ok": true,
+      "detail": {
+        "checks": 17
+      }
+    },
+    {
+      "phase": "render1",
+      "name": "render1: restricted-visual check emitted",
+      "ok": true
+    },
+    {
+      "phase": "render1",
+      "name": "render1: restricted-visual PASS (stand-in clean verdict)",
+      "ok": true,
+      "detail": {
+        "id": "restricted-visual",
+        "label": "No depiction of restricted religious figures (content policy)",
+        "status": "pass",
+        "pass": true,
+        "value": "29 frame(s) compliant across 4 batch(es)",
+        "detail": "grid 29 @0.50s · tripwire 12 hit(s) → 15 forced (cv2 4.13.0) · judged 29 ≈0.50s apart · no revered figure depicted; anonymous travelers and landscape only"
+      }
+    },
+    {
+      "phase": "render1",
+      "name": "render1: coverage discloses grid + tripwire + batches",
+      "ok": true,
+      "detail": {
+        "coverageText": "29 frame(s) compliant across 4 batch(es) · grid 29 @0.50s · tripwire 12 hit(s) → 15 forced (cv2 4.13.0) · judged 29 ≈0.50s apart · no revered figure depicted; anonymous travelers and landscape only"
+      }
+    },
+    {
+      "phase": "render1",
+      "name": "render1: text-artifacts scan measured clean",
+      "ok": true,
+      "detail": {
+        "id": "text-artifacts",
+        "label": "No gibberish text or watermarks in the imagery",
+        "status": "pass",
+        "pass": true,
+        "value": "8 frame(s) clean of artifact text",
+        "detail": "no artifact text"
+      }
+    },
+    {
+      "phase": "render1",
+      "name": "render1: the 8 structural lenses green (the T-55.3 fixed path)",
+      "ok": true,
+      "detail": [
+        "playable:pass",
+        "duration:pass",
+        "black-frames:pass",
+        "frozen-frames:pass",
+        "aspect:pass",
+        "flicker:pass",
+        "stutter:pass",
+        "cut-alignment:pass"
+      ]
+    },
+    {
+      "phase": "render1",
+      "name": "render1: EXPORT GATE OPEN (applyQcPolicy — the export route's own law)",
+      "ok": true,
+      "detail": {
+        "blockers": []
+      }
+    },
+    {
+      "phase": "render1",
+      "name": "render1: render activity carries NO export hold",
+      "ok": true,
+      "detail": {
+        "message": "Video rendered (Ken Burns, 15s) — no music, Crossfade · 0.5s between scenes, QC passed"
+      }
+    },
+    {
+      "phase": "render1",
+      "name": "i2v: exactly one motion prompt dispatched (scene 3, needsI2V)",
+      "ok": true,
+      "detail": {
+        "prompts": 1
+      }
+    },
+    {
+      "phase": "render1",
+      "name": "i2v (S50 seam): motion prompt sanitized on the wire",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "phase": "render1",
+      "name": "i2v: hard negative clause rides the motion prompt",
+      "ok": true
+    },
+    {
+      "phase": "render1",
+      "name": "i2v: clip downloaded from the stand-in",
+      "ok": true,
+      "detail": {
+        "downloads": 1
+      }
+    },
+    {
+      "phase": "render1",
+      "name": "i2v: clip cached on storage",
+      "ok": true
+    },
+    {
+      "phase": "render1",
+      "name": "i2v/KB: extra-shot paints dispatched during render (≤6)",
+      "ok": true,
+      "detail": {
+        "extras": 1
+      }
+    },
+    {
+      "phase": "render1",
+      "name": "L3 (extra shots): every render-time paint sanitized",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "phase": "render1",
+      "name": "i2v: final render's scene-3 window carries the clip's magenta marker (the clip PLAYED)",
+      "ok": true,
+      "detail": {
+        "frames": 7,
+        "magentaFrames": 7
+      }
+    },
+    {
+      "phase": "render1",
+      "name": "standard: tripwire MEASURED on the exported final.mp4 (real haar)",
+      "ok": true,
+      "detail": {
+        "cv2": "4.13.0",
+        "scanned": 29,
+        "grid": 29
+      }
+    },
+    {
+      "phase": "render1",
+      "name": "standard: anonymous traveler's face detected in the export (tripwire forces frames to the judge)",
+      "ok": true,
+      "detail": {
+        "hits": 12,
+        "hitTimes": [
+          4,
+          4.5,
+          9.5,
+          10,
+          10.5,
+          11,
+          11.5,
+          12,
+          12.5,
+          13,
+          13.5,
+          14
+        ]
+      }
+    },
+    {
+      "phase": "regen",
+      "name": "regen: scene 1 re-rolled (paint dispatched; dedupe re-roll tolerated)",
+      "ok": true,
+      "detail": {
+        "dispatches": 2
+      }
+    },
+    {
+      "phase": "regen",
+      "name": "regen (re-roll): L3 sanitized on the wire — zero restricted refs",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "phase": "regen",
+      "name": "regen (re-roll): negative clause rides the re-roll prompt",
+      "ok": true
+    },
+    {
+      "phase": "regen",
+      "name": "regen: scene 2 AI-edit dispatched to the stand-in",
+      "ok": true
+    },
+    {
+      "phase": "regen",
+      "name": "regen (AI-edit, T-55.5 fix): instruction sanitized on the wire — zero restricted refs",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "phase": "regen",
+      "name": "regen (AI-edit): negative clause rides the edit prompt",
+      "ok": true
+    },
+    {
+      "phase": "regen",
+      "name": "regen (AI-edit): the surgical boilerplate survived",
+      "ok": true
+    },
+    {
+      "phase": "regen",
+      "name": "regen: rendered artifacts invalidated (hasVideo false — new evidence required)",
+      "ok": true
+    },
+    {
+      "phase": "regen",
+      "name": "regen: storyboard still complete",
+      "ok": true
+    },
+    {
+      "phase": "regen",
+      "name": "regen: activity row records the AI-edit",
+      "ok": true,
+      "detail": {
+        "message": "Scene 2 \"The Migration\" AI-edited: show the Prophet Muhammad and Abu Bakr walking together in the foreground, faces"
+      }
+    },
+    {
+      "phase": "render2",
+      "name": "render2: re-render stands (new final.mp4 + fresh report)",
+      "ok": true
+    },
+    {
+      "phase": "render2",
+      "name": "render2 (step 5): restricted-visual FAILS on the violation verdict",
+      "ok": true,
+      "detail": {
+        "id": "restricted-visual",
+        "label": "No depiction of restricted religious figures (content policy)",
+        "status": "fail",
+        "pass": false,
+        "value": "restricted figure depicted in 2 frame(s)",
+        "detail": "frames: 3 (t=1.00s), 4 (t=1.50s) — a haloed, venerated central figure stands in for a named prophet · grid 29 @0.50s · tripwire 12 hit(s) → 15 forced (cv2 4.13.0) · judged 29 ≈0.50s apart · 1/4 batch(es)"
+      }
+    },
+    {
+      "phase": "render2",
+      "name": "render2: failing frames named with timestamps",
+      "ok": true,
+      "detail": {
+        "detail": "frames: 3 (t=1.00s), 4 (t=1.50s) — a haloed, venerated central figure stands in for a named prophet · grid 29 @0.50s · tripwire 12 hit(s) → 15 forced (cv2 4.13.0) · judged 29 ≈0.50s apart · 1/4 batch(es)"
+      }
+    },
+    {
+      "phase": "render2",
+      "name": "render2 (step 5): EXPORT GATE BLOCKED (applyQcPolicy)",
+      "ok": true,
+      "detail": {
+        "blockers": [
+          "restricted-visual:fail"
+        ]
+      }
+    },
+    {
+      "phase": "render2",
+      "name": "render2 (step 5): restricted-visual IS the blocker (severity block)",
+      "ok": true
+    },
+    {
+      "phase": "render2",
+      "name": "render2: render activity announces EXPORT ON HOLD",
+      "ok": true,
+      "detail": {
+        "message": "Video rendered (Ken Burns, 15s) — no music, Crossfade · 0.5s between scenes, QC flagged 1 check(s) — EXPORT ON HOLD (blocking finding; see QC card)"
+      }
+    },
+    {
+      "phase": "render2",
+      "name": "render2: scan short-circuited on the first failing batch",
+      "ok": true,
+      "detail": {
+        "scanCalls": 1
+      }
+    },
+    {
+      "phase": "unmeasured",
+      "name": "unmeasured: the garbage verdict reached the scan (short-circuit after batch 1)",
+      "ok": true,
+      "detail": {
+        "scanCalls": 1
+      }
+    },
+    {
+      "phase": "unmeasured",
+      "name": "unmeasured (step 6): QC re-run stands on the same final.mp4",
+      "ok": true
+    },
+    {
+      "phase": "unmeasured",
+      "name": "unmeasured (step 6): restricted-visual reads UNMEASURED (fail-closed, never silently clean)",
+      "ok": true,
+      "detail": {
+        "id": "restricted-visual",
+        "label": "No depiction of restricted religious figures (content policy)",
+        "status": "unmeasured",
+        "pass": false,
+        "value": "scan could not run",
+        "detail": "batch 1 error: Model did not return valid JSON · grid 29 @0.50s · tripwire 12 hit(s) → 15 forced (cv2 4.13.0) · judged 29 ≈0.50s apart · 1/4 batch(es)"
+      }
+    },
+    {
+      "phase": "unmeasured",
+      "name": "unmeasured (step 6): EXPORT GATE STILL BLOCKED (an unmeasured lens cannot certify)",
+      "ok": true,
+      "detail": {
+        "blockers": [
+          "cut-alignment:unmeasured",
+          "restricted-visual:unmeasured"
+        ]
+      }
+    },
+    {
+      "phase": "unmeasured",
+      "name": "unmeasured: the unmeasured verdict is attributed to the unreadable batch",
+      "ok": true,
+      "detail": {
+        "value": "scan could not run",
+        "detail": "batch 1 error: Model did not return valid JSON · grid 29 @0.50s · tripwire 12 hit(s) → 15 forced (cv2 4.13.0) · judged 29 ≈0.50s apart · 1/4 batch(es)"
+      }
+    }
+  ]
+}

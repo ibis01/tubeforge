@@ -6060,6 +6060,45 @@ await test("S55 face tripwire (real detector when present): solid frames are a f
   }
 });
 
+suiteStart("S55 — Islamic export acceptance (T-55.5)");
+await test("S55 editSceneImage instruction: the AI-edit prompt rides the L3 sanitizer (standard = the pre-S55 bytes)", async () => {
+  const { sanitizePromptForPolicy, policyNegativeClause, ALTERNATIVE_COMPOSITIONS } =
+    await import("../src/lib/tubeforge/restricted-subjects.ts");
+  // The EXACT composition the fixed editSceneImage builds (story.ts): the
+  // user's free-text instruction embedded in the surgical edit template.
+  // The T-55.5 acceptance found this path UNSANITIZED (the S49 L3 seam
+  // covered generateSceneImage + ensureShotImages but not the instruction
+  // edit) — an adversarial "depict the Prophet…" instruction reached the
+  // image provider verbatim, with L4/L5 as the only backstops.
+  const instruction = "show the Prophet Muhammad and Abu Bakr walking together in the foreground, faces clearly visible";
+  const editPromptRaw = `Edit this image: ${instruction}. Keep the overall composition, subject and framing unchanged unless the instruction asks otherwise. Photorealistic continuity with the original. Absolutely no text, no letters, no numbers, no watermarks.`;
+  // Standard policy: the identity transform — the pre-S55 edit prompt,
+  // byte-for-byte (no behavior change for unrestricted productions).
+  eq(
+    sanitizePromptForPolicy(editPromptRaw, "standard").prompt,
+    editPromptRaw,
+    "standard policy: the edit prompt is byte-identical to the pre-S55 composition"
+  );
+  // Islamic-history: the restricted sentence is REPLACED (never deleted),
+  // the hard negative clause rides, and the surgical boilerplate survives.
+  const res = sanitizePromptForPolicy(editPromptRaw, "islamic-history");
+  eq(res.substituted, 1, "the restricted instruction sentence is substituted");
+  ok(res.matches.some((m) => m.entry === "the Prophet Muhammad ﷺ"), "the Prophet match reported");
+  ok(res.matches.some((m) => m.entry === "Abu Bakr"), "the Abu Bakr match reported");
+  ok(res.prompt.includes(policyNegativeClause("islamic-history")), "the hard negative clause rides the edit dispatch");
+  ok(res.prompt.includes("Keep the overall composition, subject and framing unchanged"), "the surgical clause survives");
+  ok(res.prompt.includes("Absolutely no text, no letters, no numbers, no watermarks"), "the no-text hygiene clause survives");
+  const positive = res.prompt.replace(policyNegativeClause("islamic-history"), "");
+  ok(!/Prophet Muhammad/i.test(positive) && !/Abu Bakr/i.test(positive), "the restricted names are GONE from the positive prompt");
+  ok(ALTERNATIVE_COMPOSITIONS.some((alt) => res.prompt.includes(alt)), "the replacement comes from the alternative-composition library");
+  // A clean instruction under the policy gains ONLY the negative clause.
+  const cleanInstruction = "make it night, cooler light, deeper shadows";
+  const cleanRaw = `Edit this image: ${cleanInstruction}. Keep the overall composition, subject and framing unchanged unless the instruction asks otherwise. Photorealistic continuity with the original. Absolutely no text, no letters, no numbers, no watermarks.`;
+  const cleanRes = sanitizePromptForPolicy(cleanRaw, "islamic-history");
+  eq(cleanRes.substituted, 0, "clean instruction: nothing substituted");
+  eq(cleanRes.prompt, `${cleanRaw} ${policyNegativeClause("islamic-history")}`, "clean instruction: only the negative clause is added");
+});
+
 console.log(`\n${"─".repeat(56)}`);
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);

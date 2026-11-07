@@ -964,6 +964,22 @@ export async function editSceneImage(opts: {
     );
 
   const current = fs.readFileSync(imagePath);
+  // S55 T-55.5 — the edit instruction is a PAINT surface like any other:
+  // the user's free-text instruction rides the image dispatch, so a
+  // restricted-figure reference ("depict the Prophet in the foreground")
+  // reached the provider unsanitized — the S49 L3 seam covered
+  // generateSceneImage + ensureShotImages but not this path (L4/L5 were the
+  // only backstops). The composed prompt now rides the SAME sanitizer:
+  // sentence REPLACE + the hard negative clause (standard policy = identity,
+  // byte-identical to the pre-S55 edit prompt).
+  const contentPolicy = await getVideoContentPolicy(opts.videoId);
+  const editPromptRaw = `Edit this image: ${instruction}. Keep the overall composition, subject and framing unchanged unless the instruction asks otherwise. Photorealistic continuity with the original. Absolutely no text, no letters, no numbers, no watermarks.`;
+  const sanitizedEdit = sanitizePromptForPolicy(editPromptRaw, contentPolicy);
+  if (sanitizedEdit.substituted > 0) {
+    console.warn(
+      `[story] scene ${scene.index} edit: content policy substituted ${sanitizedEdit.substituted} sentence(s) naming restricted subject(s): ${sanitizedEdit.matches.map((m) => m.entry).join(", ")}`
+    );
+  }
   const buffer = await aiCall(
     "image",
     `scene ${scene.index} edit (instruction)`,
@@ -972,7 +988,7 @@ export async function editSceneImage(opts: {
         // Keep the edit surgical: preserve the composition/subject, apply the
         // requested change, and keep the no-text hygiene clause so edits don't
         // smuggle garbled lettering into previously clean frames.
-        prompt: `Edit this image: ${instruction}. Keep the overall composition, subject and framing unchanged unless the instruction asks otherwise. Photorealistic continuity with the original. Absolutely no text, no letters, no numbers, no watermarks.`,
+        prompt: sanitizedEdit.prompt,
         imagePngBase64: current.toString("base64"),
         size: "1344x768",
       }).then((b) => {
