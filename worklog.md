@@ -2612,3 +2612,45 @@ look). Gates: tsc 0 · eslint 0 errors/672 warnings (zero net vs HEAD) ·
 rebuilds scene-seam-only expectations (render-time joins not persisted —
 same class as its unstored blackWindows). S55 continues with T-55.4
 (Islamic dense-frame QC) next.
+
+## S55 T-55.4 (2026-11-08 UTC) — the dense L4: a grid the timeline cannot slip through
+
+The audit's core safety point, closed at the source. The S49 L4 scan
+sampled 8 frames evenly — a 60s render carried a 7.50s mean judged gap,
+so a 1.5s flash of a restricted figure slipped through ~80% of the time
+and read "pass". runRestrictedVisualScan (same exported signature; both
+call sites ride as-is) now runs a three-stage funnel, fail-closed at
+every seam: (1) a DENSE GRID — one frame per 0.50s, capped at 240 with
+honest disclosed coarsening (300s → 1.25s interval); (2) a FACE TRIPWIRE —
+python3 + OpenCV haar cascades probed per scan, a face ≥1.5% of frame
+area forces itself + neighbors into the judge set (top 12 anchors by
+area); a missing detector DEGRADES resolution (noted in the detail),
+never the verdict — faces are a tripwire, not a verdict, because
+anonymous people are allowed content; the VLM decides reverence;
+(3) a BATCHED VLM JUDGE — ≤48 frames in batches of 8 with global frame
+labels + timestamps, temperature 0; the first failing batch
+short-circuits (a fail already blocks export — more calls buy nothing);
+any unreadable batch is unmeasured; pass only when every batch measured
+clean. The check detail now carries the honest coverage — "grid 120
+@0.50s · tripwire 3 hit(s) → 9 forced (cv2 4.13.0) · judged 48 ≈1.25s
+apart · 6/6 batch(es)" — so a human reads the scan's resolution, never a
+bare "pass". Spend: ≤6 VLM calls per Islamic render, metered through
+aiCall; the spend gate untouched.
+
+Evidence, zero gateway spend (scripts/s55-dense-qc-probe.mts, the
+probe-hygiene law): false-positive control — 0 hits across the 40-frame
+testsrc2 grid (cv2 4.13.0, 1.21s); positive control — skimage's astronaut
+sample (a real NASA-portrait face riding BSD-licensed sample data; no
+network, no repo fixture) → exactly 1 hit, index 0, areaFrac 0.0363,
+2.4× the threshold. Coverage: the 60s class goes 7.50s → 1.25s judged
+gap (6×), on a 0.50s local grid (15×); forced seats always kept.
+Margins on record (docs/audits/s55-islamic-dense-qc.md): haar sees
+FACES — silhouettes and light-bodies ride the even grid; sub-interval
+flashes at the 240-frame cap; the VLM end-to-end verdict is T-55.5's
+acceptance to run (the 7-step owner protocol, next in the chain).
+
+Gates: tsc 0 · eslint 0 errors/672 warnings (zero net vs HEAD) ·
+244/244 unit (+4 S55: planDenseGrid coarsening, selectVlmFrames
+exact-cap + determinism, restrictedVerdictFromBatches fail-closed law,
+real-detector both-direction controls). Commits: f3b98b5 (code) + the
+docs close-out.

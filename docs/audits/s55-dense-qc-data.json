@@ -1,0 +1,153 @@
+{
+  "probe": "s55-dense-qc",
+  "task": "T-55.4",
+  "commit": "f3b98b5",
+  "ranAt": "2026-11-07T21:21:55.122Z",
+  "gatewaySpend": "none (local stages only; the VLM stage is T-55.5's acceptance)",
+  "stage1": {
+    "render": "lavfi testsrc2 1920x1080 20s (the §B stand-in lineage)",
+    "plan": {
+      "fps": 2,
+      "count": 40
+    },
+    "extracted": 40,
+    "extractMs": 1187,
+    "jpegBytes": {
+      "min": 95952,
+      "mean": 104094,
+      "max": 111917
+    },
+    "intervalSec": 0.5
+  },
+  "stage2_falsePositiveControl": {
+    "source": "the extracted testsrc2 grid — no faces anywhere in it",
+    "available": true,
+    "cv2": "4.13.0",
+    "scanned": 40,
+    "hits": [],
+    "expect": "0 hits",
+    "pass": true,
+    "wallMs": 1208
+  },
+  "stage2_positiveControl": {
+    "source": "skimage.data.astronaut (NASA portrait, BSD-licensed sample) + one solid frame",
+    "available": true,
+    "cv2": "4.13.0",
+    "scanned": 2,
+    "hits": [
+      {
+        "index": 0,
+        "areaFrac": 0.03634
+      }
+    ],
+    "expect": "exactly 1 hit, index 0, areaFrac >= 0.015",
+    "pass": true,
+    "wallMs": 299
+  },
+  "stage3_coverage": [
+    {
+      "durationSec": 20,
+      "s49_frames": 8,
+      "s49_meanGapSec": 2.5,
+      "grid": {
+        "count": 40,
+        "intervalSec": 0.5
+      },
+      "s55": {
+        "vlmMax": 48,
+        "judgedFrames": 40,
+        "batches": 5,
+        "meanJudgedGapSec": 0.5,
+        "withThreeSimulatedFaceAnchors": {
+          "judgedFrames": 40,
+          "forcedSeatsKept": true,
+          "batches": 5
+        }
+      }
+    },
+    {
+      "durationSec": 60,
+      "s49_frames": 8,
+      "s49_meanGapSec": 7.5,
+      "grid": {
+        "count": 120,
+        "intervalSec": 0.5
+      },
+      "s55": {
+        "vlmMax": 48,
+        "judgedFrames": 48,
+        "batches": 6,
+        "meanJudgedGapSec": 1.25,
+        "withThreeSimulatedFaceAnchors": {
+          "judgedFrames": 48,
+          "forcedSeatsKept": true,
+          "batches": 6
+        }
+      }
+    },
+    {
+      "durationSec": 120,
+      "s49_frames": 8,
+      "s49_meanGapSec": 15,
+      "grid": {
+        "count": 240,
+        "intervalSec": 0.5
+      },
+      "s55": {
+        "vlmMax": 48,
+        "judgedFrames": 48,
+        "batches": 6,
+        "meanJudgedGapSec": 2.5,
+        "withThreeSimulatedFaceAnchors": {
+          "judgedFrames": 48,
+          "forcedSeatsKept": true,
+          "batches": 6
+        }
+      }
+    },
+    {
+      "durationSec": 300,
+      "s49_frames": 8,
+      "s49_meanGapSec": 37.5,
+      "grid": {
+        "count": 240,
+        "intervalSec": 1.25
+      },
+      "s55": {
+        "vlmMax": 48,
+        "judgedFrames": 48,
+        "batches": 6,
+        "meanJudgedGapSec": 6.25,
+        "withThreeSimulatedFaceAnchors": {
+          "judgedFrames": 48,
+          "forcedSeatsKept": true,
+          "batches": 6
+        }
+      }
+    },
+    {
+      "durationSec": 600,
+      "s49_frames": 8,
+      "s49_meanGapSec": 75,
+      "grid": {
+        "count": 240,
+        "intervalSec": 2.5
+      },
+      "s55": {
+        "vlmMax": 48,
+        "judgedFrames": 48,
+        "batches": 6,
+        "meanJudgedGapSec": 12.5,
+        "withThreeSimulatedFaceAnchors": {
+          "judgedFrames": 48,
+          "forcedSeatsKept": true,
+          "batches": 6
+        }
+      }
+    }
+  ],
+  "verdict": {
+    "controlsOk": true,
+    "summary": "dense grid 40 frames @0.50s on the 20s §B-class render (S49 saw 8 frames @2.50s); the 60s class judges 48 frames @1.25s mean gap vs S49's 7.50s; face tripwire validated both directions."
+  }
+}
