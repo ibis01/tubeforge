@@ -52,6 +52,7 @@ import {
   planSceneMovements,
   sceneFilterGraph,
   multiShotSceneGraph,
+  shotGraphJoins,
   focalForScene,
   sanitizeMotion,
   studioCameraPlan,
@@ -62,6 +63,7 @@ import {
   type MotionSettings,
   type MoveKind,
   type SceneContext,
+  type ShotJoinMark,
 } from "./motion";
 import {
   gradeFilter,
@@ -546,6 +548,12 @@ async function buildSegment(opts: {
    *  never break the render; the orchestrator turns this into a progress
    *  note so the degradation is VISIBLE, never silent). */
   onI2vFallback?: (sceneIndex: number, reason: string) => void;
+  /** S55 (T-55.3a) — fired when the scene renders through the M2 multi-shot
+   *  graph, with the joins that ACTUALLY executed (scene-local clock — the
+   *  same fitted allocation the graph runs). The orchestrator books them
+   * into RenderResult.expectedCuts so the QC cut-alignment lens reads the
+   *  graph's own flips as designed boundaries, not strays. */
+  onShotJoins?: (joins: ShotJoinMark[]) => void;
 }): Promise<void> {
   const { scene, dur, mode, motion, plan, shotPlan, outPath } = opts;
   const dir = videoDir(opts.videoId);
@@ -735,6 +743,15 @@ async function buildSegment(opts: {
           "-loop", "1", "-framerate", String(fps), "-t", (sh.sec + 1).toFixed(3), "-i", sh.file
         );
       }
+      const shotList = shotInputs.map((sh) => ({
+        kind: sh.moveKind,
+        sec: sh.sec,
+        input: inputFor.get(sh.file)!,
+        crop: sh.crop,
+        focal: sh.focal,
+        speed: sh.speed,
+        transitionOut: sh.transitionOut,
+      }));
       const vChain = multiShotSceneGraph({
         dur,
         settings: motion,
@@ -742,16 +759,11 @@ async function buildSegment(opts: {
         aspect,
         grade: chroma ? "" : grade,
         focal: focalForScene(scene),
-        shots: shotInputs.map((sh) => ({
-          kind: sh.moveKind,
-          sec: sh.sec,
-          input: inputFor.get(sh.file)!,
-          crop: sh.crop,
-          focal: sh.focal,
-          speed: sh.speed,
-          transitionOut: sh.transitionOut,
-        })),
+        shots: shotList,
       });
+      // S55 (T-55.3a) — record the graph's own boundaries (the SAME fitted
+      // allocation the graph just executed) for the render→QC contract.
+      opts.onShotJoins?.(shotGraphJoins({ dur, shots: shotList, fps }));
       // The PIP logo rides AFTER the shot stills (input order: 0 = scene
       // image, 1 = narration, 2.. = audio extras, then stills, then logo —
       // the index is positional, nextInput counts it).
@@ -1590,6 +1602,11 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
 
     // 2) One segment per scene (visual + narration audio, exact duration).
     const segPaths: string[] = [];
+    // S55 — the M2 shot-graph joins per scene (scene-local clock), recorded
+    // by the segments that actually rendered through the multi-shot path —
+    // i2v/stock/slides scenes carry none (their channels have no intra-scene
+    // flips), and neither do M2 scenes that fell back before the graph ran.
+    const shotJoinMarks: (ShotJoinMark[] | undefined)[] = [];
     for (const [i, scene] of scenes.entries()) {
       // S35 — the label tells the truth about WHO is playing: the channel
       // decides, and a per-scene i2v pick says so by name.
@@ -1632,6 +1649,9 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
             d.reason = `i2v unavailable — Ken Burns fallback (${reason.slice(0, 90)})`;
           }
           report(i, `Composing scene ${i + 1} — i2v unavailable, Ken Burns fallback`);
+        },
+        onShotJoins: (marks) => {
+          shotJoinMarks[i] = marks;
         },
         motion,
         plan: plans[i],
@@ -1810,7 +1830,10 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       // S36 — the continuity expectation, built from the SAME durations +
       // per-boundary settings the stitcher just consumed: hard cuts must
       // appear in the pixels, blend windows explain detections nearby.
-      expectedCuts: expectedCutsForTimeline(durations, boundary),
+      // S55 — plus the M2 shot graph's own intra-scene joins (what actually
+      // executed, per scene), so the graph's flips read as designed
+      // boundaries instead of "unexpected" cuts (T-55.2).
+      expectedCuts: expectedCutsForTimeline(durations, boundary, shotJoinMarks),
       // S35 — the liveliness ledger (what played, per scene, and why).
       liveliness,
     };

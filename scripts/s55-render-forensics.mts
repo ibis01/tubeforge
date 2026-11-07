@@ -22,6 +22,11 @@
 // pattern (no DB or scratch residue).
 //
 // Usage: node --import tsx scripts/s55-render-forensics.mts
+//   S55_DATA_PATH=…    evidence JSON path  (default: the T-55.1/T-55.2 file —
+//                      override for post-fix verification runs so the
+//                      forensics evidence is never overwritten)
+//   S55_EVIDENCE_DIR=… artifact copy dir   (default: /tmp/s55-evidence)
+//   S55_COMMIT=…       commit stamp recorded in the evidence
 
 import { PrismaClient } from "@prisma/client";
 import { execFile } from "child_process";
@@ -61,7 +66,8 @@ import { R_LEAD_SEC, R_TAIL_SEC, R_MIN_SEG_SEC } from "../src/lib/tubeforge/prev
 const execFileAsync = promisify(execFile);
 const prisma = new PrismaClient();
 const SUFFIX = `${Date.now().toString(36)}-${process.pid.toString(36)}`;
-const DATA_PATH = "docs/audits/s55-render-forensics-data.json";
+const DATA_PATH = process.env.S55_DATA_PATH ?? "docs/audits/s55-render-forensics-data.json";
+const EVIDENCE_DIR = process.env.S55_EVIDENCE_DIR ?? "/tmp/s55-evidence";
 const WAV_SEC = 4; // the §B sine stand-ins
 const BLEND_SEC = 0.5; // the default seam (fade) the §B render ran with
 
@@ -402,13 +408,13 @@ try {
     writeEvidence({});
 
     // Evidence copy OUTSIDE uploads/ — the teardown below deletes the video
-    // dir; /tmp/s55-evidence keeps the artifacts for the fix sprint.
-    fs.mkdirSync("/tmp/s55-evidence", { recursive: true });
-    fs.copyFileSync(finalPath, "/tmp/s55-evidence/final.mp4");
+    // dir; EVIDENCE_DIR keeps the artifacts for the fix sprint.
+    fs.mkdirSync(EVIDENCE_DIR, { recursive: true });
+    fs.copyFileSync(finalPath, path.join(EVIDENCE_DIR, "final.mp4"));
     for (const r of sceneRows) {
-      fs.copyFileSync(path.join("uploads", video.id, sceneImageFile(r.index)), `/tmp/s55-evidence/scene-${r.index}.png`);
+      fs.copyFileSync(path.join("uploads", video.id, sceneImageFile(r.index)), path.join(EVIDENCE_DIR, `scene-${r.index}.png`));
     }
-    console.info(`evidence artifacts copied: /tmp/s55-evidence/`);
+    console.info(`evidence artifacts copied: ${EVIDENCE_DIR}/`);
 
     // 8) Correlation — each lens-detected cut vs windows and flips.
     console.info("\ncut correlation (lens threshold 0.40):");

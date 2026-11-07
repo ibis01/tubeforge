@@ -5777,6 +5777,182 @@ await test("S53 runSubjectContinuityScan + runTextArtifactScan: cannot-run repor
   ok(text.detail !== undefined && text.detail.length > 0, "the text outcome carries the failure detail");
 });
 
+suiteStart("S55 — cinematic quality fixes (T-55.3)");
+
+await test("S55 movementForKind: declared statics execute the ambient drift; the stillness contract stays a TRUE hold", async () => {
+  const { movementForKind, STATIC_AMBIENT_DRIFT } = await import("../src/lib/tubeforge/motion.ts");
+  const focal = { x: 0.5, y: 0.5 };
+  // The owner's option (ii): a DECLARED static (motion on) creeps z 1.00→1.03.
+  const declared = movementForKind("hold", focal, 40);
+  eq(declared.kind, "hold", "declared static keeps its kind");
+  approx(declared.zStart, 1, 1e-9, "static starts wide");
+  approx(declared.zEnd, 1 + STATIC_AMBIENT_DRIFT, 1e-9, "static creeps to the ambient drift");
+  // The user's stillness contract is untouched: intensity < 1 freezes EVERY
+  // kind, drift included (the pre-S55 true hold).
+  const stillHold = movementForKind("hold", focal, 0);
+  eq(stillHold.zEnd, stillHold.zStart, "intensity < 1 keeps the TRUE hold");
+  const stillZoom = movementForKind("zoom-in", focal, 0);
+  eq(stillZoom.kind, "hold", "stillness contract outranks every move kind");
+  eq(stillZoom.zEnd, stillZoom.zStart, "the contract holds the camera, not a creep");
+});
+
+await test("S55 shotZoompan: the ambient-drift static executes the creep; TRUE holds keep the constant graph", async () => {
+  const { multiShotSceneGraph } = await import("../src/lib/tubeforge/motion.ts");
+  const fps = 30;
+  const drifting = multiShotSceneGraph({
+    dur: 6,
+    settings: { mode: "smart", intensity: 40, curve: "smooth", vary: true } as never,
+    fps,
+    shots: [
+      { kind: "hold", sec: 3, input: 0 },
+      { kind: "zoom-in", sec: 3, input: 0 },
+    ] as never,
+  });
+  ok(
+    /zoompan=z='1\.0000\+0\.0300\*/.test(drifting),
+    "the declared static executes the 1.00→1.03 creep through the eased progress"
+  );
+  const still = multiShotSceneGraph({
+    dur: 6,
+    settings: { mode: "smart", intensity: 0, curve: "smooth", vary: true } as never,
+    fps,
+    shots: [
+      { kind: "hold", sec: 3, input: 0 },
+      { kind: "zoom-in", sec: 3, input: 0 },
+    ] as never,
+  });
+  ok(!still.includes("*"), "intensity 0 keeps the TRUE constant-zoom hold graph (stillness contract, byte-identical)");
+});
+
+await test("S55 shotGraphJoins: the graph's own boundaries, frame-exact against the fitted allocation", async () => {
+  const { shotGraphJoins, multiShotSceneGraph, SHOT_FADE_SEC } = await import("../src/lib/tubeforge/motion.ts");
+  const settings = { mode: "smart", intensity: 40, curve: "smooth", vary: true } as never;
+  const fps = 30;
+  // Hard concats: 4/3/3s over a 10s scene — flips land on the FITTED
+  // proportions (fitFrames scales the planned seconds to the exact budget).
+  const joins = shotGraphJoins({
+    dur: 10,
+    fps,
+    shots: [
+      { kind: "zoom-in", sec: 4, input: 0 },
+      { kind: "pan-right", sec: 3, input: 0 },
+      { kind: "zoom-out", sec: 3, input: 4 },
+    ] as never,
+  });
+  eq(joins.length, 2, "one join per shot boundary");
+  approx(joins[0].at, 4, 0.05, "flip 1 sits on the fitted 4s proportion");
+  approx(joins[1].at, 7, 0.05, "flip 2 sits on the fitted 7s proportion");
+  eq(joins.every((j) => j.fadeSec === 0), true, "hard concats book no fade");
+  // The fade hand-off sits EXACTLY at the xfade offset the graph emits
+  // (the shared allocation's whole point — they cannot disagree).
+  const fadeShots = [
+    { kind: "zoom-in", sec: 4, input: 0, transitionOut: "fade" },
+    { kind: "pan-right", sec: 3, input: 0, transitionOut: "cut" },
+    { kind: "zoom-out", sec: 3, input: 4 },
+  ];
+  const fj = shotGraphJoins({ dur: 10, fps, shots: fadeShots as never });
+  const g = multiShotSceneGraph({ dur: 10, settings, fps, shots: fadeShots as never });
+  const off = Number(g.match(/xfade=transition=fade:[^:]*:offset=([\d.]+)/)?.[1] ?? -1);
+  approx(fj[0].at, off, 0.005, "the fade join sits at the graph's own xfade offset");
+  ok(fj[0].fadeSec > 0 && fj[0].fadeSec <= SHOT_FADE_SEC + 1e-6, "fade duration ≤ SHOT_FADE_SEC");
+  eq(fj[1].fadeSec, 0, "the cut pair stays a hard join");
+  // The post-fade flip sits where the OUTPUT timeline puts it — the xfade
+  // consumed its overlap, so the flip lands fadeSec EARLY. Parse the graph's
+  // own trims + fade and confirm the join matches the graph exactly.
+  const trims = [...g.matchAll(/trim=end_frame=(\d+)/g)].map((m) => Number(m[1]));
+  const fadeFrames = Math.round(fj[0].fadeSec * fps);
+  approx(fj[1].at, (trims[0] + trims[1] - fadeFrames) / fps, 0.005, "the post-fade flip keeps the fitted proportion (fade debt paid)");
+  // Degenerate cases.
+  eq(
+    shotGraphJoins({ dur: 5, fps, shots: [{ kind: "zoom-in", sec: 5, input: 0 }] as never }).length,
+    0,
+    "single-shot scenes carry no joins"
+  );
+  eq(shotGraphJoins({ dur: 5, fps, shots: [] as never }).length, 0, "empty plans carry no joins");
+});
+
+await test("S55 expectedCutsForTimeline: intra-scene shot joins ride the expectation as blended-clock windows", async () => {
+  const { alignCuts, expectedCutsForTimeline } = await import("../src/lib/tubeforge/render-qc.ts");
+  // 2 scenes (4s + 4s) joined by a 0.5s fade: the seam blends at 3.5s, so
+  // scene 2's local 0 sits at 3.5s on the blended clock. Scene 1 carries a
+  // hard flip at local 2.0s (→ blended 2.0); scene 2 a fade hand-off at
+  // local 1.0s (→ blended 4.5, window spanning the 0.4s dissolve).
+  const exp = expectedCutsForTimeline(
+    [4, 4],
+    [{ style: "fade", durationSec: 0.5 }],
+    [[{ at: 2.0, fadeSec: 0 }], [{ at: 1.0, fadeSec: 0.4 }]]
+  );
+  eq(exp.windows.length, 3, "two shot-join windows + the scene-seam blend window");
+  eq(exp.cuts.length, 0, "flips excuse detections — they never demand an appearance (the 13.25s evidence)");
+  eq(alignCuts([2.0], exp).unexpected.length, 0, "the intra-scene hard flip is explained");
+  eq(alignCuts([4.5], exp).unexpected.length, 0, "the intra-scene fade hand-off is explained");
+  eq(alignCuts([6.2], exp).unexpected.length, 1, "a stray cut away from every boundary still flags");
+  // Scene-seam obligations are untouched.
+  const cutExp = expectedCutsForTimeline(
+    [4, 4],
+    [{ style: "cut", durationSec: 0.5 }],
+    [[{ at: 2.0, fadeSec: 0 }], [{ at: 1.0, fadeSec: 0 }]]
+  );
+  eq(cutExp.cuts.length, 1, "the hard scene seam still MUST appear");
+  eq(alignCuts([], cutExp).missing.length, 1, "a swallowed scene seam still flags");
+  // The pre-S55 contract is byte-identical without joins…
+  const plain = expectedCutsForTimeline([4, 4], [{ style: "fade", durationSec: 0.5 }]);
+  eq(plain.windows.length, 1, "no shotJoins → the scene-seam-only expectation, unchanged");
+  // …and a single-scene M2 render now books its flips (pre-S55: both empty).
+  const single = expectedCutsForTimeline([8], [], [[{ at: 3.0, fadeSec: 0 }]]);
+  eq(single.windows.length, 1, "a single-scene M2 render books its flips");
+  eq(alignCuts([3.0], single).unexpected.length, 0, "the flip is explained");
+  eq(alignCuts([6.5], single).unexpected.length, 1, "a stray cut in a single-scene render still breaks continuity");
+});
+
+await test("S55 ambient-drift static: freezedetect-clean on a real render, the TRUE hold still flags (real ffmpeg)", async () => {
+  const { multiShotSceneGraph } = await import("../src/lib/tubeforge/motion.ts");
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "tf-s55-"));
+  try {
+    const img = path.join(tmp, "scene-01.png");
+    await genFixture(img, ["-f", "lavfi", "-i", "testsrc2=size=1280x720", "-frames:v", "1"]);
+    const freezeRuns = async (file: string): Promise<number> => {
+      try {
+        const { stderr } = await execFileAsync(
+          "ffmpeg",
+          ["-hide_banner", "-nostats", "-i", file, "-vf", "freezedetect=n=0.004:d=1.00", "-an", "-f", "null", "-"],
+          { timeout: 120_000, maxBuffer: 16 * 1024 * 1024 }
+        );
+        return [...stderr.toString().matchAll(/freeze_start:\s*(\d+(?:\.\d+)?)/g)].length;
+      } catch (err) {
+        // freezedetect exits nonzero only on decode failure; a real freeze
+        // still parses out of stderr — reread it before giving up.
+        const se = (err as { stderr?: Buffer }).stderr?.toString() ?? "";
+        return [...se.matchAll(/freeze_start:\s*(\d+(?:\.\d+)?)/g)].length;
+      }
+    };
+    const render = async (intensity: number): Promise<string> => {
+      const out = path.join(tmp, `hold-${intensity}.mp4`);
+      const graph = multiShotSceneGraph({
+        dur: 3,
+        settings: { mode: "smart", intensity, curve: "smooth", vary: true } as never,
+        fps: 12,
+        shots: [{ kind: "hold", sec: 3, input: 0 }] as never,
+      });
+      await genFixture(out, [
+        "-loop", "1", "-framerate", "12", "-t", "3", "-i", img,
+        "-filter_complex", graph,
+        "-map", "[v]", "-r", "12",
+        ...FFMPEG_COMMON,
+      ]);
+      return out;
+    };
+    // The differential that pins the law: the DECLARED static (motion on)
+    // creeps and reads clean; the stillness-contract hold is a real freeze.
+    const drifting = await freezeRuns(await render(40));
+    eq(drifting, 0, "the ambient-drift static carries no ≥1.00s freeze run");
+    const frozen = await freezeRuns(await render(0));
+    ok(frozen >= 1, "the TRUE hold (intensity 0) still flags — the law keeps its teeth");
+  } finally {
+    await fsp.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 console.log(`\n${"─".repeat(56)}`);
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);

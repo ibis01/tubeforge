@@ -29,6 +29,7 @@ import {
   sanitizeTransitionDuration,
   type TransitionSettings,
 } from "./transitions";
+import type { ShotJoinMark } from "./motion";
 
 const execFileAsync = promisify(execFile);
 
@@ -246,9 +247,11 @@ export async function detectStutter(
 
 /** What the timeline says the cuts should look like on the blended clock.
  * `cuts` are hard-cut boundary times (a cut MUST appear); `windows` are
- * blend spans [lo, hi] where any detection is explained by the blend
- * itself. Single-scene renders ship both empty — any detected cut is then
- * a genuine continuity break. */
+ * spans [lo, hi] where any detection is explained — scene-seam blends AND
+ * (S55) the M2 shot graph's own intra-scene flips. Renders without shot
+ * joins ship the scene-seam contract only; single-scene renders without
+ * joins ship both empty — any detected cut is then a genuine continuity
+ * break. */
 export interface ExpectedCuts {
   cuts: number[];
   windows: [number, number][];
@@ -263,15 +266,27 @@ export const CUT_TOL_SEC = 0.6;
  * settings — the SAME inputs stitchSegments consumes (transitionOffsetsMulti
  * is the render's own blended-clock math, so the expectation can never
  * disagree with what the render was told to do). Pure.
+ *
+ * S55 (T-55.3a) — `shotJoins` carries the M2 shot graph's own intra-scene
+ * boundaries (renderVideo records what actually executed, per scene, on
+ * each scene's LOCAL clock). They ride the expectation as WINDOWS — both
+ * the hard-concat flips and the SHOT_FADE_SEC hand-offs: a flip is a
+ * boundary the render owns, so a detection there is explained, but unlike
+ * a scene seam it carries NO must-appear obligation — the T-55.2 evidence
+ * measured a flip scoring under the lens's 0.40 scene threshold (13.25 s
+ * on the anchor), which a `cuts` booking would misread as "missing".
+ * Scene seams keep the must-appear side; stray cuts anywhere else still
+ * flag.
  */
 export function expectedCutsForTimeline(
   durationsSec: number[],
-  settings: TransitionSettings[]
+  settings: TransitionSettings[],
+  shotJoins?: (ShotJoinMark[] | null | undefined)[]
 ): ExpectedCuts {
-  if (durationsSec.length < 2) return { cuts: [], windows: [] };
   const cuts: number[] = [];
   const windows: [number, number][] = [];
-  transitionOffsetsMulti(durationsSec, settings).forEach((off, b) => {
+  const offsets = transitionOffsetsMulti(durationsSec, settings);
+  offsets.forEach((off, b) => {
     const s = settings[b];
     if (s && s.style === "cut") {
       cuts.push(off);
@@ -279,6 +294,18 @@ export function expectedCutsForTimeline(
       windows.push([Math.max(off - 0.3, 0), off + sanitizeTransitionDuration(s?.durationSec) + 0.3]);
     }
   });
+  if (shotJoins) {
+    shotJoins.forEach((marks, i) => {
+      if (!marks || marks.length === 0) return;
+      // Scene i's local 0 sits at offsets[i-1] on the blended clock (0 for
+      // the first scene) — the same math the stitcher's xfade offsets use,
+      // so a join can never be booked away from where it rendered.
+      const start = i === 0 ? 0 : (offsets[i - 1] ?? 0);
+      for (const m of marks) {
+        windows.push([Math.max(start + m.at - 0.3, 0), start + m.at + m.fadeSec + 0.3]);
+      }
+    });
+  }
   return { cuts, windows };
 }
 

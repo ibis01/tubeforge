@@ -830,9 +830,21 @@ function shotZoompan(
     xExpr = `clip(iw*(${fmt(cx0, 4)}+${fmt(cx1 - cx0, 4)}*${easeExpr})-iw/(2*zoom)\,0\,iw-iw/zoom)`;
     yExpr = `clip(ih*(${fmt(cy0, 4)}+${fmt(cy1 - cy0, 4)}*${easeExpr})-ih/(2*zoom)\,0\,ih-ih/zoom)`;
   } else if (kind === "hold") {
-    zExpr = "1";
-    xExpr = "iw/2-(iw/zoom)/2";
-    yExpr = "ih/2-(ih/zoom)/2";
+    // S55 — the ambient-drift static: a DECLARED static carries a tiny
+    // zStart→zEnd creep (movementForKind); execute it with the standard
+    // eased progress, focal-anchored like a zoom so the subject keeps its
+    // place while the frame creeps tighter. A TRUE hold (zStart === zEnd —
+    // the user's stillness contract, the plan-less defaults) keeps the
+    // exact constant-zoom graph, byte-identical to pre-S55.
+    if (shot.zEnd > shot.zStart) {
+      zExpr = `${fmt(shot.zStart, 4)}+${fmt(shot.zEnd - shot.zStart, 4)}*${p}`;
+      xExpr = focalAnchorExpr("x", shot.focal.x);
+      yExpr = focalAnchorExpr("y", shot.focal.y);
+    } else {
+      zExpr = "1";
+      xExpr = "iw/2-(iw/zoom)/2";
+      yExpr = "ih/2-(ih/zoom)/2";
+    }
   } else if (kind === "zoom-in" || kind === "zoom-out") {
     zExpr = `${fmt(shot.zStart, 4)}+${fmt(shot.zEnd - shot.zStart, 4)}*${p}`;
     xExpr = focalAnchorExpr("x", shot.focal.x);
@@ -949,12 +961,28 @@ export function sceneFilterGraph(opts: {
  * planSceneShots exists to reframe ONE image across cuts, which per-shot
  * images make unnecessary (the cut itself is the re-frame).
  */
+/** S55 (T-55.3b — owner option ii of the three on record in
+ * docs/audits/s55-render-forensics.md) — the ambient drift a DECLARED
+ * static shot executes with: z 1.00→1.03 across the shot. Perceptually
+ * still (~1%/s on a 3 s shot) while the pixels move, so the
+ * motion-everywhere law keeps catching real freezes without exempting
+ * anything. Exported for the tests that pin the law. */
+export const STATIC_AMBIENT_DRIFT = 0.03;
+
 export function movementForKind(kind: MoveKind, focal: Focal, intensity: number): MotionShot {
   // The user's stillness contract outranks any shot move: intensity < 1 (or
   // the "off" mode, which the caller maps here too) holds every shot — the
   // Director's CUTS still land (images change), the cameras stay still.
-  if (kind === "hold" || intensity < 1) {
+  if (intensity < 1) {
     return { kind: "hold", zStart: 1, zEnd: 1, focal, travel: 0, sec: 3 };
+  }
+  // S55 — a DECLARED static (the Director's camera vocabulary, motion on)
+  // executes as a minimal ambient drift, not a z=1 freeze: the S54 §B
+  // anchor's frozen-frames failures were exactly these holds (T-55.1 — a
+  // vocabulary/law conflict, not a renderer defect). Creative intent kept,
+  // law bright.
+  if (kind === "hold") {
+    return { kind: "hold", zStart: 1, zEnd: 1 + STATIC_AMBIENT_DRIFT, focal, travel: 0, sec: 3 };
   }
   const amp = Math.max(Math.min(intensity / 100, AMP_CAP), 0.1);
   if (kind === "zoom-in") return { kind, zStart: 1, zEnd: 1 + amp, focal, travel: 0, sec: 3 };
@@ -1094,48 +1122,10 @@ export function multiShotSceneGraph(opts: {
   // frame-budget law survives the xfade by construction: an xfade OVERLAPS
   // its duration (the pair's output runs `fade` frames shorter), so the trim
   // budget is EXTENDED by exactly the fade total — the visible timeline
-  // still lands on round(dur*fps) and the audio never drifts.
-  const wantsFade = (i: number) =>
-    i >= 0 && i < list.length - 1 && list[i].transitionOut === "fade";
-  const fadeRaw = list.map((s, i) =>
-    wantsFade(i)
-      ? Math.max(
-          2,
-          Math.round(
-            Math.min(
-              SHOT_FADE_SEC,
-              Math.min(Math.max(s.sec, 0.01), Math.max(list[i + 1].sec, 0.01)) / 4
-            ) * fps
-          )
-        )
-      : 0
-  );
-  const fadeTotal = fadeRaw.reduce((a, b) => a + b, 0);
-
-  const secs = list.map((s) => Math.max(s.sec, 0.01));
-  const frames = fitFrames(secs, totalFrames + fadeTotal);
-  // Re-cap the fades against the FITTED allocation (a rounding edge could
-  // fit a neighbor tighter than its raw seconds) and pay any debt back from
-  // the largest shots so the OUTPUT total stays exactly totalFrames:
-  // output = Σframes − Σfades.
-  let debt = 0;
-  const fades = fadeRaw.map((f, i) => {
-    if (f <= 0) return 0;
-    const cap = Math.floor(Math.min(frames[i], frames[i + 1]) / 4);
-    const v = Math.min(f, cap);
-    debt += f - v;
-    return v;
-  });
-  if (debt > 0) {
-    const bySize = frames.map((f, i) => [f, i] as const).sort((a, b) => b[0] - a[0]);
-    for (let g = 0; debt > 0 && g < bySize.length * 4; g++) {
-      const i = bySize[g % bySize.length][1];
-      if (frames[i] > 2) {
-        frames[i] -= 1;
-        debt -= 1;
-      }
-    }
-  }
+  // still lands on round(dur*fps) and the audio never drifts. (S55: the
+  // allocation lives in allocateShotFrames so shotGraphJoins — the render→QC
+  // boundary contract — executes the SAME math.)
+  const { frames, fades } = allocateShotFrames(list, totalFrames, fps);
 
   const cover = `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}`;
 
@@ -1208,6 +1198,101 @@ export function multiShotSceneGraph(opts: {
 
 /** Unused-import guard: FOCAL_CENTER is exported for tests. */
 export { FOCAL_CENTER };
+
+/** S55 (T-55.3a) — one intra-scene shot join on the scene-LOCAL clock (the
+ * segment's own timeline, before the stitch shifts it onto the blended
+ * clock). `fadeSec` 0 = the hard-concat flip; > 0 = the xfade hand-off
+ * (SHOT_FADE_SEC), with `at` = the xfade offset. */
+export interface ShotJoinMark {
+  at: number;
+  fadeSec: number;
+}
+
+/** S55 (T-55.3a) — the M2 shot graph's own boundaries, frame-exact by
+ * construction: the SAME fitted allocation multiShotSceneGraph executes
+ * (shared allocateShotFrames), walked with the same accumulator the join
+ * loop uses, so the marks can never drift from the rendered graph. The
+ * render→QC contract books these (expectedCutsForTimeline) so the
+ * cut-alignment lens stops reading the graph's own flips as "unexpected"
+ * (T-55.2: the expectation was incomplete, not the render). */
+export function shotGraphJoins(opts: {
+  dur: number;
+  shots: GraphShotInput[];
+  fps: number;
+}): ShotJoinMark[] {
+  const totalFrames = Math.max(Math.round(opts.dur * opts.fps), 2);
+  const list = opts.shots.slice(0, MAX_SHOTS);
+  if (list.length < 2) return [];
+  const { frames, fades } = allocateShotFrames(list, totalFrames, opts.fps);
+  const joins: ShotJoinMark[] = [];
+  // accLen tracks the accumulated OUTPUT frames — the same walk the xfade
+  // chain performs, so every join lands exactly where the graph puts it.
+  let accLen = frames[0];
+  for (let k = 1; k < list.length; k++) {
+    const f = fades[k - 1];
+    if (f > 0) {
+      joins.push({ at: Math.max((accLen - f) / opts.fps, 0), fadeSec: f / opts.fps });
+      accLen = accLen - f + frames[k];
+    } else {
+      joins.push({ at: accLen / opts.fps, fadeSec: 0 });
+      accLen += frames[k];
+    }
+  }
+  return joins;
+}
+
+/** S55 — the fitted per-shot frame allocation + re-capped fades, extracted
+ * VERBATIM from multiShotSceneGraph so the graph and shotGraphJoins (the
+ * render→QC boundary contract) can never disagree about where a join sits.
+ * Output invariant: Σframes − Σfades === totalFrames (the audio-sync law). */
+function allocateShotFrames(
+  list: GraphShotInput[],
+  totalFrames: number,
+  fps: number
+): { frames: number[]; fades: number[] } {
+  const wantsFade = (i: number) =>
+    i >= 0 && i < list.length - 1 && list[i].transitionOut === "fade";
+  const fadeRaw = list.map((s, i) =>
+    wantsFade(i)
+      ? Math.max(
+          2,
+          Math.round(
+            Math.min(
+              SHOT_FADE_SEC,
+              Math.min(Math.max(s.sec, 0.01), Math.max(list[i + 1].sec, 0.01)) / 4
+            ) * fps
+          )
+        )
+      : 0
+  );
+  const fadeTotal = fadeRaw.reduce((a, b) => a + b, 0);
+
+  const secs = list.map((s) => Math.max(s.sec, 0.01));
+  const frames = fitFrames(secs, totalFrames + fadeTotal);
+  // Re-cap the fades against the FITTED allocation (a rounding edge could
+  // fit a neighbor tighter than its raw seconds) and pay any debt back from
+  // the largest shots so the OUTPUT total stays exactly totalFrames:
+  // output = Σframes − Σfades.
+  let debt = 0;
+  const fades = fadeRaw.map((f, i) => {
+    if (f <= 0) return 0;
+    const cap = Math.floor(Math.min(frames[i], frames[i + 1]) / 4);
+    const v = Math.min(f, cap);
+    debt += f - v;
+    return v;
+  });
+  if (debt > 0) {
+    const bySize = frames.map((f, i) => [f, i] as const).sort((a, b) => b[0] - a[0]);
+    for (let g = 0; debt > 0 && g < bySize.length * 4; g++) {
+      const i = bySize[g % bySize.length][1];
+      if (frames[i] > 2) {
+        frames[i] -= 1;
+        debt -= 1;
+      }
+    }
+  }
+  return { frames, fades };
+}
 /**
  * zoompan segment builder shared with the slides compositor — slides feed a
  * SINGLE still frame and let zoompan `d` emit the whole shot, which avoids
