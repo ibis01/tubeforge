@@ -82,7 +82,7 @@ const PROFILES: ProductionProfile[] = [
   {
     id: "documentary",
     label: "Documentary",
-    systemOverlay: `You are the AI Director of a documentary. Voice: observational, evidence-led, restrained. Open scenes on the subject, not the narrator's opinion. Lean on real-world b-roll — set useStock=true for any scene that names a real place, machine, animal or event. Camera moves stay grounded (push-in, pan-left/right, tilt-up/down); avoid handheld unless the scene is verité. Compositions favor leading lines and negative space. Outfit/accessory only when the cast is a real on-screen subject.`,
+    systemOverlay: `You are the AI Director of a documentary. Voice: observational, evidence-led, restrained. Open scenes on the subject, not the narrator's opinion. Lean on real-world b-roll — set useStock=true for any scene that names a real place, machine, animal or event. Camera moves stay grounded (zoom-in for emphasis, pans and tilts to survey); avoid diag-tl/diag-br drift unless the scene is verité. Compositions favor leading lines and negative space. Outfit/accessory only when the cast is a real on-screen subject.`,
     defaultTone: {
       transitionBias: "fade",
       pacingBias: "slow",
@@ -90,7 +90,7 @@ const PROFILES: ProductionProfile[] = [
     },
     vocabularies: {
       framings: ["wide", "medium", "close-up", "aerial"],
-      cameras: ["static", "push-in", "pull-out", "pan-left", "pan-right", "tilt-up", "tilt-down", "drone"],
+      cameras: ["static", "zoom-in", "zoom-out", "pan-left", "pan-right", "tilt-up", "tilt-down", "diag-br"],
       transitions: TRANSITION_IDS.filter((id) => id === "fade" || id === "fadeblack" || id === "cut"),
     },
     validation: (plan) => {
@@ -118,7 +118,7 @@ const PROFILES: ProductionProfile[] = [
     },
     vocabularies: {
       framings: ["wide", "medium", "close-up", "extreme close-up", "over-the-shoulder", "pov"],
-      cameras: ["static", "push-in", "pull-out", "pan-left", "pan-right"],
+      cameras: ["static", "zoom-in", "zoom-out", "pan-left", "pan-right"],
       transitions: TRANSITION_IDS.filter((id) => id === "cut" || id === "fade"),
     },
     validation: (plan) => {
@@ -140,7 +140,7 @@ const PROFILES: ProductionProfile[] = [
   {
     id: "advertisement",
     label: "Advertisement",
-    systemOverlay: `You are the AI Director of an advertisement. Voice: persuasive, product-forward, urgent. Every scene must service the product. The FIRST shot of the video must show the product (the thing being sold) — never open on atmosphere, the problem, or the brand logo alone. Pacing biases "fast"; transitions bias "cut" for energy or "sting" for reveals. Camera moves favor push-in (escalating desire) and dolly-in. Shot density is "dense" — many short beats read as a campaign. The closing scene is a CTA shot (product hero + tagline framing).`,
+    systemOverlay: `You are the AI Director of an advertisement. Voice: persuasive, product-forward, urgent. Every scene must service the product. The FIRST shot of the video must show the product (the thing being sold) — never open on atmosphere, the problem, or the brand logo alone. Pacing biases "fast"; transitions bias "cut" for energy or "sting" for reveals. Camera moves favor zoom-in (escalating desire) and punch-in (hard emphasis); moveSpeed "fast" on hero beats. Shot density is "dense" — many short beats read as a campaign. The closing scene is a CTA shot (product hero + tagline framing).`,
     defaultTone: {
       transitionBias: "cut",
       pacingBias: "fast",
@@ -148,7 +148,7 @@ const PROFILES: ProductionProfile[] = [
     },
     vocabularies: {
       framings: ["close-up", "extreme close-up", "medium", "wide", "pov"],
-      cameras: ["push-in", "dolly-in", "static", "pan-right", "pan-left", "handheld"],
+      cameras: ["zoom-in", "punch-in", "static", "pan-right", "pan-left", "diag-tl"],
       transitions: TRANSITION_IDS,
     },
     validation: (plan) => {
@@ -210,7 +210,7 @@ const PROFILES: ProductionProfile[] = [
   {
     id: "podcast",
     label: "Podcast / talking-head",
-    systemOverlay: `You are the AI Director of a podcast video. Voice: intimate, conversational, talking-head-led. Most scenes are the host on mic — framing stays medium or close-up, camera stays static or slow push-in, pacing stays "normal" or "slow". Punctuate key moments with a close-up or extreme close-up, but never a whip-cut. Ambience beds matter: "room" for the studio, "none" for purely voice-led scenes. The shot list supports the talk, it does not compete with it.`,
+    systemOverlay: `You are the AI Director of a podcast video. Voice: intimate, conversational, talking-head-led. Most scenes are the host on mic — framing stays medium or close-up, camera stays static or a slow zoom-in, pacing stays "normal" or "slow". Punctuate key moments with a close-up or extreme close-up, but never a whip-cut. Ambience beds matter: "room" for the studio, "none" for purely voice-led scenes. The shot list supports the talk, it does not compete with it.`,
     defaultTone: {
       transitionBias: "fade",
       pacingBias: "slow",
@@ -218,19 +218,20 @@ const PROFILES: ProductionProfile[] = [
     },
     vocabularies: {
       framings: ["medium", "close-up", "extreme close-up", "over-the-shoulder"],
-      cameras: ["static", "push-in", "pull-out", "pan-left", "pan-right"],
+      cameras: ["static", "zoom-in", "zoom-out", "pan-left", "pan-right"],
       transitions: TRANSITION_IDS.filter((id) => id === "fade" || id === "fadeblack" || id === "fadewhite"),
     },
     validation: (plan) => {
       const issues: string[] = [];
       // Podcast scenes should bias toward static — a video that whip-pans
-      // through a talking-head is fighting itself.
+      // through a talking-head is fighting itself. (S48: the frenetic verbs
+      // are now the engine's diag drifts + punch-in.)
       const frenetic = plan.scenes.filter(
-        (s) => s.shots.filter((sh) => sh.camera === "handheld" || sh.camera === "drone" || sh.camera === "crane-up").length > 0
+        (s) => s.shots.filter((sh) => sh.camera === "diag-tl" || sh.camera === "diag-br" || sh.camera === "punch-in").length > 0
       );
       if (frenetic.length > 0) {
         issues.push(
-          `${frenetic.length} podcast scene(s) use handheld/drone/crane cameras — talking-head video favors static + slow push-in (scenes: ${frenetic.slice(0, 3).map((s) => s.sceneIndex).join(", ")}).`
+          `${frenetic.length} podcast scene(s) use diag-drift/punch-in cameras — talking-head video favors static + slow zoom-in (scenes: ${frenetic.slice(0, 3).map((s) => s.sceneIndex).join(", ")}).`
         );
       }
       return issues;
@@ -239,7 +240,7 @@ const PROFILES: ProductionProfile[] = [
   {
     id: "social",
     label: "Social short",
-    systemOverlay: `You are the AI Director of a social short (TikTok / Reels / Shorts). Voice: hook in the first second, fast cuts, vertical-thinking even when the canvas is 16:9. Scene 1 shot 0 is the HOOK — visual + narration must stop the scroll. Pacing biases "fast"; shot density is "dense" (≤2s shots). Transitions bias "cut" — momentum beats mood. The last shot is the CTA (follow, like, subscribe, comment). Camera moves favor push-in and handheld; static establishing shots waste the format. NEVER exceed 3 shots per scene — short-form attention does not reward cut-aways.`,
+    systemOverlay: `You are the AI Director of a social short (TikTok / Reels / Shorts). Voice: hook in the first second, fast cuts, vertical-thinking even when the canvas is 16:9. Scene 1 shot 0 is the HOOK — visual + narration must stop the scroll. Pacing biases "fast"; shot density is "dense" (≤2s shots). Transitions bias "cut" — momentum beats mood. The last shot is the CTA (follow, like, subscribe, comment). Camera moves favor zoom-in and diag-tl drift with moveSpeed "fast"; static establishing shots waste the format. NEVER exceed 3 shots per scene — short-form attention does not reward cut-aways.`,
     defaultTone: {
       transitionBias: "cut",
       pacingBias: "fast",
@@ -247,7 +248,7 @@ const PROFILES: ProductionProfile[] = [
     },
     vocabularies: {
       framings: ["close-up", "medium", "extreme close-up", "pov", "over-the-shoulder"],
-      cameras: ["push-in", "handheld", "static", "pan-right", "tilt-up", "dolly-in"],
+      cameras: ["zoom-in", "diag-tl", "static", "pan-right", "tilt-up", "punch-in"],
       transitions: TRANSITION_IDS.filter((id) => id === "cut" || id === "fadewhite"),
     },
     validation: (plan) => {

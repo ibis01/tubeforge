@@ -2033,8 +2033,8 @@ await test("M1: story regression — narrative profile output ≡ today's prompt
   ok(user.includes("Transition ids:"), "transition line present");
   ok(user.includes("Framings: wide, medium, close-up, extreme close-up, over-the-shoulder, pov, aerial."),
     "narrative keeps the FULL framings list");
-  ok(user.includes("Camera moves: static, push-in, pull-out, pan-left, pan-right, tilt-up, tilt-down, dolly-in, handheld, crane-up, drone."),
-    "narrative keeps the FULL camera moves list");
+  ok(user.includes("Camera moves: static, zoom-in, zoom-out, pan-left, pan-right, tilt-up, tilt-down, diag-tl, diag-br, punch-in."),
+    "narrative keeps the FULL v2 camera moves list (S48: engine-verbatim)");
   ok(user.includes("Compositions: rule of thirds, leading lines, golden ratio, centered symmetry, negative space, frame within frame, diagonal."),
     "narrative keeps the FULL compositions list");
   // The narrative profile DOES surface its default-tone hints — that line
@@ -4639,6 +4639,276 @@ await test("S46 loginWindowDecision: the straddle hole is closed (4+4 across a w
   // And the same 8 hits spread past the window edge are fine again.
   const spread = straddle.map((t) => t - 30_000);
   eq(loginWindowDecision(spread, now).allowed, true, "the same failures aged 30s more → only 4 in window");
+});
+
+// ---------------------------------------------------------------------------
+// S48 — the 19-field cinematic Director (schema v2, engine-verbatim cameras,
+// per-shot focal + moveSpeed, director-grade model hint).
+// ---------------------------------------------------------------------------
+
+await test("S48 CAMERA_TO_MOVE: every v2 verb is engine-verbatim (identity or a documented 1:1 rename)", async () => {
+  const { CAMERA_MOVES } = await import("../src/lib/tubeforge/director-plan.ts");
+  const { CAMERA_TO_MOVE } = await import("../src/lib/tubeforge/shots.ts");
+  // The v2 vocabulary IS the engine's move set: only static→hold and
+  // punch-in→punch are renames; every other id maps to ITSELF.
+  const renames: Record<string, string> = { static: "hold", "punch-in": "punch" };
+  for (const move of CAMERA_MOVES) {
+    const mapped = CAMERA_TO_MOVE[move];
+    ok(mapped !== undefined, `${move} is mapped`);
+    eq(mapped, renames[move] ?? move, `${move} → ${renames[move] ?? move} (verbatim)`);
+  }
+  // The legacy verbs stay covered for pre-S48 plans (frozen approximations).
+  const legacyExpect: Record<string, string> = {
+    "push-in": "zoom-in",
+    "pull-out": "zoom-out",
+    "dolly-in": "zoom-in",
+    handheld: "diag-tl",
+    "crane-up": "tilt-up",
+    drone: "diag-br",
+  };
+  for (const [verb, kind] of Object.entries(legacyExpect)) {
+    eq(CAMERA_TO_MOVE[verb], kind, `legacy ${verb} → ${kind} (v1-compat, unchanged)`);
+  }
+});
+
+await test("S48 parsePlan: a v2 plan parses with all 19 fields snapped; version records provenance", async () => {
+  const { parsePlan } = await import("../src/lib/tubeforge/director-plan.ts");
+  const json = JSON.stringify({
+    version: 2,
+    generatedAt: "2026-11-07T00:00:00.000Z",
+    concept: "test",
+    profile: "narrative",
+    scenes: [
+      {
+        sceneIndex: 1,
+        mood: "dawn",
+        shots: [
+          {
+            shotIndex: 0,
+            framing: "wide",
+            camera: "zoom-in",
+            lens: "24mm wide",
+            composition: "leading lines",
+            duration: 2.8,
+            imagePrompt: "the caravan at dawn",
+            subject: "the caravan",
+            subjectAction: "cresting the dune",
+            cameraHeight: "low-angle",
+            angle: "three-quarter",
+            depthOfField: "shallow",
+            lighting: "golden hour rim light",
+            colorGrade: "teal-orange",
+            focal: "upper-left",
+            moveSpeed: "slow",
+            transitionOut: "fade",
+            purpose: "establish",
+            notes: "sets the journey's scale",
+          },
+          // A minimal second shot: every v2 field absent → defaults fill.
+          { shotIndex: 1, framing: "close-up", camera: "diag-br", duration: 2 },
+        ],
+      },
+    ],
+  });
+  const plan = parsePlan(json);
+  if (!plan) throw new Error("v2 plan must parse");
+  eq(plan.version, 2, "version records v2 provenance");
+  const s0 = plan.scenes[0].shots[0];
+  eq(s0.subject, "the caravan", "subject parses");
+  eq(s0.subjectAction, "cresting the dune", "subjectAction parses");
+  eq(s0.cameraHeight, "low-angle", "cameraHeight parses");
+  eq(s0.angle, "three-quarter", "angle parses");
+  eq(s0.depthOfField, "shallow", "depthOfField parses");
+  eq(s0.lighting, "golden hour rim light", "lighting parses");
+  eq(s0.colorGrade, "teal-orange", "colorGrade parses");
+  eq(s0.focal, "upper-left", "focal parses");
+  eq(s0.moveSpeed, "slow", "moveSpeed parses");
+  eq(s0.transitionOut, "fade", "transitionOut parses");
+  eq(s0.purpose, "establish", "purpose parses");
+  eq(s0.notes, "sets the journey's scale", "notes parses");
+  // Field-count contract: the complete parsed shot carries exactly 19 keys.
+  eq(Object.keys(s0).length, 19, "the parsed v2 shot carries all 19 fields");
+  // Absent v2 fields default to the documented v1-equivalent values.
+  const s1 = plan.scenes[0].shots[1];
+  eq(s1.cameraHeight, "eye-level", "cameraHeight defaults");
+  eq(s1.angle, "front", "angle defaults");
+  eq(s1.depthOfField, "deep", "depthOfField defaults");
+  eq(s1.focal, "", "focal defaults empty (scene heuristic stays in charge)");
+  eq(s1.moveSpeed, "normal", "moveSpeed defaults");
+  eq(s1.transitionOut, "cut", "transitionOut defaults");
+  eq(s1.purpose, "contextualize", "purpose defaults");
+  eq(s1.subject, "", "subject defaults empty");
+});
+
+await test("S48 parsePlan: a v1 plan upgrades losslessly — legacy verbs kept verbatim, version stays 1", async () => {
+  const { parsePlan } = await import("../src/lib/tubeforge/director-plan.ts");
+  const json = JSON.stringify({
+    version: 1,
+    generatedAt: "2026-11-01T00:00:00.000Z",
+    concept: "legacy",
+    scenes: [
+      {
+        sceneIndex: 1,
+        mood: "dusk",
+        transitionIn: "",
+        motion: "smart",
+        shots: [
+          { shotIndex: 0, framing: "wide", camera: "drone", lens: "24mm", composition: "diagonal", duration: 3, imagePrompt: "the city from above" },
+          { shotIndex: 1, framing: "medium", camera: "handheld", duration: 2.5, imagePrompt: "the market" },
+        ],
+      },
+    ],
+  });
+  const plan = parsePlan(json);
+  if (!plan) throw new Error("v1 plan must parse");
+  eq(plan.version, 1, "version stays 1 (provenance, never rewritten)");
+  // The v1 verbs ride through parse UNCHANGED — execution maps them.
+  eq(plan.scenes[0].shots[0].camera, "drone", "legacy drone verb survives parse verbatim");
+  eq(plan.scenes[0].shots[1].camera, "handheld", "legacy handheld verb survives parse verbatim");
+  // And the v2 fields exist with defaults (complete in-memory shape).
+  eq(plan.scenes[0].shots[0].moveSpeed, "normal", "v1 shot gains defaulted moveSpeed");
+  eq(plan.scenes[0].shots[0].purpose, "contextualize", "v1 shot gains defaulted purpose");
+});
+
+await test("S48 buildSceneShots: per-shot focal + moveSpeed ride the execution verbatim", async () => {
+  const { buildSceneShots } = await import("../src/lib/tubeforge/shots.ts");
+  const scene = {
+    index: 1, title: "T", narration: "n", visual: "v", camera: "static",
+    mood: "m", caption: "c", hostInScene: false, rehook: false, sfx: "none",
+  } as never;
+  const planScene = {
+    sceneIndex: 1,
+    mood: "m",
+    transitionIn: "",
+    motion: "smart",
+    needsI2V: false,
+    useStock: false,
+    pacing: "normal",
+    ambience: "none",
+    sfx: "none",
+    shots: [
+      { shotIndex: 0, framing: "wide", camera: "zoom-in", lens: "35mm", composition: "rule of thirds", duration: 2.5, imagePrompt: "a", focal: "upper-left", moveSpeed: "fast" },
+      { shotIndex: 1, framing: "medium", camera: "punch-in", lens: "35mm", composition: "rule of thirds", duration: 2.5, imagePrompt: "b" },
+    ],
+  } as never;
+  const plan = buildSceneShots({ scene, planScene, measuredSec: 5 });
+  const [s0, s1] = plan.available;
+  // v2 camera verbs execute VERBATIM (identity / documented rename).
+  eq(s0.moveKind, "zoom-in", "zoom-in executes as zoom-in");
+  eq(s1.moveKind, "punch", "punch-in executes as punch (the documented rename)");
+  // The per-shot focal anchor rides through.
+  const f0 = s0.focal;
+  ok(f0 !== undefined, "shot 0 carries its focal anchor");
+  if (!f0) throw new Error("shot 0 must carry a focal anchor");
+  eq(f0.x, 0.32, "upper-left focal x resolves via motion tokens");
+  eq(f0.y, 0.35, "upper-left focal y resolves via motion tokens");
+  ok(s1.focal === undefined, "absent focal → no anchor (scene heuristic stays in charge)");
+  // moveSpeed resolves to the documented multiplier.
+  eq(s0.speed, 1.35, "fast → 1.35 intensity multiplier");
+  eq(s1.speed, 1, "absent moveSpeed → 1 (video intensity, unchanged)");
+});
+
+await test("S48 shotIntensity + focalFromToken: the motion-side seams", async () => {
+  const { shotIntensity, focalFromToken } = await import("../src/lib/tubeforge/motion.ts");
+  eq(shotIntensity(12), 12, "no speed → the base intensity");
+  eq(shotIntensity(12, 1), 12, "normal → the base intensity");
+  eq(Math.abs(shotIntensity(12, 0.7) - 8.4) < 1e-9, true, "slow → 0.7× (8.4)");
+  eq(Math.abs(shotIntensity(12, 1.35) - 16.2) < 1e-9, true, "fast → 1.35× (16.2)");
+  eq(shotIntensity(30, 1.35), 30, "clamped at the 30 ceiling — fast cannot exceed the knob's max");
+  eq(shotIntensity(0, 1.35), 0, "stillness contract preserved: 0 base stays 0");
+  // Focal resolution: tokens → anchors, unknowns → null.
+  const c = focalFromToken("center");
+  const tl = focalFromToken("top-left");
+  if (!c || !tl) throw new Error("center/top-left must resolve");
+  eq(c.x, 0.5, "center resolves");
+  eq(tl.x, 0.32, "alias top-left → upper-left resolves");
+  eq(focalFromToken(""), null, "empty → null (caller heuristic)");
+  eq(focalFromToken("somewhere"), null, "unknown token → null");
+});
+
+await test("S48 resolveChatModel: operator pick > director hint > gateway default", async () => {
+  const { resolveChatModel } = await import("../src/lib/tubeforge/llm.ts");
+  eq(resolveChatModel("gpt-4o", "glm-4.6"), "gpt-4o", "the operator's Settings pick always wins");
+  eq(resolveChatModel("", "glm-4.6"), "glm-4.6", "hint applies when no operator pick exists");
+  eq(resolveChatModel(null, "glm-4.6"), "glm-4.6", "null settings model → hint");
+  eq(resolveChatModel(undefined, "glm-4.6"), "glm-4.6", "undefined settings model → hint");
+  eq(resolveChatModel("", undefined), "", "no hint → the gateway default rides");
+  eq(resolveChatModel("  ", "glm-4.6"), "glm-4.6", "whitespace-only settings model → hint");
+  eq(resolveChatModel("glm-4.6 ", ""), "glm-4.6", "settings model is trimmed");
+});
+
+await test("S48 directorSystemPrompt: the 19-field schema + engine vocabulary reach the LLM", async () => {
+  const { directorSystemPrompt, DIRECTOR_MODEL_HINT } = await import("../src/lib/tubeforge/director.ts");
+  const { resolveProfile } = await import("../src/lib/tubeforge/production-profiles.ts");
+  const sys = directorSystemPrompt(resolveProfile("narrative"));
+  // The JSON example carries every one of the 19 shot fields.
+  for (const field of [
+    "shotIndex", "framing", "camera", "lens", "composition", "duration", "imagePrompt",
+    "subject", "subjectAction", "cameraHeight", "angle", "depthOfField",
+    "lighting", "colorGrade", "focal", "moveSpeed", "transitionOut", "purpose", "notes",
+  ]) {
+    ok(sys.includes(`"${field}"`), `system prompt schema includes "${field}"`);
+  }
+  // The cinematic FIELD rules name their vocabularies (the camera CATALOG
+  // itself rides the user prompt — pinned by the M1 golden test above).
+  ok(sys.includes("moveSpeed: slow") && sys.includes("transitionOut: cut | fade"),
+    "cinematic field rules carry their vocabularies");
+  // The director model hint is the S47-benchmarked pick.
+  eq(DIRECTOR_MODEL_HINT, "glm-4.6", "director model hint pinned to glm-4.6");
+});
+
+await test("S48 shotPrompt: v2 cinematic clauses weave into extra-shot prompts (v1 shots unchanged)", async () => {
+  const { shotPrompt } = await import("../src/lib/tubeforge/shots.ts");
+  const scene = {
+    index: 2, title: "T", narration: "n", visual: "the ancient library", camera: "static",
+    mood: "dusk light", caption: "c", hostInScene: false, rehook: false, sfx: "none",
+  } as never;
+  // v1-shaped shot (only the 7 original fields) → the pre-S48 prompt body.
+  const v1 = shotPrompt(scene as never, {
+    imagePrompt: "the reading room", framing: "wide", lens: "35mm", composition: "rule of thirds",
+  });
+  ok(!v1.includes("camera") || v1.includes("cinema camera"), "v1 shot adds no v2 clauses");
+  ok(v1.includes("the ancient library") && v1.includes("the reading room"), "v1 prompt keeps its core bits");
+  // v2 shot → the new clauses ride in.
+  const v2 = shotPrompt(scene as never, {
+    imagePrompt: "the reading room", framing: "wide", lens: "85mm f/1.8", composition: "leading lines",
+    subject: "a scholar", subjectAction: "turning a parchment page",
+    cameraHeight: "low-angle", angle: "profile", depthOfField: "shallow",
+    lighting: "single oil lamp, deep shadows", colorGrade: "warm sepia",
+  });
+  ok(v2.includes("a scholar turning a parchment page"), "subject + action clause");
+  ok(v2.includes("low-angle camera"), "cameraHeight clause");
+  ok(v2.includes("profile view"), "angle clause");
+  ok(v2.includes("shallow depth of field"), "depthOfField clause");
+  ok(v2.includes("single oil lamp, deep shadows"), "lighting clause");
+  ok(v2.includes("warm sepia color grade"), "colorGrade clause");
+});
+
+await test("S48 planStaticRuns: the pacing gate survives the v2 schema untouched", async () => {
+  const { planStaticRuns } = await import("../src/lib/tubeforge/director-plan.ts");
+  // A v2-shaped plan whose shots are ALL static + motion off + no i2v/stock
+  // is the same flat-pacing sin the Stage 5 gate exists to catch.
+  const plan = {
+    version: 2 as const,
+    generatedAt: "2026-11-07T00:00:00.000Z",
+    concept: "flat",
+    scenes: [
+      { sceneIndex: 1, mood: "", transitionIn: "", motion: "off", needsI2V: false, useStock: false, pacing: "normal", ambience: "none", sfx: "none",
+        shots: [
+          { shotIndex: 0, framing: "wide", camera: "static", lens: "35mm", composition: "rule of thirds", duration: 3, imagePrompt: "a", cameraHeight: "eye-level", angle: "front", depthOfField: "deep", focal: "", moveSpeed: "normal", transitionOut: "cut", purpose: "establish", notes: "" },
+          { shotIndex: 1, framing: "wide", camera: "static", lens: "35mm", composition: "rule of thirds", duration: 3, imagePrompt: "b", cameraHeight: "eye-level", angle: "front", depthOfField: "deep", focal: "", moveSpeed: "normal", transitionOut: "cut", purpose: "detail", notes: "" },
+          { shotIndex: 2, framing: "wide", camera: "static", lens: "35mm", composition: "rule of thirds", duration: 3, imagePrompt: "c", cameraHeight: "eye-level", angle: "front", depthOfField: "deep", focal: "", moveSpeed: "normal", transitionOut: "cut", purpose: "reveal", notes: "" },
+        ] },
+    ],
+  };
+  const runs = planStaticRuns(plan, {});
+  eq(runs.length, 1, "the static run is detected");
+  eq(runs[0].length, 3, "all three static shots counted");
+  // moveSpeed does NOT excuse a static camera (speed modulates a move that
+  // has to exist first).
+  const fast = JSON.parse(JSON.stringify(plan));
+  fast.scenes[0].shots.forEach((s: { moveSpeed: string }) => { s.moveSpeed = "fast"; });
+  eq(planStaticRuns(fast, {})[0].length, 3, "fast moveSpeed on a static camera is still flat pacing");
 });
 
 console.log(`\n${"─".repeat(56)}`);

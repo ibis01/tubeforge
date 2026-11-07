@@ -1727,3 +1727,25 @@ next census freezes whatever this environment reproduces · **197/197 unit**
 continuity benchmark ALL CHECKS PASS** · sharp 0.35.5 smoke-tested ·
 `npm audit`: 11 remaining, all dev-chain. **The S47 ledger is closed; the
 feature roadmap un-holds.**
+
+## S48 — Cinematic AI Director (opened 2026-11-07 UTC)
+
+Sprint goal: the 19-field cinematic Director — shot schema v2, engine-verbatim
+camera vocabulary, per-shot focal + speed, director-grade model selection.
+Design contract: `docs/design/s48-s49-schema.md` (joint with S49 — the ONE
+migration both sprints need belongs to S49; S48 ships zero DB changes).
+
+| Task | Status | Notes |
+|---|---|---|
+| T-48.1 shot schema v2 (19 fields) | ✅ Done | `DirectorShot` 7 → 19 fields: + subject, subjectAction, cameraHeight (5 vocab), angle (4), depthOfField (3), lighting, colorGrade, focal (9 motion tokens), moveSpeed (3), transitionOut (cut/fade), purpose (6), notes. Optional on the interface (v1 plans / fixtures / human edits), ALWAYS filled by `parsePlan` with documented defaults; the LLM-facing JSON schema demands all 19. `version: 1\|2` is provenance only — the parsed in-memory shape is uniformly complete, no consumer branches on it. |
+| T-48.2 engine-verbatim camera vocabulary | ✅ Done | v2 `CAMERA_MOVES` = the engine's move set (static, zoom-in, zoom-out, pan-left/right, tilt-up/down, diag-tl, diag-br, punch-in). `CAMERA_TO_MOVE` carries identity rows for every v2 id (static→hold, punch-in→punch — the only 1:1 renames, documented). Legacy verbs (push-in, dolly-in, handheld, crane-up, drone) stay parseable via the v1-compat rows so persisted plans render byte-identical. Cinematic language Ken Burns can't honor moved to the prompt fields + i2v prompt. |
+| T-48.3 per-shot focal + moveSpeed execution | ✅ Done | `buildSceneShots` resolves shot.focal via new `motion.ts focalFromToken` and moveSpeed via `MOVE_SPEED_FACTOR` (0.7/1/1.35); `render.ts resolveShotInputs` → `GraphShotInput.focal/speed` → `multiShotSceneGraph` applies `shotIntensity` (clamped ≤ the 30 knob ceiling). Absent values = scene heuristic + video intensity, exactly as before. |
+| T-48.4 director-grade model selection | ✅ Done | `DIRECTOR_MODEL_HINT = "glm-4.6"` (the S47 benchmark finding) rides the new `llmChat(body, { modelHint })`; `resolveChatModel` pins operator pick > hint > gateway default — pure, unit-tested. The pass's plan persists `version: 2`. |
+| T-48.5 profiles on the v2 vocabulary | ✅ Done | All 7 profiles' `cameras` lists + overlay texts speak v2 ids; the podcast frenetic-camera validation flags diag-tl/diag-br/punch-in. |
+| T-48.6 deferred field on record | ✅ Done | `transitionOut: "fade"` executes with S50's per-shot xfade (the design doc names it the ONE deliberate deferral); "cut" is the default and today's behavior. |
+| T-48.7 compatibility contract | ✅ Done | 9 new unit tests (206/206): v1 plans parse with verbs verbatim + version 1; v2 verbs execute identity/renames; parsed v2 shot carries exactly 19 keys; the pacing gate survives the schema (fast moveSpeed ≠ an excuse for static cameras); shotPrompt weaves the v2 clauses and stays byte-compatible for v1-shaped shots; the golden user-prompt camera line updated deliberately. |
+
+Verification: tsc 0 · eslint 0 errors / **671 warnings — this sprint adds
+ZERO** (first draft's 12 non-null assertions refactored to narrowing guards
+before commit) · **206/206 unit** (197 + 9 S48). No DB changes; no provider
+changes; v1 plans render byte-identically.

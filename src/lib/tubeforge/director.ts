@@ -133,8 +133,30 @@ const BASE_SYSTEM_PROMPT = `Rules:
 - If cast appearance is requested for a scene, describe outfit + accessory CONCRETELY and keep it consistent across scenes unless the narration demands a change.
 - locations / props: when the library below provides recurring set pieces, tag each scene with the names it actually uses (arrays of EXACT library names, ≤3 each). Scenes that use none get empty arrays. Never invent names outside the library.
 - imagePrompt (shots): one sentence saying WHAT THIS SHOT SHOWS. It stays inside the video's story world — when the topic carries a culture, era or domain (Arab history, finance), the imagePrompt names that world's authentic markers (its architecture, clothing, artifacts, domain objects), never a generic stand-in that could belong to another video.
+
+Cinematic shot fields (S48 — every shot carries ALL of them):
+- subject: the single dominant subject of THIS shot (who or what fills the frame) — a noun phrase, concrete.
+- subjectAction: what the subject is doing in this shot — an active verb phrase ("raising the ink-blackened reed pen", "cresting the dune at dusk").
+- cameraHeight: eye-level | low-angle | high-angle | overhead | ground-level.
+- angle: front | three-quarter | profile | back.
+- depthOfField: deep (everything sharp) | shallow (subject isolated) | rack (focus shifts inside the shot).
+- lighting: a concrete lighting scheme ("golden hour rim light", "single oil lamp, deep shadows", "flat overcast diffusion").
+- colorGrade: a color treatment ("teal-orange", "desaturated documentary", "warm sepia"). Keep it consistent within a scene; evolve it across the video's arc only when the story turns.
+- focal: where the eye must stay — center | left | right | upper | lower | upper-left | upper-right | lower-left | lower-right.
+- moveSpeed: slow (weight, grief, awe) | normal | fast (energy, urgency). Vary it with the narration's beats.
+- transitionOut: cut | fade — how THIS shot hands to the next (the scene-level transitionIn governs scene boundaries).
+- purpose: establish | contextualize | detail | reaction | reveal | payoff — the shot's narrative function.
+- notes: one short line for the human reviewing your plan (why this choice). May be "".
+
 - Respond with STRICT JSON only, no markdown fences, matching exactly:
-{"concept":"<one paragraph directorial concept>","musicMood":"cinematic","ducking":"standard","scenes":[{"sceneIndex":1,"mood":"<palette + lighting + time-of-day>","transitionIn":"fade","motion":"smart","needsI2V":false,"useStock":false,"pacing":"normal","ambience":"none","sfx":"none","locations":[],"props":[],"outfit":"<when cast present>","accessory":"<when cast present>","shots":[{"shotIndex":0,"framing":"wide","camera":"push-in","lens":"24mm wide","composition":"leading lines","duration":2.8,"imagePrompt":"<what THIS shot shows, one sentence>"}]}]}`;
+{"concept":"<one paragraph directorial concept>","musicMood":"cinematic","ducking":"standard","scenes":[{"sceneIndex":1,"mood":"<palette + lighting + time-of-day>","transitionIn":"fade","motion":"smart","needsI2V":false,"useStock":false,"pacing":"normal","ambience":"none","sfx":"none","locations":[],"props":[],"outfit":"<when cast present>","accessory":"<when cast present>","shots":[{"shotIndex":0,"framing":"wide","camera":"zoom-in","lens":"24mm wide","composition":"leading lines","duration":2.8,"imagePrompt":"<what THIS shot shows, one sentence>","subject":"<dominant subject>","subjectAction":"<active verb phrase>","cameraHeight":"eye-level","angle":"three-quarter","depthOfField":"deep","lighting":"<concrete scheme>","colorGrade":"<treatment>","focal":"center","moveSpeed":"normal","transitionOut":"cut","purpose":"establish","notes":""}]}]}`;
+
+/** S48 — the Director's model hint. The S47 acceptance benchmark measured
+ * the platform default (glm-4.5-flash) failing the narrative re-run 3/3
+ * (prose instead of JSON, scene-less objects); glm-4.6 held through 12/12
+ * plans across six genres. The hint rides llmChat ONLY when the operator
+ * has not pinned their own chat model (resolveChatModel precedence). */
+export const DIRECTOR_MODEL_HINT = "glm-4.6";
 
 /** The system message for a given profile: its opening (the format's voice)
  *  followed by the format-neutral Rules + JSON schema. Pure. */
@@ -300,6 +322,9 @@ export async function runDirectorPass(
   // the whole job. Now a malformed or scene-less response costs one fresh
   // generation, and the hardened parser (ai.ts) recovers most variance
   // without spending the retry at all.
+  // S48 — the model hint upgrades the gateway default to the director-grade
+  // glm-4.6 (the S47 benchmark finding) without ever overriding an operator
+  // pick (resolveChatModel precedence).
   const normalized = await aiCallJson<DirectorPlan>("llm", "director pass LLM",
     async () =>
       (await llmChat({
@@ -308,7 +333,7 @@ export async function runDirectorPass(
           { role: "user", content: userPrompt },
         ],
         temperature: 0.6,
-      })).choices?.[0]?.message?.content ?? "",
+      }, { modelHint: DIRECTOR_MODEL_HINT })).choices?.[0]?.message?.content ?? "",
     {
       validate: (parsed) => {
         const plan = parsePlan(
@@ -333,7 +358,7 @@ export async function runDirectorPass(
 
   const plan: DirectorPlan = {
     ...normalized,
-    version: 1,
+    version: 2,
     profile: profile.id,
     generatedAt: new Date().toISOString(),
   };

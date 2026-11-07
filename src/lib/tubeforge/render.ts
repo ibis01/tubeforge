@@ -420,22 +420,25 @@ export function droneSource(profile: MusicProfile): string {
 /** M2 — project a SceneShotPlan onto concrete ffmpeg shot inputs. Images that
  *  went missing between generation and composition (cleaned scratch dir,
  *  interrupted re-render) demote to pseudo crops over the scene art — the
- *  render always receives a full shot list (spec §1.8 floor). */
+ *  render always receives a full shot list (spec §1.8 floor). S48: the
+ *  per-shot focal anchor + moveSpeed multiplier ride through verbatim. */
 function resolveShotInputs(
   dir: string,
   plan: SceneShotPlan,
   sceneImg: string
-): { file: string; moveKind: MoveKind; sec: number; crop?: { w: number; h: number; x: number; y: number } }[] {
+): { file: string; moveKind: MoveKind; sec: number; crop?: { w: number; h: number; x: number; y: number }; focal?: { x: number; y: number }; speed?: number }[] {
   const out: {
     file: string;
     moveKind: MoveKind;
     sec: number;
     crop?: { w: number; h: number; x: number; y: number };
+    focal?: { x: number; y: number };
+    speed?: number;
   }[] = [];
   for (const sh of plan.available) {
     const file = path.join(dir, sh.imageFile);
     if (sh.source === "scene" || fs.existsSync(file)) {
-      out.push({ file, moveKind: sh.moveKind, sec: sh.sec, crop: sh.crop });
+      out.push({ file, moveKind: sh.moveKind, sec: sh.sec, crop: sh.crop, focal: sh.focal, speed: sh.speed });
       continue;
     }
     out.push({
@@ -443,6 +446,8 @@ function resolveShotInputs(
       moveKind: sh.moveKind,
       sec: sh.sec,
       crop: sh.crop ?? PSEUDO_CROPS[sh.shotIndex % PSEUDO_CROPS.length],
+      focal: sh.focal,
+      speed: sh.speed,
     });
   }
   return out;
@@ -701,6 +706,8 @@ async function buildSegment(opts: {
           sec: sh.sec,
           input: inputFor.get(sh.file)!,
           crop: sh.crop,
+          focal: sh.focal,
+          speed: sh.speed,
         })),
       });
       // The PIP logo rides AFTER the shot stills (input order: 0 = scene

@@ -2033,3 +2033,71 @@ smoke-tested · npm audit 11 remaining, all dev-chain. The S47 ledger is
 CLOSED; the feature roadmap un-holds. Next: S48 (Cinematic AI Director)
 with the two recorded findings in hand — the default-model reliability gap
 and the portrait-age drift.
+
+## S48 (2026-11-07 UTC) — the Director learns nineteen words, and the camera stops lying
+
+S48 — the Cinematic AI Director, first sprint of the approved quality
+transformation. Design first: docs/design/s48-s49-schema.md records the
+joint S48+S49 schema decision (shot v2 lives in the shotList JSON with a
+tolerant parser; S49 adds the ONE column both sprints need — no shotList
+migration, ever).
+
+The 19-field cinematic shot. DirectorShot grows from 7 to 19 fields:
+the v1 seven (shotIndex, framing, camera, lens, composition, duration,
+imagePrompt) plus subject, subjectAction, cameraHeight, angle,
+depthOfField, lighting, colorGrade, focal, moveSpeed, transitionOut,
+purpose, notes. The 12 new fields are optional ON THE INTERFACE (v1 plans,
+hand-built fixtures, human edits) but parsePlan ALWAYS fills them with
+documented defaults, so every parsed plan carries the complete shape — the
+LLM-facing schema demands all 19; the parser tolerates absence and fails
+open to v1 behavior. `version` becomes 1|2 provenance only; no consumer
+branches on it.
+
+The camera vocabulary is now ENGINE-VERBATIM — the split-brain fix. v2
+CAMERA_MOVES is the engine's own move set (static, zoom-in, zoom-out,
+pan-left, pan-right, tilt-up, tilt-down, diag-tl, diag-br, punch-in);
+CAMERA_TO_MOVE gained identity rows for every v2 id (static→hold and
+punch-in→punch are the only renames, documented 1:1). A director who asks
+for zoom-in now RENDERS zoom-in — pre-S48, dolly-in silently became a
+zoom, crane-up a tilt, drone a drift. The legacy verbs stay parseable
+through the v1-compat rows so every persisted plan renders byte-identical
+(approximations frozen as history, never new requests). Cinematic
+language Ken Burns cannot honor moved to where it belongs: the prompt
+fields (lens/cameraHeight/angle/subjectAction) that steer image models,
+and the i2v prompt for needsI2V scenes.
+
+Per-shot focal + speed execute for real. buildSceneShots resolves
+shot.focal through motion.ts's token map (focalFromToken — the new seam)
+and moveSpeed through MOVE_SPEED_FACTOR (slow 0.7 / normal 1 / fast 1.35);
+render.ts resolveShotInputs and multiShotSceneGraph carry them into the
+zoompan math via shotIntensity (clamped to the 30 knob ceiling — fast
+cannot exceed what the intensity setting allows). Absent values keep the
+scene heuristic and video intensity exactly. The one deliberately
+deferred field: transitionOut "fade" lands with S50's per-shot xfade;
+"cut" (the default) is today's behavior, so nothing waits on it.
+
+Model hardening, the S47 finding. The director pass now passes
+DIRECTOR_MODEL_HINT ("glm-4.6") through the new llmChat modelHint
+parameter: resolveChatModel pins the precedence operator pick > hint >
+gateway default, pure and unit-tested. The platform default
+(glm-4.5-flash, benchmarked failing the narrative re-run 3/3) no longer
+rides the Director unless the operator explicitly chooses it.
+
+The seven production profiles moved to the v2 vocabulary (cameras lists
+and overlay texts); the podcast "frenetic camera" validation now flags the
+engine's diag drifts + punch-in. The director system prompt carries the
+full 19-field JSON schema and the cinematic field rules; the user prompt
+lists the v2 camera catalog (the one golden line changed, test updated
+deliberately).
+
+Compatibility, pinned by 9 new unit tests (206/206): v1 plans parse with
+legacy verbs verbatim and version 1; v2 verbs execute identity; the
+pacing gate (planStaticRuns) survives the new schema — and a fast
+moveSpeed on a static camera is still flat pacing, because speed
+modulates a move that has to exist first.
+
+Gate: tsc 0 · eslint 0 errors / 671 warnings — this sprint adds ZERO
+(the 12 non-null assertions the first draft brought were refactored to
+narrowing guards before commit) · 206/206 unit. Next: S49 (Islamic
+visual protection) on the shared schema — Video.contentPolicy + the
+layered restricted-subject enforcement.

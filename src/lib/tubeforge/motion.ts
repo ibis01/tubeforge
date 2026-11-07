@@ -178,6 +178,25 @@ export function normalizeFocalToken(raw: string | null | undefined): string | nu
   return token in FOCAL_TOKENS ? token : null;
 }
 
+/** S48 — resolve a Director focal token to its anchor point (null when the
+ *  token is absent/unknown — the caller then falls back to its own
+ *  heuristic). The single seam the plan layer uses; FOCAL_TOKENS stays
+ * private to this module. */
+export function focalFromToken(raw: string | null | undefined): Focal | null {
+  const token = normalizeFocalToken(raw);
+  return token ? FOCAL_TOKENS[token] : null;
+}
+
+/** S48 — the per-shot Ken Burns intensity: the video-level base multiplied
+ * by the Director's moveSpeed (slow 0.7 / normal 1 / fast 1.35), clamped to
+ * the 0..30 setting range so a "fast" request can never exceed what the
+ * intensity knob itself allows. */
+export function shotIntensity(base: number, speed?: number): number {
+  const b = Number.isFinite(base) ? base : 0;
+  const m = Number.isFinite(speed) && speed !== undefined ? speed : 1;
+  return Math.max(0, Math.min(MOTION_INTENSITY_MAX, b * m));
+}
+
 /**
  * Where the eye must stay. Priority: the storyboard LLM's explicit "focal"
  * token > composition keywords in the visual prompt > center.
@@ -967,6 +986,9 @@ export interface GraphShotInput {
   crop?: { w: number; h: number; x: number; y: number };
   /** Per-shot override of the scene focal (defaults to opts.focal). */
   focal?: Focal;
+  /** S48 — per-shot intensity multiplier (Director moveSpeed; 1 = the
+   *  video-level motion intensity, the pre-S48 behavior). */
+  speed?: number;
 }
 
 /** PSEUDO_CROPS coordinates are authored against the 16:9 work canvas. */
@@ -1071,7 +1093,13 @@ export function multiShotSceneGraph(opts: {
 
   list.forEach((s, i) => {
     const pos = byInput.get(s.input)!.indexOf(i);
-    const shot = movementForKind(s.kind, s.focal ?? opts.focal ?? FOCAL_CENTER, settings.intensity);
+    // S48: the shot's own focal anchor + speed multiplier ride verbatim —
+    // absent values keep the scene focal + video intensity exactly.
+    const shot = movementForKind(
+      s.kind,
+      s.focal ?? opts.focal ?? FOCAL_CENTER,
+      shotIntensity(settings.intensity, s.speed)
+    );
     const zp = shotZoompan(shot, frames[i], settings, work, out, fps, 1);
     parts.push(
       `[b${s.input}_${pos}]${s.crop ? cropChain(s.crop, W, H) : ""}trim=end_frame=${frames[i]},setpts=PTS-STARTPTS,${zp},format=yuv420p[v${i}]`

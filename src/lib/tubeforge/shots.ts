@@ -14,9 +14,11 @@ import { imageGenerate } from "./providers/image";
 import { aiCall } from "./budget";
 import { getVideoTopicWorld, topicWorldClause } from "./story";
 import { videoDir } from "./ai";
+import { focalFromToken } from "./motion";
 import type { Scene } from "./types";
 import type { MoveKind } from "./motion";
 import type { DirectorScene } from "./director-plan";
+import { MOVE_SPEED_FACTOR } from "./director-plan";
 
 // ---------------------------------------------------------------------------
 // M2 — the Director→shot-engine contract (docs/director-m1-m2-spec.md §1).
@@ -28,17 +30,28 @@ import type { DirectorScene } from "./director-plan";
 // zoompan math); the renderer runs it.
 
 /** CAMERA_MOVES (Director vocabulary) → MoveKind (motion.ts engine).
- *  Approximations are documented per entry — Ken Burns cannot shake or crane,
- *  so the mapping picks the closest supported movement. Unknown values (the
- *  plan normalizer snaps everything, but be defensive) → hold. */
+ *
+ * S48 — the v2 vocabulary is ENGINE-VERBATIM: every v2 id maps to itself
+ * ("static"→hold and "punch-in"→punch are the only renames — 1:1, no
+ * creative loss). The LEGACY rows below serve pre-S48 plans and hand-built
+ * fixtures only; their approximations are frozen history, never new
+ * requests. Unknown values (the plan normalizer snaps everything, but be
+ * defensive) → hold. */
 export const CAMERA_TO_MOVE: Readonly<Record<string, MoveKind>> = {
+  // --- v2 (engine-verbatim) ---
   static: "hold",
-  "push-in": "zoom-in",
-  "pull-out": "zoom-out",
+  "zoom-in": "zoom-in",
+  "zoom-out": "zoom-out",
   "pan-left": "pan-left",
   "pan-right": "pan-right",
   "tilt-up": "tilt-up",
   "tilt-down": "tilt-down",
+  "diag-tl": "diag-tl",
+  "diag-br": "diag-br",
+  "punch-in": "punch",
+  // --- v1 legacy (pre-S48 plans; documented approximations) ---
+  "push-in": "zoom-in",
+  "pull-out": "zoom-out",
   // dolly-in: a track-in reads as a slow, larger-scale zoom on a still.
   "dolly-in": "zoom-in",
   // handheld: alternating diagonal drifts — the closest Ken Burns has to
@@ -65,6 +78,13 @@ export interface ShotExecution {
   moveKind: MoveKind; // motion.ts executes this
   sec: number; // reconciled duration
   prompt?: string; // extra only — the generation prompt (imagePrompt leads)
+  /** S48 — the shot's OWN focal anchor (a motion.ts Focal) when the plan
+   *  set one; absent = the scene-level heuristic (focalForScene) stays in
+   *  charge, exactly as before. */
+  focal?: { x: number; y: number };
+  /** S48 — moveSpeed → intensity multiplier (MOVE_SPEED_FACTOR); absent =
+   *  1 (the video-level motion intensity, unchanged). */
+  speed?: number;
 }
 
 /** All shots of one scene, ordered; durations sum ≈ the scene duration. */
@@ -144,6 +164,10 @@ export function buildSceneShots(input: {
       moveKind,
       sec: Math.round(sh.duration * scale * 100) / 100,
       prompt: isExtra ? shotPrompt(scene, sh) : undefined,
+      // S48: the Director's per-shot focal anchor + movement speed ride the
+      // execution verbatim (absent = the scene heuristic / video intensity).
+      focal: focalFromToken(sh.focal) ?? undefined,
+      speed: MOVE_SPEED_FACTOR[sh.moveSpeed ?? "normal"] ?? 1,
     };
   });
 
@@ -161,18 +185,41 @@ const SHOT_CAMERA_MOVEKINDS: readonly MoveKind[] = [
 ];
 
 /** Prompt for an extra shot image (spec §1.6): the shot's own imagePrompt
- *  LEADS — its first-ever consumer — then framing/lens/composition and the
- *  scene's visual+mood, over the same photoreal boilerplate story.ts uses. */
+ *  LEADS — its first-ever consumer — then the S48 cinematic fields
+ *  (subject/action, camera height, angle, depth of field, lighting, grade)
+ *  and the scene's visual+mood, over the same photoreal boilerplate story.ts
+ *  uses. v1-shaped shots (fields absent) render the pre-S48 prompt exactly. */
 export function shotPrompt(
   scene: Scene,
-  shot: { imagePrompt: string; framing: string; lens: string; composition: string }
+  shot: {
+    imagePrompt: string;
+    framing: string;
+    lens: string;
+    composition: string;
+    subject?: string;
+    subjectAction?: string;
+    cameraHeight?: string;
+    angle?: string;
+    depthOfField?: string;
+    lighting?: string;
+    colorGrade?: string;
+  }
 ): string {
+  const subjectClause = shot.subject
+    ? `${shot.subject}${shot.subjectAction ? ` ${shot.subjectAction}` : ""}`
+    : "";
   const bits = [
     scene.visual,
     shot.imagePrompt?.trim(),
+    subjectClause,
     `${shot.framing} shot`,
     shot.lens && shot.lens !== "35mm" ? shot.lens : "",
     shot.composition && shot.composition !== "rule of thirds" ? shot.composition : "",
+    shot.cameraHeight && shot.cameraHeight !== "eye-level" ? `${shot.cameraHeight} camera` : "",
+    shot.angle && shot.angle !== "front" ? `${shot.angle} view` : "",
+    shot.depthOfField && shot.depthOfField !== "deep" ? `${shot.depthOfField} depth of field` : "",
+    shot.lighting,
+    shot.colorGrade ? `${shot.colorGrade} color grade` : "",
     scene.mood,
   ].filter(Boolean);
   return (

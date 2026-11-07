@@ -20,7 +20,33 @@ export const FRAMINGS = [
   "aerial",
 ] as const;
 
+// S48 — CAMERA_MOVES v2: ENGINE-VERBATIM. Every id is (a 1:1 rename of) a
+// motion.ts MoveKind, so a v2 plan's camera verb executes EXACTLY — the
+// pre-S48 split-brain (dolly-in silently rendered as a zoom, crane-up as a
+// tilt, drone as a drift) is over for new plans. Cinematic language Ken
+// Burns cannot honor (crane, drone, dolly, handheld, tracking) lives in the
+// PROMPT fields (lens/cameraHeight/angle/subjectAction/imagePrompt) that
+// steer the image models — and in the i2v prompt, which can honor it.
+//   static   → hold (rename)   punch-in → punch (rename)
+//   every other id → the identical motion.ts MoveKind.
 export const CAMERA_MOVES = [
+  "static",
+  "zoom-in",
+  "zoom-out",
+  "pan-left",
+  "pan-right",
+  "tilt-up",
+  "tilt-down",
+  "diag-tl",
+  "diag-br",
+  "punch-in",
+] as const;
+
+/** Pre-S48 plans carry these verbs. parsePlan still accepts them (snapped
+ * here, mapped to engine kinds by shots.ts CAMERA_TO_MOVE at execution) so
+ * every persisted v1 plan renders byte-identically — the old approximations
+ * are frozen history for legacy plans, never new requests. */
+export const LEGACY_CAMERA_MOVES = [
   "static",
   "push-in",
   "pull-out",
@@ -32,6 +58,61 @@ export const CAMERA_MOVES = [
   "handheld",
   "crane-up",
   "drone",
+] as const;
+
+const CAMERA_ALL = [...CAMERA_MOVES, ...LEGACY_CAMERA_MOVES] as readonly string[];
+
+// S48 v2 shot vocabularies (the 19-field cinematic schema, fields 10–18).
+export const CAMERA_HEIGHTS = [
+  "eye-level",
+  "low-angle",
+  "high-angle",
+  "overhead",
+  "ground-level",
+] as const;
+
+export const ANGLES = ["front", "three-quarter", "profile", "back"] as const;
+
+export const DEPTHS_OF_FIELD = ["deep", "shallow", "rack"] as const;
+
+/** Per-shot Ken Burns speed — a multiplier on the motion intensity. */
+export const MOVE_SPEEDS = ["slow", "normal", "fast"] as const;
+
+/** moveSpeed → intensity multiplier (motion.ts shotIntensity). */
+export const MOVE_SPEED_FACTOR: Record<string, number> = {
+  slow: 0.7,
+  normal: 1,
+  fast: 1.35,
+};
+
+/** Shot hand-off vocabulary. "cut" executes today; "fade" lands with the
+ * S50 per-shot xfade — the one deliberately deferred v2 field, defaulted to
+ * "cut" so nothing waits on it. */
+export const SHOT_TRANSITIONS = ["cut", "fade"] as const;
+
+/** The narrative function of a shot (approval-card badge; S53 QC hooks). */
+export const SHOT_PURPOSES = [
+  "establish",
+  "contextualize",
+  "detail",
+  "reaction",
+  "reveal",
+  "payoff",
+] as const;
+
+/** Per-shot focal anchors — the SAME tokens motion.ts resolves (its
+ * normalizeFocalToken is the canonical normalizer; this list is what the
+ * Director may write and what parsePlan snaps against). */
+export const FOCAL_ANCHORS = [
+  "center",
+  "left",
+  "right",
+  "upper",
+  "lower",
+  "upper-left",
+  "upper-right",
+  "lower-left",
+  "lower-right",
 ] as const;
 
 export const COMPOSITIONS = [
@@ -85,15 +166,44 @@ export function pacingSpeedFactor(pacing: string): number {
   return 1;
 }
 
-/** A single shot inside a scene — the unit the render pipeline cuts between. */
+/** A single shot inside a scene — the unit the render pipeline cuts between.
+ *
+ * S48 — the 19-field cinematic shot. Fields 1–7 are the v1 schema (present on
+ * every plan since Stage 5); fields 8–19 are v2. They are OPTIONAL on the
+ * interface because v1 plans, hand-built test fixtures and human edits may
+ * predate them — but parsePlan ALWAYS fills them with the documented
+ * defaults, so every PARSED plan (the only kind the pipeline consumes)
+ * carries the complete 19-field shape. The LLM-facing JSON schema demands
+ * all 19; the parser tolerates absence (fail-open to the v1 behavior). */
 export interface DirectorShot {
   shotIndex: number; // 0-based within the scene
   framing: string; // FRAMINGS
-  camera: string; // CAMERA_MOVES
+  camera: string; // CAMERA_MOVES (v2, engine-verbatim) or a LEGACY_CAMERA_MOVES verb on pre-S48 plans
   lens: string; // free text: "24mm wide", "85mm f/1.8 shallow depth of field"
   composition: string; // COMPOSITIONS
   duration: number; // seconds — shots of one scene sum to ≈ the scene length
   imagePrompt: string; // shot-specific visual addendum (what THIS shot shows)
+
+  // --- S48 v2 (fields 8–19) ---
+  /** Who/what fills the frame — the blocking anchor ("the calligrapher's
+   * inkwell", "the Kaaba at dawn"). Empty on v1 plans / when unset. */
+  subject?: string;
+  /** What the subject is doing in this shot (motion cue for prompts, i2v
+   * merit and stock matching). */
+  subjectAction?: string;
+  cameraHeight?: string; // CAMERA_HEIGHTS
+  angle?: string; // ANGLES
+  depthOfField?: string; // DEPTHS_OF_FIELD
+  lighting?: string; // free text: "golden hour rim light", "soft overcast"
+  colorGrade?: string; // free text: "teal-orange", "desaturated documentary"
+  /** Where the eye must stay — a motion.ts focal token; empty = the scene's
+   * own heuristic (focalForScene) stays in charge. */
+  focal?: string; // FOCAL_ANCHORS
+  moveSpeed?: string; // MOVE_SPEEDS
+  transitionOut?: string; // SHOT_TRANSITIONS
+  purpose?: string; // SHOT_PURPOSES
+  /** The director's one-line note for the human reviewer. Never executes. */
+  notes?: string;
 }
 
 /** One scene's direction. */
@@ -116,9 +226,12 @@ export interface DirectorScene {
   shots: DirectorShot[];
 }
 
-/** The full plan — versioned so old persisted plans stay parseable. */
+/** The full plan — versioned so old persisted plans stay parseable.
+ * S48: version 2 plans carry the 19-field shots; version stays as PERSISTED
+ * (provenance only — the parsed in-memory shape is uniformly complete, so
+ * consumers never branch on it). */
 export interface DirectorPlan {
-  version: 1;
+  version: 1 | 2;
   generatedAt: string; // ISO timestamp
   concept: string; // one-paragraph directorial concept (the "why")
   /** M1: the production profile that authored this plan (a PROFILE_IDS
@@ -189,11 +302,27 @@ export function parsePlan(json: string | null | undefined): DirectorPlan | null 
       shots.push({
         shotIndex: Math.max(0, Math.round(clamp(sho.shotIndex, 0, 99, shots.length))),
         framing: snap(sho.framing, FRAMINGS, "medium"),
-        camera: snap(sho.camera, CAMERA_MOVES, "static"),
+        // v2 verbs snap directly; a legacy verb (pre-S48 plan) snaps against
+        // the legacy list and is mapped to its engine kind at EXECUTION time
+        // (shots.ts) — parse never rewrites what a v1 plan asked for.
+        camera: snap(sho.camera, CAMERA_ALL, "static"),
         lens: asString(sho.lens, "35mm").slice(0, 120),
         composition: snap(sho.composition, COMPOSITIONS, "rule of thirds"),
         duration,
         imagePrompt: asString(sho.imagePrompt).slice(0, 400),
+        // --- S48 v2 fields (defaults: the honest v1-equivalent behavior) ---
+        subject: asString(sho.subject).slice(0, 160),
+        subjectAction: asString(sho.subjectAction).slice(0, 160),
+        cameraHeight: snap(sho.cameraHeight, CAMERA_HEIGHTS, "eye-level"),
+        angle: snap(sho.angle, ANGLES, "front"),
+        depthOfField: snap(sho.depthOfField, DEPTHS_OF_FIELD, "deep"),
+        lighting: asString(sho.lighting).slice(0, 160),
+        colorGrade: asString(sho.colorGrade).slice(0, 120),
+        focal: snap(sho.focal, FOCAL_ANCHORS, ""),
+        moveSpeed: snap(sho.moveSpeed, MOVE_SPEEDS, "normal"),
+        transitionOut: snap(sho.transitionOut, SHOT_TRANSITIONS, "cut"),
+        purpose: snap(sho.purpose, SHOT_PURPOSES, "contextualize"),
+        notes: asString(sho.notes).slice(0, 200),
       });
     }
     scenes.push({
@@ -220,7 +349,9 @@ export function parsePlan(json: string | null | undefined): DirectorPlan | null 
   // throws a readable error before persisting an empty plan).
   if (scenes.length === 0) return null;
   return {
-    version: 1,
+    // Provenance: the version AS PERSISTED (v1 plans stay 1 — the complete
+    // in-memory shape is v2 either way, so no consumer ever branches here).
+    version: obj.version === 2 ? 2 : 1,
     generatedAt: asString(obj.generatedAt) || new Date().toISOString(),
     concept: asString(obj.concept).slice(0, 600),
     // M1: snap the profile id to the catalog (case-insensitive). Unknown or
@@ -265,6 +396,11 @@ export function directorImageAddendum(plan: DirectorPlan | null, sceneIndex: num
     parts.push(`${first.framing} shot`);
     if (first.lens && first.lens !== "35mm") parts.push(first.lens);
     if (first.composition && first.composition !== "rule of thirds") parts.push(first.composition);
+    // S48 v2 prompt clauses — skipped at their default values so v1 plans
+    // (and default choices) keep the exact pre-S48 addendum string.
+    if (first.cameraHeight && first.cameraHeight !== "eye-level") parts.push(first.cameraHeight);
+    if (first.lighting) parts.push(first.lighting);
+    if (first.colorGrade) parts.push(`${first.colorGrade} grade`);
   }
   if (s.mood) parts.push(s.mood);
   return parts.length ? parts.join(", ") : "";

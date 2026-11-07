@@ -235,8 +235,13 @@ async function gated<T>(
   }
 }
 
-/** Chat against explicit settings. `thinking` is dropped for OpenAI-compatible providers. */
-async function chatWith(s: LLMSettings, body: LLMChatBody, timeoutMs = 300_000): Promise<LLMCompletion> {
+/** Chat against explicit settings. `thinking` is dropped for OpenAI-compatible providers.
+ * S48 — `modelHint` (e.g. the Director's "glm-4.6") applies ONLY when the
+ * operator has not pinned an explicit chat model: the operator's Settings
+ * pick always wins, the hint just upgrades the platform gateway default
+ * for work that has proven to need a director-grade model. */
+async function chatWith(s: LLMSettings, body: LLMChatBody, timeoutMs = 300_000, modelHint?: string): Promise<LLMCompletion> {
+  const model = resolveChatModel(s.model, modelHint);
   if (s.provider === "openai") {
     // MAX_OUTPUT_TOKENS clamps the output half of the cost bound — the
     // estimate prices all 8192, so reported usage can never exceed it.
@@ -244,7 +249,7 @@ async function chatWith(s: LLMSettings, body: LLMChatBody, timeoutMs = 300_000):
       messages: body.messages,
       max_tokens: MAX_OUTPUT_TOKENS,
     };
-    if (s.model) payload.model = s.model;
+    if (model) payload.model = model;
     if (typeof body.temperature === "number") payload.temperature = body.temperature;
     return gated(s, body.messages.map((m) => contentText(m.content)), () =>
       openaiFetch(s, "/chat/completions", payload, timeoutMs)
@@ -254,7 +259,7 @@ async function chatWith(s: LLMSettings, body: LLMChatBody, timeoutMs = 300_000):
   // An explicit chat-model pick (Settings → AI Providers) rides to the
   // gateway; absent = the gateway's own default, exactly as before.
   const completion = (await zai.chat.completions.create(
-    (s.model ? { ...body, model: s.model } : body) as never
+    (model ? { ...body, model } : body) as never
   )) as LLMCompletion;
   // Ungated (platform gateway) — but the tokens still reach the meter.
   const usage = usageFromBody(completion);
@@ -263,6 +268,20 @@ async function chatWith(s: LLMSettings, body: LLMChatBody, timeoutMs = 300_000):
     emitUsage(usage);
   }
   return completion;
+}
+
+/** S48 — the model-resolution precedence, extracted PURE so the unit suite
+ * can pin it: operator pick (Settings) > caller hint > gateway default.
+ * The S47 director benchmark measured the platform default (glm-4.5-flash)
+ * failing the narrative re-run 3/3 — callers with director-grade needs pass
+ * a hint instead of silently riding the weakest default. */
+export function resolveChatModel(
+  settingsModel: string | null | undefined,
+  modelHint?: string
+): string {
+  const pinned = (settingsModel ?? "").trim();
+  if (pinned) return pinned;
+  return (modelHint ?? "").trim();
 }
 
 /** Vision against explicit settings (OpenAI-style multimodal content parts). */
@@ -289,9 +308,15 @@ async function visionWith(s: LLMSettings, body: LLMChatBody, timeoutMs = 300_000
 
 // ---------- public API used by the pipeline ----------
 
-/** Provider-agnostic chat completion. Drop-in for zai.chat.completions.create. */
-export async function llmChat(body: LLMChatBody): Promise<LLMCompletion> {
-  return chatWith(await effectiveSettings(), body);
+/** Provider-agnostic chat completion. Drop-in for zai.chat.completions.create.
+ * S48: the optional model hint upgrades the gateway default (see
+ * resolveChatModel) for director-grade callers — never overrides the
+ * operator's Settings pick. */
+export async function llmChat(
+  body: LLMChatBody,
+  opts?: { modelHint?: string }
+): Promise<LLMCompletion> {
+  return chatWith(await effectiveSettings(), body, 300_000, opts?.modelHint);
 }
 
 /** Provider-agnostic vision completion. Drop-in for zai.chat.completions.createVision. */
