@@ -1,0 +1,136 @@
+{
+ "runRows": [
+  {
+   "profile": "narrative",
+   "run": 1,
+   "ms": 9163,
+   "scenes": 3,
+   "shots": 6,
+   "v2Richness": "64%",
+   "cameraViolations": 0,
+   "findings": 0,
+   "planSec": 16.2
+  },
+  {
+   "profile": "narrative",
+   "run": 2,
+   "ms": 10872,
+   "scenes": 3,
+   "shots": 6,
+   "v2Richness": "61%",
+   "cameraViolations": 0,
+   "findings": 0,
+   "planSec": 16.2
+  },
+  {
+   "profile": "documentary",
+   "run": 1,
+   "ms": 9728,
+   "scenes": 3,
+   "shots": 5,
+   "v2Richness": "60%",
+   "cameraViolations": 0,
+   "findings": 0,
+   "planSec": 14.2
+  },
+  {
+   "profile": "documentary",
+   "run": 2,
+   "ms": 10850,
+   "scenes": 3,
+   "shots": 6,
+   "v2Richness": "58%",
+   "cameraViolations": 0,
+   "findings": 0,
+   "planSec": 14.2
+  },
+  {
+   "profile": "explainer",
+   "run": 1,
+   "ms": 13512,
+   "scenes": 3,
+   "shots": 6,
+   "v2Richness": "58%",
+   "cameraViolations": 0,
+   "findings": 0,
+   "planSec": 15.8
+  },
+  {
+   "profile": "explainer",
+   "run": 2,
+   "ms": 7674,
+   "scenes": 3,
+   "shots": 5,
+   "v2Richness": "58%",
+   "cameraViolations": 0,
+   "findings": 0,
+   "planSec": 12.8
+  },
+  {
+   "profile": "advertisement",
+   "run": 1,
+   "ms": 12939,
+   "scenes": 3,
+   "shots": 5,
+   "v2Richness": "72%",
+   "cameraViolations": 0,
+   "findings": 2,
+   "planSec": 7.8
+  },
+  {
+   "profile": "advertisement",
+   "run": 2,
+   "ms": 16464,
+   "scenes": 3,
+   "shots": 5,
+   "v2Richness": "72%",
+   "cameraViolations": 0,
+   "findings": 2,
+   "planSec": 9.6
+  },
+  {
+   "profile": "animation",
+   "run": 1,
+   "ms": 10898,
+   "scenes": 3,
+   "shots": 7,
+   "v2Richness": "75%",
+   "cameraViolations": 0,
+   "findings": 0,
+   "planSec": 16.2
+  },
+  {
+   "profile": "animation",
+   "run": 2,
+   "ms": 17497,
+   "scenes": 3,
+   "shots": 7,
+   "v2Richness": "79%",
+   "cameraViolations": 0,
+   "findings": 0,
+   "planSec": 16.2
+  },
+  {
+   "profile": "social",
+   "run": 1,
+   "ms": 13663,
+   "scenes": 3,
+   "shots": 5,
+   "v2Richness": "68%",
+   "cameraViolations": 0,
+   "findings": 1,
+   "planSec": 12
+  },
+  {
+   "profile": "social",
+   "run": 2,
+   "ms": 14058,
+   "scenes": 3,
+   "shots": 6,
+   "v2Richness": "74%",
+   "cameraViolations": 0,
+   "findings": 1,
+   "planSec": 14.2
+  }
+ ]
+}

@@ -188,17 +188,31 @@ const ONLY = (process.env.S54_PROFILES ?? "")
   .map((s) => s.trim())
   .filter(Boolean);
 const STATE_PATH = "/tmp/s54-state.json";
+/** Durable twin: the repo-local copy survives sandbox recycling, so a
+ * future session resumes the owed legs without re-running the measured
+ * ones. saveState writes both; loadState prefers /tmp, falls back here. */
+const STATE_DURABLE = "docs/baselines/s54-genre-benchmark-state.json";
 type State = { runRows: RunRow[]; legB: typeof legB };
 function loadState(): Partial<State> {
-  try {
-    return JSON.parse(fs.readFileSync(STATE_PATH, "utf8")) as Partial<State>;
-  } catch {
-    return {};
+  for (const p of [STATE_PATH, STATE_DURABLE]) {
+    try {
+      return JSON.parse(fs.readFileSync(p, "utf8")) as Partial<State>;
+    } catch {
+      /* try the next path */
+    }
   }
+  return {};
 }
 function saveState(patch: Partial<State>) {
   const prev = loadState();
-  fs.writeFileSync(STATE_PATH, JSON.stringify({ ...prev, ...patch }, null, 1));
+  const next = JSON.stringify({ ...prev, ...patch }, null, 1);
+  for (const p of [STATE_PATH, STATE_DURABLE]) {
+    try {
+      fs.writeFileSync(p, next);
+    } catch {
+      /* best-effort per path */
+    }
+  }
 }
 /** Replace-semantics merge: a re-run profile overwrites its old rows (never
  * double-appends). Persists per profile so a killed chunk loses nothing. */

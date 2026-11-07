@@ -1,4 +1,4 @@
-S54 seven-genre benchmark — recorded 2026-11-07T06:43:30.966Z
+S54 seven-genre benchmark — recorded 2026-11-07T06:49:55.554Z
 Live path: Z.ai platform gateway (ungated, metered-only). glm-4.6 pinned (saveCapability).
 
 §A the eight-profile director contract (repeats per genre: 2):
