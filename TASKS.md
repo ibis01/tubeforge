@@ -1901,3 +1901,29 @@ harness + baseline only, no production code).
 | T-D.2 deepmerge-ts (H, transitive via @prisma/config) | ✅ Done | Forced to **8.0.0** via `npm overrides` (S47 had accepted it pending a Prisma minor). Consumer verified: the Prisma config layer (version, schema load, env load, binaryTarget, sqlite-schema validate) runs clean on 8.0.0. |
 | T-D.3 minimatch ≥7 <11 (M, dev-only via @typescript-eslint) | ✅ Done | **Scoped override** on `@typescript-eslint/typescript-estree` → minimatch 11.0.1; eslint's own minimatch@^3.1.5 untouched (a global override would break the v3 API consumers). Full lint pass unchanged: 0 errors / 669 warnings. |
 | T-D.4 gate | ✅ Done | tsc 0 · eslint 0 errors/669 warnings · 235/235 unit · queue PASS · full record in `docs/audits/s47-dependency-triage.md` (2026-11-07 section). Dependabot closes the 10 on its next `main` scan. |
+
+## S55 — cinematic quality and Islamic safety assurance (opened 2026-11-08 UTC, owner-approved)
+
+Sprint goal (the owner audit's directive, post-S54): close the two measured
+§B rendering failures and prove the Islamic-history protection on FINAL
+output. No new feature sprint — quality closure first. CI on `77cad6f`
+independently verified this time (run 42393750230: Typecheck·Lint·Unit +
+gitleaks + E2E all green via the REST API, closing the audit's §6 gap; the
+empty lookup was the short-SHA filter).
+
+| Task | Status | Notes |
+|---|---|---|
+| T-55.1 frozen-frames forensics | ✅ Done | `docs/audits/s55-render-forensics.md` — BOTH frozen runs are the Director's own declared `static` shots (z=1 holds), executed faithfully: 0.00–2.70 s (scene 1 opener, 2.8 s) and 9.90–11.73 s (scene 3 opener, 3.5 s, head-trimmed by the blend-in, tail ending exactly at the hold→zoom flip). freezedetect d=0.50 finds the SAME two runs and nothing else — no hidden sub-second freezes, no ease-plateau regressions; the cos-ease plateaus stay well under 1 s. A vocabulary/law conflict, not a renderer defect: the camera vocabulary legitimately contains `static` while the frozen-frames law demands motion everywhere. §B's "3 runs" = same class on that day's plan. |
+| T-55.2 cut-alignment forensics | ✅ Done | Same note — ALL lens-detected "unexpected" cuts are the render's own INTRA-SCENE shot flips, matched to centiseconds by the fitted allocation: 2.70/6.77/11.73 s detected vs 2.70/6.78/11.76 s fitted (Δ ≤ 0.03 s); the 4th flip (13.25 s) sits under the 0.40 scene threshold (visible at 0.20). Root cause: `expectedCutsForTimeline` books scene seams only — the M2 shot graph's hard-concat/fade joins (frame-exact in `multiShotSceneGraph`) never reach `ExpectedCuts`. Lens right, render right, expectation incomplete. Instrument bugs found + fixed en route (one-per-line freezedetect parse; fitted vs raw flip math) — recorded in the audit note. |
+| T-55.3 the fixes, evidence-directed | ⏳ Next | (a) cut-alignment: extend the render→QC contract — shot-graph boundaries ride `ExpectedCuts` (hard flips as `cuts`, `SHOT_FADE_SEC` fades as `windows`); the graph already computes the frame budgets. (b) frozen/static: OWNER DECISION with three options on record — forbid `static` in multi-shot kenburns plans / execute statics with minimal ambient drift (z 1.00→1.03, RECOMMENDED — creative intent kept, law stays bright) / exempt declared holds (weakest — erodes the law that caught the real Battle-Yamuk-class defects). (c) re-run the §B anchor through the fixed path: frozen-frames + cut-alignment must read PASS on a real MP4 before this row turns ✅. |
+| T-55.4 Islamic dense-frame QC | ⏳ Pending | Denser temporal frame inspection + restricted-face detection on final-render frames; sparse 8-frame sampling cannot guarantee a brief violation between frames is caught (the audit's core safety point). |
+| T-55.5 Islamic export acceptance test | ⏳ Pending | The owner's 7-step protocol: multi-scene Islamic-history video with restricted-figure references → full MP4 → dense inspection → scene regeneration + i2v paths → violation blocks export → unmeasured scan blocks export. Standard: zero prohibited faces in exported videos. |
+| T-55.6 human cinematic evaluation kit | ⏳ Pending | Per-profile anchor renders + rubric: motion realism, camera movement, lighting, composition, scene relevance, AV sync. Scoring stays human. |
+| T-55.7 production reliability record | ⏳ Pending | CI evidence + Dependabot closure watch (0 open re-verified 2026-11-08) + the spend-gate law (pricing stays provisional; paid OpenAI dispatch stays blocked until independent verification). |
+
+Verification: forensic evidence `docs/audits/s55-render-forensics-data.json`
+(plan raw+parsed, shot tables, timeline, battery rows, freezes d=1.00/0.50,
+cuts 0.40/0.20, motion profile, correlations); the anchor render reproduced
+BOTH failure classes on an independent plan (fail 2 frozen / 3 unexpected;
+all other 14 checks green). No production code touched this increment —
+tsc/eslint/unit/queue gates re-run below before push.

@@ -2559,3 +2559,25 @@ spend this firing. The cron watch is deleted;
 scripts/s54-autowatch.sh stays versioned in the tree. Open for human review:
 the 70 floor, the two §B fails, camera/text severity calibration; rotate the
 PAT after this push.
+
+## S55 opening (2026-11-08 UTC) — the two §B failures localized to centiseconds
+
+The owner approved S55 (quality closure, no feature sprint) and flagged one
+verification gap: the audit's CI lookup had returned no runs — the short-SHA
+filter quirk; the full-SHA REST lookup shows run 42393750230 green on all
+three jobs (Typecheck·Lint·Unit + gitleaks + E2E). Dependabot re-verified 0
+open. T-55.1/T-55.2 ran same-session: a fresh §B-anchor render (verbatim
+params, independent plan — the failures REPRODUCED: 2 frozen, 3 unexpected)
+measured at frame level against the render's own fitted shot allocation.
+Verdict A (cut-alignment): every "unexpected" cut is the render's own
+intra-scene shot flip (Δ ≤ 0.03 s, centisecond match) — the expectation
+books scene seams only; lens right, render right, expectation incomplete.
+Verdict B (frozen-frames): both runs are Director-declared `static` shots
+executed as z=1 holds — a vocabulary/law conflict, not a defect; d=0.50
+shows the same two runs and nothing else. Two instrument bugs found and
+fixed en route (one-per-line freezedetect parse that had silently eaten
+every event; fitted-vs-raw flip math) — both recorded in
+docs/audits/s55-render-forensics.md with the evidence JSON. T-55.3 is
+staged with the fix design; the static-shot resolution carries three
+options with a recommendation (minimal ambient drift) awaiting the owner's
+call. No production code touched.
