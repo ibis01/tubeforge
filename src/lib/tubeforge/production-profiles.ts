@@ -30,6 +30,10 @@ export interface ProductionProfile {
   id: string;
   /** Human label for the UI picker (the approval card reads this in M2.x). */
   label: string;
+  /** S52 — one-line picker description (what this profile DOES to the
+   * video, written for a creator choosing between them). Kept short so
+   * the dropdown never wraps. */
+  blurb: string;
   /** Appended verbatim to the base SYSTEM_PROMPT — the format's voice,
    *  structure rules, do/don't list. The base prompt stays format-neutral. */
   systemOverlay: string;
@@ -71,6 +75,7 @@ const PROFILES: ProductionProfile[] = [
   {
     id: "narrative",
     label: "Narrative story",
+    blurb: "The faceless-YouTube classic — full catalog, no constraints",
     systemOverlay: NARRATIVE_OVERLAY,
     defaultTone: {
       transitionBias: "mixed",
@@ -82,6 +87,7 @@ const PROFILES: ProductionProfile[] = [
   {
     id: "documentary",
     label: "Documentary",
+    blurb: "Observational, evidence-led, stock b-roll for the real world",
     systemOverlay: `You are the AI Director of a documentary. Voice: observational, evidence-led, restrained. Open scenes on the subject, not the narrator's opinion. Lean on real-world b-roll — set useStock=true for any scene that names a real place, machine, animal or event. Camera moves stay grounded (zoom-in for emphasis, pans and tilts to survey); avoid diag-tl/diag-br drift unless the scene is verité. Compositions favor leading lines and negative space. Outfit/accessory only when the cast is a real on-screen subject.`,
     defaultTone: {
       transitionBias: "fade",
@@ -110,6 +116,7 @@ const PROFILES: ProductionProfile[] = [
   {
     id: "explainer",
     label: "Explainer",
+    blurb: "Didactic walks — one idea per scene, cut-driven clarity",
     systemOverlay: `You are the AI Director of an explainer video. Voice: clear, structured, didactic. Each scene carries one idea; the shot list walks the viewer through it (wide establishing → medium process → close-up detail → summary). Transitions bias to "cut" — momentum and clarity, not mood. Pacing stays "normal" — let the viewer absorb each step. The first shot of a scene must literally show the subject the narration introduces; never lead with abstract b-roll.`,
     defaultTone: {
       transitionBias: "cut",
@@ -140,6 +147,7 @@ const PROFILES: ProductionProfile[] = [
   {
     id: "advertisement",
     label: "Advertisement",
+    blurb: "Product-first beats, fast pacing, CTA open and close",
     systemOverlay: `You are the AI Director of an advertisement. Voice: persuasive, product-forward, urgent. Every scene must service the product. The FIRST shot of the video must show the product (the thing being sold) — never open on atmosphere, the problem, or the brand logo alone. Pacing biases "fast"; transitions bias "cut" for energy or "sting" for reveals. Camera moves favor zoom-in (escalating desire) and punch-in (hard emphasis); moveSpeed "fast" on hero beats. Shot density is "dense" — many short beats read as a campaign. The closing scene is a CTA shot (product hero + tagline framing).`,
     defaultTone: {
       transitionBias: "cut",
@@ -179,6 +187,7 @@ const PROFILES: ProductionProfile[] = [
   {
     id: "animation",
     label: "Animation",
+    blurb: "Character-driven and kinetic — bold cameras, i2v motion",
     systemOverlay: `You are the AI Director of an animated short. Voice: imaginative, character-driven, kinetic. needsI2V is true for any scene with motion as the point (character action, weather, vehicles, magic, choreography). Camera moves may be bold (crane-up, drone, handheld) — animation can sustain them where live footage cannot. Pacing matches the beats: slow for emotional moments, fast for action. Compositions favor frame-within-frame and diagonal for graphic energy.`,
     defaultTone: {
       transitionBias: "mixed",
@@ -210,6 +219,7 @@ const PROFILES: ProductionProfile[] = [
   {
     id: "podcast",
     label: "Podcast / talking-head",
+    blurb: "Intimate talking-head — static camera, the talk leads",
     systemOverlay: `You are the AI Director of a podcast video. Voice: intimate, conversational, talking-head-led. Most scenes are the host on mic — framing stays medium or close-up, camera stays static or a slow zoom-in, pacing stays "normal" or "slow". Punctuate key moments with a close-up or extreme close-up, but never a whip-cut. Ambience beds matter: "room" for the studio, "none" for purely voice-led scenes. The shot list supports the talk, it does not compete with it.`,
     defaultTone: {
       transitionBias: "fade",
@@ -240,6 +250,7 @@ const PROFILES: ProductionProfile[] = [
   {
     id: "social",
     label: "Social short",
+    blurb: "Hook-first, ≤2s beats, ≤3 shots — built for the scroll",
     systemOverlay: `You are the AI Director of a social short (TikTok / Reels / Shorts). Voice: hook in the first second, fast cuts, vertical-thinking even when the canvas is 16:9. Scene 1 shot 0 is the HOOK — visual + narration must stop the scroll. Pacing biases "fast"; shot density is "dense" (≤2s shots). Transitions bias "cut" — momentum beats mood. The last shot is the CTA (follow, like, subscribe, comment). Camera moves favor zoom-in and diag-tl drift with moveSpeed "fast"; static establishing shots waste the format. NEVER exceed 3 shots per scene — short-form attention does not reward cut-aways.`,
     defaultTone: {
       transitionBias: "cut",
@@ -273,6 +284,7 @@ const PROFILES: ProductionProfile[] = [
   {
     id: "islamic-history",
     label: "Islamic history",
+    blurb: "Reverent documentary voice — composes around revered figures (pair with visual protection)",
     // S49 — the 8th profile. It is a DOCUMENTARY-style voice whose creative
     // doctrine composes around revered figures, AND the profile whose S52 UI
     // picker will default Video.contentPolicy to "islamic-history". The two
@@ -320,6 +332,27 @@ export const PRODUCTION_PROFILES: Record<string, ProductionProfile> = Object.fro
 export const PROFILE_IDS_CATALOG = Object.keys(PRODUCTION_PROFILES);
 
 export const DEFAULT_PROFILE_ID = "narrative";
+
+/** S52 — the picker's wire shape: id + label + one-line blurb, in catalog
+ * order. The GET /director route serves exactly this list, so the dropdown
+ * and `resolveProfile` can never disagree (the ids are the same keys). */
+export interface ProfilePickerEntry {
+  id: string;
+  label: string;
+  blurb: string;
+}
+
+export function profilePickerList(): ProfilePickerEntry[] {
+  return PROFILES.map(({ id, label, blurb }) => ({ id, label, blurb }));
+}
+
+/** S52 — the approval card's "no silent creative decisions" surface: the
+ * authoring profile's own validation notes for THIS plan, evaluated live
+ * (never persisted — the check follows the code that ships). Advisory
+ * only, exactly as in the activity feed. */
+export function planProfileNotes(plan: DirectorPlan): string[] {
+  return resolveProfile(plan.profile).validation(plan);
+}
 
 /** Snap an unknown profile id to a real ProductionProfile; unknown / absent
  *  → narrative (the compatibility profile). Pure. */

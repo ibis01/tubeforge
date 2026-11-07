@@ -9,6 +9,10 @@ import {
   setDirectorState,
   type DirectorState,
 } from "@/lib/tubeforge/director";
+import {
+  profilePickerList,
+  planProfileNotes,
+} from "@/lib/tubeforge/production-profiles";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -16,6 +20,12 @@ type Ctx = { params: Promise<{ id: string }> };
  * GET — the AI Director panel state for one video:
  *   plan        (parsed DirectorPlan | null), state (proposed|approved|dismissed|null),
  *   consistency (VLM ContinuityReport | null), generating flags + last errors.
+ *   S52 — the themed-profiles surface: `profiles` (the picker catalog, in
+ *   catalog order — the same keys `resolveProfile` snaps against),
+ *   `contentPolicy` (the video's policy column — the one truth the islamic-
+ *   history picker advisory reads), and `profileNotes` (the authoring
+ *   profile's validation findings for THIS plan, evaluated live — the
+ *   approval card's "no silent creative decisions" surface).
  */
 export async function GET(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
@@ -31,6 +41,9 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     plan,
     state: (video.directorState as DirectorState | null) ?? null,
     consistency: parseConsistency(video.consistency),
+    profiles: profilePickerList(),
+    contentPolicy: video.contentPolicy ?? null,
+    profileNotes: plan ? planProfileNotes(plan) : [],
     generating: {
       plan: isJobRunning(id, "director"),
       check: isJobRunning(id, "continuity"),

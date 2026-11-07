@@ -2314,3 +2314,56 @@ live benchmark legs A/B/C recorded in
 docs/baselines/s51-continuity-benchmark-2026-11-07.txt. Next: S52 (the
 themed production profiles surface — the profile picker UI the islamic-
 history profile has been waiting for).
+
+## S52 (2026-11-07 UTC) — the eight voices finally speak, and the picker that keeps them honest
+
+S52 — the themed production profiles surface. M1 shipped the 8 profiles as
+an API-only surface (`?profile=` on the director POST, no UI); the S49
+islamic-history profile has been waiting on this picker since it landed.
+Three laws, all carried from the design docs and all pinned by tests:
+
+The picker CANNOT lie to the engine. GET /director now serves
+`profilePickerList()` — id/label/blurb straight from the catalog, in catalog
+order — and the card renders entirely from that response. The ids in the
+dropdown are the same keys `resolveProfile` snaps against, so a stale client
+catalog is structurally impossible: the server IS the catalog. Each profile
+grew a `blurb` (one creator-facing line: what choosing it DOES to the video),
+and the default selection is honest — the plan's own authoring profile once
+one exists, islamic-history when the video carries the protection policy
+(the profile suggests itself from the policy, never the reverse).
+
+"No silent creative decisions" finally has its surface. M1 landed the
+profile `validation(plan)` findings in the activity feed with a TODO: "the
+approval-card detail is a later milestone." This is that milestone:
+`planProfileNotes(plan)` runs the authoring profile's validation LIVE on
+every GET (never persisted — the check follows the code that ships), and the
+card renders the notes as an amber advisory list above the Approve buttons.
+The advertisement rules are the pin: a non-product open and a non-CTA close
+both fire on the fixture, both dissolve on the compliant one, narrative and
+legacy no-profile plans carry zero notes.
+
+The policy still never derives from the profile at runtime. The S49 design
+§3.2 says the S52 picker "defaults the POLICY on" — implemented as a
+default-on AFFORDANCE, not a side effect: picking islamic-history with
+protection off surfaces the amber advisory ("the profile composes around
+revered figures, but the enforcement layers only run with the policy on")
+with a one-click Enable. The click PATCHes the column — gated under the
+house catalog-gate law (present-but-illegal dies with a readable 400,
+"standard" normalizes to null so the column's domain stays
+null|"islamic-history", an absent key stays untouched), activity-logged
+(warn, either direction) BEFORE the write lands. Protection on shows the
+teal badge and a two-step "Turn protection off…" confirm — disabling is
+deliberate too. And the flip never wipes artifacts silently: the QC
+restricted-visual gate re-verifies on the next render, and the activity row
+says exactly that.
+
+One deliberate scope line: the create-video dialog stays untouched — the
+DirectorCard is the one profile surface (the director pass is where a
+profile applies), and S54's seven-genre benchmark exercises all 8 live.
+
+Gate: tsc 0 · eslint 0 errors / 669 warnings — the S50/S51 level, zero net ·
+229/229 unit (2 new S52: the picker wire contract, the planProfileNotes
+law) · queue restart-recovery PASS. CI green on e40cfd9 (the S48–S51 push
+this session opened with). Next: S53 (the advanced visual QC matrix — the
+restricted-visual check rides the report surface, and the S51 benchmark's
+color-under-lighting drift finding inherits a threshold).

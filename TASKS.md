@@ -1822,3 +1822,28 @@ drift to every scene). No schema change: the columns shipped in
 | T-51.4 the live re-measurement | ✅ Done | `scripts/s51-continuity-benchmark.mts`, live on the Z.ai metered path. **Leg A (the S47 audition re-run, byte-identical anchor): the portrait-age finding DISSOLVED — zero age issues** (S47: 3/3 scenes flagged "appears 50s-60s"); overall 85/100 (78/85/93) vs S47's 88; the residual is a NEW recorded observation: hair hue drifts warm/golden under warm scene lighting vs the anchor's silver. **Leg B: reference-seeded portrait — VLM same_person=true, apparent_age="late-20s" (stated window), confidence 82.** **Leg C: location-seeded scene — VLM same_place=true, confidence 88** ("matching red lantern canopy, stall layout, signage, wet reflective pavement"). The run's 1 "failed" check was the script's own unanchored regex matching g(old)en-blonde — a false positive, fixed (word-bounded) post-run; the recorded issues prove no age flag. Baseline: `docs/baselines/s51-continuity-benchmark-2026-11-07.txt`. |
 | T-51.5 UI | ✅ Done | Cast Studio: Reference-photos panel (upload + thumbnails + hover-remove, cap-aware). World view: per-card thumbnail strip + Add-photo label (lazy lists only for carriers). |
 | T-51.6 tests + compatibility | ✅ Done | 6 new tests (227/227): parse fail-open, lowest-free pigeonhole cap (50-churn loop), traversal guard, REAL-ffmpeg normalization (2000→1024x512 downscale, 400x300 no-upscale, garbage/oversize throws, storage round-trip + cleanup), portrait prompt contract, the plan-order selection law. **Bonus fix: the S50 palindrome test's `gradients` fixture is seed-random and flaked on this sprint's 2nd run — replaced with a deterministic testsrc2 linear pan (3/3 stable runs).** |
+
+## S52 — the themed production profiles surface (opened 2026-11-07 UTC)
+
+Sprint goal: give the 8 production profiles (M1's API-only surface, waiting
+since Stage 5) their UI — the profile picker the islamic-history profile has
+been waiting for. Three laws carried over from the design docs: the picker's
+ids are the SAME keys `resolveProfile` snaps against (dropdown and engine can
+never disagree); the profile's validation notes surface in the approval card
+BEFORE the human approves (§3 guardrails: "no silent creative decisions" —
+the M1 TODO this sprint closes); and the content policy NEVER derives from
+the profile at runtime — the `Video.contentPolicy` column is the one truth
+(docs/design/s48-s49-schema.md §3.2), so the picker's "default the POLICY on"
+is a one-click explicit human action, activity-logged, never a side effect.
+
+| Task | Status | Notes |
+|---|---|---|
+| T-52.1 the picker catalog + wire shape | ✅ Done | `ProductionProfile.blurb` (one-line creator-facing description, all 8 profiles) + `profilePickerList()` (pure: id/label/blurb in catalog order) + `planProfileNotes(plan)` (pure: the authoring profile's live validation, the seam the GET route calls). GET `/api/videos/[id]/director` now also serves `profiles`, `contentPolicy`, `profileNotes` — the card renders entirely from the response, so the client bundle stays lean and the catalog is always the server's truth. |
+| T-52.2 the policy PATCH gate | ✅ Done | PATCH `/api/videos/[id]` accepts `contentPolicy` under the S12/S13/S14 catalog-gate law: a PRESENT but illegal value dies with a readable 400 (foreign ids, type confusion); `null` clears to standard; a friendly `"standard"` normalizes to null (the column's domain stays `null \| "islamic-history"`); an absent key stays untouched. The flip is activity-logged (warn, either direction) BEFORE the write lands — "deliberate human choice" is auditable. Existing artifacts are never silently wiped; the QC restricted-visual gate re-verifies on the next render. |
+| T-52.3 the DirectorCard surface | ✅ Done | Profile `<Select>` (8 entries, label + blurb, default = the plan's authoring profile, or islamic-history when the video is protected) rides every "Suggest direction"/"Re-run pass" as the POST body's `profile`. The plan block shows the authoring-profile badge (non-narrative), and the profile's validation notes render as an amber advisory list above the approve buttons. islamic-history pairing: picking the profile with protection off surfaces the amber advisory + one-click "Enable protection" (PATCH → column → every enforcement layer); protection on shows the teal badge and a two-step "Turn protection off…" confirm. |
+| T-52.4 tests + compatibility | ✅ Done | 2 new tests (229/229): the picker wire contract (8 entries, unique ids, order === catalog order, narrative leads, blurbs 20–100 chars, islamic-history names the pairing) and `planProfileNotes` (advertisement open+close rules fire on a non-compliant fixture, dissolve on a compliant one; narrative and legacy no-profile plans carry zero notes). No schema change; no e2e surface touched (the director card has no e2e selectors to break). |
+
+Verification: tsc 0 · eslint 0 errors / **669 warnings (the S50/S51 level,
+zero net)** · **229/229 unit** (227 + 2 S52) · queue restart-recovery PASS.
+The 8-profile live generation benchmark belongs to S54 (seven genres); S52's
+deliverables are the surface contracts, pinned above.

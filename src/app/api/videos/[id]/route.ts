@@ -23,6 +23,7 @@ import {
 } from "@/lib/tubeforge/motion";
 import { isDuckIntensity } from "@/lib/tubeforge/audiomix";
 import { isMusicMoodId } from "@/lib/tubeforge/music";
+import { CONTENT_POLICY_IDS } from "@/lib/tubeforge/restricted-subjects";
 import * as storage from "@/lib/tubeforge/storage";
 
 /** Every artifact keyed off the voice/narration — used when the SCRIPT or
@@ -407,6 +408,47 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     }
   }
 
+  // S52 — the content policy's PATCH gate (the S12/S13/S14 catalog-gate
+  // law, applied to the S49 column): a PRESENT but illegal value dies with
+  // a readable 400 before any write — foreign ids, type confusion — never
+  // the silent snap the CREATE route uses (create snaps because the value
+  // rides a brand-new row; PATCH must be honest about a hostile write).
+  // `null` clears to the standard policy; an absent key stays untouched.
+  // The flip is a DELIBERATE human choice: activity-logged either way, and
+  // it NEVER derives from the production profile at runtime — the column
+  // is the one truth every enforcement layer reads (docs/design §3.2).
+  // Consequences stay visible: artifacts built under the OLD policy are
+  // not silently wiped — the QC restricted-visual gate re-verifies on the
+  // next render, and the human re-runs the stages that must re-comply.
+  let policyFlip: "on" | "off" | null = null;
+  if (body.contentPolicy !== undefined) {
+    const next = body.contentPolicy;
+    if (
+      next === null ||
+      (typeof next === "string" &&
+        (CONTENT_POLICY_IDS as readonly string[]).includes(next))
+    ) {
+      // The column's value domain is null | "islamic-history" (the S49
+      // create snap) — a friendly "standard" normalizes to null rather
+      // than introducing a third stored shape.
+      const nextVal =
+        next === null || next === "standard" ? null : "islamic-history";
+      if (nextVal !== (video.contentPolicy ?? null)) {
+        data.contentPolicy = nextVal;
+        policyFlip = nextVal === "islamic-history" ? "on" : "off";
+      }
+    } else {
+      return NextResponse.json(
+        {
+          error: `Invalid contentPolicy — pick one of ${CONTENT_POLICY_IDS.join(
+            ", "
+          )}, or null for the standard policy`,
+        },
+        { status: 400 }
+      );
+    }
+  }
+
   // Status transitions (mark ready / retry). "published" is deliberately NOT
   // client-writable (S17): the ship machine lives in /publish + the upload
   // job — the route flips "publishing" on acceptance, the job flips
@@ -438,6 +480,24 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
         },
       });
     }
+  }
+
+  // S52 — the flip goes on the record BEFORE the write lands (the activity
+  // row is what makes "deliberate human choice" auditable later).
+  if (policyFlip) {
+    await db.activity.create({
+      data: {
+        organizationId: auth.ctx.organizationId,
+        userId: auth.ctx.userId,
+        videoId: id,
+        stage: "script",
+        level: "warn",
+        message:
+          policyFlip === "on"
+            ? "Content policy set to islamic-history — restricted-subject protection now applies to every generation layer (script, director, image prompts, edits) and the QC visual gate holds export until verified."
+            : "Content policy cleared to standard — restricted-subject protection is OFF. Existing artifacts are not wiped; re-render and re-verify anything that must comply.",
+      },
+    });
   }
 
   const updated = await db.video.update({

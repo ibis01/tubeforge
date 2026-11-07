@@ -5556,6 +5556,79 @@ await test("S51 getApprovedLocationRefKey's selection law, pinned at the seam it
   eq(picked, "locations/n/ref-2.png", "plan order wins over row order, newest (tail) seeds");
 });
 
+// ---------------------------------------------------------------------------
+// S52 — the themed production profiles surface: the picker catalog (what the
+// GET /director route serves) and the approval card's live profile notes.
+// ---------------------------------------------------------------------------
+
+await test("S52 profilePickerList: the picker's wire contract", async () => {
+  const { profilePickerList, PROFILE_IDS_CATALOG } = await import(
+    "../src/lib/tubeforge/production-profiles.ts"
+  );
+  const list = profilePickerList();
+  eq(list.length, 8, "all 8 profiles are offered");
+  eq(new Set(list.map((p) => p.id)).size, 8, "ids are unique");
+  eq(
+    JSON.stringify(list.map((p) => p.id)),
+    JSON.stringify(PROFILE_IDS_CATALOG),
+    "picker order === catalog order (the same keys resolveProfile snaps against)"
+  );
+  eq(list[0].id, "narrative", "narrative (the compatibility profile) leads");
+  for (const p of list) {
+    ok(p.label.length > 0 && p.label.length <= 30, `${p.id}: label present and short`);
+    ok(
+      p.blurb.length >= 20 && p.blurb.length <= 100,
+      `${p.id}: blurb is one readable line (20–100 chars), got ${p.blurb.length}`
+    );
+  }
+  const islamic = list.find((p) => p.id === "islamic-history");
+  ok(islamic && /protection/i.test(islamic.blurb), "islamic-history's blurb names the protection pairing");
+});
+
+await test("S52 planProfileNotes: the authoring profile's live advisory (no silent creative decisions)", async () => {
+  const { planProfileNotes } = await import("../src/lib/tubeforge/production-profiles.ts");
+  type Plan = import("../src/lib/tubeforge/director-plan.ts").DirectorPlan;
+  const shot = (imagePrompt: string) => ({
+    shotIndex: 0, framing: "medium", camera: "static", lens: "35mm",
+    composition: "centered", duration: 3, imagePrompt,
+  });
+  const scene = (sceneIndex: number, imagePrompt: string, transitionIn = "cut") => ({
+    sceneIndex, mood: "warm", transitionIn, motion: "smart", needsI2V: false,
+    useStock: false, pacing: "normal", ambience: "none", sfx: "none",
+    shots: [shot(imagePrompt)],
+  });
+  // An advertisement plan whose opening shot is NOT product-forward and
+  // whose close is not a CTA — the profile's own validation must flag both
+  // (the exact notes the approval card surfaces before the human approves).
+  const adPlan = {
+    version: 2 as const,
+    generatedAt: "2026-11-07T00:00:00Z",
+    concept: "test fixture",
+    profile: "advertisement",
+    scenes: [
+      scene(1, "a windswept cliff at golden hour, empty and vast", ""),
+      scene(2, "the brand story continues quietly"),
+    ],
+  };
+  const notes = planProfileNotes(adPlan as Plan);
+  eq(notes.length, 2, `both advertisement rules fire (open + close), got ${notes.length}`);
+  ok(notes.some((n) => n.includes("must open on the product")), "the non-product open is flagged");
+  ok(notes.some((n) => n.includes("must close on a CTA")), "the non-CTA close is flagged");
+
+  // A compliant close dissolves the CTA note; narrative never imposes notes.
+  const fixed = {
+    ...adPlan,
+    scenes: [scene(1, "hero product bottle on stone, water beading", ""), scene(2, "CTA end card — tap to order now")],
+  };
+  eq(planProfileNotes(fixed as Plan), [], "a compliant advertisement plan carries zero notes");
+  const narrativePlan = { ...adPlan, profile: "narrative" };
+  eq(planProfileNotes(narrativePlan as Plan), [], "narrative carries no profile notes");
+  // A v1 plan with NO profile field resolves to narrative — no notes, no crash.
+  const v1 = { ...adPlan } as Partial<typeof adPlan>;
+  delete v1.profile;
+  eq(planProfileNotes(v1 as Plan), [], "a legacy plan (no profile field) resolves narrative — no notes");
+});
+
 console.log(`\n${"─".repeat(56)}`);
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);

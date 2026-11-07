@@ -5,13 +5,30 @@
 // human approves / dismisses / re-runs it, and the VLM continuity check
 // flags scenes that drifted from the character's identity with one-click
 // regeneration (delegated to the existing Scene Studio re-roll path).
+//
+// S52 — the themed production profiles surface: the picker (8 profiles,
+// served by GET /director straight from the catalog `resolveProfile` snaps
+// against, so the dropdown and the engine can never disagree), the plan's
+// authoring-profile badge, the profile's own validation notes (advisory,
+// evaluated live — "no silent creative decisions"), and the islamic-history
+// policy advisory: picking that profile surfaces a one-click "enable
+// protection" (default-on affordance) — but the POLICY never silently
+// derives from the profile; the column is the one truth, set by this human
+// click, read by every enforcement layer.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Clapperboard, ShieldCheck, RefreshCw, Check, X, RotateCcw, WandSparkles } from "lucide-react";
+import { Loader2, Clapperboard, ShieldCheck, ShieldOff, RefreshCw, Check, X, RotateCcw, WandSparkles } from "lucide-react";
 import type { DirectorPlan } from "@/lib/tubeforge/director-plan";
 
 interface ContinuityScene {
@@ -25,10 +42,18 @@ interface ContinuityReport {
   overall: number;
   scenes: ContinuityScene[];
 }
+interface ProfileOption {
+  id: string;
+  label: string;
+  blurb: string;
+}
 interface DirectorResponse {
   plan: DirectorPlan | null;
   state: "proposed" | "approved" | "dismissed" | null;
   consistency: ContinuityReport | null;
+  profiles: ProfileOption[];
+  contentPolicy: string | null;
+  profileNotes: string[];
   generating: { plan: boolean; check: boolean };
   error: { plan: string | null; check: string | null };
   videoError: string | null;
@@ -67,6 +92,14 @@ export function DirectorCard({
   // Module D constraint loop: which scene's "Fix…" input is open + its text.
   const [fixScene, setFixScene] = useState<number | null>(null);
   const [fixText, setFixText] = useState("");
+  // S52 — the picker's selection (the profile the NEXT pass runs under).
+  // Initialized from the plan's authoring profile (or the video's policy,
+  // for islamic-history) on first load; afterwards it is purely the user's
+  // pick until they touch nothing — a re-load never stomps a live choice.
+  const [profile, setProfile] = useState("");
+  const profileTouched = useRef(false);
+  const [policyBusy, setPolicyBusy] = useState(false);
+  const [confirmPolicyOff, setConfirmPolicyOff] = useState(false);
   const alive = useRef(true);
 
   const load = useCallback(async () => {
@@ -77,6 +110,14 @@ export function DirectorCard({
       if (alive.current) {
         setData(json);
         setLoaded(true);
+        if (!profileTouched.current) {
+          // The plan's own profile is the honest default once one exists;
+          // before that, a protected video suggests its companion profile.
+          const fallback =
+            json.plan?.profile ??
+            (json.contentPolicy === "islamic-history" ? "islamic-history" : "narrative");
+          setProfile(fallback);
+        }
       }
     } catch {
       /* transient — next poll retries */
@@ -105,7 +146,7 @@ export function DirectorCard({
       const res = await fetch(`/api/videos/${videoId}/director`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, profile: action === "plan" ? profile || "narrative" : undefined }),
       });
       const json = (await res.json()) as { error?: string };
       if (!res.ok) {
@@ -114,11 +155,50 @@ export function DirectorCard({
       }
       toast({
         title: action === "plan" ? "AI Director is watching the dailies…" : "Continuity check started…",
-        description: action === "plan" ? "A shot plan will be proposed in a moment" : undefined,
+        description:
+          action === "plan"
+            ? profile && profile !== "narrative"
+              ? `A ${data?.profiles.find((p) => p.id === profile)?.label ?? profile} plan will be proposed in a moment`
+              : "A shot plan will be proposed in a moment"
+            : undefined,
       });
       await load();
     } finally {
       if (alive.current) setBusy(null);
+    }
+  };
+
+  // S52 — the policy toggle (PATCH /api/videos/[id] { contentPolicy }).
+  // NEVER called implicitly: only this component's explicit buttons fire it,
+  // the server gates + activity-logs the flip, and the director data
+  // re-loads so the advisory reflects the column's new truth.
+  const setPolicy = async (v: "islamic-history" | null) => {
+    setPolicyBusy(true);
+    setConfirmPolicyOff(false);
+    try {
+      const res = await fetch(`/api/videos/${videoId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contentPolicy: v }),
+      });
+      const json = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        toast({ title: json.error ?? "Request failed", variant: "destructive" });
+        return;
+      }
+      toast({
+        title:
+          v === "islamic-history"
+            ? "Islamic visual protection is on"
+            : "Islamic visual protection is off",
+        description:
+          v === "islamic-history"
+            ? "Restricted-subject protection now applies to every generation layer; the QC visual gate holds export until verified"
+            : "Existing artifacts are not wiped — re-render and re-verify anything that must comply",
+      });
+      await load();
+    } finally {
+      if (alive.current) setPolicyBusy(false);
     }
   };
 
@@ -160,11 +240,16 @@ export function DirectorCard({
   const plan = data.plan;
   const generating = data.generating.plan || busy === "plan";
   const checking = data.generating.check || busy === "check";
+  const authoring = plan?.profile && plan.profile !== "narrative"
+    ? data.profiles.find((p) => p.id === plan.profile)
+    : undefined;
+  const protectionOn = data.contentPolicy === "islamic-history";
+  const islamicPicked = profile === "islamic-history";
 
   return (
     <div className="tf-card p-4 space-y-3" data-testid="director-card">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Clapperboard className="h-4 w-4 text-red-300" />
           <h3 className="text-sm font-semibold">AI Director</h3>
           {data.state === "approved" && (
@@ -177,8 +262,55 @@ export function DirectorCard({
               awaiting your approval
             </Badge>
           )}
+          {authoring && (
+            <Badge
+              className="border-violet-500/30 bg-violet-500/15 text-violet-200"
+              variant="outline"
+              title={`This plan was directed under the ${authoring.label} profile`}
+            >
+              {authoring.label}
+            </Badge>
+          )}
+          {protectionOn && (
+            <Badge
+              className="border-teal-500/30 bg-teal-500/15 text-teal-200"
+              variant="outline"
+              title="Islamic visual protection — restricted-subject enforcement is active on every generation layer and the QC visual gate holds export until verified"
+            >
+              <ShieldCheck className="mr-1 h-3 w-3" /> protection on
+            </Badge>
+          )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* S52 — the themed profile picker. The NEXT pass (Suggest or
+              Re-run) runs under the selected profile; the catalog comes
+              from the server, so the ids are exactly what resolveProfile
+              accepts. */}
+          <Select
+            value={profile}
+            onValueChange={(v) => {
+              profileTouched.current = true;
+              setProfile(v);
+            }}
+          >
+            <SelectTrigger
+              className="h-8 w-[200px] text-xs"
+              aria-label="Production profile"
+              data-testid="director-profile-picker"
+            >
+              <SelectValue placeholder="Profile" />
+            </SelectTrigger>
+            <SelectContent>
+              {data.profiles.map((p) => (
+                <SelectItem key={p.id} value={p.id} className="text-xs">
+                  <div className="flex flex-col gap-0.5 py-0.5">
+                    <span className="font-medium">{p.label}</span>
+                    <span className="text-[11px] text-muted-foreground">{p.blurb}</span>
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {!plan && !generating && (
             <Button size="sm" disabled={storyGenerating} onClick={() => void act("plan")} className="bg-brand-gradient hover:opacity-90 font-medium">
               <Clapperboard className="h-3.5 w-3.5" /> Suggest direction
@@ -203,6 +335,69 @@ export function DirectorCard({
         </div>
       </div>
 
+      {/* S52 — the islamic-history pairing advisory. Picking the profile
+          surfaces the enforcement question (default-on affordance), but the
+          policy only flips on this explicit human click — never derived
+          from the profile at runtime. */}
+      {islamicPicked && !protectionOn && (
+        <div
+          className="flex items-center justify-between gap-2 flex-wrap rounded-md border border-amber-500/25 bg-amber-500/8 px-2.5 py-2"
+          data-testid="director-policy-advisory"
+        >
+          <p className="text-[11px] text-amber-200/90">
+            Islamic visual protection is <span className="font-semibold">off</span> — the profile composes
+            around revered figures, but the enforcement layers (prompt sanitization, QC visual gate,
+            export hold) only run with the policy on.
+          </p>
+          <Button
+            size="sm"
+            className="h-7 bg-amber-500/20 text-amber-100 hover:bg-amber-500/30"
+            disabled={policyBusy}
+            onClick={() => void setPolicy("islamic-history")}
+          >
+            {policyBusy ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <ShieldCheck className="mr-1 h-3 w-3" />}
+            Enable protection
+          </Button>
+        </div>
+      )}
+      {protectionOn && (
+        <div className="flex items-center justify-end gap-2">
+          {confirmPolicyOff ? (
+            <span className="flex items-center gap-1.5 text-[11px] text-red-200">
+              Disable restricted-subject protection for this video?
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-[11px] text-red-200 hover:bg-red-500/15"
+                disabled={policyBusy}
+                onClick={() => void setPolicy(null)}
+              >
+                Yes, disable
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-[11px]"
+                disabled={policyBusy}
+                onClick={() => setConfirmPolicyOff(false)}
+              >
+                Keep protection
+              </Button>
+            </span>
+          ) : (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-[11px] text-muted-foreground"
+              disabled={policyBusy}
+              onClick={() => setConfirmPolicyOff(true)}
+            >
+              <ShieldOff className="mr-1 h-3 w-3" /> Turn protection off…
+            </Button>
+          )}
+        </div>
+      )}
+
       {data.error.plan && (
         <p className="text-xs text-red-300">{data.error.plan}</p>
       )}
@@ -210,6 +405,24 @@ export function DirectorCard({
       {plan && (
         <div className="space-y-2">
           {plan.concept && <p className="text-xs text-muted-foreground italic">{plan.concept}</p>}
+          {/* S52 — the authoring profile's own notes, evaluated live by the
+              server on every GET (never persisted). Advisory only, shown
+              BEFORE the approve buttons: "no silent creative decisions". */}
+          {data.profileNotes.length > 0 && (
+            <div
+              className="rounded-md border border-amber-500/25 bg-amber-500/8 px-2.5 py-2 space-y-1"
+              data-testid="director-profile-notes"
+            >
+              <p className="text-[11px] font-medium text-amber-200">
+                {authoring ? `${authoring.label} profile notes` : "Profile notes"} — advisory, review before approving:
+              </p>
+              <ul className="space-y-0.5">
+                {data.profileNotes.map((note, i) => (
+                  <li key={i} className="text-[11px] text-amber-100/80">• {note}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {(plan.musicMood || plan.ducking) && (
             <p className="text-[11px] text-muted-foreground">
               <span className="text-white/60">Audio direction:</span>{" "}
