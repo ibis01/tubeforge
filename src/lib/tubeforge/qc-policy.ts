@@ -52,7 +52,7 @@ export interface QcPolicyEntry {
 
 /** Bumped whenever a severity flips or a check is added — stamped into every
  * gate decision so a stored decision can name the policy that made it. */
-export const QC_POLICY_VERSION = "s49-v1";
+export const QC_POLICY_VERSION = "s53-v1";
 
 /**
  * The enforcement matrix. Every check id qc.ts can emit is classified
@@ -123,6 +123,14 @@ export const QC_ENFORCEMENT_MATRIX: Record<string, QcPolicyEntry> = {
   "restricted-visual": {
     severity: "block",
     why: "a depicted restricted religious figure violates the video's declared content policy — the artifact misrepresents what the production promised (S49; emitted only under a restricted policy, fail-closed on unmeasured)",
+  },
+  "subject-continuity": {
+    severity: "report",
+    why: "identity drift of the recurring subject is a continuity defect the operator repaints or accepts — lighting-induced hue shift is noted, never failed (S53; the S51 benchmark's finding class)",
+  },
+  "text-artifacts": {
+    severity: "report",
+    why: "gibberish pseudo-text and watermarks are polish defects of AI imagery — deliberate burned captions are excluded by the judge; REPORT until calibration evidence justifies a flip (S53)",
   },
 };
 

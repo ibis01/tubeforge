@@ -62,6 +62,10 @@ import {
   resolveContentPolicy,
   runRestrictedVisualScan,
 } from "./restricted-subjects";
+import {
+  runSubjectContinuityScan,
+  runTextArtifactScan,
+} from "./visual-qc";
 import { expectedCutsForTimeline } from "./render-qc";
 import type { ExpectedCuts } from "./render-qc";
 import { applyQcPolicy, qcEnforcementMode } from "./qc-policy";
@@ -658,13 +662,43 @@ export async function runRenderJob(
       // runRestrictedVisualScan never throws (a crashed scan reports
       // "unmeasured", which the gate holds — fail-closed, never silently
       // clean). Standard policy: no scan, no check, exactly as before.
+      //
+      // S53 — the advanced visual lenses join the same seam, on the same
+      // materialized final.mp4: textScan on EVERY final render (AI imagery
+      // is the product; gibberish pseudo-text is its classic defect — the
+      // judge excludes deliberate burned captions), subjectScan only for a
+      // recurring cast with an identity anchor (the S51 benchmark's
+      // color-under-lighting finding lands here as a note, never a false
+      // fail). Both never-throw; unmeasured is the honest state.
+      const finalPath = await (await import("./storage")).materialize(`${videoId}/final.mp4`);
       const restrictedScan =
         resolveContentPolicy(video.contentPolicy) === "islamic-history"
           ? await runRestrictedVisualScan({
-              mp4Path: await (await import("./storage")).materialize(`${videoId}/final.mp4`),
+              mp4Path: finalPath,
               durationSec: result.durationSec,
             })
           : undefined;
+      const textScan = await runTextArtifactScan({
+        mp4Path: finalPath,
+        durationSec: result.durationSec,
+      });
+      let subjectScan:
+        | { status: "pass" | "fail" | "unmeasured"; value: string; detail?: string }
+        | undefined;
+      if (video.characterId) {
+        const character = await db.character.findUnique({
+          where: { id: video.characterId },
+          select: { name: true, identityAnchor: true },
+        });
+        if (character?.identityAnchor) {
+          subjectScan = await runSubjectContinuityScan({
+            mp4Path: finalPath,
+            durationSec: result.durationSec,
+            characterName: character.name,
+            anchor: character.identityAnchor,
+          });
+        }
+      }
       const report = await qcForVideo(
         videoId,
         result.durationSec,
@@ -680,7 +714,9 @@ export async function runRenderJob(
         // exact durations + boundaries it stitched; hold the pixels to it.
         result.expectedCuts ?? null,
         frameRate,
-        restrictedScan
+        restrictedScan,
+        subjectScan,
+        textScan
       );
       await db.video.update({
         where: { id: videoId },
@@ -1468,13 +1504,37 @@ export async function runQcJob(videoId: string): Promise<void> {
     // S49 (L4) — the QC re-run honors the content policy exactly like the
     // post-render battery: restricted policy → the visual scan re-runs on the
     // standing final.mp4 (fail-closed on any scan failure).
+    // S53 — the advanced visual lenses re-run too (same applicability laws
+    // as the render path: text always, subject when cast + anchor exist).
+    const finalPath = await (await import("./storage")).materialize(`${videoId}/final.mp4`);
     const restrictedScan =
       resolveContentPolicy(video.contentPolicy) === "islamic-history"
         ? await runRestrictedVisualScan({
-            mp4Path: await (await import("./storage")).materialize(`${videoId}/final.mp4`),
+            mp4Path: finalPath,
             durationSec: video.videoDuration ?? 1,
           })
         : undefined;
+    const textScan = await runTextArtifactScan({
+      mp4Path: finalPath,
+      durationSec: video.videoDuration ?? 1,
+    });
+    let subjectScan:
+      | { status: "pass" | "fail" | "unmeasured"; value: string; detail?: string }
+      | undefined;
+    if (video.characterId) {
+      const character = await db.character.findUnique({
+        where: { id: video.characterId },
+        select: { name: true, identityAnchor: true },
+      });
+      if (character?.identityAnchor) {
+        subjectScan = await runSubjectContinuityScan({
+          mp4Path: finalPath,
+          durationSec: video.videoDuration ?? 1,
+          characterName: character.name,
+          anchor: character.identityAnchor,
+        });
+      }
+    }
     const report = await qcForVideo(
       videoId,
       video.videoDuration,
@@ -1488,7 +1548,9 @@ export async function runQcJob(videoId: string): Promise<void> {
       },
       expectedCuts,
       video.frameRate === 24 || video.frameRate === 60 ? video.frameRate : 30,
-      restrictedScan
+      restrictedScan,
+      subjectScan,
+      textScan
     );
     await db.video.update({
       where: { id: videoId },

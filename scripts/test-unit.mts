@@ -4126,13 +4126,14 @@ await test("S39 tenant ALS: module-graph duplication shares one storage", async 
 // matrix must classify exactly these, no more, no less: an id missing here is
 // a check nobody decided on; an extra id is a classification for a check
 // that never runs (drift the day a check is renamed). S49 added
-// "restricted-visual" — emitted only when the caller ran the content-policy
-// scan, but it IS part of the battery's emission set and carries a severity.
+// "restricted-visual"; S53 added "subject-continuity" + "text-artifacts" —
+// all three emitted only when the caller ran the respective scan, but each
+// IS part of the battery's emission set and carries a severity.
 const S40_EMITTED_IDS = [
   "playable", "duration", "black-frames", "frozen-frames", "aspect",
   "loudness", "true-peak", "loudness-range", "dead-air", "static-shots",
   "flicker", "stutter", "cut-alignment", "tail-fade", "captions",
-  "restricted-visual",
+  "restricted-visual", "subject-continuity", "text-artifacts",
 ] as const;
 
 const s40Check = (id: string, status: "pass" | "fail" | "unmeasured") => ({
@@ -4152,7 +4153,7 @@ const s40Report = (
   checks,
 });
 
-await test("S40 matrix: every battery check classified exactly once — 10 block, 6 report", () => {
+await test("S40 matrix: every battery check classified exactly once — 10 block, 8 report", () => {
   const matrixIds = Object.keys(QC_ENFORCEMENT_MATRIX).sort();
   const emitted = [...S40_EMITTED_IDS].sort();
   eq(matrixIds, emitted, "matrix ids == battery emission set (both directions)");
@@ -4164,8 +4165,8 @@ await test("S40 matrix: every battery check classified exactly once — 10 block
   eq(QC_BLOCKING_COUNT, 10, "ten blocking checks — S49 added restricted-visual deliberately (a flip here is a deliberate act)");
   eq(
     Object.values(QC_ENFORCEMENT_MATRIX).filter((e) => e.severity === "report").length,
-    6,
-    "six report-severity checks"
+    8,
+    "eight report-severity checks (S53 added subject-continuity + text-artifacts deliberately)"
   );
   ok(QC_POLICY_VERSION.length > 0, "policy version stamped");
 });
@@ -5627,6 +5628,153 @@ await test("S52 planProfileNotes: the authoring profile's live advisory (no sile
   const v1 = { ...adPlan } as Partial<typeof adPlan>;
   delete v1.profile;
   eq(planProfileNotes(v1 as Plan), [], "a legacy plan (no profile field) resolves narrative — no notes");
+});
+
+// ---------------------------------------------------------------------------
+// S53 — advanced visual QC: the subject-continuity threshold (the S51
+// finding's check) and the text-artifacts lens, both on the L4 seam's laws.
+// ---------------------------------------------------------------------------
+
+await test("S53 subjectVerdictFromJudge: the threshold law (lighting never flips it)", async () => {
+  const { subjectVerdictFromJudge, SUBJECT_CONSISTENCY_FLOOR } = await import(
+    "../src/lib/tubeforge/visual-qc.ts"
+  );
+  eq(SUBJECT_CONSISTENCY_FLOOR, 70, "the floor the S51 benchmark finding inherits");
+  eq(subjectVerdictFromJudge({ consistent: true, score: 100 }).status, "pass", "no-subject frames verdict stands (the judge's own contract)");
+  eq(subjectVerdictFromJudge({ consistent: true, score: 85 }).status, "pass", "S51-class score (85) passes");
+  eq(subjectVerdictFromJudge({ consistent: true, score: 70 }).status, "pass", "the floor itself passes");
+  eq(subjectVerdictFromJudge({ consistent: true, score: 69 }).status, "fail", "one under the floor fails");
+  eq(subjectVerdictFromJudge({ consistent: false, score: 90 }).status, "fail", "an inconsistent judge verdict fails at ANY score");
+  eq(subjectVerdictFromJudge({ consistent: true, score: 250 }).score, 100, "the score clamps to 100");
+  eq(subjectVerdictFromJudge({ consistent: true, score: -5 }).score, 0, "the score clamps to 0");
+  // Lighting notes live in `notes` and never enter the verdict — but a judge
+  // that reports hue drift as inconsistent is OBEYED (the human reads why).
+  eq(subjectVerdictFromJudge({ consistent: true, score: 72, notes: "hair reads golden under warm light — lighting, not identity" }).status, "pass", "the S51 finding class passes with its note");
+  // Unparsable / partial judge output → unmeasured, never a silent pass.
+  eq(subjectVerdictFromJudge(null).status, "unmeasured", "null judge output");
+  eq(subjectVerdictFromJudge("garbage").status, "unmeasured", "string judge output");
+  eq(subjectVerdictFromJudge({}).status, "unmeasured", "no consistent field");
+  eq(subjectVerdictFromJudge({ consistent: true }).status, "unmeasured", "no score field");
+  eq(subjectVerdictFromJudge({ consistent: "yes", score: 90 }).status, "unmeasured", "non-boolean consistent");
+  eq(subjectVerdictFromJudge({ consistent: true, score: NaN }).status, "unmeasured", "NaN score");
+});
+
+await test("S53 visual scan prompts: the two laws the judges must carry", async () => {
+  const { SUBJECT_CONTINUITY_SYSTEM, TEXT_ARTIFACT_SYSTEM } = await import(
+    "../src/lib/tubeforge/visual-qc.ts"
+  );
+  // The S51 finding made explicit: lighting-induced hue shifts are notes,
+  // not drift — only identity-defining changes count.
+  ok(SUBJECT_CONTINUITY_SYSTEM.includes("LIGHTING IS NOT IDENTITY"), "the lighting law leads the subject judge");
+  ok(SUBJECT_CONTINUITY_SYSTEM.includes("hair color and style, apparent age"), "identity-defining features are enumerated");
+  ok(SUBJECT_CONTINUITY_SYSTEM.includes("ignore those frames"), "b-roll frames without the subject are excluded");
+  // The caption-exclusion law: this production burns captions on purpose —
+  // a judge that flags them would cry wolf on every video.
+  ok(TEXT_ARTIFACT_SYSTEM.includes("burns captions on purpose"), "the caption-exclusion law rides the text judge");
+  ok(TEXT_ARTIFACT_SYSTEM.includes("gibberish or garbled lettering"), "the artifact classes are enumerated");
+  ok(TEXT_ARTIFACT_SYSTEM.includes("watermarks"), "watermarks are in scope");
+});
+
+await test("S53 sampleFramesEvenly: real ffmpeg sampling + the never-throw contract", async () => {
+  const { sampleFramesEvenly } = await import("../src/lib/tubeforge/visual-qc.ts");
+  const FFOPT = { timeout: 60_000, maxBuffer: 4 * 1024 * 1024 } as const;
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "s53-frames-"));
+  try {
+    // A real 4s video: 4 frames sampled evenly (fps = min(4/4, 1) = 1/s —
+    // the L4 sampling-density cap) must come back as 4 decodable base64
+    // JPEG payloads. NOTE: a file SHORTER than the frame count samples
+    // fewer frames (the 1fps cap) — the S49 density law, kept as-is.
+    const mp4 = path.join(tmp, "v.mp4");
+    await execFileAsync("ffmpeg", [
+      "-y", "-f", "lavfi", "-i", "testsrc2=s=320x240:d=4:r=10",
+      "-pix_fmt", "yuv420p", mp4,
+    ], FFOPT);
+    const payloads = await sampleFramesEvenly(mp4, 4, 4);
+    eq(payloads.length, 4, "4 frames sampled from a 4s file at the 1fps cap");
+    for (const p of payloads) {
+      ok(p.length > 1000, "each payload is a real JPEG, not a stub");
+      // JPEG magic FF D8 FF encodes to base64 as /9j/ at the head.
+      ok(p.startsWith("/9j/"), "the payload is base64 JPEG");
+    }
+    // A 0/NaN duration falls back to 1s (clamp), a nonexistent file → [].
+    const clamp = await sampleFramesEvenly(mp4, Number.NaN, 4);
+    ok(clamp.length > 0, "a NaN duration still samples (the 1s clamp)");
+    eq(await sampleFramesEvenly("/nonexistent/s53/final.mp4", 10, 4), [], "nonexistent input → empty (never throws)");
+  } finally {
+    await fsp.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+await test("S53 qc battery: the advanced visual lenses ride the report when the scans ran", async () => {
+  const { runQcReport } = await import("../src/lib/tubeforge/qc.ts");
+  const opts = {
+    mp4Path: "/nonexistent/tf-s53/final.mp4",
+    videoDuration: 10,
+    narrationSec: null,
+    srtPath: null,
+  };
+  // Absent scans → neither check is emitted (pre-S53 behavior).
+  const plain = await runQcReport(opts);
+  eq(plain.checks.some((c) => c.id === "subject-continuity"), false, "no subject scan → no subject check");
+  eq(plain.checks.some((c) => c.id === "text-artifacts"), false, "no text scan → no text check");
+  // Passing scans → emitted, passing.
+  const pass = await runQcReport({
+    ...opts,
+    subjectScan: { status: "pass", value: "identity consistent across 5 subject frame(s) — 86/100" },
+    textScan: { status: "pass", value: "8 frame(s) clean of artifact text" },
+  });
+  eq(pass.checks.find((c) => c.id === "subject-continuity")?.status, "pass", "subject pass rides");
+  eq(pass.checks.find((c) => c.id === "text-artifacts")?.status, "pass", "text pass rides");
+  // Failing/unmeasured scans → the checks ride AND keep the report unclean
+  // (the battery's never-silently-clean contract).
+  const fail = await runQcReport({
+    ...opts,
+    subjectScan: { status: "fail", value: "identity drift — 54/100", detail: "frame 3" },
+    textScan: { status: "unmeasured", value: "scan could not run" },
+  });
+  eq(fail.checks.find((c) => c.id === "subject-continuity")?.status, "fail", "subject fail rides");
+  eq(fail.checks.find((c) => c.id === "text-artifacts")?.status, "unmeasured", "text unmeasured rides");
+  eq(fail.passed, false, "a failed/unmeasured lens never reads as clean");
+});
+
+await test("S53 qc gate: the advanced visual lenses ADVISE, never hold", async () => {
+  const { applyQcPolicy, QC_ENFORCEMENT_MATRIX } = await import("../src/lib/tubeforge/qc-policy.ts");
+  eq(QC_ENFORCEMENT_MATRIX["subject-continuity"]?.severity, "report", "subject-continuity is REPORT (repaint-or-accept is the operator's call)");
+  eq(QC_ENFORCEMENT_MATRIX["text-artifacts"]?.severity, "report", "text-artifacts is REPORT (until calibration evidence justifies a flip)");
+  const mk = (status: "pass" | "fail" | "unmeasured") => ({
+    passed: status === "pass",
+    checkedAt: "2026-11-07T00:00:00.000Z",
+    durationSec: 60,
+    checks: [
+      { id: "playable", label: "Plays", status: "pass" as const, value: "ok" },
+      { id: "subject-continuity", label: "Subject", status, value: "fixture" },
+      { id: "text-artifacts", label: "Text", status, value: "fixture" },
+    ],
+  });
+  eq(applyQcPolicy(mk("fail")).blocked, false, "failing visual lenses do NOT block the export");
+  eq(applyQcPolicy(mk("unmeasured")).blocked, false, "unmeasured visual lenses do NOT block");
+  const advisories = applyQcPolicy(mk("fail")).advisories.map((a) => a.id).sort();
+  eq(advisories, ["subject-continuity", "text-artifacts"], "both surface as advisories with their rationale");
+  ok(applyQcPolicy(mk("fail")).advisories.every((a) => a.why.length > 10), "each advisory carries its rationale");
+});
+
+await test("S53 runSubjectContinuityScan + runTextArtifactScan: cannot-run reports unmeasured, never throws", async () => {
+  const { runSubjectContinuityScan, runTextArtifactScan } = await import(
+    "../src/lib/tubeforge/visual-qc.ts"
+  );
+  // A nonexistent input file: ffmpeg samples nothing → both scans report
+  // "unmeasured" with a readable detail (the never-throw contract).
+  const subject = await runSubjectContinuityScan({
+    mp4Path: "/nonexistent/tf-s53/final.mp4",
+    durationSec: 10,
+    characterName: "Nova",
+    anchor: "late-20s presenter, short silver hair",
+  });
+  eq(subject.status, "unmeasured", "subject scan on a dead file → unmeasured");
+  ok(subject.detail !== undefined && subject.detail.length > 0, "the subject outcome carries the failure detail");
+  const text = await runTextArtifactScan({ mp4Path: "/nonexistent/tf-s53/final.mp4", durationSec: 10 });
+  eq(text.status, "unmeasured", "text scan on a dead file → unmeasured");
+  ok(text.detail !== undefined && text.detail.length > 0, "the text outcome carries the failure detail");
 });
 
 console.log(`\n${"─".repeat(56)}`);

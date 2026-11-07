@@ -253,6 +253,19 @@ export async function runQcReport(opts: {
    *  silence). Absent (standard policy) = the check is not emitted, exactly
    *  as before S49. */
   restrictedScan?: { status: "pass" | "fail" | "unmeasured"; value: string; detail?: string };
+  /** S53 — the subject-continuity scan outcome (visual-qc.ts
+   *  runSubjectContinuityScan). Provided ONLY when the video has a recurring
+   *  cast with an identity anchor (the caller owns applicability). The S51
+   *  benchmark's color-under-lighting finding lands here: lighting-induced
+   *  hue drift reads in the notes, only identity-defining drift fails.
+   *  Absent = the check is not emitted (no cast, no continuity domain). */
+  subjectScan?: { status: "pass" | "fail" | "unmeasured"; value: string; detail?: string };
+  /** S53 — the text-artifacts scan outcome (visual-qc.ts
+   *  runTextArtifactScan). Provided for every render (AI imagery is the
+   *  product; gibberish pseudo-text and watermarks are its classic defect).
+   *  Deliberate burned captions are excluded by the judge's contract.
+   *  Absent = the check is not emitted (e.g. a pre-S53 caller). */
+  textScan?: { status: "pass" | "fail" | "unmeasured"; value: string; detail?: string };
 }): Promise<QcReport> {
   const aspect: QcAspect =
     opts.expectedAspect === "9:16" ? "9:16" : opts.expectedAspect === "1:1" ? "1:1" : "16:9";
@@ -645,6 +658,33 @@ export async function runQcReport(opts: {
     );
   }
 
+  // S53 — the advanced visual lenses ride the same law: emitted when (and
+  // only when) the caller ran the scan, counting toward `passed` like every
+  // other check (a fail or unmeasured scan keeps the report from reading
+  // clean — the battery's own never-silently-clean contract).
+  if (opts.subjectScan) {
+    checks.push(
+      check(
+        "subject-continuity",
+        "Recurring subject keeps one identity across scenes",
+        opts.subjectScan.status,
+        opts.subjectScan.value,
+        opts.subjectScan.detail
+      )
+    );
+  }
+  if (opts.textScan) {
+    checks.push(
+      check(
+        "text-artifacts",
+        "No gibberish text or watermarks in the imagery",
+        opts.textScan.status,
+        opts.textScan.value,
+        opts.textScan.detail
+      )
+    );
+  }
+
   return {
     // The report is clean only when EVERY check actually ran AND passed —
     // an unmeasured check keeps the overall badge red/amber for a human.
@@ -666,7 +706,9 @@ export async function qcForVideo(
   pacingExemptions?: { i2vEverywhere?: boolean; stockEverywhere?: boolean },
   expectedCuts?: ExpectedCuts | null,
   frameRate?: number,
-  restrictedScan?: { status: "pass" | "fail" | "unmeasured"; value: string; detail?: string }
+  restrictedScan?: { status: "pass" | "fail" | "unmeasured"; value: string; detail?: string },
+  subjectScan?: { status: "pass" | "fail" | "unmeasured"; value: string; detail?: string },
+  textScan?: { status: "pass" | "fail" | "unmeasured"; value: string; detail?: string }
 ): Promise<QcReport> {
   // Storage seam (T-3.7): ffprobe/readFile need real paths — materialize
   // returns the uploads path locally, a cached download under s3.
@@ -684,6 +726,8 @@ export async function qcForVideo(
     expectedCuts,
     frameRate,
     restrictedScan,
+    subjectScan,
+    textScan,
   });
 }
 

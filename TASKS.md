@@ -1847,3 +1847,26 @@ Verification: tsc 0 · eslint 0 errors / **669 warnings (the S50/S51 level,
 zero net)** · **229/229 unit** (227 + 2 S52) · queue restart-recovery PASS.
 The 8-profile live generation benchmark belongs to S54 (seven genres); S52's
 deliverables are the surface contracts, pinned above.
+
+## S53 — the advanced visual QC matrix (opened 2026-11-07 UTC)
+
+Sprint goal: give the battery the two VLM-judged visual lenses the cinematic
+transformation promised — and land the threshold the S51 benchmark's residual
+finding inherited. The S51 benchmark closed with "hair hue drifts warm/golden
+under warm scene lighting against the anchor's silver — a color-under-lighting
+drift, not identity drift, and S54's threshold work inherits it": that finding
+now has a check, a floor, and a judge that tells lighting from identity.
+
+| Task | Status | Notes |
+|---|---|---|
+| T-53.1 the visual QC seam | ✅ Done | `src/lib/tubeforge/visual-qc.ts`: `sampleFramesEvenly` (even ffmpeg sampling → in-memory base64 payloads, read BEFORE temp cleanup — no TOCTOU window; never-throws, [] = probe dead), `runSubjectContinuityScan` (VLM judge over the recurring subject's identity-defining features, anchor + name in the user prompt), `runTextArtifactScan` (VLM judge over gibberish pseudo-text/garbled signage/watermarks). Both follow the S49 L4 laws verbatim: STRICT-JSON judge at temperature 0, `parseJsonLoose` recovery, any failure → "unmeasured", NEVER a throw, NEVER a silent pass. |
+| T-53.2 subject-continuity (the S51 threshold) | ✅ Done | `SUBJECT_CONSISTENCY_FLOOR = 70` + the pure `subjectVerdictFromJudge` law: pass ⟺ judge `consistent` ∧ score ≥ floor; the LIGHTING IS NOT IDENTITY clause leads the judge's prompt (hue shift under scene light reads in `notes`, never flips the verdict); b-roll frames without the subject are ignored; frames-free verdicts stand at the judge's own contract. Emitted only when the video has cast + identity anchor (caller owns applicability). REPORT severity — repaint-or-accept is the operator's call. |
+| T-53.3 text-artifacts | ✅ Done | The AI-imagery classic: gibberish lettering, pseudo-text on signs/screens, melted typography, watermarks. The caption-exclusion law rides the judge's prompt (this production burns captions on purpose — a lens that flagged them would cry wolf on every video). Runs on EVERY final render + QC re-run. REPORT severity until calibration evidence justifies a flip (a deliberate, versioned act). |
+| T-53.4 battery + gate wiring | ✅ Done | `runQcReport`/`qcForVideo` take `subjectScan`/`textScan` (same ride-the-report law as `restrictedScan`: emitted when and only when the caller ran the scan, counted toward `passed`). Both job paths (render + QC re-run) run textScan always, subjectScan for cast+anchor, sharing one materialized final.mp4. Matrix: 2 new REPORT rows, `QC_POLICY_VERSION` → **s53-v1**, blocking count stays 10 (pinned). Scorecard groups both ids under "Video". |
+| T-53.5 tests + compatibility | ✅ Done | 6 new tests (235/235): the threshold law (floor edges, clamps, judge-obeyed inconsistency, garbage → unmeasured), the two judges' prompt laws, a REAL-ffmpeg sampling test (4 frames from a 4s file, base64 JPEG payloads, NaN-duration clamp, dead file → []), the battery emission law (absent → not emitted; pass/fail/unmeasured ride; fail keeps the report unclean), and the gate law (both lenses advise, never hold; advisories carry rationales). The S40 matrix pin updated to the 18-id emission set — 10 block / 8 report, a deliberate act. |
+
+Verification: tsc 0 · eslint 0 errors / **669 warnings (zero net)** · **235/235
+unit** (229 + 6 S53, one real ffmpeg) · queue restart-recovery PASS. The live
+VLM calibration (do the judges agree with the S51 benchmark's findings at the
+70 floor?) belongs to S54's seven-genre benchmark, which now exercises the
+full matrix per genre.

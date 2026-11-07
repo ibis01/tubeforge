@@ -2367,3 +2367,60 @@ law) · queue restart-recovery PASS. CI green on e40cfd9 (the S48–S51 push
 this session opened with). Next: S53 (the advanced visual QC matrix — the
 restricted-visual check rides the report surface, and the S51 benchmark's
 color-under-lighting drift finding inherits a threshold).
+
+## S53 (2026-11-07 UTC) — the lenses that tell lighting from lying
+
+S53 — the advanced visual QC matrix. The battery's visual lenses through S52
+were structural (black/frozen/flicker/stutter/cut-alignment — ffmpeg-measured
+geometry and timing) plus the S49 policy scan. What the cinematic
+transformation still owed the report was JUDGMENT-class vision: does the
+recurring subject stay ONE person across scenes, and is the imagery free of
+AI's signature gibberish text? Both lenses live in one new seam
+(visual-qc.ts) that follows the S49 L4 laws verbatim — even ffmpeg sampling,
+a STRICT-JSON VLM judge at temperature 0, parseJsonLoose recovery, and a
+never-throw contract where any failure reports "unmeasured" (the honest
+state, never a silent pass).
+
+The S51 finding finally has its threshold. The continuity benchmark closed
+with a residual: hair hue drifts warm/golden under warm scene lighting
+against the anchor's silver — "a color-under-lighting drift, not identity
+drift". The subject-continuity check encodes exactly that distinction:
+`SUBJECT_CONSISTENCY_FLOOR = 70`, and the judge's prompt LEADS with LIGHTING
+IS NOT IDENTITY — hue shifts under scene light belong in the notes, only
+changes to the identity-defining features themselves (hair color and style
+once lighting is accounted for, apparent age, build, defining wardrobe) count
+as drift. The pure verdict law is unit-pinned at every edge: the floor
+itself passes, one under fails, a judge that says inconsistent fails at any
+score, garbage parses to unmeasured. B-roll frames without the subject are
+ignored; a cast video where every sampled frame missed the subject stands at
+the judge's own contract (consistent, 100) rather than a false verdict.
+
+Its sibling hunts the AI-imagery classic: gibberish pseudo-text on signs and
+screens, melted typography, watermarks. The caption-exclusion law matters
+more than the detection itself — this production burns captions ON PURPOSE,
+and a lens that flagged them would cry wolf on every video ever rendered.
+The judge's prompt excludes deliberate typeset subtitle overlays explicitly
+and hunts only artifact text inside the image content.
+
+Severity is honest, not brave. Both lenses are REPORT: identity drift is a
+defect the operator repaints or accepts (the Stage-5 continuity card already
+offers the one-click repaint), artifact text is polish, and neither has
+calibration evidence yet to justify holding export — the restricted-visual
+check earned BLOCK because a policy violation misrepresents the production's
+promise; these two are quality, not promise. The matrix pin now reads 10
+block / 8 report, policy version s53-v1, and the S40 test that pins the
+emission set grew to 18 ids — a deliberate act, on the record.
+
+One implementation save worth noting: the first draft of the sampler
+returned file PATHS and cleaned the temp dir in `finally` — a TOCTOU where
+the frames were deleted before the VLM read them (every scan would have
+reported unmeasured). The sampler now reads the payloads into memory BEFORE
+cleanup and hands the caller base64 directly; there is no window where
+frames vanish. The real-ffmpeg test pins the contract: 4 frames from a 4s
+file, decodable JPEG payloads, NaN duration clamps, dead file → [].
+
+Gate: tsc 0 · eslint 0 errors / 669 warnings — zero net · 235/235 unit
+(6 new S53, one real ffmpeg) · queue restart-recovery PASS. CI green on
+both pushes this session (e40cfd9 S48–S51, 98a5faf S52). Next: S54 — the
+seven-genre benchmark, which exercises all 8 profiles and the full 18-check
+matrix live, and calibrates the 70 floor against the S51 anchor re-run.
