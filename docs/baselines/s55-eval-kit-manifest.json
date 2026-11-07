@@ -1,0 +1,304 @@
+{
+  "recordedAt": "2026-11-07T22:39:59.828Z",
+  "kit": "scripts/s55-eval-kit.mts",
+  "commit": "21cf723",
+  "spend": {
+    "gatewayQuotaSpent": 0,
+    "paidDispatches": 0,
+    "standinOnly": true
+  },
+  "anchorScenes": [
+    {
+      "title": "The Ridge",
+      "visual": "a windswept mountain ridge at first light, low clouds pouring over the saddle"
+    },
+    {
+      "title": "The Harbor",
+      "visual": "a quiet harbor at dusk, moored boats rocking gently under lantern light"
+    }
+  ],
+  "tier1": "engine axes on local stand-in anchors (motion realism, camera movement, shot rhythm, AV sync, transitions)",
+  "tier2": "imagery axes on gateway anchors (lighting, composition-on-content, scene relevance) — the runbook's protocol",
+  "profiles": {
+    "narrative": {
+      "videoId": "cmw6za0du0005vgtinmqiirfa",
+      "durationSec": 9.9,
+      "fileBytes": 2918655,
+      "sha8": "8f1411e8",
+      "cameras": [
+        "static",
+        "zoom-in",
+        "zoom-out",
+        "pan-left",
+        "pan-right",
+        "tilt-up"
+      ],
+      "pacing": "normal",
+      "transitionIn": "fade",
+      "lenses": {
+        "playable": "pass",
+        "duration": "pass",
+        "black-frames": "pass",
+        "frozen-frames": "pass",
+        "aspect": "pass",
+        "loudness": "pass",
+        "true-peak": "pass",
+        "loudness-range": "pass",
+        "dead-air": "pass",
+        "static-shots": "pass",
+        "flicker": "pass",
+        "stutter": "pass",
+        "cut-alignment": "pass",
+        "tail-fade": "pass",
+        "captions": "pass",
+        "text-artifacts": "pass"
+      },
+      "renderMs": 62249
+    },
+    "documentary": {
+      "videoId": "cmw6zbcf1001pvgti8ngkciyt",
+      "durationSec": 9.9,
+      "fileBytes": 2725421,
+      "sha8": "c375e790",
+      "cameras": [
+        "static",
+        "zoom-in",
+        "pan-left",
+        "pan-right"
+      ],
+      "pacing": "slow",
+      "transitionIn": "cut",
+      "lenses": {
+        "playable": "pass",
+        "duration": "pass",
+        "black-frames": "pass",
+        "frozen-frames": "pass",
+        "aspect": "pass",
+        "loudness": "pass",
+        "true-peak": "pass",
+        "loudness-range": "pass",
+        "dead-air": "pass",
+        "static-shots": "pass",
+        "flicker": "pass",
+        "stutter": "pass",
+        "cut-alignment": "pass",
+        "tail-fade": "pass",
+        "captions": "pass",
+        "text-artifacts": "pass"
+      },
+      "renderMs": 46186
+    },
+    "explainer": {
+      "videoId": "cmw6zcc200031vgtiqr9lco9f",
+      "durationSec": 9.9,
+      "fileBytes": 3000265,
+      "sha8": "07ea64d1",
+      "cameras": [
+        "static",
+        "zoom-in",
+        "zoom-out",
+        "pan-left",
+        "pan-right",
+        "static"
+      ],
+      "pacing": "normal",
+      "transitionIn": "cut",
+      "lenses": {
+        "playable": "pass",
+        "duration": "pass",
+        "black-frames": "pass",
+        "frozen-frames": "pass",
+        "aspect": "pass",
+        "loudness": "pass",
+        "true-peak": "pass",
+        "loudness-range": "pass",
+        "dead-air": "pass",
+        "static-shots": "pass",
+        "flicker": "pass",
+        "stutter": "pass",
+        "cut-alignment": "pass",
+        "tail-fade": "pass",
+        "captions": "pass",
+        "text-artifacts": "pass"
+      },
+      "renderMs": 62405
+    },
+    "advertisement": {
+      "videoId": "cmw6zdo7j004lvgtiasz80iyg",
+      "durationSec": 9.9,
+      "fileBytes": 3440586,
+      "sha8": "e9c46cbc",
+      "cameras": [
+        "zoom-in",
+        "punch-in",
+        "static",
+        "pan-right",
+        "pan-right",
+        "pan-left",
+        "diag-tl",
+        "zoom-in"
+      ],
+      "pacing": "fast",
+      "transitionIn": "cut",
+      "lenses": {
+        "playable": "pass",
+        "duration": "pass",
+        "black-frames": "pass",
+        "frozen-frames": "pass",
+        "aspect": "pass",
+        "loudness": "pass",
+        "true-peak": "pass",
+        "loudness-range": "pass",
+        "dead-air": "pass",
+        "static-shots": "pass",
+        "flicker": "pass",
+        "stutter": "pass",
+        "cut-alignment": "pass",
+        "tail-fade": "pass",
+        "captions": "pass",
+        "text-artifacts": "pass"
+      },
+      "renderMs": 79186
+    },
+    "animation": {
+      "videoId": "cmw6zfgjc0001vgpmebh1gr3a",
+      "durationSec": 9.9,
+      "fileBytes": 2960716,
+      "sha8": "44d788d1",
+      "cameras": [
+        "static",
+        "zoom-in",
+        "zoom-out",
+        "pan-left",
+        "pan-left",
+        "pan-right",
+        "tilt-up",
+        "tilt-down"
+      ],
+      "pacing": "normal",
+      "transitionIn": "cut",
+      "lenses": {
+        "playable": "pass",
+        "duration": "pass",
+        "black-frames": "pass",
+        "frozen-frames": "pass",
+        "aspect": "pass",
+        "loudness": "pass",
+        "true-peak": "pass",
+        "loudness-range": "pass",
+        "dead-air": "pass",
+        "static-shots": "pass",
+        "flicker": "pass",
+        "stutter": "pass",
+        "cut-alignment": "pass",
+        "tail-fade": "pass",
+        "captions": "pass",
+        "text-artifacts": "pass"
+      },
+      "renderMs": 77981
+    },
+    "podcast": {
+      "videoId": "cmw6zh4p5001tvgpmf6v11gv5",
+      "durationSec": 9.9,
+      "fileBytes": 2485339,
+      "sha8": "47a15d27",
+      "cameras": [
+        "static",
+        "zoom-in",
+        "pan-left",
+        "pan-right"
+      ],
+      "pacing": "slow",
+      "transitionIn": "fade",
+      "lenses": {
+        "playable": "pass",
+        "duration": "pass",
+        "black-frames": "pass",
+        "frozen-frames": "pass",
+        "aspect": "pass",
+        "loudness": "pass",
+        "true-peak": "pass",
+        "loudness-range": "pass",
+        "dead-air": "pass",
+        "static-shots": "pass",
+        "flicker": "pass",
+        "stutter": "pass",
+        "cut-alignment": "pass",
+        "tail-fade": "pass",
+        "captions": "pass",
+        "text-artifacts": "pass"
+      },
+      "renderMs": 46591
+    },
+    "social": {
+      "videoId": "cmw6zi4ne0035vgpmj73aimjs",
+      "durationSec": 9.9,
+      "fileBytes": 3354030,
+      "sha8": "2682c7fd",
+      "cameras": [
+        "zoom-in",
+        "diag-tl",
+        "static",
+        "pan-right",
+        "pan-right",
+        "tilt-up",
+        "punch-in",
+        "zoom-in"
+      ],
+      "pacing": "fast",
+      "transitionIn": "cut",
+      "lenses": {
+        "playable": "pass",
+        "duration": "pass",
+        "black-frames": "pass",
+        "frozen-frames": "pass",
+        "aspect": "pass",
+        "loudness": "pass",
+        "true-peak": "pass",
+        "loudness-range": "pass",
+        "dead-air": "pass",
+        "static-shots": "pass",
+        "flicker": "pass",
+        "stutter": "pass",
+        "cut-alignment": "pass",
+        "tail-fade": "pass",
+        "captions": "pass",
+        "text-artifacts": "pass"
+      },
+      "renderMs": 78620
+    },
+    "islamic-history": {
+      "videoId": "cmw6zjtbc004zvgpmen6uhlhk",
+      "durationSec": 9.9,
+      "fileBytes": 2485339,
+      "sha8": "47a15d27",
+      "cameras": [
+        "static",
+        "zoom-in",
+        "pan-left",
+        "pan-right"
+      ],
+      "pacing": "slow",
+      "transitionIn": "cut",
+      "lenses": {
+        "playable": "pass",
+        "duration": "pass",
+        "black-frames": "pass",
+        "frozen-frames": "pass",
+        "aspect": "pass",
+        "loudness": "pass",
+        "true-peak": "pass",
+        "loudness-range": "pass",
+        "dead-air": "pass",
+        "static-shots": "pass",
+        "flicker": "pass",
+        "stutter": "pass",
+        "cut-alignment": "pass",
+        "tail-fade": "pass",
+        "captions": "pass",
+        "text-artifacts": "pass"
+      },
+      "renderMs": 46498
+    }
+  }
+}

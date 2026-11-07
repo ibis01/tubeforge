@@ -64,6 +64,10 @@ export interface StandinGateway {
   baseUrl: string;
   state: StandinState;
   setVlmMode(mode: VlmMode): void;
+  /** Swap the canned director-plan JSON (one gateway, many plans — the SDK
+   * client is a per-process singleton, so restarting the gateway mid-process
+   * would orphan it against a dead port). */
+  setPlanJson(planJson: string): void;
   close(): Promise<void>;
 }
 
@@ -106,6 +110,7 @@ export async function startStandinGateway(assets: StandinAssets): Promise<Standi
     clipDownloads: 0,
   };
   let vlmMode: VlmMode = "clean";
+  let currentPlanJson = assets.planJson;
 
   let unmatchedCount = 0;
   /** Pick the paint for an image request. The traveler rides prompts that
@@ -159,7 +164,7 @@ export async function startStandinGateway(assets: StandinAssets): Promise<Standi
         // ---- director chat ----
         if (req.method === "POST" && url === "/v1/chat/completions") {
           state.chatCalls++;
-          return send(200, chatResponse(assets.planJson));
+          return send(200, chatResponse(currentPlanJson));
         }
         // ---- vision: restricted scan / text scan / quality gate ----
         if (req.method === "POST" && url === "/v1/chat/completions/vision") {
@@ -222,6 +227,9 @@ export async function startStandinGateway(assets: StandinAssets): Promise<Standi
     state,
     setVlmMode: (mode: VlmMode) => {
       vlmMode = mode;
+    },
+    setPlanJson: (planJson: string) => {
+      currentPlanJson = planJson;
     },
     close: () =>
       new Promise<void>((resolve, reject) =>
