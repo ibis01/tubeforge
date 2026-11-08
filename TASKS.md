@@ -2307,8 +2307,10 @@ muxed at the audiomix stage), so playable:fail on a RAW clip is a category
 mismatch, not a defect. The lane therefore reads the clip-local visual
 lenses as binding and marks audio-bearing checks unmeasured-by-design.
 
-S62 CLOSED on CI evidence (2026-11-08): all eight profiles validated REAL
-end-to-end, blind-scored, and the motion-prompt contract pinned in the
-suite (251 tests). The audit's P1 is executed: real image-to-video output
-is no longer assumed — it is measured. Carry-forward P2: subject-motion
-vigor on static doctrines (see the record's findings).
+S62 CLOSED on CI evidence (2026-11-08): run 42505390870, 6/6 jobs green on
+e3798f7 (check · coverage · postgres · build · gitleaks · e2e — the unit
+suite at 251 under both check and coverage). All eight profiles validated
+REAL end-to-end, blind-scored, and the motion-prompt contract pinned in
+the suite. The audit's P1 is executed: real image-to-video output is no
+longer assumed — it is measured. Carry-forward P2: subject-motion vigor
+on static doctrines (see the record's findings).
