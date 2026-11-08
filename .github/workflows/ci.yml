@@ -202,7 +202,7 @@ jobs:
 
       # Pass 1 — the clean chain is expected to wedge (42P07 at auth_setting,
       # non-fatally swallowed by postinstall's Postgres branch).
-      - name: Install dependencies (postinstall: generate PG client + deploy attempt 1)
+      - name: "Install dependencies (postinstall: generate PG client + deploy attempt 1)"
         run: npm ci
 
       # Pass 2 — the self-heal fires (the wedge fingerprint is present):
