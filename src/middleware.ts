@@ -41,10 +41,11 @@ const PUBLIC_API = new Set<string>([
   "/api/auth/register",
   "/api/auth/verify-email",
   "/api/auth/reset-password",
-  // TEMPORARY deployment diagnostic (Vercel registration incident) — public
-  // on purpose: it exposes only env-presence booleans and redacted error
-  // text. Remove when the incident is closed.
-  "/api/diag",
+  // S61 — /api/diag LEFT this list: the Vercel registration incident it was
+  // added for is closed (S60 healed the deployment; the S60 record's owner
+  // checklist and the route's own header both called for this). The route
+  // itself stays for AUTHENTICATED incident triage — it now requires a
+  // session/Bearer like every other /api/* endpoint.
   // OAuth redirect target — Google hits it with ?code&state and NO session
   // cookie; the route authenticates via the signed state token instead.
   "/api/youtube/callback",

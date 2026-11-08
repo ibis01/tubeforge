@@ -62,6 +62,28 @@ export async function register(): Promise<void> {
     }
 
     g.__tfInstrumentation = { ok: true, at: new Date().toISOString() };
+
+    // S61 — the encryption-key watchlight (the S60 record's owner-side
+    // finding #1: the Vercel deployment ran without TUBEFORGE_ENCRYPTION_KEY,
+    // so provider-credential encryption and the security card fail closed at
+    // USE time — invisible until something tries to store or read a secret).
+    // Boot is the one guaranteed-loud moment: say it once, per process, with
+    // the exact remediation. Never fatal — see the header's fault-tolerance
+    // law.
+    if (
+      process.env.NODE_ENV === "production" &&
+      (process.env.TUBEFORGE_ENCRYPTION_KEY ?? "").length < 16
+    ) {
+      const encLog = (await import("./lib/tubeforge/log").catch(() => ({ log: null as null }))).log;
+      const message =
+        "TUBEFORGE_ENCRYPTION_KEY is missing or too short (<16 chars) — provider " +
+        "credentials cannot be encrypted or read (they fail closed). Fix: set a " +
+        "securely generated 32+ char key in the deployment's environment settings, " +
+        "then re-store any saved provider credentials.";
+      if (encLog) encLog.warn("encryption key missing — secrets at rest are unavailable", { err: message });
+      // eslint-disable-next-line no-console -- operator-facing boot warning
+      else console.warn("[instrumentation]", message);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const stackLines = ((err instanceof Error ? err.stack : "") ?? "")

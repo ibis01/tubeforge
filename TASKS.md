@@ -2255,3 +2255,25 @@ probe account performed reads only and was deleted through its own front
 door. Landing hygiene deviation, recorded plainly: the owner re-sent the
 SAME S59 token (its second chat transit) as the landing green light —
 rotate it before S61, without fail.
+
+## S61 — PostgreSQL reliability lane + production security closure (opened + executed 2026-11-08 UTC, owner-directed: the 2026-11-08 external audit)
+
+The owner's fresh audit (8 November) confirmed S60 closed on CI evidence
+and ranked the follow-ups. S61 executes every code-side P0 and builds the
+lane whose absence the audit calls the CI blind spot that let the S60
+incident through: "every CI surface runs SQLite; the Postgres path had zero
+automated coverage."
+
+| Task | Status | Notes |
+|---|---|---|
+| T-61.1 close the public /api/diag exposure | ✅ Done (2026-11-08) | Removed from the middleware's PUBLIC_API set (S60's owner checklist + the route's own header both called for it once the heal was confirmed — it was, ~4 min after the S60 deploy). The route itself stays for AUTHENTICATED incident triage. Verified live on the rebuilt sandbox preview: /api/diag → 401 "Authentication required"; /api/auth/status still public 200. |
+| T-61.2 encryption-key watchlight | ✅ Done (2026-11-08) | instrumentation register() logs a loud, remediation-exact warning when NODE_ENV=production boots with TUBEFORGE_ENCRYPTION_KEY missing/short (the S60 record's owner-side finding #1 — the key IS absent on Vercel). Never fatal (the hook's fault-tolerance law). The actual env set + credential re-store remain OWNER actions (Vercel dashboard). |
+| T-61.3 the PostgreSQL CI lane | ✅ Done (2026-11-08) | ci.yml gains the `postgres` job (services: postgres:17): DATABASE_URL set before `npm ci` so postinstall picks prisma/schema.prisma, TWO authentic postinstall passes (clean chain wedges at auth_setting → self-heal), then `scripts/pg-ci-verify.mts` asserts: _prisma_migrations managed · every one of the 18 chain migrations finished · nothing stuck · Setting_pkey on Setting + LegacySetting_pkey on LegacySetting · no surviving Setting_pkey on LegacySetting · Video.qcOverrideAt + Video.contentPolicy exist (the P2022 columns) · the REAL usage sparkline SQL (now shared, T-61.4) runs on PG with seeded boolean roundtrip (NOT "ok", the 42883 fix) · full-select Video create+read (the P2022 query shape). |
+| T-61.4 single-source the sparkline SQL | ✅ Done (2026-11-08) | Extracted the daily-usage sparkline from the route into src/lib/tubeforge/usage-sql.ts (dailyUsageSparkline) — the route and the CI probe call ONE function, so CI verifies the exact production SQL; drift is structurally impossible. The S60 portability law is documented at the single source. |
+| T-61.5 virgin-database deploy bug — found by the new lane's own local drill | ✅ Done (2026-11-08) | Reproducing the CI job locally (embedded Postgres) caught a REAL latent bug: pgRepairMissingInitTables (b8ec16f, built for PARTIAL legacy schemas) ran on a VIRGIN database first — creating VoiceProfile with no _prisma_migrations — so `migrate deploy` refused forever with P3005 ("The database schema is not empty"): a brand-new Postgres deployment could NEVER migrate. Fix: virgin (zero public tables) → deploy directly, no repairs; PLUS the in-run heal — the clean chain wedges at auth_setting MID-deploy (the survivor constraint only exists after stage2 runs), so postgresMigrate now catches the wedge fingerprint, repairs, resolves the stuck row, and redeploys ONCE. Verified end-to-end on embedded PG: one postinstall pass → wedge (P3018/42P07) → repair → all 18 migrations applied → 27/27 battery assertions → second postinstall a clean no-op. Fresh deployments now self-heal within a single build (S60's story took two). |
+| T-61.6 gates | ✅ Done (2026-11-08) | tsc 0 · eslint 0/20 (census unchanged) · unit 247/247 · billing 40/40 · queue 39/39 exit 0 (one first-run ✗ was the live preview server's claim loop winning a race on the shared dev DB — environment interference, clean on rerun) · build 57/57 (the same four documented warnings) · the embedded-PG drill above. |
+
+Owner actions outstanding (unchanged by this stage, restated): set
+TUBEFORGE_ENCRYPTION_KEY on the Vercel deployment and re-store any saved
+credentials; rotate the GitHub PAT through a channel that does not put it
+in chat — S61's push waits for it.

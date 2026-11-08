@@ -1,8 +1,12 @@
-// GET /api/diag — deployment diagnostic (temporary, added while fixing the
-// Vercel registration 500s). Public + rate-limited (middleware). Returns ONLY
-// booleans/protocols and the redacted import/query error text — never env
-// values, never connection strings. Remove from PUBLIC_API when the incident
-// is closed.
+// GET /api/diag — deployment diagnostic (added while fixing the Vercel
+// registration 500s; kept for AUTHENTICATED incident triage). S61 removed it
+// from PUBLIC_API: the S60 record's owner checklist and this file's own
+// header both called for closing the public exposure once the incident was
+// confirmed healed (it was — the DB self-healed ~4 minutes after the S60
+// deploy). Since then a session cookie or Bearer token is required, like
+// every other /api/* endpoint. Returns ONLY booleans/protocols and the
+// redacted import/query error text — never env values, never connection
+// strings.
 import { NextResponse } from "next/server";
 
 const redact = (s: string) =>

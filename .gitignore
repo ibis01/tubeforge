@@ -96,6 +96,9 @@ venv/
 .venv/
 preview/venv/
 
+# local embedded-Postgres harness (S60/S61 repro + CI drill data dir)
+/scripts/pgtest/
+
 # --- container platform artifacts (never commit; a sweep once captured a 469MB bundle) ---
 *.bundle
 /.zscripts/

@@ -181,6 +181,27 @@ async function pgFingerprint(prisma) {
   };
 }
 
+/** S61 — is the auth_setting wedge fingerprint present? (LegacySetting
+ *  carries a PK still named "Setting_pkey" and no Setting table exists —
+ *  the exact post-stage2, pre-auth_setting state.) Shared by the repair's
+ *  guard and by postgresMigrate's clean-chain retry decision. */
+async function pgWedgePresent(prisma) {
+  const survivor = await prisma.$queryRawUnsafe(
+    `SELECT COUNT(*)::int AS n
+       FROM pg_constraint c
+       JOIN pg_class t ON t.oid = c.conrelid
+       JOIN pg_namespace ns ON ns.oid = t.relnamespace
+      WHERE ns.nspname = 'public' AND t.relname = 'LegacySetting'
+        AND c.conname = 'Setting_pkey'`
+  );
+  if (Number(survivor?.[0]?.n ?? 0) === 0) return false;
+  const setting = await prisma.$queryRawUnsafe(
+    `SELECT COUNT(*)::int AS n FROM pg_tables
+      WHERE schemaname = 'public' AND tablename = 'Setting'`
+  );
+  return Number(setting?.[0]?.n ?? 0) === 0;
+}
+
 /** S60 — the auth_setting wedge repair. Postgres's ALTER TABLE … RENAME TO
  * renames the table but NOT its constraints: stage2's Setting →
  * LegacySetting rename leaves a PK still named "Setting_pkey" on
@@ -193,25 +214,96 @@ async function pgFingerprint(prisma) {
  * survivor un-wedges the chain. Idempotent: the guard is exactly the
  * wedge's fingerprint (survivor present, Setting absent). */
 async function pgRepairSettingPkeySurvivor(prisma) {
-  const rows = await prisma.$queryRawUnsafe(
-    `SELECT COUNT(*)::int AS n
-       FROM pg_constraint c
-       JOIN pg_class t ON t.oid = c.conrelid
-       JOIN pg_namespace ns ON ns.oid = t.relnamespace
-      WHERE ns.nspname = 'public' AND t.relname = 'LegacySetting'
-        AND c.conname = 'Setting_pkey'`
-  );
-  if (Number(rows?.[0]?.n ?? 0) === 0) return;
-  const setting = await prisma.$queryRawUnsafe(
-    `SELECT COUNT(*)::int AS n FROM pg_tables
-      WHERE schemaname = 'public' AND tablename = 'Setting'`
-  );
-  if (Number(setting?.[0]?.n ?? 0) > 0) return; // auth_setting-era DB — not our wedge
+  if (!(await pgWedgePresent(prisma))) return;
   log('repair: renaming the surviving "Setting_pkey" constraint on LegacySetting (the auth_setting wedge)');
   execSql(
     "prisma/schema.prisma",
     `ALTER TABLE "LegacySetting" RENAME CONSTRAINT "Setting_pkey" TO "LegacySetting_pkey";`
   );
+}
+
+/** Recovery: a migration row stuck finished_at=NULL / rolled_back_at=NULL
+ *  (a deploy interrupted mid-run — e.g. a cancelled build — or a genuinely
+ *  failing migration) BLOCKS the whole chain: "New migrations cannot be
+ *  applied before the error is recovered from". The transaction already
+ *  rolled the SQL back, so resolving as rolled-back is safe and is
+ *  Prisma's documented production recovery; deploy then retries it. */
+async function pgResolveStuckMigrations(prisma) {
+  const failed = await prisma.$queryRawUnsafe(
+    `SELECT migration_name FROM "_prisma_migrations"
+      WHERE "finished_at" IS NULL AND "rolled_back_at" IS NULL`
+  );
+  for (const row of failed) {
+    log(`failed migration row detected (${row.migration_name}) — resolving as rolled back for retry`);
+    run(["migrate", "resolve", "--rolled-back", String(row.migration_name), "--schema", "prisma/schema.prisma"]);
+  }
+}
+
+/** Baseline + deploy for a Postgres database (see header). Drops nothing:
+ *  `migrate resolve --applied` only RECORDS history; `migrate deploy`
+ *  applies pending migrations from the chain. */
+async function postgresMigrate(prisma) {
+  // S61 — a VIRGIN database (zero public tables) deploys directly. The
+  // repairs exist for PARTIAL legacy schemas; running them on an empty
+  // schema CREATES a table (VoiceProfile) with no _prisma_migrations to
+  // show for it — `migrate deploy` then refuses forever with P3005 ("The
+  // database schema is not empty"), so a brand-new Postgres deployment
+  // could never migrate. Init creates everything; nothing needs repairing.
+  const tableCount = await prisma.$queryRawUnsafe(
+    `SELECT COUNT(*)::int AS n FROM pg_tables WHERE schemaname = 'public'`
+  );
+  const virgin = Number(tableCount?.[0]?.n ?? 0) === 0;
+  if (virgin) log("empty database — deploying the full chain (no repairs apply)");
+  else {
+    await pgRepairMissingInitTables(prisma);
+    await pgRepairSettingPkeySurvivor(prisma);
+  }
+
+  const historyRows = await prisma.$queryRawUnsafe(
+    `SELECT COUNT(*)::int AS n FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = '_prisma_migrations'`
+  );
+  const managed = Number(historyRows?.[0]?.n ?? 0) > 0;
+
+  if (!managed) {
+    const fp = await pgFingerprint(prisma);
+    const prefix = decideBaselinePrefix(BASELINE_SENTINELS, fp.hasTable, fp.hasColumn);
+    if (prefix.length > 0) {
+      log(
+        `unmanaged schema detected (newest sentinel: ${prefix[prefix.length - 1]}) — ` +
+          `baselining ${prefix.length} migration(s) as applied`
+      );
+      for (const migration of prefix) {
+        run(["migrate", "resolve", "--applied", migration, "--schema", "prisma/schema.prisma"]);
+      }
+    } else {
+      log("empty/unfingerprinted database — the full chain will be applied");
+    }
+  } else {
+    await pgResolveStuckMigrations(prisma);
+  }
+
+  try {
+    log("running prisma migrate deploy");
+    run(["migrate", "deploy", "--schema", "prisma/schema.prisma"]);
+  } catch (err) {
+    // S61 — on a VIRGIN database the clean chain is EXPECTED to wedge at
+    // auth_setting: the survivor constraint only comes into existence when
+    // stage2's rename runs MID-DEPLOY, so no pre-deploy repair could catch
+    // it (this is precisely how every chain-walking Postgres got wedged).
+    // The fingerprint is present NOW — repair, resolve the stuck row, and
+    // redeploy once, so a fresh deployment heals within a single build
+    // instead of waiting for the next one.
+    if (virgin && (await pgWedgePresent(prisma))) {
+      log("clean-chain deploy wedged at auth_setting (42P07) — the S60 repair fires mid-chain; redeploying");
+      await pgRepairSettingPkeySurvivor(prisma);
+      await pgResolveStuckMigrations(prisma);
+      log("redeploying the chain after the wedge repair");
+      run(["migrate", "deploy", "--schema", "prisma/schema.prisma"]);
+    } else {
+      throw err;
+    }
+  }
 }
 
 /** Pre-deploy repair for unmanaged legacy databases: the chain assumes the
@@ -221,7 +313,9 @@ async function pgRepairSettingPkeySurvivor(prisma) {
  *  `ALTER TABLE "VoiceProfile" ADD COLUMN …` then fails on a missing
  *  relation, wedging the chain). Creating the missing table in init's exact
  *  shape (CREATE TABLE IF NOT EXISTS — a no-op on healthy databases) lets
- *  the unmodified chain apply cleanly. */
+ *  the unmodified chain apply cleanly. Skipped on VIRGIN databases — see
+ *  postgresMigrate's virgin guard (repairing an empty schema is what
+ *  produced the eternal P3005). */
 async function pgRepairMissingInitTables(prisma) {
   const REPAIRS = [
     {
@@ -254,54 +348,6 @@ async function pgRepairMissingInitTables(prisma) {
       execSql("prisma/schema.prisma", r.sql);
     }
   }
-}
-
-/** Baseline + deploy for a Postgres database (see header). Drops nothing:
- *  `migrate resolve --applied` only RECORDS history; `migrate deploy`
- *  applies pending migrations from the chain. */
-async function postgresMigrate(prisma) {
-  await pgRepairMissingInitTables(prisma);
-  await pgRepairSettingPkeySurvivor(prisma);
-
-  const historyRows = await prisma.$queryRawUnsafe(
-    `SELECT COUNT(*)::int AS n FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_name = '_prisma_migrations'`
-  );
-  const managed = Number(historyRows?.[0]?.n ?? 0) > 0;
-
-  if (!managed) {
-    const fp = await pgFingerprint(prisma);
-    const prefix = decideBaselinePrefix(BASELINE_SENTINELS, fp.hasTable, fp.hasColumn);
-    if (prefix.length > 0) {
-      log(
-        `unmanaged schema detected (newest sentinel: ${prefix[prefix.length - 1]}) — ` +
-          `baselining ${prefix.length} migration(s) as applied`
-      );
-      for (const migration of prefix) {
-        run(["migrate", "resolve", "--applied", migration, "--schema", "prisma/schema.prisma"]);
-      }
-    } else {
-      log("empty/unfingerprinted database — the full chain will be applied");
-    }
-  } else {
-    // Recovery: a migration row stuck finished_at=NULL / rolled_back_at=NULL
-    // (a deploy interrupted mid-run — e.g. a cancelled build — or a genuinely
-    // failing migration) BLOCKS the whole chain: "New migrations cannot be
-    // applied before the error is recovered from". The transaction already
-    // rolled the SQL back, so resolving as rolled-back is safe and is
-    // Prisma's documented production recovery; deploy then retries it.
-    const failed = await prisma.$queryRawUnsafe(
-      `SELECT migration_name FROM "_prisma_migrations"
-        WHERE "finished_at" IS NULL AND "rolled_back_at" IS NULL`
-    );
-    for (const row of failed) {
-      log(`failed migration row detected (${row.migration_name}) — resolving as rolled back for retry`);
-      run(["migrate", "resolve", "--rolled-back", String(row.migration_name), "--schema", "prisma/schema.prisma"]);
-    }
-  }
-
-  log("running prisma migrate deploy");
-  run(["migrate", "deploy", "--schema", "prisma/schema.prisma"]);
 }
 
 async function main() {

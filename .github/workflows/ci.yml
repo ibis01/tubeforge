@@ -156,6 +156,64 @@ jobs:
       - name: "Coverage (floor: 50% aggregate lines on the money paths)"
         run: npm run test:coverage
 
+  # S61 — the PostgreSQL integration lane. The S60 production incident's
+  # lesson: every CI surface ran SQLite, so a Postgres-only migration wedge
+  # (42P07 at auth_setting) and two Postgres-only SQL bugs (42703 unquoted
+  # camelCase, 42883 boolean `ok = 0`) shipped with zero automated coverage.
+  # This job replays the incident end-to-end on a real Postgres 17:
+  #   pass 1 (npm ci's postinstall + the explicit step below): a CLEAN
+  #     database walks the chain and is EXPECTED to wedge at auth_setting —
+  #     postinstall is non-fatal for Postgres by design, so this prints the
+  #     warning and continues (the exact production story).
+  #   pass 2: the self-heal (pgRepairSettingPkeySurvivor → stuck-row resolve
+  #     → migrate deploy) completes the chain.
+  #   pg-ci-verify.mts then asserts the healed state + probes the usage
+  #     sparkline SQL (the real shared function) and the full-select Video
+  #     query — the two shapes that 500'd production.
+  postgres:
+    name: PostgreSQL integration (migrations + wedge recovery)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: tf
+          POSTGRES_PASSWORD: tf
+          POSTGRES_DB: tubeforge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tf -d tubeforge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Set BEFORE npm ci so postinstall picks prisma/schema.prisma and
+      # generates the Postgres client (the check/build jobs stay SQLite).
+      DATABASE_URL: postgres://tf:tf@localhost:5432/tubeforge
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Pass 1 — the clean chain is expected to wedge (42P07 at auth_setting,
+      # non-fatally swallowed by postinstall's Postgres branch).
+      - name: Install dependencies (postinstall: generate PG client + deploy attempt 1)
+        run: npm ci
+
+      # Pass 2 — the self-heal fires (the wedge fingerprint is present):
+      # repair → resolve → deploy → the chain completes.
+      - name: Deploy attempt 2 — the S60 self-heal (repair → resolve → deploy)
+        run: node scripts/postinstall.mjs
+
+      # The gate — fails the job on any regression.
+      - name: Verify healed chain + provider portability (S60 regression battery)
+        run: node --import tsx scripts/pg-ci-verify.mts
+
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-24.04

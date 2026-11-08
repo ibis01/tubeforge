@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { rawDatabase as rawDb } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { usageBytes, storageQuotaBytes, storageDriverKind } from "@/lib/tubeforge/storage";
+import { dailyUsageSparkline } from "@/lib/tubeforge/usage-sql";
 
 export async function GET(req: NextRequest) {
   const auth = await requireUser(req);
@@ -79,18 +80,11 @@ export async function GET(req: NextRequest) {
     byCapability.set(row.capability, entry);
   }
 
-  // Daily call volume for the sparkline. S60 portability: every identifier
-  // is quoted (Postgres folds unquoted camelCase to lowercase — 42703 —
-  // and SQLite accepts standard double-quoted identifiers), and the failure
-  // predicate is `NOT ok`, which is boolean on Postgres and 0/1 on SQLite
-  // (`ok = 0` is a type error on Postgres booleans). Verified on both
-  // providers in the S60 record.
-  const daily = await rawDb.$queryRaw<{ day: string; calls: bigint; failures: bigint }[]>`
-    SELECT substr(CAST("createdAt" AS TEXT), 1, 10) AS day, COUNT(*) AS calls,
-           SUM(CASE WHEN NOT "ok" THEN 1 ELSE 0 END) AS failures
-    FROM "UsageRecord"
-    WHERE "userId" = ${userId} AND "createdAt" >= ${since}
-    GROUP BY day ORDER BY day ASC`;
+  // Daily call volume for the sparkline. S61: the SQL lives in
+  // usage-sql.ts — one source of truth shared with the PostgreSQL CI lane's
+  // portability probe, so the exact production query is what CI verifies.
+  // The portability law (quoted identifiers + NOT "ok") is documented there.
+  const daily = await dailyUsageSparkline(rawDb, userId, since);
 
   const totalCalls = [...byCapability.values()].reduce((a, c) => a + c.calls, 0);
   const totalCostMicroUsd = [...byCapability.values()].reduce((a, c) => a + c.costMicroUsd, 0);
@@ -106,11 +100,7 @@ export async function GET(req: NextRequest) {
       costUsd: totalCostMicroUsd / 1e6,
     },
     capabilities: [...byCapability.values()].sort((a, b) => b.calls - a.calls),
-    daily: daily.map((d) => ({
-      day: d.day,
-      calls: Number(d.calls),
-      failures: Number(d.failures),
-    })),
+    daily,
     storage: {
       driver: storageDriverKind(),
       usedBytes: storageUsed,
