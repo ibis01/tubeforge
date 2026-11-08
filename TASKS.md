@@ -2355,4 +2355,16 @@ uncommitted stage work does not exist).
 | T-64.6 render.ts — chromium rasterizer + FFmpeg assembly | ✅ Done (2026-11-09) | chromium with ALL network routes aborted (security line 2) rasterizing per-frame state from OUR pure plan; page-registered id maps (window.__wbDraw/__wbText — the namespace seam: frame-plan keys are "::"-keyed while page ids are "--"-namespaced, and the original applier's bare getElementById(key) silently missed EVERY element); the paper-dots surface texture (a 99%-blank canvas measured mean \|Δluma\| 0.3–0.6 against the ~1.0 freezedetect floor — the texture gives the camera drift purchase on every pixel, and is canonical whiteboard craft); FFmpeg scene encode + concat + the house music bed with the solo-bed loudness law (no VO → bed at full −16 LUFS gain, not the ducked 0.16 — the ducked solo bed measured −32.1 LUFS). |
 | T-64.7 unit contracts | ✅ Done (2026-11-09) | 40 S64 contracts in the house suite (sanitizer 7 · grammar 11 · storyboard 7 · timing 10 · assets 3 · renderer 2). Suite 253 → 293, all green. Bring-up caught two real engine defects (the extractAsset regex; the Z-length pin was the test's own arithmetic) — receipts in the record §4. |
 | T-64.8 the 60-second benchmark | ✅ Done (2026-11-09) | 63.88s · 5 scenes · 1920×1080 · 24fps from scripts/s64-whiteboard-benchmark.mts; render 171s; QC: ALL LENSES PASS (playable · black-frames · frozen-frames · aspect · loudness · true-peak · loudness-range · dead-air · static-shots · flicker · stutter · tail-fade; cut-alignment honestly unmeasured — no timeline doc). The QC journey is the stage's spine: 16 frozen runs → 5 (fill law + resting pen + solo-bed gain) → 1 (drift + paper-dots texture + ease-out entry) → 0 (settle window 4.5s + darker dots). Pixel forensics: heart+labels 13.6% ink at t=20s, title/heart zones drawing at t=8s, dot-grid periodicity confirmed. Evidence: validation/s64/ (manifest + project.json committed; binaries gitignored). Narration timing is the honest 2.6-wps estimate — the gateway outage holds. |
-| T-64.9 landing + CI evidence | 🚀 in flight (2026-11-09) | Local gates on the exact tree ALL GREEN first: tsc 0 · eslint 0 errors/20 warnings (census unchanged) · unit 293/293 · billing 40/40 · queue restart-recovery PASS · build ✓. The feat commit is being pushed; this row closes with the real CI run number when green. |
+| T-64.9 landing + CI evidence | ✅ Done (2026-11-09) | `83aa7d3` pushed; run 42534021634 GREEN 6/6 (gitleaks · postgres · Typecheck/Lint/Unit · coverage · build · e2e) — unit suite 293 under both check and coverage lanes. Local gates on the exact tree first: tsc 0 · eslint 0 errors/20 warnings (census unchanged) · unit 293/293 · billing 40/40 · queue restart-recovery PASS · build ✓. |
+
+S64 CLOSED on CI evidence (2026-11-09): the native whiteboard engine —
+pure SVG geometry, deterministic frame plans, the path-following pen,
+keyframed camera under a permanent drift, the paper-dots surface —
+renders a 63.88s 1080p MP4 through chromium + FFmpeg with ZERO
+generation APIs, and the benchmark passes every applicable house QC
+lens. The plan's formal E0 deliverable (WHITEBOARD_ENGINE_AUDIT.md)
+lands in the follow-up docs commit; the next engineering milestone per
+the plan is E1 — the technical design doc that formalizes the
+product-integration phase (a `whiteboard-render` JobKind joining the
+20 registered kinds, the editor surface, the asset-library phase, and
+real-VO synchronization once the gateway clears).
