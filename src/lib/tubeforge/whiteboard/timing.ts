@@ -366,6 +366,40 @@ export function frameCount(durationMs: number, fps: number): number {
   return Math.max(1, Math.round((durationMs / 1000) * fps));
 }
 
+// ---------------------------------------------------------------------------
+// S65 (E1) — the render frame budget (pure, so CI can pin it).
+//
+// The renderer MUST refuse a project whose estimated frame count exceeds
+// this budget BEFORE chromium launches (E0 audit §6 risk 4: chromium memory
+// on 4GB workers for long videos). 25,920 frames = 18 min at 24 fps — the
+// validator's explicit-duration budgets (storyboard.ts WB_BUDGETS) already
+// cap author intent at 15 min; this is the hard wall that also bounds
+// VO-measured durations the validator cannot see. Arithmetic for the
+// record: 24 fps × 1080 s = 25,920; a 30 fps project hits it at 14.4 min.
+// ---------------------------------------------------------------------------
+
+export const WB_RENDER_FRAME_BUDGET = 25_920;
+
+/**
+ * Total estimated frames for a project — the exact durations the renderer
+ * will use (explicit > VO-measured > narration estimate), so the pre-flight
+ * and the render loop can never disagree. Pure: the caller supplies VO
+ * durations (renderer-side ffprobe); this module stays pure.
+ */
+export function estimateProjectFrames(
+  project: WhiteboardProject,
+  voMsBySceneId: Map<string, number>
+): { totalFrames: number; sceneMs: number[] } {
+  const sceneMs: number[] = [];
+  let totalFrames = 0;
+  for (const scene of project.scenes) {
+    const ms = sceneDurationMs(scene, voMsBySceneId.get(scene.id) ?? null);
+    sceneMs.push(ms);
+    totalFrames += frameCount(ms, project.fps);
+  }
+  return { totalFrames, sceneMs };
+}
+
 /** Build the asset geometry map from raw path data (renderer-agnostic). */
 export function buildGeometry(
   assets: { id: string; paths: { id: string; d: string }[] }[]

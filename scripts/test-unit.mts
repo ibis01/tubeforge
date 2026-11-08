@@ -6961,6 +6961,246 @@ await test("S64 render: the applier resolves frame-plan keys through the registe
   );
 });
 
+// ─── S65 — Whiteboard E1: the id-charset law + the resource budgets ───
+//
+// The E0 audit's §6 risks 2–4, pinned: the renderer's namespace seam
+// (`${assetId}--${pathId}` DOM ids, `assetId::pathId` frame-plan keys) can
+// never be fed a corrupting id, and every unbounded dimension of a project
+// (placements, events, camera keys, scenes, durations, frames, path
+// commands) now has a wall with a name.
+
+suiteStart("S65 whiteboard — E1: the id-charset law");
+
+await test("S65 charset: validWhiteboardId accepts legal ids and rejects the namespace separators + exotics", async () => {
+  const { validWhiteboardId } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  ok(validWhiteboardId("a"), "single letter");
+  ok(validWhiteboardId("hm-outline"), "single hyphens are legal (the starter library's own convention)");
+  ok(validWhiteboardId("p_1.x"), "underscore + dot");
+  ok(validWhiteboardId("_lead"), "leading underscore");
+  ok(validWhiteboardId("x".repeat(64)), "64 chars is the ceiling");
+  ok(!validWhiteboardId("a--b"), "double hyphen would corrupt the DOM id seam");
+  ok(!validWhiteboardId("a::b"), "double colon would corrupt the frame-plan key seam");
+  ok(!validWhiteboardId("a b"), "spaces break DOM addressing");
+  ok(!validWhiteboardId(".dot"), "must start alnum/underscore");
+  ok(!validWhiteboardId("x".repeat(65)), "over the 64-char ceiling");
+  ok(!validWhiteboardId(""), "empty is not an id");
+});
+
+await test("S65 charset: the project validator rejects scene ids that break the law (missing ids still default)", async () => {
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const bad = validateWhiteboardProject(wbProject([{ ...WB_SCENE, id: "scene--1" }]), WB_LIB);
+  ok(bad.project === null, "a `--` scene id must null the project");
+  ok(bad.errors.some((e) => e.includes("id charset")), `errors: ${bad.errors.join("; ")}`);
+
+  const colon = validateWhiteboardProject(wbProject([{ ...WB_SCENE, id: "s::1" }]), WB_LIB);
+  ok(colon.project === null && colon.errors.some((e) => e.includes("id charset")), "`::` rejected");
+
+  // The default path is untouched: a MISSING id still gets scene-N.
+  const { ...noId } = WB_SCENE;
+  delete (noId as Record<string, unknown>).id;
+  const defaulted = validateWhiteboardProject(wbProject([noId]), WB_LIB);
+  ok(defaulted.project !== null, "missing id still parses");
+  eq(defaulted.project?.scenes[0].id, "scene-1");
+
+  // Legal explicit ids pass through verbatim.
+  const legal = validateWhiteboardProject(wbProject([{ ...WB_SCENE, id: "intro-shot_2" }]), WB_LIB);
+  eq(legal.project?.scenes[0].id, "intro-shot_2");
+});
+
+await test("S65 charset: extractAsset excludes corrupting ids from the drawable index and reports them", async () => {
+  const { extractAsset } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const ex = extractAsset({
+    id: "x",
+    viewBox: { w: 10, h: 10 },
+    tags: [],
+    svg:
+      '<path id="ok-1" d="M 0 0 L 3 3"/>' +
+      '<path id="bad--sep" d="M 0 0 L 3 3"/>' +
+      '<path id="bad::sep" d="M 0 0 L 3 3"/>' +
+      '<text id="bad space" x="5" y="6" font-size="12">Hi</text>' +
+      '<text id="ok-t" x="5" y="6" font-size="12">Hi</text>',
+  });
+  eq(ex.paths.map((p) => p.id), ["ok-1"], "only the charset-legal path is drawable");
+  eq(ex.texts.map((t) => t.id), ["ok-t"], "only the charset-legal text is drawable");
+  eq(
+    ex.rejected.map((r) => `${r.kind}:${r.reason}`).sort(),
+    ["path:id-charset", "path:id-charset", "text:id-charset"],
+    "every exclusion is surfaced with its reason"
+  );
+});
+
+await test("S65 charset: the starter library is clean under the law (nothing rejected, no separator ids in the index)", async () => {
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  for (const ex of lib.extracted.values()) {
+    eq(ex.rejected, [], `${ex.asset.id}: the built-in asset must be fully drawable`);
+  }
+  for (const ids of [...lib.libraryIndex.pathIdsByAsset.values(), ...lib.libraryIndex.textIdsByAsset.values()]) {
+    for (const id of ids) {
+      ok(!id.includes("--") && !id.includes("::"), `index id "${id}" must respect the namespace law`);
+    }
+  }
+  for (const assetId of lib.libraryIndex.assetIds) {
+    ok(!assetId.includes("--") && !assetId.includes("::"), `asset id "${assetId}" must respect the namespace law`);
+  }
+});
+
+suiteStart("S65 whiteboard — E1: the resource budgets");
+
+await test("S65 budgets: the per-path command budget counts through the real grammar (implicit repeats included)", async () => {
+  const { extractAsset, WB_PATH_COMMAND_BUDGET } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const { countPathCommands } = await import("../src/lib/tubeforge/whiteboard/svg");
+  // The unit of account is EXPANDED commands: `M 0 0 L p1 p2 …` is
+  // 1 (M) + N (implicit L repeats) commands. countPathCommands is pinned
+  // directly first, then through the extraction gate.
+  eq(countPathCommands("M 0 0 L 0 0 1 1 2 2"), 4, "M + 3 implicit L repeats");
+  eq(countPathCommands("M 0 0 L 3 3 Z"), 3, "Z counts as one command");
+  eq(countPathCommands("M 0 0"), 1, "a lone moveto");
+
+  // Over the wall: M + 512 implicit repeats = 513 commands.
+  const pairs = (n: number) =>
+    Array.from({ length: n }, (_, i) => `${i} ${i}`).join(" ");
+  const over = extractAsset({
+    id: "x",
+    viewBox: { w: 10, h: 10 },
+    tags: [],
+    svg: `<path id="p" d="M 0 0 L ${pairs(WB_PATH_COMMAND_BUDGET)}"/>`,
+  });
+  eq(over.paths, [], "an over-budget path is not drawable");
+  eq(over.rejected, [{ kind: "path", id: "p", reason: "path-commands" }], "the exclusion is surfaced");
+
+  // Exactly at the wall: M + 511 implicit repeats = 512 commands passes.
+  const at = extractAsset({
+    id: "x",
+    viewBox: { w: 10, h: 10 },
+    tags: [],
+    svg: `<path id="p" d="M 0 0 L ${pairs(WB_PATH_COMMAND_BUDGET - 1)}"/>`,
+  });
+  eq(at.paths.length, 1, "a path at exactly the budget is drawable");
+  eq(at.rejected, []);
+});
+
+await test("S65 budgets: per-scene caps — placements, animations, camera keys", async () => {
+  const { validateWhiteboardProject, WB_BUDGETS } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const placements = (n: number) =>
+    Array.from({ length: n }, () => ({ assetId: "a1", placement: { x: 0, y: 0, scale: 1, rotateDeg: 0 } }));
+
+  // Over the placements wall → but only ONE distinct asset is placeable per
+  // scene (the double-placement law), so over-budget is proven via raw count
+  // with unknown assets: the budget error fires FIRST.
+  const overPlacements = validateWhiteboardProject(
+    wbProject([{ ...WB_SCENE, placements: placements(WB_BUDGETS.placementsPerScene + 1) }]),
+    WB_LIB
+  );
+  ok(
+    overPlacements.errors.some((e) => e.includes("placements exceed")),
+    `errors: ${overPlacements.errors.join("; ")}`
+  );
+
+  const anims = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ type: "draw_path", assetId: "a1", pathId: "p1", startMs: i, durationMs: 100 }));
+  const overAnims = validateWhiteboardProject(
+    wbProject([{ ...WB_SCENE, animations: anims(WB_BUDGETS.animationsPerScene + 1) }]),
+    WB_LIB
+  );
+  ok(overAnims.errors.some((e) => e.includes("animation events exceed")), `errors: ${overAnims.errors.join("; ")}`);
+
+  const cams = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ cx: 960, cy: 540, scale: 1, startMs: i * 100, durationMs: 100 }));
+  const overCams = validateWhiteboardProject(
+    wbProject([{ ...WB_SCENE, camera: cams(WB_BUDGETS.cameraKeysPerScene + 1) }]),
+    WB_LIB
+  );
+  ok(overCams.errors.some((e) => e.includes("camera keyframes exceed")), `errors: ${overCams.errors.join("; ")}`);
+
+  // AT the wall everything passes.
+  const atWalls = validateWhiteboardProject(
+    wbProject([{
+      ...WB_SCENE,
+      animations: anims(WB_BUDGETS.animationsPerScene),
+      camera: cams(WB_BUDGETS.cameraKeysPerScene),
+    }]),
+    WB_LIB
+  );
+  ok(atWalls.project !== null, `at-budget project parses: ${atWalls.errors.join("; ")}`);
+});
+
+await test("S65 budgets: project caps — scenes, explicit scene duration, Σ explicit durations", async () => {
+  const { validateWhiteboardProject, WB_BUDGETS } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const nScenes = (n: number, extra: Partial<WhiteboardScene> = {}) =>
+    wbProject(Array.from({ length: n }, (_, i) => ({ ...WB_SCENE, id: `s${i + 1}`, ...extra })));
+
+  eq(validateWhiteboardProject(nScenes(WB_BUDGETS.scenesPerProject), WB_LIB).project?.scenes.length, WB_BUDGETS.scenesPerProject, "24 scenes parse");
+  const overScenes = validateWhiteboardProject(nScenes(WB_BUDGETS.scenesPerProject + 1), WB_LIB);
+  ok(overScenes.project === null && overScenes.errors.some((e) => e.includes("scene project budget")), `errors: ${overScenes.errors.join("; ")}`);
+
+  const overSceneDur = validateWhiteboardProject(
+    wbProject([{ ...WB_SCENE, durationMs: WB_BUDGETS.sceneDurationMsMax + 1 }]),
+    WB_LIB
+  );
+  ok(overSceneDur.errors.some((e) => e.includes("durationMs")), `errors: ${overSceneDur.errors.join("; ")}`);
+  ok(
+    validateWhiteboardProject(wbProject([{ ...WB_SCENE, durationMs: WB_BUDGETS.sceneDurationMsMax }]), WB_LIB).project !== null,
+    "a scene at exactly 120s parses"
+  );
+
+  // Σ explicit: 8 scenes × 113s = 904s > the 900s wall.
+  const overTotal = validateWhiteboardProject(nScenes(8, { durationMs: 113_000 }), WB_LIB);
+  ok(overTotal.project === null && overTotal.errors.some((e) => e.includes("project budget")), `errors: ${overTotal.errors.join("; ")}`);
+  // 8 × 112.5s = 900s exactly — at the wall passes.
+  ok(validateWhiteboardProject(nScenes(8, { durationMs: 112_500 }), WB_LIB).project !== null, "Σ 900s exactly parses");
+});
+
+await test("S65 budgets: the pure frame estimator — duration priority, arithmetic, and the render wall", async () => {
+  const { estimateProjectFrames, WB_RENDER_FRAME_BUDGET } = await import("../src/lib/tubeforge/whiteboard/timing");
+  // One explicit-duration scene, one VO-driven scene, one estimate-driven scene.
+  const proj: WhiteboardProject = {
+    title: "t", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 },
+    scenes: [
+      { ...WB_SCENE, id: "explicit", durationMs: 10_000, animations: [] },
+      { ...WB_SCENE, id: "vo-driven", animations: [] },
+      { ...WB_SCENE, id: "estimated", animations: [] },
+    ],
+  };
+  const vo = new Map([["vo-driven", 20_000]]); // 20s VO → 20.35s effective
+  const { totalFrames, sceneMs } = estimateProjectFrames(proj, vo);
+  eq(sceneMs[0], 10_000, "explicit wins over everything");
+  eq(sceneMs[1], 20_350, "VO (+350ms tail) wins over the estimate");
+  // estimateNarrationMs("hello world") = 2 words / 2.6wps ≈ 769ms → clamped to the 4000ms floor.
+  eq(sceneMs[2], 4_000, "narration estimate with the floor clamp");
+  eq(totalFrames, Math.round((10_000 / 1000) * 24) + Math.round((20_350 / 1000) * 24) + Math.round((4_000 / 1000) * 24), "the total is the Σ of scene frames");
+
+  // The wall: 24 scenes × 80s explicit = 46,080 frames > 25,920 (the
+  // validator's Σ-900s cap cannot see this hand-built project object —
+  // the RENDER pre-flight is the wall that catches it).
+  const huge: WhiteboardProject = {
+    ...proj,
+    scenes: Array.from({ length: 24 }, (_, i) => ({ ...WB_SCENE, id: `s${i + 1}`, durationMs: 80_000, animations: [] })),
+  };
+  const est = estimateProjectFrames(huge, new Map());
+  eq(est.totalFrames, 46_080, "24 × 80s × 24fps arithmetic");
+  ok(est.totalFrames > WB_RENDER_FRAME_BUDGET, "over the wall");
+});
+
+await test("S65 budgets: renderWhiteboard refuses an over-budget project BEFORE chromium launches", async () => {
+  const { renderWhiteboard } = await import("../src/lib/tubeforge/whiteboard/render");
+  const huge: WhiteboardProject = {
+    title: "t", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 },
+    scenes: Array.from({ length: 24 }, (_, i) => ({
+      ...WB_SCENE, id: `s${i + 1}`, durationMs: 80_000, animations: [],
+    })),
+  };
+  let threw: unknown = null;
+  try {
+    // No voFiles → no ffprobe; the pre-flight throws before playwright is
+    // even imported (the dynamic import sits AFTER the budget check).
+    await renderWhiteboard(huge, { outDir: "/tmp/s65-budget-guard-test" });
+  } catch (err) {
+    threw = err;
+  }
+  ok(threw instanceof Error && /frame budget/.test(threw.message), `expected the budget wall, got: ${String(threw)}`);
+});
+
 console.log(`\n${"─".repeat(56)}`);
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);

@@ -120,6 +120,21 @@ export const TOKENS_PER_CMD: Readonly<Record<string, number>> = {
   M: 2, L: 2, H: 1, V: 1, C: 6, S: 4, Q: 4, T: 2, A: 7, Z: 0,
 };
 
+/** S65 (E1): the EXPANDED command count of a path — parsePathData groups a
+ *  command letter with all its implicit-repeat numbers into one entry, so
+ *  the real cost (what the flattener and the rasterizer pay) is the number
+ *  of complete coordinate groups, not the number of letters. Z counts as
+ *  one command (it consumes no tokens). This is the per-path budget's
+ *  unit of account. */
+export function countPathCommands(d: string): number {
+  let n = 0;
+  for (const c of parsePathData(d)) {
+    const per = TOKENS_PER_CMD[c.cmd.toUpperCase()] ?? 2;
+    n += per === 0 ? 1 : Math.max(1, Math.floor(c.args.length / per));
+  }
+  return n;
+}
+
 function cubicAt(p0: Point, p1: Point, p2: Point, p3: Point, t: number): Point {
   const u = 1 - t;
   return {

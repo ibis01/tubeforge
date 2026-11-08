@@ -98,6 +98,47 @@ export interface ValidationResult {
   errors: string[];
 }
 
+// -------------------------------------------------------------------------
+// S65 (E1) — the id-charset law + the resource budgets.
+//
+// The renderer namespaces DOM ids as `${assetId}--${pathId}` and frame-plan
+// keys as `assetId::pathId` (render.ts composeScene / the applier's id
+// maps). An id carrying either separator — or characters outside this
+// charset — corrupts that seam. The law applies at BOTH layers: the
+// library loader excludes violating ids from the drawable index, and the
+// project validator rejects them here (defense in depth: a hand-edited
+// project JSON is untrusted input like any other).
+// -------------------------------------------------------------------------
+
+/** Legal whiteboard id: starts alnum/underscore, then alnum/_.- , ≤ 64
+ *  chars, and never contains the namespace separators `--` / `::`. */
+export const WB_ID_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/;
+
+export function validWhiteboardId(id: string): boolean {
+  return WB_ID_RE.test(id) && !id.includes("--") && !id.includes("::");
+}
+
+/** E1 resource budgets — the E0 audit §6 risks 2 + 4, pinned as constants
+ *  so the validator, the tests, and WHITEBOARD_ENGINE_DESIGN.md §6 cite
+ *  ONE source. Per-path command + per-asset totals live in assets.ts
+ *  (extraction-time); the frame budget lives in timing.ts (render
+ *  pre-flight). */
+export const WB_BUDGETS = {
+  /** Max scenes per project. */
+  scenesPerProject: 24,
+  /** Max asset placements per scene. */
+  placementsPerScene: 64,
+  /** Max animation events per scene. */
+  animationsPerScene: 256,
+  /** Max camera keyframes per scene. */
+  cameraKeysPerScene: 32,
+  /** Max EXPLICIT scene duration (narration estimates clamp lower). */
+  sceneDurationMsMax: 120_000,
+  /** Max Σ explicit scene durations (VO-measured totals are bounded at
+   *  render pre-flight by the frame budget instead). */
+  projectExplicitDurationMsMax: 900_000,
+} as const;
+
 function isPlacement(v: unknown): v is Placement {
   if (typeof v !== "object" || v === null) return false;
   const p = v as Record<string, unknown>;
@@ -136,17 +177,46 @@ export function validateWhiteboardProject(
   if (!Array.isArray(p.scenes) || p.scenes.length === 0) {
     return { project: null, errors: ["scenes must be a non-empty array"] };
   }
+  if (p.scenes.length > WB_BUDGETS.scenesPerProject) {
+    return {
+      project: null,
+      errors: [`scenes: ${p.scenes.length} exceeds the ${WB_BUDGETS.scenesPerProject}-scene project budget`],
+    };
+  }
+  let explicitDurationTotalMs = 0;
   for (let i = 0; i < p.scenes.length; i++) {
     const s = p.scenes[i] as Record<string, unknown>;
     const id = typeof s.id === "string" && s.id ? s.id : `scene-${i + 1}`;
+    // S65: an EXPLICIT id must respect the namespace charset (a missing id
+    // still gets the safe default). `--`/`::` would corrupt the renderer's
+    // id seam; stray characters would break DOM addressing.
+    if (typeof s.id === "string" && s.id && !validWhiteboardId(s.id)) {
+      errors.push(`scene ${i + 1}: id "${s.id.slice(0, 40)}" violates the id charset (namespace separators --/:: and exotic characters are forbidden)`);
+      continue;
+    }
     if (typeof s.narration !== "string" || !s.narration.trim()) {
       errors.push(`scene ${i + 1}: narration missing`);
       continue;
     }
+    if (
+      typeof s.durationMs === "number" &&
+      (s.durationMs > WB_BUDGETS.sceneDurationMsMax || s.durationMs <= 0)
+    ) {
+      errors.push(`scene ${i + 1}: durationMs ${s.durationMs} is outside the (0, ${WB_BUDGETS.sceneDurationMsMax}] budget`);
+      continue;
+    }
+    if (typeof s.durationMs === "number" && s.durationMs > 0) {
+      explicitDurationTotalMs += s.durationMs;
+    }
     const background = s.background === "#f8f5ee" ? "#f8f5ee" : "#ffffff";
     const placements: WhiteboardAssetPlacement[] = [];
     const seenAssets = new Set<string>();
-    for (const pl of Array.isArray(s.placements) ? s.placements : []) {
+    const rawPlacements = Array.isArray(s.placements) ? s.placements : [];
+    if (rawPlacements.length > WB_BUDGETS.placementsPerScene) {
+      errors.push(`scene ${i + 1}: ${rawPlacements.length} placements exceed the ${WB_BUDGETS.placementsPerScene}/scene budget`);
+      continue;
+    }
+    for (const pl of rawPlacements) {
       const e = pl as Record<string, unknown>;
       if (typeof e.assetId !== "string" || !library.assetIds.has(e.assetId)) {
         errors.push(`scene ${i + 1}: unknown asset "${String(e.assetId)}"`);
@@ -168,7 +238,12 @@ export function validateWhiteboardProject(
       });
     }
     const animations: AnimationEvent[] = [];
-    for (const a of Array.isArray(s.animations) ? s.animations : []) {
+    const rawAnimations = Array.isArray(s.animations) ? s.animations : [];
+    if (rawAnimations.length > WB_BUDGETS.animationsPerScene) {
+      errors.push(`scene ${i + 1}: ${rawAnimations.length} animation events exceed the ${WB_BUDGETS.animationsPerScene}/scene budget`);
+      continue;
+    }
+    for (const a of rawAnimations) {
       const e = a as Record<string, unknown>;
       const type = String(e.type);
       const assetOk = typeof e.assetId === "string" && library.assetIds.has(e.assetId);
@@ -214,7 +289,12 @@ export function validateWhiteboardProject(
       }
     }
     const camera: CameraEvent[] = [];
-    for (const c of Array.isArray(s.camera) ? s.camera : []) {
+    const rawCamera = Array.isArray(s.camera) ? s.camera : [];
+    if (rawCamera.length > WB_BUDGETS.cameraKeysPerScene) {
+      errors.push(`scene ${i + 1}: ${rawCamera.length} camera keyframes exceed the ${WB_BUDGETS.cameraKeysPerScene}/scene budget`);
+      continue;
+    }
+    for (const c of rawCamera) {
       const e = c as Record<string, unknown>;
       if (
         typeof e.cx !== "number" || !Number.isFinite(e.cx) ||
@@ -242,6 +322,10 @@ export function validateWhiteboardProject(
     });
   }
   if (errors.length > 0 || scenes.length === 0) return { project: null, errors };
+  if (explicitDurationTotalMs > WB_BUDGETS.projectExplicitDurationMsMax) {
+    errors.push(`Σ explicit scene durations ${Math.round(explicitDurationTotalMs / 1000)}s exceeds the ${WB_BUDGETS.projectExplicitDurationMsMax / 1000}s project budget`);
+    return { project: null, errors };
+  }
 
   const handScale = typeof p.hand === "object" && p.hand !== null && typeof (p.hand as Record<string, unknown>).scale === "number"
     ? Math.max(0.2, Math.min(4, (p.hand as Record<string, unknown>).scale as number))

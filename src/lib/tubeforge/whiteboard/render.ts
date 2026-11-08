@@ -19,10 +19,11 @@ import { promisify } from "util";
 import { HAND_TIP, loadLibrary, type WhiteboardAsset } from "./assets";
 import {
   buildGeometry,
+  estimateProjectFrames,
   frameAt,
   frameCount,
   scheduleScene,
-  sceneDurationMs,
+  WB_RENDER_FRAME_BUDGET,
   type FrameState,
 } from "./timing";
 import type { WhiteboardProject, WhiteboardScene } from "./storyboard";
@@ -221,6 +222,29 @@ export async function renderWhiteboard(
   project: WhiteboardProject,
   opts: RenderWhiteboardOptions
 ): Promise<{ scenes: SceneRenderResult[]; file: string }> {
+  // S65 (E1) pre-flight — the frame budget. Compute every scene's duration
+  // the EXACT way the loop below will (explicit > VO-measured > narration
+  // estimate, via the shared pure estimator), then refuse the project
+  // BEFORE chromium launches: a 4GB worker must never learn about an
+  // unbounded render from the OOM killer.
+  const voMsBySceneId = new Map<string, number>();
+  let anyVoAudio = false;
+  for (const scene of project.scenes) {
+    const voPath = opts.voFiles?.get(scene.id) ?? null;
+    if (!voPath) continue;
+    anyVoAudio = true;
+    const voDurSec = await probeDurationSec(voPath);
+    if (voDurSec !== null) voMsBySceneId.set(scene.id, voDurSec * 1000);
+  }
+  const { totalFrames, sceneMs } = estimateProjectFrames(project, voMsBySceneId);
+  if (totalFrames > WB_RENDER_FRAME_BUDGET) {
+    throw new Error(
+      `whiteboard project exceeds the render frame budget: ${totalFrames} frames ` +
+        `(~${(sceneMs.reduce((a, b) => a + b, 0) / 1000).toFixed(0)}s at ${project.fps}fps) ` +
+        `against the ${WB_RENDER_FRAME_BUDGET}-frame wall (18 min at 24fps) — split the project or shorten scenes`
+    );
+  }
+
   const { chromium } = await import("playwright");
   const lib = loadLibrary();
   const geometry = buildGeometry(
@@ -243,14 +267,13 @@ export async function renderWhiteboard(
   };
 
   const sceneFiles: SceneRenderResult[] = [];
-  let anyVoAudio = false;
   try {
     for (let si = 0; si < project.scenes.length; si++) {
       const scene = project.scenes[si];
-      const voPath = opts.voFiles?.get(scene.id) ?? null;
-      if (voPath) anyVoAudio = true;
-      const voDurSec = voPath ? await probeDurationSec(voPath) : null;
-      const durationMs = sceneDurationMs(scene, voDurSec !== null ? voDurSec * 1000 : null);
+      // Pre-flight already probed every VO and computed the durations the
+      // estimator returned — reuse them so budget and render agree by
+      // construction (never re-probe, never diverge).
+      const durationMs = sceneMs[si];
       const events = scheduleScene(scene, durationMs, geometry);
       const frames = frameCount(durationMs, project.fps);
 
@@ -331,6 +354,7 @@ export async function renderWhiteboard(
       }
 
       // Encode the scene: frames (+ VO when present). Music joins at assembly.
+      const voPath = opts.voFiles?.get(scene.id) ?? null;
       const sceneFile = path.join(opts.outDir, `scene-${si + 1}.mp4`);
       const durSec = frames / project.fps;
       const args: string[] = [

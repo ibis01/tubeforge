@@ -9,8 +9,9 @@
 // the categorized education/science/business/history library is the
 // dedicated asset phase (plan §C / Phase 2). Coordinates are asset-space
 // (see each viewBox); the scene places them via Placement.
-import { sanitizeSvg } from "./svg";
+import { countPathCommands, sanitizeSvg } from "./svg";
 import { TEXT_CHARS_BY_ID, TEXT_IDS_BY_ASSET, TEXT_ANCHORS } from "./timing";
+import { validWhiteboardId } from "./storyboard";
 
 export interface WhiteboardAsset {
   id: string;
@@ -113,13 +114,30 @@ export interface ExtractedAsset {
   paths: { id: string; d: string }[];
   /** Text elements: id + visible content + anchor. */
   texts: { id: string; content: string; x: number; y: number; size: number }[];
+  /** S65 (E1): elements excluded from the drawable index, with the budget
+   *  law each one broke — surfaced for diagnostics instead of silently
+   *  shrinking the drawable set (the E11 upload path rejects outright). */
+  rejected: { kind: "path" | "text"; id: string; reason: "id-charset" | "path-commands" }[];
 }
 
+/** S65 (E1): per-path command budget, counted as EXPANDED commands through
+ *  the real grammar (svg.ts countPathCommands — implicit repeats count),
+ *  so a polyline of 10,000 implicit points counts as 10,000 — the
+ *  flattening cost the timing engine and the rasterizer would both pay
+ *  per frame. */
+export const WB_PATH_COMMAND_BUDGET = 512;
+
 /** Extract drawable elements from an asset's markup (trusted, well-formed
- *  library markup — regex extraction; the sanitizer already ran on load). */
+ *  library markup — regex extraction; the sanitizer already ran on load).
+ *  S65: the id-charset law and the per-path command budget apply HERE —
+ *  an element that breaks either never reaches the drawable index, so no
+ *  project event can address it and the renderer's namespace seam
+ *  (`${assetId}--${pathId}` DOM ids, `assetId::pathId` frame-plan keys)
+ *  can never be fed a corrupting id. */
 export function extractAsset(asset: WhiteboardAsset): ExtractedAsset {
   const paths: { id: string; d: string }[] = [];
   const texts: ExtractedAsset["texts"] = [];
+  const rejected: ExtractedAsset["rejected"] = [];
   const pathRe = /<path\b[^>]*>/g;
   for (const m of asset.svg.matchAll(pathRe)) {
     const tag = m[0];
@@ -127,13 +145,26 @@ export function extractAsset(asset: WhiteboardAsset): ExtractedAsset {
     // the tail of id="…" and extract the id as path data.
     const id = /\sid="([^"]+)"/.exec(tag)?.[1];
     const d = /\sd="([^"]+)"/.exec(tag)?.[1];
-    if (id && d) paths.push({ id, d });
+    if (!id || !d) continue;
+    if (!validWhiteboardId(id)) {
+      rejected.push({ kind: "path", id, reason: "id-charset" });
+      continue;
+    }
+    if (countPathCommands(d) > WB_PATH_COMMAND_BUDGET) {
+      rejected.push({ kind: "path", id, reason: "path-commands" });
+      continue;
+    }
+    paths.push({ id, d });
   }
   for (const m of asset.svg.matchAll(/<text\b([^>]*)>([^<]*)<\/text>/g)) {
     const attrs = m[1];
     const content = m[2].trim();
     const id = /\sid="([^"]+)"/.exec(attrs)?.[1];
     if (!id || !content) continue;
+    if (!validWhiteboardId(id)) {
+      rejected.push({ kind: "text", id, reason: "id-charset" });
+      continue;
+    }
     texts.push({
       id,
       content,
@@ -142,7 +173,7 @@ export function extractAsset(asset: WhiteboardAsset): ExtractedAsset {
       size: Number(/\sfont-size="([-\d.]+)"/.exec(attrs)?.[1] ?? 32),
     });
   }
-  return { asset, paths, texts };
+  return { asset, paths, texts, rejected };
 }
 
 /** Load + register the library: sanitize (already at construction), extract,

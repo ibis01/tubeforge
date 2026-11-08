@@ -1,5 +1,5 @@
 {
-  "renderedAt": "2026-11-08T23:07:34.094Z",
+  "renderedAt": "2026-11-08T23:48:08.236Z",
   "engine": "src/lib/tubeforge/whiteboard (S64 P0)",
   "title": "How Your Heart Works — S64 whiteboard P0 benchmark",
   "durationSec": 63.88,
@@ -66,10 +66,10 @@
     "narration": "estimated 2.6 wps (gateway throttled — no TTS this run)",
     "music": "house bedExpression curiosity-spark"
   },
-  "renderMs": 193818,
+  "renderMs": 188619,
   "qc": {
     "passed": false,
-    "checkedAt": "2026-11-08T23:07:33.052Z",
+    "checkedAt": "2026-11-08T23:48:07.198Z",
     "durationSec": 63.9,
     "checks": [
       {

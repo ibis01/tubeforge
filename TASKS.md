@@ -2368,3 +2368,30 @@ the plan is E1 — the technical design doc that formalizes the
 product-integration phase (a `whiteboard-render` JobKind joining the
 20 registered kinds, the editor surface, the asset-library phase, and
 real-VO synchronization once the gateway clears).
+
+## S65 — Whiteboard E1: the technical design + engine budget hardening (opened 2026-11-09 UTC, owner-directed "Go")
+
+S64 closed with the E0 audit naming E1 as the next milestone:
+WHITEBOARD_ENGINE_DESIGN.md — the technical design that formalizes the
+product-integration phase (JobKind wiring, DB shape, API surface, editor
+views, upload hardening, the CI-lane decision) — plus the two cheap
+engine-side hardening pins the audit's §6 explicitly assigns to E1 (the
+id-charset law, the path/resource budgets). Product implementation still
+waits for owner review of the architecture (the plan's own law); E1 is
+the review artifact, not the implementation.
+
+Gateway note at open: the S63 outage is STILL ACTIVE — one fresh llm
+probe through the app's own stack returned 429 (same account-wide
+throttle, scripts/gateway-quota-probe.mts lands this stage as the
+resumption instrument). S63 stays parked; E1 is zero-gateway by design.
+
+| Task | Status | Notes |
+|---|---|---|
+| T-65.1 recon | ✅ Done (2026-11-09) | The integration surfaces read on the live tree: jobs.ts (20-kind union, dedupe keys, boot recovery), queue.ts (HEAVY_KINDS = render/short/convert, per-org cap, MAX_ATTEMPTS_BY_KIND), queue-handlers.ts (registerDefaultHandlers + the resumableKinds drift lesson), video-jobs.ts (runSlideJob composite-id pattern), Video model (JSON-doc precedent: scenes/shotList/verifyReport/commentsKit/qcReport), render.ts mode union (kenburns/animated/stock/slides), the 20+ /api/videos/[id]/<stage> routes, views/ + timeline-studio editor precedents, MONEY_PATHS coverage list. |
+| T-65.2 the id-charset law | ✅ Done (2026-11-09) | validWhiteboardId (`[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}`, minus `--`/`::`) enforced at BOTH layers: extractAsset excludes violating path/text ids from the drawable index (surfaced in a new `rejected` list with reasons), validateWhiteboardProject rejects explicit scene ids. Missing ids still default — P0 tolerance untouched for legal input. | Renderer DOM ids are `${assetId}--${pathId}`, frame-plan keys `assetId::pathId` — an id carrying either separator corrupts the namespace seam (E0 audit §6 risk 3). Pin `[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}` minus `--`/`::` at BOTH layers: extractAsset excludes violating path/text ids from the drawable index; validateWhiteboardProject rejects scene ids and referenced ids that violate it. |
+| T-65.3 the budgets | ✅ Done (2026-11-09) | countPathCommands (svg.ts) counts EXPANDED commands through the real grammar (implicit repeats count — parsePathData groups them, the flattener pays per group; bring-up caught the test's own letter-count arithmetic). WB_BUDGETS: 24 scenes · 64 placements · 256 events · 32 camera keys per scene · 120s explicit scene · 900s Σ explicit. estimateProjectFrames (timing.ts, PURE) + WB_RENDER_FRAME_BUDGET 25,920: renderWhiteboard probes VOs, runs the estimator, REFUSES over-budget BEFORE chromium launches, then the loop reuses the estimator's durations — budget and render cannot disagree. | Per-path command budget (512, parsed via the REAL grammar — parsePathData, so implicit repeats count); per-scene caps (placements 64, animations 256, camera keys 32); per-project caps (scenes 24, explicit durationMs ≤ 120s, Σ explicit ≤ 900s); the render pre-flight frame budget (25,920 frames = 18 min at 24fps) computed by a PURE estimator in timing.ts and enforced BEFORE chromium launches. |
+| T-65.4 unit contracts | ✅ Done (2026-11-09) | 9 S65 contracts (charset ×4, budgets ×5): the charset acceptance/rejection table, validator scene-id law + default path, extraction exclusions + reasons, starter-library cleanliness, expanded-command counting pinned directly + through the gate, per-scene caps at/over the wall, project caps at/over the wall, the estimator's duration priority + arithmetic, and renderWhiteboard refusing an over-budget project before playwright is even imported. Suite 293 → 302. | Attack fixtures for every budget + the charset; the estimator pinned. |
+| T-65.5 WHITEBOARD_ENGINE_DESIGN.md | ✅ Done (2026-11-09) | The E1 deliverable at repo root beside its E0 sibling: the doc-column decision (sixth of the house's JSON-doc family, LWW + advisory rev), the `whiteboard` 21st-kind wiring (heavy kind, default attempts, boot-recovery guard, `#wb<sceneId>` previews, the shared slides chromium deployment contract named honestly), the five-route API surface, the frame-plan editor seam (frameAt + APPLY_FRAME_FN — one motion implementation for editor and MP4), the E11 upload spec (byte cap → sniff → sanitize → budget → rasterize-before-trust → quota → provenance), the CI-lane decision (unit suite now, MONEY_PATHS via video-jobs.ts at E9), and the updated E-matrix. | The E1 deliverable proper: DB doc-column decision (Video.whiteboardProject JSON, the parsePlan precedent), the `whiteboard` JobKind wiring (heavy kind, handler registration, boot-recovery guard), the API surface (project GET/PUT, scaffold, render, scene preview, asset upload), the editor surface (frame-plan seam — one source of motion truth), upload hardening spec for E11, the CI-lane decision, and the updated E-milestone → stage mapping. |
+| T-65.6 record + delivery | ✅ Done (2026-11-09) | docs/audits/s65-whiteboard-e1-record.md (incl. the gateway probe at open — still 429 — and the benchmark regression proof: the 63.88s benchmark re-ran through the pre-flight path, ALL lenses pass, manifest diff = timestamps + renderMs only, zero rendered frames changed). | docs/audits/s65-whiteboard-e1-record.md. |
+| T-65.7 the gates | ✅ Done (2026-11-09) | tsc 0 · eslint 0 errors/20 warnings (census unchanged) · unit 302/302 · billing 40/40 · queue restart-recovery PASS · build exit 0. | Full battery on the exact tree: tsc · eslint · unit · billing · queue · build. |
+| T-65.8 landing + CI evidence | ⏳ | Push, CI polled by full SHA, close on 6/6 green. |
