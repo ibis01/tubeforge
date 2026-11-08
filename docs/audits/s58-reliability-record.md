@@ -1,10 +1,12 @@
 # S58 reliability record — correctness hardening: the non-null-assertion class
 
 **Date**: 2026-11-08 (UTC) · **Stage**: S58 (owner-directed "Next")
-**Status**: all five tasks executed and verified LOCALLY, on top of `75503b2`
-(S57's head). **Not pushed, not CI-verified** — the landing constraint is
-unchanged from S57 and restated below. The stage's official close waits for
-the pushed commits' green CI runs, like S57's.
+**Status**: **CLOSED (2026-11-08)** — landed with S57 as one fast-forward
+(`9da54b4..34ec87a`); CI run 42480528396 on head `34ec87a` green, all
+jobs. The local gates below ran in the pre-landing sandbox on trees
+bit-identical to what was pushed; the landing story — a fourth reclaim,
+survived by the bundle exactly as this record's last paragraph promised —
+is in "The landing constraint".
 
 ## The landing constraint (read this first)
 
@@ -15,6 +17,35 @@ current remote `main`, confirmed by PAT-less `git ls-remote`) has a CI run.
 The push, the CI evidence, and the S57+S58 closes all ride the owner's
 rotated PAT; the delivery bundle carries `e2e7c1e..HEAD` so a fourth
 reclaim loses nothing.
+
+**The resolution (2026-11-08, the landing session).** The rotated PAT
+arrived — and between the sessions a FOURTH reclaim hit, the deepest yet:
+`/home/z/my-project` came back at its initial 2-Nov snapshot, taking
+`work/` (the repo tree) and the `download/` bundle with it. The paragraph
+above held to the letter: the platform's shutdown staging left the full
+pre-reclaim project under `/tmp/my-project`, bundle included, and the
+recovery was exactly the delivery doc's recipe — fresh public clone at
+`9da54b4` → `git fetch` the bundle → fast-forward to `34ec87a` (clean
+tree, objects cryptographically verified) → push with the rotated PAT
+via a one-shot credential helper (the token touched no file, config, or
+commit; it transited chat once and must be rotated again per the standing
+rule). No local gate was re-run in the recovered sandbox — the trees are
+bit-identical to the locally-gated ones and CI re-verified everything.
+
+## The CI evidence (the close)
+
+One push, one head run — the S56 convention for multi-commit pushes (the
+run at the head covers every tree below it cumulatively):
+
+| Commit | Run | Outcome |
+| --- | --- | --- |
+| `e2e7c1e` (docs: S57 opened) | — | tree covered by the head run |
+| `75503b2` (feat: S57 logger) | — | tree covered by the head run |
+| `14bfa20` (docs: S58 opened) | — | tree covered by the head run |
+| `34ec87a` (feat: S58 — this stage's head) | 42480528396 | ✅ **all jobs green** — Typecheck · Lint · Unit, Secret scan (gitleaks), Production build, Money-path coverage, E2E (Playwright) |
+
+https://github.com/ibis01/tubeforge/actions/runs/42480528396. S58 closes
+on this evidence.
 
 ## The tranche — what actually changed
 
@@ -109,9 +140,10 @@ is the natural S59.
 
 ## What remains (and whose it is)
 
-1. **Owner: rotate the PAT** — then push `e2e7c1e..HEAD` (S57+S58, five
-   commits), watch the CI runs on `75503b2`'s successor, record both stages'
-   runs, and close them.
+1. ~~**Owner: rotate the PAT** — push, watch, record, close.~~ **Done
+   (2026-11-08)**: landed `9da54b4..34ec87a`, run 42480528396 green, both
+   stages' records carry it, both closed. (The landing PAT transited chat
+   once — rotate again before the next landing.)
 2. **Owner-side, unchanged**: Dependabot PR triage (8 open, human merge
    decisions; the typescript-7 major is a known CI-red).
 3. **Next in-repo tranche (S59 candidate)**: react-hooks correctness

@@ -1,10 +1,12 @@
 # S57 reliability record — observability: the structured logger's in-repo half
 
 **Date**: 2026-11-08 (UTC) · **Stage**: S57 (owner-directed "Next")
-**Status**: all five tasks executed and verified LOCALLY. **Not pushed, not
-CI-verified — see "The landing constraint" before trusting anything beyond
-the local gates.** The stage's official close is deferred until the pushed
-commits carry green CI runs.
+**Status**: **CLOSED (2026-11-08)** — landed together with S58 as one
+fast-forward (`9da54b4..34ec87a`); CI run 42480528396 on head `34ec87a`
+green, all jobs (see "The CI evidence" below). The local-gate table further
+down ran in the pre-landing sandbox on trees bit-identical to what was
+pushed; the landing story — a fourth reclaim survived by the bundle — is in
+"The landing constraint".
 
 ## The landing constraint (read this first)
 
@@ -22,6 +24,41 @@ clones publicly at `9da54b4` clean; the live workflow badge reads
 "CI — passing" on that commit (the REST API was IP-rate-limited to zero this
 session — method disclosed; the badge reflects the default branch's latest
 commit, which is exactly the closing commit).
+
+**The resolution (2026-11-08, the landing session).** The rotated PAT
+arrived — and between the sessions a FOURTH reclaim hit, the deepest yet:
+`/home/z/my-project` came back at its initial 2-Nov snapshot, taking
+`work/` (the repo tree) and the `download/` delivery with it. The
+contingency held anyway: the platform's shutdown staging left the full
+pre-reclaim project under `/tmp/my-project`, bundle included (byte-size
+identical to the verified one). Recovery: fresh public clone at `9da54b4` →
+`git fetch` the bundle → fast-forward to `34ec87a` (clean tree; the
+bundle's objects cryptographically verified by the fetch) → push with the
+rotated PAT through a one-shot credential helper. The PAT was never
+written to any file, config, or commit and is not reproduced here; having
+transited chat once it must be rotated again per the standing rule. No
+local gate was re-run in the recovered sandbox (no node_modules) — nothing
+needed it: the pushed trees are bit-identical (same SHAs) to the
+locally-gated ones, and CI re-verified everything on GitHub.
+
+## The CI evidence (the close)
+
+The one push carried S57+S58 together (`9da54b4..34ec87a`), so the head
+run is both stages' landing evidence — the S56 table's own convention for
+multi-commit pushes (one run, at the head; every tree below is covered by
+it cumulatively):
+
+| Commit | Run | Outcome |
+| --- | --- | --- |
+| `e2e7c1e` (docs: S57 opened + stray T-56.7 row fixed) | — | tree covered by the head run |
+| `75503b2` (feat: the structured logger's in-repo half) | — | tree covered by the head run |
+| `14bfa20` (docs: S58 opened) | — | tree covered by the head run |
+| `34ec87a` (feat: S58 — non-null class zeroed and frozen) | 42480528396 | ✅ **all jobs green** — Typecheck · Lint · Unit, Secret scan (gitleaks), Production build, Money-path coverage, E2E (Playwright) |
+
+https://github.com/ibis01/tubeforge/actions/runs/42480528396 — queried by
+full head SHA over the authenticated REST API (the API answered in the
+landing session; the earlier IP-rate-limit was an anonymous-request
+phenomenon). S57 closes on this evidence.
 
 ## The tranche (T-57.2) — what actually changed
 
@@ -122,9 +159,10 @@ unused-expressions 11, exhaustive-deps 9, any 7, two singles.
 
 ## What remains (and whose it is)
 
-1. **Owner: rotate the PAT** (this record's whole constraint) — then push
-   `e2e7c1e..HEAD`, watch the CI run on the head commit, record it here,
-   and close S57.
+1. ~~**Owner: rotate the PAT** — then push, watch, record, close.~~ **Done
+   (2026-11-08)**: rotated PAT provided, `9da54b4..34ec87a` landed, CI run
+   42480528396 green, recorded above — S57 CLOSED. (The landing PAT
+   transited chat once; rotate again before the next landing.)
 2. **Owner-side, unchanged from S56**: Dependabot PR triage (8 open, human
    merge decisions; the typescript-7 major is a known CI-red).
 3. **Next in-repo tranches**: non-null-assertion (159), react-hooks

@@ -2047,6 +2047,16 @@ The moment a rotated PAT lands: push `e2e7c1e..` (or apply the bundle),
 watch the CI run, record it, and close S57 with the reliability record's
 pending line struck.
 
+**S57 CLOSED (2026-11-08, the landing session)** — the rotated PAT landed
+`9da54b4..34ec87a` (S57+S58 as one fast-forward, after a FOURTH reclaim —
+the deepest yet, which the delivery bundle survived exactly as designed:
+fresh public clone at `9da54b4`, `git fetch` the bundle, fast-forward,
+push via a one-shot credential helper; the token touched no file, config,
+or commit). CI run 42480528396 on head `34ec87a`: **all jobs green** —
+Typecheck · Lint · Unit, Secret scan (gitleaks), Production build,
+Money-path coverage, E2E (Playwright). Recorded in the reliability
+record's CI-evidence table; the stage closes on it.
+
 ## S58 — correctness hardening: the non-null-assertion class (opened 2026-11-08 UTC, owner-directed "Next")
 
 Sprint goal: warning burn-down tranche 2 — the S56 close's carried-forward
@@ -2104,3 +2114,10 @@ config keys that had silently demoted the T-56.6 freeze to warn-only).
 The moment a rotated PAT lands: push `e2e7c1e..HEAD` (S57+S58 together),
 watch the CI runs, record them in both stages' reliability records, and
 close both.
+
+**S58 CLOSED (2026-11-08, the landing session)** — landed with S57 in the
+same fast-forward (`9da54b4..34ec87a`); CI run 42480528396 on the head:
+all jobs green (the one head run covers both stages' trees cumulatively —
+the S56 multi-commit-push convention, recorded in both reliability
+records). The landing PAT transited chat once — rotate before the next
+landing.
