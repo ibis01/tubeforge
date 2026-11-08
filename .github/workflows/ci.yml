@@ -3,14 +3,17 @@
 # Contract:
 #   secrets — gitleaks scans every push/PR for leaked credentials (roadmap §4.1)
 #   check   — typecheck + lint + unit suite, on every push/PR
+#   build   — `npm run build` (production build + standalone assembly), on
+#             every push/PR (S56/T-56.1, closing the S33+ backlog's P1-3:
+#             build-only failures surface here before the platform)
 #   e2e     — Playwright suite, on PRs AND on pushes to main (S33: the repo
 #             landed 240+ commits by direct push with zero PRs, so the PR-only
 #             gate meant the 5 suites — including cross-tenant isolation —
 #             never ran in CI; they now run on every push to main)
 #
-# NOTE: `npm run test:billing` is intentionally NOT part of CI yet — it needs
-# a seeded SQLite database (see scripts/test-billing.mts header). Wiring it
-# in (deterministic seed inside the job) is tracked in the S33+ backlog (P1).
+# NOTE (S56/T-56.2): `npm run test:billing` JOINED the check job — the suite
+# self-seeds (unique MARK fixtures + full cleanup) against the same
+# postinstall-bootstrapped SQLite DB; 40/40 locally on a fresh DB first.
 # The unit suite renders its QC fixtures with ffmpeg, so the runner needs it.
 #
 # NOTE (external-audit response, 2026-11-05): `npm run test:queue` JOINED the
@@ -97,6 +100,33 @@ jobs:
 
       - name: Queue integration suite (resume contract, real worker restart)
         run: npm run test:queue
+
+      - name: Billing integrity suite (self-seeding, money path)
+        run: npm run test:billing
+
+  build:
+    name: Production build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies (postinstall bootstraps SQLite + Prisma)
+        run: npm ci
+
+      - name: Build (next build + standalone assembly)
+        # S56/T-56.1: closes P1-3. The build is env-free (verified: exit 0
+        # with NO .env present — pages that need secrets render dynamic).
+        # Turbopack prints 4 known WARNINGS (edge-runtime process.pid in
+        # instrumentation.ts — guarded by the NEXT_RUNTIME check at runtime;
+        # dynamic-fs tracing in the stock/export routes) — warnings only,
+        # exit stays 0; do not "fix" by breaking the runtime guard.
+        run: npm run build
 
   e2e:
     name: E2E (Playwright)

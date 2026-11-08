@@ -1961,3 +1961,31 @@ re-runs the T-55.5 protocol verbatim (the stand-in disclosure's margin);
 the 70-floor recheck + tier-2 imagery scoring ride the kit's first gateway
 round; the QC re-run's doc-less cut-alignment limitation stands as recorded
 in T-55.3.
+
+## S56 — release engineering: the CI that builds, bills, and measures (opened 2026-11-08 UTC, owner-approved)
+
+Sprint goal: close the S33+ backlog's **Priority 1** in-repo items — the CI
+gaps and measurement baselines the improvement roadmap called out at the S32
+snapshot and never lost: `next build` in CI (P1-3), the billing suite in CI
+with deterministic self-seeding (P1-1), the nightly job with the durable
+route probes (P1-2), the coverage baseline on the money paths (P1-5),
+Dependabot weekly version bumps (P1-7), and the first warning burn-down
+tranche (P1-4). All owner-action items (Sentry accounts, LICENSE, staging
+provisioning) stay out of scope by design.
+
+Pre-verified in the recovered sandbox before the stage opened: `next build`
+is GREEN here (Turbopack, exit 0, TS clean, 57/57 pages, 4 disclosed
+warnings — the P1-3 "the 4 GB sandbox cannot build" note was stale, now
+corrected on record); the billing suite reads **40/40 on a fresh
+postinstall-bootstrapped SQLite DB** (it self-seeds via unique MARK fixtures
+and cleans up — the CI note in ci.yml was the only blocker).
+
+| Task | Status | Notes |
+|---|---|---|
+| T-56.1 the build job (P1-3) | ✅ Done (2026-11-08) | `build` job in ci.yml: `npm run build` (Turbopack `next build` + the standalone `cp` assembly) on every push/PR, ubuntu-24.04, 15-min cap, parallel with `check`. Pre-proven in-sandbox TWICE — with the local `.env` and with NO env at all (CI parity: exit 0, TS clean, 57/57 static pages) — so the job's first run had a green local twin. The 4 Turbopack warnings are documented IN the job (edge-runtime `process.pid` in instrumentation.ts — runtime-guarded by the `NEXT_RUNTIME !== "nodejs"` return; dynamic-fs tracing in stock/export routes): warnings only, exit 0, "do not fix by breaking the runtime guard". The stale P1-3 premise ("7 GB runners can build; the 4 GB sandbox cannot") is corrected on record: this sandbox builds in ~17s compile / ~35s total. |
+| T-56.2 the billing suite joins CI (P1-1) | ✅ Done (2026-11-08) | `npm run test:billing` added to the check job after unit + queue — the ci.yml "not part of CI yet" note retired. The suite was ALREADY deterministic: unique `MARK` fixtures (time-based), self-created users/plans/subscriptions, full cleanup; it just needed the bootstrapped SQLite DB that `npm ci` postinstall already provides (the same DB test:queue rides). Proven locally in the EXACT CI order (typecheck → lint → 245/245 unit → queue PASS → billing 40/40) on one DB — no queue→billing interaction. The money path (webhook fail-closed, canonical credit units, ledger linkage, status rules, idempotent grants, concurrent-spend safety) is now CI-proven on every push. |
+| T-56.3 Dependabot weekly version bumps (P1-7) | ⏳ | `.github/dependabot.yml` — npm + github-actions ecosystems, weekly, grouped — closing the last half of the Dependabot rule (security updates were already ON since S33). |
+| T-56.4 coverage baseline on the money paths (P1-5) | ⏳ | c8 wired around the real suites (`test:coverage`), scoped to billing/spend/render modules, baseline recorded in `docs/baselines/`, floor enforced in CI at the measured line. |
+| T-56.5 the nightly battery (P1-2) | ⏳ | `nightly.yml`: scheduled + dispatchable — full e2e, and the durable standard-daemon route probes against one booted daemon (the set locally verified green in sequence first). |
+| T-56.6 warning burn-down tranche 1 (P1-4) | ⏳ | The trivial class to zero: no-unused-vars (72) + prefer-const (3) + no-useless-escape (5) = 80 sites, per-site review; the three rules then re-enabled as ERRORS so the class cannot grow back. Census re-recorded. |
+| T-56.7 reliability record + stage close | ⏳ | CI evidence via full-SHA REST for every S56 commit; Dependabot re-check; spend-gate law untouched; the stage ledger. |
