@@ -1,9 +1,10 @@
 # S59 reliability record — react-hooks correctness: set-state-in-effect + exhaustive-deps
 
 **Date**: 2026-11-08 (UTC) · **Stage**: S59 (owner-directed "Next")
-**Status**: all seven tasks executed and verified LOCALLY, on top of `39721de`
-(the S57+S58 close, current remote `main`). **Not pushed, not CI-verified** —
-the landing constraint is the standing law and is restated below.
+**Status**: **CLOSED (2026-11-08)** — pushed alone on the rotated PAT as
+`39721de..62b3656`; CI run **42485325793** green on the head `62b3656`
+(attempt 2 — attempt 1's single E2E failure is triaged as a CI dev-server
+flake, with evidence, in the landing section at the end of this record).
 
 ## The landing constraint (read this first)
 
@@ -147,11 +148,59 @@ are covered by CI's E2E job on landing.
 - No forced `TUBEFORGE_PRICING_VERIFIED`; zero gateway quota, zero paid
   dispatches — S59 touched only client-side React code; no provider path.
 
+## The landing — pushed, CI-verified, closed (2026-11-08, later the same day)
+
+The owner's rotated PAT arrived; S59 pushed alone as `39721de..62b3656`
+(`ec24c80` docs open + `62b3656` feat). **CI run 42485325793** on the head:
+
+| Job | Attempt 1 | Attempt 2 (`rerun-failed-jobs`) |
+|---|---|---|
+| Secret scan (gitleaks) | success | kept |
+| Typecheck · Lint · Unit | success | kept |
+| Money-path coverage | success | kept |
+| Production build | success | kept |
+| E2E (Playwright) | **failure** — 1 of 26 | **success — 26/26 (42.7s)** |
+
+### The attempt-1 E2E failure — triaged as a CI dev-server flake, not a regression
+
+The one red: `e2e/premium-ux.spec.ts:151` "voice studio: catalog renders
+and pronunciations roundtrip (T-4.10/T-4.11)" — after filling
+"colonel"→"kernel" and clicking Add, `getByText('colonel')` timed out at
+15s ("element(s) not found"); the other 25 passed. The triage, in
+evidence order:
+
+1. **The failing path contains no S59-touched code.** The add flow is
+   pure event-handler code (`addPron` → `savePron` → PUT
+   `/api/voices/pronunciations` → `setPronEntries` → the chip map);
+   S59's voice-view diff is the 6-line await-first IIFE around
+   `loadProfiles` — and the catalog it loads RENDERED fine in the same
+   failed run (the test's earlier catalog asserts passed). No S59 file
+   touches an API route.
+2. **The dev-server compile noise is pre-existing, not new.** The failed
+   attempt's log carries 320 "Ecmascript file had an error" lines, all
+   trailing the known `instrumentation.ts` Edge-runtime warning; the
+   GREEN S58 run (42480528396) carried 338 of the same, and the green
+   attempt 2 carried 332. Same noise, opposite outcomes.
+3. **Local reproduction: 10/10 passes under the CI-identical condition.**
+   `npx playwright test e2e/premium-ux.spec.ts -g "voice studio"
+   --repeat-each=5 --workers=1` against the config's own `npm run dev`
+   webServer — the exact failing test ×5 plus the clone-tab deep-link
+   test ×5, all green (1.1m).
+4. **Same commit, rerun: green.** `rerun-failed-jobs` on 42485325793 →
+   attempt 2 E2E success, 26/26, all five jobs green.
+
+Verdict: a Turbopack on-demand compile stall on the loaded 2-worker CI
+runner — the attempt-1 failure window (the 15s expect starting ~13:34:45)
+sits inside a burst of that compile noise (13:34:50). Suite history:
+seven consecutive green main-push runs before this one (#117–#123). No
+code change was made for this; the flake and its evidence are recorded
+here instead.
+
 ## What remains (and whose it is)
 
-1. **Owner: rotate the PAT** (this record's whole constraint) — then push
-   `39721de..HEAD` (S59 alone this time), watch the CI run on the head
-   commit, record it here, and close S59.
+1. **Owner: rotate the PAT again** — the S59 landing token transited chat
+   once (the standing law's threshold; rotation is the recorded
+   instruction at every close).
 2. **Owner-side, unchanged**: Dependabot PR triage (8 open, human merge
    decisions; the typescript-7 major is a known CI-red);
    Sentry/GlitchTip + uptime monitor (P0-7's other half); the S55 standing

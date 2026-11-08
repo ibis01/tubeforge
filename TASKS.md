@@ -2186,14 +2186,19 @@ stage close ride a **rotated** PAT (the current one landed S57+S58 and
 transited chat once already — rotation was the recorded instruction). A
 bundle ships in the delivery so the sixth reclaim loses nothing.
 
-Stage status (2026-11-08, end of session): **all seven tasks executed and
-locally verified; the stage is NOT closed** — the close requires the pushed
-commit's CI evidence (the project's law), and the landing PAT must be a
-ROTATED one (the S57+S58 token transited chat once; rotation was the
-recorded instruction at both closes). What IS verified: tsc 0 · eslint
-**0 errors/20 warnings** under the frozen config (set-state-in-effect
-33→0 and exhaustive-deps 9→0, both at error) · **247/247 unit** · billing
-40/40 · queue PASS · build exit 0 · the live preview battery green with
-zero page/console errors. The moment a rotated PAT lands: push
-`39721de..HEAD`, watch the CI run on the head, record it in the S59
-reliability record, and close the stage.
+Stage status (2026-11-08, closed on CI evidence): **CLOSED** — pushed alone
+on the rotated PAT as `39721de..62b3656`; CI run **42485325793** green on
+the head: attempt 1 carried ONE E2E failure (voice studio pronunciation
+roundtrip — 15s toBeVisible timeout, 25/26), triaged as a CI dev-server
+flake, not a regression: the failing path contains no S59-touched code (a
+pure event-handler add flow; voice-view's whole diff is the inert
+await-first IIFE wrap), the dev-server compile noise is equally present in
+the GREEN S58 run (338× there, 320× here, 332× in the green attempt 2),
+10/10 local reproductions passed under the CI-identical `npm run dev`
+webServer, and the same-commit `rerun-failed-jobs` came back 26/26 with
+all five jobs green. Full post-mortem with evidence:
+docs/audits/s59-reliability-record.md. Local verification stands as
+recorded above (tsc 0 · eslint 0/20 frozen · 247/247 unit · billing 40/40
+· queue PASS · build exit 0 · live battery zero errors). The landing PAT
+transited chat once — rotation is the recorded instruction at this close
+too.
