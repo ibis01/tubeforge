@@ -533,9 +533,14 @@ function CharacterStudio({
   const [posesBusy, setPosesBusy] = useState(initial.generating.poses);
   const pollRef = useRef<AbortController | null>(null);
 
-  useEffect(() => {
+  // Re-seed when the parent sends a fresh character (post-mutation
+  // refresh) — render-time adjust (guarded reference compare) replacing
+  // the re-seed effect: same trigger, same final state, one fewer paint.
+  const [seedInitial, setSeedInitial] = useState(initial);
+  if (seedInitial !== initial) {
+    setSeedInitial(initial);
     setC(initial);
-  }, [initial]);
+  }
 
   const applyUpdate = (next: CharacterDTO) => {
     setC(next);

@@ -64,7 +64,11 @@ export function SecurityAccessCard() {
   }, []);
 
   useEffect(() => {
-    void load();
+    // Await-first IIFE (see director-card): the rule verifies async
+    // boundaries only in effect-local code.
+    void (async () => {
+      await load();
+    })();
     const onGate = (e: Event) =>
       setStatus((s) => (s ? { ...s, gateEnabled: Boolean((e as CustomEvent).detail?.enabled) } : s));
     window.addEventListener("tf-gate", onGate);
@@ -237,7 +241,11 @@ export function SecurityAccessCard() {
   // S20 — the token console loads its rows when a signed-in account exists
   // (the routes 403 otherwise; the section is not rendered for them anyway).
   useEffect(() => {
-    if (status?.configured && status?.authenticated) void loadTokens();
+    // Await-first IIFE (see director-card).
+    if (status?.configured && status?.authenticated)
+      void (async () => {
+        await loadTokens();
+      })();
   }, [status?.configured, status?.authenticated, loadTokens]);
 
   const mintToken = async () => {

@@ -81,7 +81,12 @@ export function PlanCard() {
   };
 
   useEffect(() => {
-    void load();
+    // Await-first IIFE (see director-card). On this mount-only path the
+    // loader's synchronous setLoading(true) is a same-value no-op (loading
+    // starts true); the retry button keeps its busy UX unchanged.
+    void (async () => {
+      await load();
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

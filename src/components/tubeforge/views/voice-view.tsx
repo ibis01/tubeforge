@@ -114,7 +114,11 @@ export function VoiceView() {
   }, []);
 
   useEffect(() => {
-    loadProfiles();
+    // Await-first IIFE (see director-card): the rule verifies async
+    // boundaries only in effect-local code.
+    void (async () => {
+      await loadProfiles();
+    })();
     fetch("/api/characters", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setCharacters(d?.characters ?? []))

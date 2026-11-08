@@ -1,0 +1,9 @@
+TubeForge lint census — post-S59 (2026-11-08 UTC)
+Command: npx eslint . (repo root, frozen config)
+
+
+Rule totals:
+11 @typescript-eslint/no-unused-expressions
+7 @typescript-eslint/no-explicit-any
+1 import/no-anonymous-default-export
+1 @next/next/no-location-assign-relative-destination

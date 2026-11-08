@@ -72,7 +72,11 @@ export function AccountDataCard() {
 
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [usageDays, setUsageDays] = useState(30);
-  const [usageLoading, setUsageLoading] = useState(true);
+  // Busy is DERIVED: the loaded data belongs to a day-window that no longer
+  // matches the current one. The loader never sets state synchronously —
+  // its setStates all land in the then/catch callbacks, after the fetch.
+  const [loadedDays, setLoadedDays] = useState<number | null>(null);
+  const usageLoading = loadedDays !== usageDays;
   const [exporting, setExporting] = useState(false);
 
   const [dangerOpen, setDangerOpen] = useState(false);
@@ -80,12 +84,16 @@ export function AccountDataCard() {
   const [deleting, setDeleting] = useState(false);
 
   const loadUsage = useCallback((days: number) => {
-    setUsageLoading(true);
     fetch(`/api/account/usage?days=${days}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d: UsageResponse) => setUsage(d))
-      .catch(() => setUsage(null))
-      .finally(() => setUsageLoading(false));
+      .then((d: UsageResponse) => {
+        setUsage(d);
+        setLoadedDays(days);
+      })
+      .catch(() => {
+        setUsage(null);
+        setLoadedDays(days);
+      });
   }, []);
 
   useEffect(() => {

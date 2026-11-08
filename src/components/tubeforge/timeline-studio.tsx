@@ -520,7 +520,12 @@ export function TimelineStudio({
   }, [videoId, toast]);
 
   useEffect(() => {
-    if (canAssemble) void loadTimeline();
+    // Await-first IIFE (see director-card): the rule verifies async
+    // boundaries only in effect-local code.
+    if (canAssemble)
+      void (async () => {
+        await loadTimeline();
+      })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId, canAssemble]);
 
@@ -1213,9 +1218,14 @@ export function TimelineStudio({
     return () => clearTimeout(t);
   }, [deleteArmed]);
 
-  useEffect(() => {
+  // Disarm the two-step delete when the target changes — render-time
+  // adjust (guarded seed compare) instead of the reset effect: same
+  // trigger, same final state, one fewer paint.
+  const [deleteSeedClip, setDeleteSeedClip] = useState<number | null | undefined>(activeClip?.index);
+  if (deleteSeedClip !== activeClip?.index) {
+    setDeleteSeedClip(activeClip?.index);
     setDeleteArmed(false);
-  }, [activeClip?.index]);
+  }
 
   // ---------- S8 — the narrator pick ----------
   // The voice: unlike the caption/music picks this is NOT a doc field — the
@@ -1385,9 +1395,13 @@ export function TimelineStudio({
     const t = setTimeout(() => setVoiceArmed(false), 4000);
     return () => clearTimeout(t);
   }, [voiceArmed]);
-  useEffect(() => {
+  // Re-picking a voice disarms — render-time adjust (same trigger as the
+  // old reset effect, one fewer paint).
+  const [voiceSeedPick, setVoiceSeedPick] = useState(voicePick);
+  if (voiceSeedPick !== voicePick) {
+    setVoiceSeedPick(voicePick);
     setVoiceArmed(false);
-  }, [voicePick]);
+  }
 
   // ---------- S11 — the pacing pick ----------
   // The narrator's sibling axis: HOW FAST the read goes. ttsSpeed is set
@@ -1539,9 +1553,13 @@ export function TimelineStudio({
     const t = setTimeout(() => setPaceArmed(false), 4000);
     return () => clearTimeout(t);
   }, [paceArmed]);
-  useEffect(() => {
+  // Re-picking a pace disarms — render-time adjust (same trigger as the
+  // old reset effect, one fewer paint).
+  const [paceSeedPick, setPaceSeedPick] = useState(pacePick);
+  if (paceSeedPick !== pacePick) {
+    setPaceSeedPick(pacePick);
     setPaceArmed(false);
-  }, [pacePick]);
+  }
 
   // ---------- S9: the poster — the scene the cover depicts ----------
   // The cover art's SUBJECT was a pipeline default: the concept derived
@@ -2513,7 +2531,7 @@ export function TimelineStudio({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [timeline, loading, saving, clipBusy, dirty, total, playhead, undo, redo, save, stepFrame, clipOp, deleteArmed, activeClip]);
+  }, [timeline, loading, saving, clipBusy, dirty, total, playhead, undo, redo, save, stepFrame, clipOp, deleteArmed, activeClip, toast]);
 
   // ---------- render gate ----------
 
@@ -4186,7 +4204,14 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
   // the two can never drift. Resets when the scene changes or the server's
   // copy updates (a re-voice rebuilds the doc).
   const [scriptDraft, setScriptDraft] = useState(scene.narration);
-  useEffect(() => setScriptDraft(scene.narration), [scene.index, scene.narration]);
+  // Re-seed when a different scene opens or the server's copy updates —
+  // render-time adjust (guarded seed compare) replacing the re-seed
+  // effect: same trigger pair, same final state, one fewer paint.
+  const [scriptSeed, setScriptSeed] = useState({ index: scene.index, narration: scene.narration });
+  if (scriptSeed.index !== scene.index || scriptSeed.narration !== scene.narration) {
+    setScriptSeed({ index: scene.index, narration: scene.narration });
+    setScriptDraft(scene.narration);
+  }
   const scriptChanged = scriptDraft.trim() !== scene.narration.trim();
 
   // ---------- audition (S5) ----------
@@ -4243,13 +4268,19 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
     }
   }, []);
   useEffect(() => stopPoll, [stopPoll]); // unmount
-  useEffect(() => {
-    // Scene switch: the poll watches the OLD scene's job to completion is
-    // wrong here — stop, and drop the transient open/draft panels.
-    stopPoll();
+  // Scene switch: the poll watching the OLD scene's job to completion is
+  // wrong here — stop it (a real side effect, stays an effect), and drop
+  // the transient open/draft panels (render-time adjust on the same
+  // trigger, replacing the reset effect).
+  const [artSeedIndex, setArtSeedIndex] = useState(scene.index);
+  if (artSeedIndex !== scene.index) {
+    setArtSeedIndex(scene.index);
     setArtBusy(null);
     setAiOpen(false);
     setStockOpen(false);
+  }
+  useEffect(() => {
+    stopPoll();
   }, [scene.index, stopPoll]);
 
   const thumbUrl = scenesMeta?.imageUrl

@@ -380,9 +380,11 @@ export function ResearchView() {
       const data = await res.json();
       if (res.ok) {
         setSessions(data.sessions ?? []);
-        if (!active && data.sessions?.length > 0) {
-          setActive(data.sessions[0]);
-        }
+        // Auto-select the first session only when none is active — a
+        // functional update reads the CURRENT active, so the callback
+        // carries no `active` closure (the deps stay honestly empty).
+        const first = data.sessions?.[0];
+        if (first) setActive((cur) => cur ?? first);
       }
     } catch {
       // silent — first paint shows empty state
@@ -392,7 +394,11 @@ export function ResearchView() {
   }, []);
 
   useEffect(() => {
-    loadSessions();
+    // Await-first IIFE (see director-card): the rule verifies async
+    // boundaries only in effect-local code.
+    void (async () => {
+      await loadSessions();
+    })();
   }, [loadSessions]);
 
   const runScan = async () => {

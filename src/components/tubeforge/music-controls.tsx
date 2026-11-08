@@ -106,7 +106,11 @@ export function useMusicLibrary() {
   }, []);
 
   useEffect(() => {
-    void load();
+    // Await-first IIFE (see director-card): the rule verifies async
+    // boundaries only in effect-local code.
+    void (async () => {
+      await load();
+    })();
   }, [load]);
 
   return { tracks, settings, loading, reload: load, setSettings };

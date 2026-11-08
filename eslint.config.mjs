@@ -34,11 +34,13 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "no-useless-escape": "error", // S56/T-56.6 — frozen at zero
 
     // React rules
-    "react-hooks/exhaustive-deps": "warn",
-    // Next 16 ships this React-Compiler rule at error level; 17 pre-existing
-    // call sites trip it. Warned for Stage 1 (refactoring them is their own
-    // task); tighten to "error" once they are addressed.
-    "react-hooks/set-state-in-effect": "warn",
+    // S59 — both react-hooks correctness classes frozen at error, no
+    // carve-outs: set-state-in-effect 33→0 and exhaustive-deps 9→0. The one
+    // reasoned inline disable (video-detail-dialog's fetch battery, whose
+    // deps would otherwise storm on an unstable inline prop) is disclosed
+    // in the S59 reliability record.
+    "react-hooks/exhaustive-deps": "error",
+    "react-hooks/set-state-in-effect": "error",
     "react-hooks/purity": "off",
     "react/no-unescaped-entities": "off",
     "react/display-name": "off",

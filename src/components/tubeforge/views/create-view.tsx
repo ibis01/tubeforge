@@ -284,16 +284,65 @@ export function CreateView() {
       : true;
 
   // Reset approval whenever the script or its options change — the analysis
-  // verdict is tied to the exact text we analyzed.
-  useEffect(() => {
+  // verdict is tied to the exact text we analyzed. Render-time adjust
+  // (guarded seed compare) instead of the reset effect: same trigger, same
+  // final state, one fewer paint.
+  const [analysisSeed, setAnalysisSeed] = useState({ customScript, niche, tone, length, useOwnScript });
+  if (
+    analysisSeed.customScript !== customScript ||
+    analysisSeed.niche !== niche ||
+    analysisSeed.tone !== tone ||
+    analysisSeed.length !== length ||
+    analysisSeed.useOwnScript !== useOwnScript
+  ) {
+    setAnalysisSeed({ customScript, niche, tone, length, useOwnScript });
     setScriptApproved(false);
     setAnalysisState("idle");
     setAnalysisReport(null);
     setAnalysisError(null);
-  }, [customScript, niche, tone, length, useOwnScript]);
+  }
 
   // Load defaults from settings + channel list
   useEffect(() => {
+    // ---- Brief draft restore (T-4.3), folded onto the settings chain ----
+    // Applied exactly once, AFTER the server defaults land (so the draft
+    // wins); a prefill topic from another view wins over any saved draft —
+    // read from the store at apply time, matching the old effect's
+    // latest-render check. Effect-local + promise-callback = no synchronous
+    // setState in the effect body.
+    const applyDraft = () => {
+      if (draftCheckedRef.current) return;
+      draftCheckedRef.current = true;
+      if (useAppStore.getState().prefillTopic) return;
+      try {
+        const raw = localStorage.getItem(DRAFT_KEY);
+        if (!raw) return;
+        const d = JSON.parse(raw);
+        if (!d || typeof d !== "object") return;
+        if (typeof d.topic === "string" && d.topic) setTopic(d.topic);
+        if (typeof d.niche === "string" && d.niche) setNiche(d.niche);
+        if (typeof d.tone === "string" && d.tone) setTone(d.tone);
+        if (typeof d.length === "string" && d.length) setLength(d.length);
+        if (typeof d.voice === "string" && d.voice) setVoice(d.voice);
+        if (typeof d.speed === "number") setSpeed(d.speed);
+        if (typeof d.thumbStyle === "string" && d.thumbStyle) setThumbStyle(d.thumbStyle);
+        if (d.music && typeof d.music === "object") setMusic(d.music);
+        if (d.motion && typeof d.motion === "object") setMotion(d.motion);
+        if (d.transition && typeof d.transition === "object") setTransition(d.transition);
+        if (typeof d.channelId === "string") setChannelId(d.channelId);
+        if (typeof d.characterId === "string") setCharacterId(d.characterId);
+        if (d.format === "story" || d.format === "script") setFormat(d.format);
+        if (typeof d.renderMode === "string" && d.renderMode) setRenderMode(d.renderMode);
+        if (typeof d.useOwnScript === "boolean") setUseOwnScript(d.useOwnScript);
+        if (typeof d.customScript === "string" && d.customScript) setCustomScript(d.customScript);
+        if (typeof d.batchCount === "number") setBatchCount(d.batchCount);
+        // A discarded/empty draft must not resurrect a pointless banner.
+        if (d.topic || d.customScript) setDraftRestored(true);
+      } catch {
+        /* corrupt draft — start fresh */
+      }
+    };
+
     fetch("/api/settings")
       .then((r) => r.json())
       .then((d) => {
@@ -308,7 +357,10 @@ export function CreateView() {
         setAutoThumb(s.autoThumbnail !== "false");
       })
       .catch(() => undefined)
-      .finally(() => setSettingsLoaded(true));
+      .finally(() => {
+        setSettingsLoaded(true);
+        applyDraft();
+      });
 
     // Load AI Provider config to fix the red warning text
     fetch("/api/settings/ai")
@@ -368,40 +420,8 @@ export function CreateView() {
   }, [prefillTopic, prefillSources, setPrefillTopic, setPrefillSources]);
 
   // ---- Brief draft persistence (T-4.3) -----------------------------------
-  // Restore once, AFTER server defaults land (so the draft wins). A prefill
-  // topic from another view wins over any saved draft.
-  useEffect(() => {
-    if (!settingsLoaded || draftCheckedRef.current) return;
-    draftCheckedRef.current = true;
-    if (prefillTopic) return;
-    try {
-      const raw = localStorage.getItem(DRAFT_KEY);
-      if (!raw) return;
-      const d = JSON.parse(raw);
-      if (!d || typeof d !== "object") return;
-      if (typeof d.topic === "string" && d.topic) setTopic(d.topic);
-      if (typeof d.niche === "string" && d.niche) setNiche(d.niche);
-      if (typeof d.tone === "string" && d.tone) setTone(d.tone);
-      if (typeof d.length === "string" && d.length) setLength(d.length);
-      if (typeof d.voice === "string" && d.voice) setVoice(d.voice);
-      if (typeof d.speed === "number") setSpeed(d.speed);
-      if (typeof d.thumbStyle === "string" && d.thumbStyle) setThumbStyle(d.thumbStyle);
-      if (d.music && typeof d.music === "object") setMusic(d.music);
-      if (d.motion && typeof d.motion === "object") setMotion(d.motion);
-      if (d.transition && typeof d.transition === "object") setTransition(d.transition);
-      if (typeof d.channelId === "string") setChannelId(d.channelId);
-      if (typeof d.characterId === "string") setCharacterId(d.characterId);
-      if (d.format === "story" || d.format === "script") setFormat(d.format);
-      if (typeof d.renderMode === "string" && d.renderMode) setRenderMode(d.renderMode);
-      if (typeof d.useOwnScript === "boolean") setUseOwnScript(d.useOwnScript);
-      if (typeof d.customScript === "string" && d.customScript) setCustomScript(d.customScript);
-      if (typeof d.batchCount === "number") setBatchCount(d.batchCount);
-      // A discarded/empty draft must not resurrect a pointless banner.
-      if (d.topic || d.customScript) setDraftRestored(true);
-    } catch {
-      /* corrupt draft — start fresh */
-    }
-  }, [settingsLoaded, prefillTopic]);
+  // (The restore now rides the settings chain above — applyDraft, folded
+  // into its .finally so the draft lands after the server defaults.)
 
   // Debounced save — never while a production run is live (the brief is
   // committed at that point; freezing it keeps the draft honest).
@@ -461,7 +481,15 @@ export function CreateView() {
   ]);
 
   // A created video = the brief was used. Clear the draft so the next visit
-  // starts clean instead of resurrecting a produced topic.
+  // starts clean instead of resurrecting a produced topic. The storage
+  // delete stays an effect (a real side effect); the banner retirement is
+  // a render-time adjust on the same video reference.
+  const [draftSeedVideo, setDraftSeedVideo] = useState<VideoDTO | null>(video);
+  if (draftSeedVideo !== video) {
+    setDraftSeedVideo(video);
+    if (video) setDraftRestored(false);
+  }
+
   useEffect(() => {
     if (!video) return;
     try {
@@ -469,7 +497,6 @@ export function CreateView() {
     } catch {
       /* ignore */
     }
-    setDraftRestored(false);
   }, [video]);
 
   const discardDraft = () => {
@@ -938,6 +965,7 @@ export function CreateView() {
       runStage,
       createVideo,
       startStoryboard,
+      startStock,
       startVoiceover,
       startThumbnail,
       startRender,

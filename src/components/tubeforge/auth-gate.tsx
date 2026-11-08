@@ -71,21 +71,33 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [confirm, setConfirm] = useState("");
   const [legacy, setLegacy] = useState("");
 
-  const refresh = useCallback(async (): Promise<GateState> => {
+  // The probe fetches; the mapping sets state. Split so the mount effect
+  // can await-first (the lint rule verifies awaits only in effect-local
+  // code) while the submit path keeps calling the combined refresh().
+  const probeStatus = useCallback(async (): Promise<StatusResponse | null> => {
     try {
       const res = await fetch("/api/auth/status", { cache: "no-store" });
-      const d = (await res.json()) as StatusResponse;
-      setNeedsLegacy(Boolean(d.legacyClaim?.required));
-      if (d.authenticated) return "open";
-      setMode(d.configured ? "login" : "register");
-      return "signedOut";
+      return (await res.json()) as StatusResponse;
     } catch {
-      return "error"; // can't reach the status endpoint — don't brick the UI
+      return null; // can't reach the status endpoint — don't brick the UI
     }
   }, []);
 
+  const applyStatus = useCallback((d: StatusResponse | null): GateState => {
+    if (!d) return "error";
+    setNeedsLegacy(Boolean(d.legacyClaim?.required));
+    if (d.authenticated) return "open";
+    setMode(d.configured ? "login" : "register");
+    return "signedOut";
+  }, []);
+
+  const refresh = useCallback(async (): Promise<GateState> => {
+    return applyStatus(await probeStatus());
+  }, [applyStatus, probeStatus]);
+
   useEffect(() => {
-    void refresh().then((s) => {
+    void (async () => {
+      const s = applyStatus(await probeStatus());
       setState(s);
       broadcastGateState(s !== "error");
       // S18 — an EMAILED reset link lands as /?reset=<token> (the route's GET
@@ -108,8 +120,8 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         if (s === "signedOut") setVerifiedNote(verified);
         // a signed-in browser sees its verification state on the security card
       }
-    });
-  }, [refresh]);
+    })();
+  }, [applyStatus, probeStatus]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();

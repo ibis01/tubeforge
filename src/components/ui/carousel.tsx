@@ -93,9 +93,20 @@ function Carousel({
     setApi(api)
   }, [api, setApi])
 
+  // Initial canScroll sync when the embla api arrives (or re-inits) —
+  // render-time adjust (guarded identity compare), the same idiom as the
+  // app-side tranches; the effect below keeps only the subscriptions.
+  const [seedApi, setSeedApi] = React.useState<CarouselApi>(api)
+  if (seedApi !== api) {
+    setSeedApi(api)
+    if (api) {
+      setCanScrollPrev(api.canScrollPrev())
+      setCanScrollNext(api.canScrollNext())
+    }
+  }
+
   React.useEffect(() => {
     if (!api) return
-    onSelect(api)
     api.on("reInit", onSelect)
     api.on("select", onSelect)
 

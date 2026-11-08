@@ -54,10 +54,17 @@ export function BrandKitCard({
   const fileRef = useRef<HTMLInputElement>(null);
   const patchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Re-seed when a different video (or fresh server state) arrives.
-  useEffect(() => {
+  // Re-seed when a different video (or fresh server state) arrives —
+  // React's documented render-time adjust (guarded seed compare) instead
+  // of the re-seed effect: same trigger pair, same final state, no stale
+  // paint between prop change and reset.
+  const [seedVideo, setSeedVideo] = useState(videoId);
+  const [seedAccent, setSeedAccent] = useState<string | null>(value.accent);
+  if (seedVideo !== videoId || seedAccent !== value.accent) {
+    setSeedVideo(videoId);
+    setSeedAccent(value.accent);
     setAccent(value.accent);
-  }, [videoId, value.accent]);
+  }
 
   useEffect(
     () => () => {

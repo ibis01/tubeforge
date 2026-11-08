@@ -259,16 +259,22 @@ export function VideoDetailDialog({
   const auditionRef = useRef<HTMLAudioElement | null>(null);
 
   // Keep the picked voice inside the ACTIVE provider's catalog (switching the
-  // voiceover provider in Settings can invalidate the stored voice).
-  useEffect(() => {
-    if (voices.length && !voices.some((v) => v.id === pickedVoice)) {
-      setPickedVoice(voices[0].id);
-    }
-  }, [voices, pickedVoice]);
-
-  useEffect(() => {
-    if (video) setPickedVoice(video.voice);
-  }, [video?.id, video?.voice]);
+  // voiceover provider in Settings can invalidate the stored voice), and
+  // re-seed it when a different video (or fresh server state) arrives. Both
+  // are render-time adjusts now (guarded, convergent) — same triggers as
+  // the old effects, one fewer paint. Order preserved from the effect
+  // sequence: the catalog validity first, the video re-seed second (a
+  // re-seed that lands an off-catalog voice wins, as before).
+  const [seedVoiceVideoId, setSeedVoiceVideoId] = useState<string | null>(video?.id ?? null);
+  const [seedVoice, setSeedVoice] = useState<string | null>(video?.voice ?? null);
+  if (voices.length && !voices.some((v) => v.id === pickedVoice)) {
+    setPickedVoice(voices[0].id);
+  }
+  if (video && (seedVoiceVideoId !== video.id || seedVoice !== video.voice)) {
+    setSeedVoiceVideoId(video.id);
+    setSeedVoice(video.voice);
+    setPickedVoice(video.voice);
+  }
 
   // Auto-Short state (Phase 5 — 9:16 vertical cut)
   const [shortScenePick, setShortScenePick] = useState<number | "auto">("auto");
@@ -312,51 +318,62 @@ export function VideoDetailDialog({
     [onChanged]
   );
 
-  // Load A/B variants + storyboard whenever the open video changes
-  useEffect(() => {
+  // Reset + re-seed the dialog's transient state whenever the open video
+  // changes — React's documented render-time adjust (guarded seed compare)
+  // replaces the old effect's synchronous block: same trigger (the video
+  // id), same final state, one fewer paint. The network loads stay in the
+  // effect below.
+  const [seedVideoId, setSeedVideoId] = useState<string | null>(video?.id ?? null);
+  if (seedVideoId !== (video?.id ?? null)) {
+    setSeedVideoId(video?.id ?? null);
     if (!video?.id) {
       setVariants([]);
       setScenes([]);
       setSlides(null);
-      return;
+    } else {
+      setRenderMode(video.renderMode ?? "kenburns");
+      setMusicDraft({
+        enabled: video.musicEnabled ?? null,
+        trackId: video.musicTrackId ?? null,
+        volume: video.musicVolume ?? null,
+        fadeIn: video.musicFadeIn ?? null,
+        fadeOut: video.musicFadeOut ?? null,
+        ducking: video.musicDucking ?? null,
+        duckingIntensity: video.musicDuckingIntensity ?? null,
+        mood: video.musicMood && video.musicMood !== "auto" ? video.musicMood : null,
+      });
+      setMotionDraft({
+        mode: video.motionMode ?? null,
+        intensity: video.motionIntensity ?? null,
+        curve: video.motionCurve ?? null,
+        vary: video.motionVary ?? null,
+      });
+      setTransitionDraft({
+        style: video.transitionStyle ?? null,
+        durationSec: video.transitionDuration ?? null,
+      });
+      setEditingScene(null);
+      setRenderLabel(null);
+      setVerifyReport(null);
+      setVerifyRunning(false);
+      setCommentsKit(null);
+      setKitRunning(false);
+      setPubOpen(false); // fresh ship surface per video (S17 — replaces the dead setUploading)
+      setPubBusy(false);
+      setPubProgress(null);
+      setPubDefaults(null);
+      setQcRerunning(false);
+      setCopiedKey(null);
+      setShortScenePick("auto");
+      setShortRunning(false);
+      setExportQuality(video.timeline?.renderPrefs?.quality ?? "standard");
     }
+  }
+
+  // Load A/B variants + storyboard whenever the open video changes
+  useEffect(() => {
+    if (!video?.id) return;
     let cancelled = false;
-    setRenderMode(video.renderMode ?? "kenburns");
-    setMusicDraft({
-      enabled: video.musicEnabled ?? null,
-      trackId: video.musicTrackId ?? null,
-      volume: video.musicVolume ?? null,
-      fadeIn: video.musicFadeIn ?? null,
-      fadeOut: video.musicFadeOut ?? null,
-      ducking: video.musicDucking ?? null,
-      duckingIntensity: video.musicDuckingIntensity ?? null,
-      mood: video.musicMood && video.musicMood !== "auto" ? video.musicMood : null,
-    });
-    setMotionDraft({
-      mode: video.motionMode ?? null,
-      intensity: video.motionIntensity ?? null,
-      curve: video.motionCurve ?? null,
-      vary: video.motionVary ?? null,
-    });
-    setTransitionDraft({
-      style: video.transitionStyle ?? null,
-      durationSec: video.transitionDuration ?? null,
-    });
-    setEditingScene(null);
-    setRenderLabel(null);
-    setVerifyReport(null);
-    setVerifyRunning(false);
-    setCommentsKit(null);
-    setKitRunning(false);
-    setPubOpen(false); // fresh ship surface per video (S17 — replaces the dead setUploading)
-    setPubBusy(false);
-    setPubProgress(null);
-    setPubDefaults(null);
-    setQcRerunning(false);
-    setCopiedKey(null);
-    setShortScenePick("auto");
-    setShortRunning(false);
-    setExportQuality(video.timeline?.renderPrefs?.quality ?? "standard");
     fetch(`/api/videos/${video.id}/verify`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -401,8 +418,12 @@ export function VideoDetailDialog({
       })
       .catch(() => {});
     if (video.format === "story") {
-      reloadScenes(video.id);
-      if (video.renderMode === "slides") reloadSlides(video.id);
+      // Await-first IIFE (see director-card): reloadScenes/reloadSlides are
+      // setState-containing loaders; the async boundary makes that visible.
+      void (async () => {
+        await reloadScenes(video.id);
+        if (video.renderMode === "slides") await reloadSlides(video.id);
+      })();
       // Adopt any render already in flight (survives dialog re-opens).
       fetch(`/api/videos/${video.id}/render`, { cache: "no-store" })
         .then((r) => (r.ok ? r.json() : null))
@@ -421,6 +442,12 @@ export function VideoDetailDialog({
     return () => {
       cancelled = true;
     };
+    // Deps deliberately only [video?.id]: completing them with onChanged
+    // (an unstable inline prop from library-view) would re-run this whole
+    // fetch battery on every parent render; the id key already reloads
+    // everything the dialog shows, and the seed adjust above carries the
+    // fresh field values on the same trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video?.id]);
 
   // ---------- Voice cloning: upload a sample → narrate in that voice ----------
@@ -441,7 +468,12 @@ export function VideoDetailDialog({
 
   // (Re)load the cloned-voice list whenever the clone tab is opened.
   useEffect(() => {
-    if (voiceMode === "clone" && voicePanelOpen) loadCloneProfiles();
+    // Await-first IIFE (see director-card): the rule verifies async
+    // boundaries only in effect-local code.
+    if (voiceMode === "clone" && voicePanelOpen)
+      void (async () => {
+        await loadCloneProfiles();
+      })();
   }, [voiceMode, voicePanelOpen, loadCloneProfiles]);
 
   /** Poll a fresh clone's background audition until it lands (or ~10 min pass). */
@@ -500,7 +532,7 @@ export function VideoDetailDialog({
         });
       }
     },
-    [auditionPlaying, stopAudition]
+    [auditionPlaying, stopAudition, toast]
   );
 
   // ---------- Script editing (Stage 4a, T-4.4) — classic format ----------

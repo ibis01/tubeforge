@@ -127,20 +127,32 @@ export function SceneEditorDialog({
   const [compare, setCompare] = useState<"after" | "before">("after");
   const lastImageRef = useRef<string | null>(null);
 
-  // Re-seed local state whenever a different scene opens.
-  useEffect(() => {
-    if (scene) {
-      setVisual(scene.visual);
-      setMood(scene.mood);
-      setStyle(scene.style || "default");
-      setNarration(scene.narration);
-      setCaption(scene.caption);
-      setInstruction("");
-      setPendingFile(null);
-      setOutfit(scene.appearance?.outfit ?? "");
-      setAccessory(scene.appearance?.accessory ?? "");
-    }
-  }, [scene?.index, scene?.imageUrl, open]);
+  // Re-seed local state whenever a different scene opens — render-time
+  // adjust (guarded seed compare) replacing the re-seed effect: same
+  // trigger triple (scene index, repaint, open), same final state, one
+  // fewer paint.
+  const [sceneSeed, setSceneSeed] = useState({
+    index: scene?.index,
+    imageUrl: scene?.imageUrl,
+    open,
+  });
+  if (
+    scene &&
+    (sceneSeed.index !== scene.index ||
+      sceneSeed.imageUrl !== scene.imageUrl ||
+      sceneSeed.open !== open)
+  ) {
+    setSceneSeed({ index: scene.index, imageUrl: scene.imageUrl, open });
+    setVisual(scene.visual);
+    setMood(scene.mood);
+    setStyle(scene.style || "default");
+    setNarration(scene.narration);
+    setCaption(scene.caption);
+    setInstruction("");
+    setPendingFile(null);
+    setOutfit(scene.appearance?.outfit ?? "");
+    setAccessory(scene.appearance?.accessory ?? "");
+  }
 
   // Track image transitions while open — any repaint (re-roll, AI edit,
   // upload) records the previous take for the Before/After compare.

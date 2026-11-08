@@ -79,6 +79,7 @@ export function AttentionPanel() {
   const { toast } = useToast();
   const bumpRefresh = useAppStore((s) => s.bumpRefresh);
   const setView = useAppStore((s) => s.setView);
+  const refreshKey = useAppStore((s) => s.refreshKey);
   const [jobs, setJobs] = useState<JobDTO[] | null>(null);
   const [resuming, setResuming] = useState<string | null>(null);
 
@@ -92,11 +93,28 @@ export function AttentionPanel() {
     }
   }, []);
 
+  // The effect owns an inlined, await-first tick (the lint rule cannot see
+  // through called functions' awaits, but verifies effect-local ones); the
+  // shared `load` below stays for the event paths (resume, cancel). The
+  // alive flag keeps a late response from setting state after cleanup.
   useEffect(() => {
-    void load();
-    const t = setInterval(() => void load(), 8000); // live while renders run
-    return () => clearInterval(t);
-  }, [load, useAppStore((s) => s.refreshKey)]);
+    let alive = true;
+    const tick = async () => {
+      try {
+        const res = await fetch("/api/jobs?limit=40", { cache: "no-store" });
+        const d = (await res.json()) as { jobs: JobDTO[] };
+        if (alive) setJobs(d.jobs ?? []);
+      } catch {
+        if (alive) setJobs([]);
+      }
+    };
+    void tick();
+    const t = setInterval(() => void tick(), 8000); // live while renders run
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [refreshKey]);
 
   if (jobs === null) return null;
 

@@ -51,7 +51,11 @@ export function ChannelsView() {
   }, []);
 
   useEffect(() => {
-    load();
+    // Await-first IIFE (see director-card): the rule verifies async
+    // boundaries only in effect-local code.
+    void (async () => {
+      await load();
+    })();
   }, [load, refreshKey]);
 
   const handleCreate = async () => {

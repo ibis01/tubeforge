@@ -126,7 +126,11 @@ export function DirectorCard({
 
   useEffect(() => {
     alive.current = true;
-    void load();
+    // Await-first IIFE: the loader's setStates all sit behind its own awaits,
+    // and the wrapper makes that async boundary visible to the effect lint.
+    void (async () => {
+      await load();
+    })();
     return () => {
       alive.current = false;
     };

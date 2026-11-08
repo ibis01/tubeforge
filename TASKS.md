@@ -2172,16 +2172,28 @@ The reconnaissance found three honest families, not 42 one-offs:
 
 | Task | Status | Notes |
 |---|---|---|
-| T-59.1 Family A — the 13 sync-first loads | ⏳ | Per-site: derive busy from key-match, loader prefix goes setState-free, setState only after await. Files: account-card, attention-panel, auth-gate, director-card, music-controls, plan-card, security-card ×2, timeline-studio L523, channels-view, research-view, voice-view, video-detail L444. |
-| T-59.2 Family B — the prop→state mirrors | ⏳ | Render-time adjust (guarded seed compare) replacing the re-seed effects. Files: brand-kit, scene-editor, video-detail L265/270, cast-view, timeline-studio L4189, create-view L382. |
-| T-59.3 Family C — the resets | ⏳ | Render-time adjust or event-handler moves. Files: command-palette ×2, timeline-studio L1217/1389/1543/4250, create-view L289/472, calendar-view L140, video-detail L318. |
-| T-59.4 Family D+E — deps + vendored | ⏳ | The 9 exhaustive-deps completions (incl. the complex-expression extraction) + use-mobile's useSyncExternalStore + carousel's restructure. |
-| T-59.5 the freeze + census | ⏳ | `react-hooks/set-state-in-effect` and `react-hooks/exhaustive-deps` promoted to **error**; census re-recorded (expect the remaining 20: unused-expressions 11, any 7, two singles). |
-| T-59.6 the gates + live battery | ⏳ | tsc · eslint · unit · billing · queue · `next build` — plus the LIVE preview battery exercising the affected views (settings/account, brand kit, command palette, timeline studio, video dialog, calendar, research, voice, channels) on the standalone server. |
-| T-59.7 reliability record | ⏳ | `docs/audits/s59-reliability-record.md` — the evidence chain, the landing constraint (the S58-close PAT transited chat once and must be rotated before the next landing), the honest list of any behavior deltas. |
+| T-59.1 Family A — the 13 sync-first loads | ✅ Done (2026-11-08) | Await-first IIFE wraps (the rule's boundary established empirically first: it does not model awaits inside called functions; an await-first IIFE wrapping the call is clean — probe files linted then deleted, method disclosed). account-card instead got DERIVED busy (loadedDays !== usageDays — the loader's sync prefix sets no state at all). attention-panel's effect owns an inlined alive-guarded tick; auth-gate split probeStatus/applyStatus so the mount effect awaits first while submit keeps refresh().
+| T-59.2 Family B — the prop→state mirrors | ✅ Done (2026-11-08) | Render-time adjusts (React's documented guarded seed compare — same triggers, same final state, one fewer paint): brand-kit (videoId+accent), scene-editor (nine fields, index+imageUrl+open), cast-view (reference), timeline's scriptDraft (index+narration), vdd's ~25-setter re-seed block (video id — the census's single flagged line was one-per-effect; the rest surfaced and were fixed), create-view's analysis reset + draft-banner retirement.
+| T-59.3 Family C — the resets | ✅ Done (2026-11-08) | command-palette (open + query resets), timeline's delete/voice/pace disarm (their picks), vdd's variants clear, create-view's draftRestored. calendar's schedule command: render-time adjust for the React sets + a store-write-only effect for the consume.
+| T-59.4 Family D+E — deps + vendored | ✅ Done (2026-11-08) | toast (module-constant) added at three sites; attention-panel's complex dep extracted; research-view's active removed via functional update; create-view's startStock added; vdd's fetch battery keeps [video?.id] under the stage's ONE reasoned inline disable (unstable inline onChanged prop — completing would storm; disclosed in the record). use-mobile rewritten onto useSyncExternalStore; carousel's initial canScroll sync moved to a render-time adjust keyed on the api identity.
+| T-59.5 the freeze + census | ✅ Done (2026-11-08) | Both rules promoted to error, no carve-outs. Census: docs/baselines/s59-lint-census-2026-11-08.txt — 0 errors · 20 warnings (62→20: unused-expressions 11, any 7, two singles).
+| T-59.6 the gates + live battery | ✅ Done (2026-11-08) | tsc 0 · eslint 0/20 · 247/247 unit · billing 40/40 · queue PASS · build exit 0 (57/57, same four warnings). LIVE battery: register through the restructured gate, nine views walked, Settings cards with live data (derived-busy proven), create-view draft save→reload→restore (the applyDraft fold), palette open/filter/close, mobile breakpoint both ways — ZERO page/console errors. Honest limit: vdd/timeline/scene-editor deep paths not live-exercised (no videos locally; CI E2E covers on landing).
+| T-59.7 reliability record | ✅ Done (2026-11-08) | docs/audits/s59-reliability-record.md — the rule-boundary probes, the five moves, the one owned disable, the gate table + live battery, the landing constraint (rotated PAT — the S57+S58 one transited chat once), the spend-gate law untouched.
 
 Landing constraint (declared up front, the standing law): S59 executes
 and verifies locally on top of `39721de`; the push, the CI runs, and the
 stage close ride a **rotated** PAT (the current one landed S57+S58 and
 transited chat once already — rotation was the recorded instruction). A
 bundle ships in the delivery so the sixth reclaim loses nothing.
+
+Stage status (2026-11-08, end of session): **all seven tasks executed and
+locally verified; the stage is NOT closed** — the close requires the pushed
+commit's CI evidence (the project's law), and the landing PAT must be a
+ROTATED one (the S57+S58 token transited chat once; rotation was the
+recorded instruction at both closes). What IS verified: tsc 0 · eslint
+**0 errors/20 warnings** under the frozen config (set-state-in-effect
+33→0 and exhaustive-deps 9→0, both at error) · **247/247 unit** · billing
+40/40 · queue PASS · build exit 0 · the live preview battery green with
+zero page/console errors. The moment a rotated PAT lands: push
+`39721de..HEAD`, watch the CI run on the head, record it in the S59
+reliability record, and close the stage.

@@ -47,11 +47,21 @@ export function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
+  // Reset the transient palette state when it opens — React's documented
+  // "adjust state when a prop changes" form (setState during render, guarded
+  // by a seed compare): same trigger as the old effect, one fewer paint.
+  const [wasOpen, setWasOpen] = useState(paletteOpen);
+  if (wasOpen !== paletteOpen) {
+    setWasOpen(paletteOpen);
+    if (paletteOpen) {
+      setQuery("");
+      setActive(0);
+    }
+  }
+
   // Recent videos load when the palette opens (cheap, capped, cache-busts).
   useEffect(() => {
     if (!paletteOpen) return;
-    setQuery("");
-    setActive(0);
     fetch("/api/videos?limit=8")
       .then((r) => r.json())
       .then((d) => setRecent(d.videos ?? []))
@@ -109,8 +119,13 @@ export function CommandPalette() {
     return items.filter((it) => it.keywords.includes(q) || it.label.toLowerCase().includes(q));
   }, [items, query]);
 
-  // Reset the cursor whenever the result set changes shape.
-  useEffect(() => setActive(0), [query]);
+  // Reset the cursor whenever the result set changes shape — same guarded
+  // render-time adjust as the open reset above.
+  const [seedQuery, setSeedQuery] = useState(query);
+  if (seedQuery !== query) {
+    setSeedQuery(query);
+    setActive(0);
+  }
 
   // Keep the highlighted row in view during arrow navigation.
   useEffect(() => {

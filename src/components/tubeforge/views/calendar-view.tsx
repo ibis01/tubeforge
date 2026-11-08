@@ -128,21 +128,32 @@ export function CalendarView() {
     } finally {
       setLoading(false);
     }
-  }, [cursor]);
+  }, [cursor, toast]);
 
   useEffect(() => {
-    load();
+    // Await-first IIFE (see director-card): the rule verifies async
+    // boundaries only in effect-local code.
+    void (async () => {
+      await load();
+    })();
   }, [load]);
 
-  // Open create dialog when arriving from another view with a video preselected
-  useEffect(() => {
+  // Open create dialog when arriving from another view with a video
+  // preselected — the store command is consumed by a render-time adjust
+  // (guarded seed compare; the React setStates) plus a small effect that
+  // only resets the store field (an external write, not a React setState).
+  const [seenSchedule, setSeenSchedule] = useState<string | null>(scheduleVideoId);
+  if (seenSchedule !== scheduleVideoId) {
+    setSeenSchedule(scheduleVideoId);
     if (scheduleVideoId) {
       setPickVideo(scheduleVideoId);
       setSlotDate(toDayString(new Date()));
       setCreateOpen(true);
-      setScheduleVideoId(null);
     }
-  }, [scheduleVideoId, setScheduleVideoId]);
+  }
+  useEffect(() => {
+    if (scheduleVideoId && seenSchedule === scheduleVideoId) setScheduleVideoId(null);
+  }, [scheduleVideoId, seenSchedule, setScheduleVideoId]);
 
   const days = useMemo(() => {
     const start = startOfWeek(startOfMonth(cursor), { weekStartsOn: 1 });
