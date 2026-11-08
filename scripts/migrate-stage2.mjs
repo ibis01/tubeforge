@@ -24,6 +24,12 @@
 //        DEFAULT, Setting -> LegacySetting rename, bootstrap org, partial
 //        index, and every later stage). Runs from postinstall on every
 //        deploy: idempotent (a fully-migrated database is a no-op).
+//        S60 repairs (both idempotent, both observed live on the production
+//        Vercel DB): the VoiceProfile missing-table repair below, and the
+//        Setting_pkey survivor — stage2's ALTER TABLE RENAME leaves the PK
+//        constraint's ORIGINAL name on LegacySetting, so auth_setting's
+//        CREATE TABLE "Setting" collides with it (42P07) and the chain
+//        wedges on every deploy until the survivor is renamed away.
 //
 // WHY THE BOOTSTRAP ORG EXISTS: legacy single-user data must keep a tenant
 // after the schema change. It is parked under organization 'default' until the
@@ -105,6 +111,26 @@ export const BASELINE_SENTINELS = [
   { migration: "20261102010000_stage7_billing", table: "Plan" },
   { migration: "20261102020000_stage71_billing_integrity", table: "ProcessedWebhookEvent" },
   { migration: "20261102030000_stage72_credit_reservations", column: ["CreditLedger", "reconcilesId"] },
+  // S60 — the tail sentinels. The list MUST track prisma/migrations/*; it
+  // had silently stopped at stage72, so a legacy database db-push'd at any
+  // newer era collided with the chain's CREATE TABLEs and wedged. Two
+  // disambiguations worth knowing:
+  //   • auth_setting's Setting has the same NAME as init's but a different
+  //     shape — init's carried updatedAt, auth_setting's does not. An
+  //     init-era fingerprint (Setting WITH updatedAt) must fall through to
+  //     the init sentinel, never baseline the tail.
+  //   • s40/s49 fingerprint on Video columns, the same fields the dashboard
+  //     routes select — the exact columns whose absence 500s /api/videos.
+  {
+    migration: "20261102040000_auth_setting",
+    table: "Setting",
+    unlessColumn: ["Setting", "updatedAt"],
+  },
+  { migration: "20261104140000_s20_api_token_registry", table: "ApiToken" },
+  { migration: "20261105000000_s32_spend_reservations", table: "SpendReservation" },
+  { migration: "20261106000000_s40_qc_enforcement", column: ["Video", "qcOverrideAt"] },
+  { migration: "20261107000000_s46_auth_attempt", table: "AuthAttempt" },
+  { migration: "20261107000000_s49_content_policy", column: ["Video", "contentPolicy"] },
 ];
 
 /** Pure decision: given the schema fingerprint, which migration prefix must
@@ -119,7 +145,8 @@ export function decideBaselinePrefix(
   for (let i = sentinels.length - 1; i >= 0; i--) {
     const s = sentinels[i];
     const present = s.table
-      ? hasTable(s.table)
+      ? hasTable(s.table) &&
+        !(s.unlessColumn && hasColumn(s.unlessColumn[0], s.unlessColumn[1]))
       : s.column
         ? hasColumn(s.column[0], s.column[1])
         : false;
@@ -136,8 +163,8 @@ async function pgFingerprint(prisma) {
   );
   const tableSet = new Set(tables.map((t) => t.name));
   const wantedTables = new Set(
-    BASELINE_SENTINELS.filter((s) => s.column)
-      .map((s) => s.column[0])
+    BASELINE_SENTINELS.filter((s) => s.column || s.unlessColumn)
+      .map((s) => (s.column ?? s.unlessColumn)[0])
       .filter((t) => tableSet.has(t))
   );
   const columns = new Set();
@@ -152,6 +179,39 @@ async function pgFingerprint(prisma) {
     hasTable: (t) => tableSet.has(t),
     hasColumn: (t, c) => columns.has(`${t}.${c}`),
   };
+}
+
+/** S60 — the auth_setting wedge repair. Postgres's ALTER TABLE … RENAME TO
+ * renames the table but NOT its constraints: stage2's Setting →
+ * LegacySetting rename leaves a PK still named "Setting_pkey" on
+ * LegacySetting. auth_setting later re-creates Setting with CONSTRAINT
+ * "Setting_pkey" — the names collide (42P07) and `migrate deploy` fails on
+ * EVERY deploy, retried and re-failed by the recovery loop forever
+ * (observed live: ~90 rolled-back auth_setting rows on the production
+ * Vercel DB, one per build since 2026-11-02 — and every full-select Video
+ * query 500ing because s40/s49's columns never landed). Renaming the
+ * survivor un-wedges the chain. Idempotent: the guard is exactly the
+ * wedge's fingerprint (survivor present, Setting absent). */
+async function pgRepairSettingPkeySurvivor(prisma) {
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT COUNT(*)::int AS n
+       FROM pg_constraint c
+       JOIN pg_class t ON t.oid = c.conrelid
+       JOIN pg_namespace ns ON ns.oid = t.relnamespace
+      WHERE ns.nspname = 'public' AND t.relname = 'LegacySetting'
+        AND c.conname = 'Setting_pkey'`
+  );
+  if (Number(rows?.[0]?.n ?? 0) === 0) return;
+  const setting = await prisma.$queryRawUnsafe(
+    `SELECT COUNT(*)::int AS n FROM pg_tables
+      WHERE schemaname = 'public' AND tablename = 'Setting'`
+  );
+  if (Number(setting?.[0]?.n ?? 0) > 0) return; // auth_setting-era DB — not our wedge
+  log('repair: renaming the surviving "Setting_pkey" constraint on LegacySetting (the auth_setting wedge)');
+  execSql(
+    "prisma/schema.prisma",
+    `ALTER TABLE "LegacySetting" RENAME CONSTRAINT "Setting_pkey" TO "LegacySetting_pkey";`
+  );
 }
 
 /** Pre-deploy repair for unmanaged legacy databases: the chain assumes the
@@ -201,6 +261,7 @@ async function pgRepairMissingInitTables(prisma) {
  *  applies pending migrations from the chain. */
 async function postgresMigrate(prisma) {
   await pgRepairMissingInitTables(prisma);
+  await pgRepairSettingPkeySurvivor(prisma);
 
   const historyRows = await prisma.$queryRawUnsafe(
     `SELECT COUNT(*)::int AS n FROM information_schema.tables

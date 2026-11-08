@@ -2830,18 +2830,68 @@ await test("migrate-stage2: decideBaselinePrefix fingerprints every schema era",
   eq(decideBaselinePrefix(S, fp([]).hasTable, fp([]).hasColumn).length, 0, "empty DB → no baseline");
 
   // Stage-1 legacy (Vercel Postgres pushed with db push in the old era):
-  // Setting exists → baseline init only.
-  const legacy = fp(["Channel", "Character", "Video", "Setting"]);
+  // Setting exists — WITH init's updatedAt column — → baseline init only.
+  // S60 regression guard: auth_setting's sentinel keys on the same TABLE
+  // name; only the missing updatedAt distinguishes the eras. A legacy
+  // fingerprint that omits the column would falsely baseline the tail.
+  const legacy = fp(
+    ["Channel", "Character", "Video", "Setting"],
+    ["Setting.updatedAt"]
+  );
   eq(
     decideBaselinePrefix(S, legacy.hasTable, legacy.hasColumn),
     ["000000000000_init"],
-    "Stage-1 schema → baseline init only"
+    "Stage-1 schema (Setting WITH updatedAt) → baseline init only"
+  );
+
+  // S60 — auth_setting-era db-push (Setting exists WITHOUT updatedAt — the
+  // re-created keystore shape — but no ApiToken yet) → baseline through
+  // auth_setting; deploy applies s20 onward.
+  const authGate = fp(
+    ["User", "Organization", "Plan", "CreditLedger", "Setting"],
+    ["Video.timeline", "CreditLedger.reconcilesId"]
+  );
+  const authGatePrefix = decideBaselinePrefix(S, authGate.hasTable, authGate.hasColumn);
+  eq(
+    authGatePrefix[authGatePrefix.length - 1],
+    "20261102040000_auth_setting",
+    "auth_setting-era schema → newest sentinel is auth_setting"
+  );
+
+  // S60 — s40-era db-push (qcOverride columns landed, s46/s49 not) →
+  // baseline through s40; deploy applies s46 + s49.
+  const s40era = fp(
+    ["User", "Organization", "Plan", "CreditLedger", "Setting", "ApiToken", "SpendReservation"],
+    ["Video.timeline", "CreditLedger.reconcilesId", "Video.qcOverrideAt"]
+  );
+  const s40Prefix = decideBaselinePrefix(S, s40era.hasTable, s40era.hasColumn);
+  eq(
+    s40Prefix[s40Prefix.length - 1],
+    "20261106000000_s40_qc_enforcement",
+    "s40-era schema → newest sentinel is s40"
   );
 
   // Fully modern db-push'd schema → the entire chain is baselined.
   const modern = fp(
-    ["User", "Organization", "Plan", "ProcessedWebhookEvent", "CreditLedger"],
-    ["Video.shotList", "Video.timeline", "Job.payload", "CreditLedger.reconcilesId"]
+    [
+      "User",
+      "Organization",
+      "Plan",
+      "ProcessedWebhookEvent",
+      "CreditLedger",
+      "Setting",
+      "ApiToken",
+      "SpendReservation",
+      "AuthAttempt",
+    ],
+    [
+      "Video.shotList",
+      "Video.timeline",
+      "Job.payload",
+      "CreditLedger.reconcilesId",
+      "Video.qcOverrideAt",
+      "Video.contentPolicy",
+    ]
   );
   eq(
     decideBaselinePrefix(S, modern.hasTable, modern.hasColumn).length,

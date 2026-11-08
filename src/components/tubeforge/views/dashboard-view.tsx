@@ -65,20 +65,23 @@ export function DashboardView() {
 
   useEffect(() => {
     let cancelled = false;
+    // S60: the two loads degrade independently. The old blind Promise.all
+    // with r.json() turned ANY non-JSON response (an empty-bodied 500 from
+    // a route that crashed) into a rejected chain — a failing /api/videos
+    // blanked the whole dashboard as "the stats service did not respond"
+    // even with a healthy stats payload in hand. Each fetch now guards its
+    // own ok + JSON parse; the error card means STATS specifically failed.
+    const getJson = (r: Response) => (r.ok ? r.json().catch(() => null) : null);
     Promise.all([
-      fetch("/api/stats").then((r) => r.json()),
-      fetch("/api/videos?limit=6").then((r) => r.json()),
-    ])
-      .then(([statsData, videosData]) => {
-        if (!cancelled) {
-          setStats(statsData.stats ?? null);
-          setVideos(videosData.videos ?? []);
-          setLoading(false);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setLoading(false);
-      });
+      fetch("/api/stats").then(getJson).catch(() => null),
+      fetch("/api/videos?limit=6").then(getJson).catch(() => null),
+    ]).then(([statsData, videosData]) => {
+      if (!cancelled) {
+        setStats(statsData?.stats ?? null);
+        setVideos(videosData?.videos ?? []);
+        setLoading(false);
+      }
+    });
     return () => {
       cancelled = true;
     };

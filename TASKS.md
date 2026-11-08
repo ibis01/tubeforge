@@ -2202,3 +2202,39 @@ recorded above (tsc 0 · eslint 0/20 frozen · 247/247 unit · billing 40/40
 · queue PASS · build exit 0 · live battery zero errors). The landing PAT
 transited chat once — rotation is the recorded instruction at this close
 too.
+
+## S60 — production incident: the Vercel dashboard 500s (opened + executed 2026-11-08 UTC, owner-directed "SOLVE")
+
+The owner reported the deployed app (tubeforge-ibismuh.vercel.app) showing
+"Could not load dashboard — The stats service did not respond." The live
+triage (a registered probe account + the public /api/diag fingerprint)
+found the real shape within minutes: /api/stats was NEVER the failure —
+/api/videos (and every full-select Video route) returned empty-bodied 500s
+because the deployed Postgres schema is wedged mid-migration-chain, while
+narrow-select routes (stats, characters, settings, voices) kept working.
+
+| Task | Status | Notes |
+|---|---|---|
+| T-60.1 live triage | ✅ Done (2026-11-08) | Blast radius mapped: /api/videos + /api/videos/stats + /api/account/usage → 500; stats/characters/settings/voices/auth → 200. /api/diag (public, the earlier Vercel-500 incident's tool) fingerprinted the DB: migrations init→stage72 finished, auth_setting ~90 rolled-back failed rows (one per deploy since 2026-11-02), s20/s32/s40/s46/s49 never attempted. |
+| T-60.2 root cause on a real Postgres | ✅ Done (2026-11-08) | Reproduced 1:1 on a local embedded Postgres 17 (scripts/pgtest): chain applied through stage72 → `migrate deploy` fails at auth_setting with 42P07 "relation Setting_pkey already exists". Mechanism: Postgres's ALTER TABLE RENAME (stage2's Setting→LegacySetting) renames the table but NOT its PK constraint — the orphaned Setting_pkey survives on LegacySetting and collides with auth_setting's CREATE TABLE Setting. Deterministic on EVERY Postgres DB that walked the chain; the non-fatal postinstall catch hid it; each deploy's failed-row recovery retried and re-failed forever. s40/s49's Video columns (qcOverrideAt, contentPolicy) therefore never landed → every full-select Video query P2022s → empty-body 500 → the dashboard's blind Promise.all r.json() rejected → the owner's error card. |
+| T-60.3 the migration self-heal | ✅ Done (2026-11-08) | scripts/migrate-stage2.mjs: (a) pgRepairSettingPkeySurvivor — renames the surviving constraint to LegacySetting_pkey when the wedge fingerprint is present (idempotent, guarded); (b) BASELINE_SENTINELS extended through s49 (it had silently stopped at stage72), with unlessColumn disambiguation so init-era Setting (WITH updatedAt) can never baseline the tail; (c) pgFingerprint reads Setting's columns. Unit tests extended: init-era regression guard, auth_setting-era, s40-era, modern-era. |
+| T-60.4 the usage route's Postgres bugs | ✅ Done (2026-11-08) | /api/account/usage's daily-sparkline raw SQL was SQLite-only: unquoted camelCase identifiers (Postgres folds to lowercase → 42703) AND `ok = 0` (a type error on Postgres booleans). Fixed: all identifiers quoted, predicate `NOT "ok"` — verified on BOTH providers (PG: old fails 42703 / new ok; SQLite: suites green). |
+| T-60.5 the dashboard's blind Promise.all | ✅ Done (2026-11-08) | dashboard-view: the two loads now degrade independently (per-fetch ok + JSON-parse guard). A failing /api/videos can no longer blank the dashboard as a STATS failure — the error card now means stats specifically failed. |
+| T-60.6 the reproduction battery | ✅ Done (2026-11-08) | On the stale PG repro (the exact production shape): dev server + browser — /api/videos 500 IN SESSION and the dashboard rendered FULLY anyway (resilience fix proven under fire; screenshot tf-s60-dashboard-resilient.png); /api/account/usage 200 (the fixed SQL). Then the AUTHENTIC deploy path (DATABASE_URL=pg node scripts/postinstall.mjs): repair fired, failed row resolved, all six pending migrations applied, "No pending migrations", videos/usage/stats all 200, dashboard fully rendered (tf-s60-dashboard-healed.png). |
+| T-60.7 the gates | ✅ Done (2026-11-08) | tsc 0 · eslint 0 errors/20 warnings (census unchanged — the S60 diff added zero) · unit 247/247 (incl. the new sentinel cases) · billing 40/40 · queue PASS · build exit 0 (57/57, same four warnings) · E2E 26/26. |
+| T-60.8 record + delivery | ✅ Done (2026-11-08) | docs/audits/s60-production-incident-record.md; S60-DELIVERY.md + bundle in the delivery. |
+
+Landing constraint (the standing law): S60 executes and verifies locally on
+top of `5c7912d` (the S59 close, current remote main). The push, CI, and
+stage close ride a ROTATED PAT — the S59 landing token transited chat once.
+The deployed database HEALS ITSELF on the first deploy of this fix
+(postinstall runs the repair + recovery + deploy); a manual-instant path is
+documented in the delivery for the owner.
+
+Owner-side findings surfaced by the incident (not code): the Vercel
+deployment runs without TUBEFORGE_ENCRYPTION_KEY (diag: encryptionKey false
+— provider-credential encryption and the security card need it); /api/diag
+is still public (close it once this incident is confirmed healed);
+DEPLOYMENT.md's doctrine stands — Vercel is a preview surface, Fly+Neon is
+the deployment of record; whichever runs, the DB needs the migration chain,
+and this fix makes that self-healing.

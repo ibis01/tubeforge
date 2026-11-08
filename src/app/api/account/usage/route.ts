@@ -79,14 +79,17 @@ export async function GET(req: NextRequest) {
     byCapability.set(row.capability, entry);
   }
 
-  // Daily call volume for the sparkline (portable SQL — date() exists in
-  // SQLite and is a no-op passthrough on Postgres TEXT timestamps; the CI
-  // Postgres job pins the schema, this query shape is the SQLite path).
+  // Daily call volume for the sparkline. S60 portability: every identifier
+  // is quoted (Postgres folds unquoted camelCase to lowercase — 42703 —
+  // and SQLite accepts standard double-quoted identifiers), and the failure
+  // predicate is `NOT ok`, which is boolean on Postgres and 0/1 on SQLite
+  // (`ok = 0` is a type error on Postgres booleans). Verified on both
+  // providers in the S60 record.
   const daily = await rawDb.$queryRaw<{ day: string; calls: bigint; failures: bigint }[]>`
-    SELECT substr(CAST(createdAt AS TEXT), 1, 10) AS day, COUNT(*) AS calls,
-           SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failures
-    FROM UsageRecord
-    WHERE userId = ${userId} AND createdAt >= ${since}
+    SELECT substr(CAST("createdAt" AS TEXT), 1, 10) AS day, COUNT(*) AS calls,
+           SUM(CASE WHEN NOT "ok" THEN 1 ELSE 0 END) AS failures
+    FROM "UsageRecord"
+    WHERE "userId" = ${userId} AND "createdAt" >= ${since}
     GROUP BY day ORDER BY day ASC`;
 
   const totalCalls = [...byCapability.values()].reduce((a, c) => a + c.calls, 0);
