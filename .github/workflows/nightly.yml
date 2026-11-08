@@ -38,8 +38,28 @@ jobs:
     name: Route-probe battery (19 probes, production server)
     runs-on: ubuntu-24.04
     timeout-minutes: 75
+    # ABSOLUTE DATABASE_URL for the whole job — the lesson of the first
+    # nightly run (42462735659): with the postinstall .env's RELATIVE
+    # file:../db/custom.db, the standalone server (which chdirs to
+    # .next/standalone and loads the .env the build copies there) and the
+    # probe processes (repo-root cwd, their own Prisma client) resolve the
+    # relative path against DIFFERENT bases — the server wrote one SQLite
+    # file while the probes read another, and every org-resolution check
+    # failed (13 probes red on registers that actually succeeded). An
+    # absolute path gives every process in the job the SAME file — the
+    # exact pattern .env.example prescribes for standalone deployments.
+    env:
+      DATABASE_URL: file:${{ github.workspace }}/db/custom.db
     steps:
       - uses: actions/checkout@v4
+
+      - name: Provision per-run secrets
+        # With the job-level DATABASE_URL set, postinstall never writes its
+        # .env — so the signing + encryption secrets must come from here.
+        # Fresh per run (sessions/credentials never survive the runner).
+        run: |
+          echo "TUBEFORGE_AUTH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "TUBEFORGE_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
