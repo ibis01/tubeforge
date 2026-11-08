@@ -228,13 +228,17 @@ async function runPhase(label, probes) {
       failed += 1;
       failedNames.push(p);
     }
-    const tail = (r.stdout ?? "").trim().split("\n").pop() ?? "";
-    const errLines = (r.stderr ?? "").trim().split("\n").filter(Boolean);
+    const tail = (r.stdout ?? "").trim().split("\n").filter(Boolean);
     if (ok) {
-      console.log(`PASS (${tail.slice(0, 90)})`);
+      console.log(`PASS (${(tail.pop() ?? "").slice(0, 90)})`);
     } else {
-      console.log(`FAIL exit=${r.status} signal=${r.signal} — ${tail.slice(0, 120)}`);
-      for (const line of errLines.slice(-5)) console.log(`      stderr: ${line.slice(0, 200)}`);
+      console.log(`FAIL exit=${r.status} signal=${r.signal} — ${(tail.pop() ?? "").slice(0, 120)}`);
+      // The probe's own check lines carry the WHY — surface them (the
+      // first nightly run failed 13 probes with only tail lines visible).
+      const detail = (r.stdout ?? "").split("\n").filter((l) => /FAIL|Error|error/i.test(l)).slice(0, 8);
+      for (const line of detail) console.log(`      ${line.slice(0, 190)}`);
+      const errLines = (r.stderr ?? "").trim().split("\n").filter(Boolean);
+      for (const line of errLines.slice(-3)) console.log(`      stderr: ${line.slice(0, 190)}`);
     }
   }
   return { failed, failedNames };
