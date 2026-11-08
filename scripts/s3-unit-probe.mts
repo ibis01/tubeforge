@@ -26,6 +26,13 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   if (!ok) failures++;
 };
 
+// S58 — the named-fixture guard: a missing token/row/hold becomes a labeled
+// error instead of a TypeError at the deref.
+const req = <T,>(label: string, v: T | undefined | null): T => {
+  if (v === undefined || v === null) throw new Error(`missing: ${label}`);
+  return v;
+};
+
 // ---- hostile docs through the sanitizers ----
 check(
   "sanitizeChroma rejects garbage, keeps legal values clamped",
@@ -67,8 +74,8 @@ const scenes = [
 ] as never;
 
 const doc = assembleTimeline(scenes as never, {});
-doc.scenes[0].chroma = sanitizeChroma({ color: "#00FF00" })!;
-doc.scenes[0].pip = sanitizePip({ pos: "br" })!;
+doc.scenes[0].chroma = req("sanitized chroma", sanitizeChroma({ color: "#00FF00" }));
+doc.scenes[0].pip = req("sanitized pip", sanitizePip({ pos: "br" }));
 doc.scenes[1].chroma = { color: "drop table", similarity: 0.5, blend: 1, background: "x" } as never; // hostile passthrough
 
 const settings = docSceneSettings(doc, 2);
@@ -142,7 +149,7 @@ check(
 );
 
 // ---- the filter builders: labels chain, long overlay variable names ----
-const c = chromaFilterChain(sanitizeChroma({ color: "#00FF00" })!, { w: 1920, h: 1080, dur: 4, fps: 30, grade: "eq=contrast=1.05" });
+const c = chromaFilterChain(req("sanitized chroma", sanitizeChroma({ color: "#00FF00" })), { w: 1920, h: 1080, dur: 4, fps: 30, grade: "eq=contrast=1.05" });
 check(
   "chromaFilterChain: key → color bg → overlay → grade, [vc] tail",
   c.chain.includes("chromakey=0x00FF00") &&
@@ -150,7 +157,7 @@ check(
     c.chain.includes("overlay=0:0:shortest=1,eq=contrast=1.05") &&
     c.outLabel === "[vc]"
 );
-const p = pipOverlayFilter(sanitizePip({ pos: "br" })!, { pipInput: 4, frameW: 1920, frameH: 1080 });
+const p = pipOverlayFilter(req("sanitized pip", sanitizePip({ pos: "br" })), { pipInput: 4, frameW: 1920, frameH: 1080 });
 check(
   "pipOverlayFilter: long variable names only (this ffmpeg drops w/W aliases), [vp] tail",
   p.chain.includes("main_w-overlay_w-") &&

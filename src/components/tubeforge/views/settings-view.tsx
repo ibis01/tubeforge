@@ -1997,13 +1997,13 @@ function StockFootageSection() {
             {tests[row.id] && (
               <div
                 className={`rounded-lg border px-3 py-2 text-xs leading-relaxed ${
-                  tests[row.id]!.ok
+                  tests[row.id]?.ok
                     ? "border-emerald-500/25 bg-emerald-500/8 text-emerald-200"
                     : "border-red-500/25 bg-red-500/8 text-red-200"
                 }`}
               >
-                {tests[row.id]!.ok ? "✓ " : "✗ "}
-                {tests[row.id]!.text}
+                {tests[row.id]?.ok ? "✓ " : "✗ "}
+                {tests[row.id]?.text}
               </div>
             )}
           </div>

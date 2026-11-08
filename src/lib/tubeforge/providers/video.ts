@@ -8,7 +8,7 @@
 
 import { zaiClientFor } from "../zai-client";
 import { getCapability, type CapabilityConfig } from "./settings";
-import { providerMeta } from "./registry";
+import { providerMetaRequired } from "./registry";
 import { joinUrl, providerFetch, providerFetchJson } from "./http";
 import { zaiVideoViaClient } from "./zai-video-core";
 
@@ -156,7 +156,7 @@ async function huggingFaceVideo(
   req: ImageToVideoRequest,
   config: CapabilityConfig,
 ): Promise<Buffer> {
-  const meta = providerMeta("video", "huggingface")!;
+  const meta = providerMetaRequired("video", "huggingface");
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const model =
     config.model?.trim() || "stabilityai/stable-video-diffusion-img2vid-xt";
@@ -197,7 +197,7 @@ async function runwayVideo(
   req: ImageToVideoRequest,
   config: CapabilityConfig,
 ): Promise<Buffer> {
-  const meta = providerMeta("video", "runway")!;
+  const meta = providerMetaRequired("video", "runway");
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const model = config.model?.trim() || "gen4_turbo";
   const key = config.apiKey?.trim();
@@ -256,7 +256,7 @@ async function lumaVideo(
   req: ImageToVideoRequest,
   config: CapabilityConfig,
 ): Promise<Buffer> {
-  const meta = providerMeta("video", "luma")!;
+  const meta = providerMetaRequired("video", "luma");
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const model = config.model?.trim() || "ray-2";
   const key = config.apiKey?.trim();

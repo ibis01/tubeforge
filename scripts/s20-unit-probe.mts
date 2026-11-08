@@ -41,9 +41,18 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   if (!ok) failures++;
 };
 
+// S58 — the named-fixture guard: a missing token/row becomes a labeled
+// error instead of a TypeError at the deref.
+const req = <T,>(label: string, v: T | undefined | null): T => {
+  if (v === undefined || v === null) throw new Error(`missing: ${label}`);
+  return v;
+};
+
 const reqWith = (opts: RequestInit) => new NextRequest("http://probe.local/api/anything", opts);
 const bearerReq = (token: string) =>
   reqWith({ headers: { authorization: `Bearer ${token}` } });
+// Guaranteed by the `??=` at the top; req keeps the guarantee named.
+const AUTH_SECRET = req("TUBEFORGE_AUTH_SECRET env", process.env.TUBEFORGE_AUTH_SECRET);
 
 // ---- throwaway identity ----
 const suffix = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
@@ -91,37 +100,37 @@ await prisma.membership.create({
 let liveToken: string | null = null;
 {
   liveToken = await createApiToken(user.id, "gate probe");
-  const ctx = await resolveRequestUser(bearerReq(liveToken!));
+  const ctx = await resolveRequestUser(bearerReq(req("live token", liveToken)));
   check("2.1  a registry-backed bearer resolves the caller", ctx?.userId === user.id && ctx?.organizationId === org.id, ctx);
 
   // valid signature, UNKNOWN jti — the pre-registry stateless token shape
-  const forged = await createSignedToken("api", 3600, process.env.TUBEFORGE_AUTH_SECRET!, {
+  const forged = await createSignedToken("api", 3600, AUTH_SECRET, {
     uid: user.id,
     jti: randomToken(),
   });
-  const forgedCtx = await resolveRequestUser(bearerReq(forged!));
+  const forgedCtx = await resolveRequestUser(bearerReq(req("forged token", forged)));
   check("2.2  a signed but unregistered jti is NULL (deny-by-default)", forgedCtx === null, forgedCtx);
 
   // a jti registered to a DIFFERENT user must not resolve for this payload
-  const stranger = await createSignedToken("api", 3600, process.env.TUBEFORGE_AUTH_SECRET!, {
+  const stranger = await createSignedToken("api", 3600, AUTH_SECRET, {
     uid: user.id,
     jti: "not-a-real-jti-anywhere",
   });
   check("2.3  an unknown-jti bearer with an arbitrary id is NULL",
-    (await resolveRequestUser(bearerReq(stranger!))) === null);
+    (await resolveRequestUser(bearerReq(req("stranger token", stranger)))) === null);
 
   // revoked → instant death
   const row = await prisma.apiToken.findFirst({ where: { userId: user.id, name: "gate probe" } });
-  await prisma.apiToken.update({ where: { id: row!.id }, data: { revokedAt: new Date() } });
+  await prisma.apiToken.update({ where: { id: req("gate-probe token row", row).id }, data: { revokedAt: new Date() } });
   check("2.4  a REVOKED bearer is NULL on its next request",
-    (await resolveRequestUser(bearerReq(liveToken!))) === null);
+    (await resolveRequestUser(bearerReq(req("live token", liveToken)))) === null);
 
   // expired row → dead even with a live signature
   const expToken = await createApiToken(user.id, "expired probe");
   const expRow = await prisma.apiToken.findFirst({ where: { userId: user.id, name: "expired probe" } });
-  await prisma.apiToken.update({ where: { id: expRow!.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+  await prisma.apiToken.update({ where: { id: req("expired-probe row", expRow).id }, data: { expiresAt: new Date(Date.now() - 1000) } });
   check("2.5  an EXPIRED row is NULL despite a valid signature",
-    (await resolveRequestUser(bearerReq(expToken!))) === null);
+    (await resolveRequestUser(bearerReq(req("expired token", expToken)))) === null);
 }
 
 // =====================================================================
@@ -130,12 +139,13 @@ let liveToken: string | null = null;
 {
   const t = await createApiToken(user.id, "revoke probe");
   const row = await prisma.apiToken.findFirst({ where: { userId: user.id, name: "revoke probe" } });
+  const revokeRowId = req("revoke-probe token row", row).id;
 
-  check("3.1  revoking a live row → true", (await revokeApiToken(user.id, row!.id)) === true);
-  check("3.2  the bearer is dead immediately", (await resolveRequestUser(bearerReq(t!))) === null);
-  check("3.3  revoking it again → false (already dead)", (await revokeApiToken(user.id, row!.id)) === false);
+  check("3.1  revoking a live row → true", (await revokeApiToken(user.id, revokeRowId)) === true);
+  check("3.2  the bearer is dead immediately", (await resolveRequestUser(bearerReq(req("revoke-probe token", t)))) === null);
+  check("3.3  revoking it again → false (already dead)", (await revokeApiToken(user.id, revokeRowId)) === false);
   check("3.4  a foreign user's revoke → false (owner-scoped)",
-    (await revokeApiToken("someone-else", row!.id)) === false);
+    (await revokeApiToken("someone-else", revokeRowId)) === false);
   check("3.5  revoking a nonexistent id → false", (await revokeApiToken(user.id, "no-such-row")) === false);
 }
 
@@ -165,14 +175,15 @@ let liveToken: string | null = null;
   const before = await prisma.apiToken.findFirst({ where: { userId: user.id, name: "usage probe" } });
   check("5.1  a fresh row has no lastUsedAt", !before?.lastUsedAt);
 
-  await resolveRequestUser(bearerReq(t!));
+  await resolveRequestUser(bearerReq(req("usage-probe token", t)));
   await new Promise((r) => setTimeout(r, 200)); // fire-and-forget stamp lands
   const after1 = await prisma.apiToken.findFirst({ where: { userId: user.id, name: "usage probe" } });
   check("5.2  the first resolve stamps lastUsedAt", Boolean(after1?.lastUsedAt));
 
-  const stampedAt = after1!.lastUsedAt!.getTime();
+  const stampedRow = req("usage row after first stamp", after1);
+  const stampedAt = req("lastUsedAt on the stamped row", stampedRow.lastUsedAt).getTime();
   await new Promise((r) => setTimeout(r, 120));
-  await resolveRequestUser(bearerReq(t!));
+  await resolveRequestUser(bearerReq(req("usage-probe token", t)));
   await new Promise((r) => setTimeout(r, 200));
   const after2 = await prisma.apiToken.findFirst({ where: { userId: user.id, name: "usage probe" } });
   check("5.3  a resolve within the minute does NOT bump the stamp (throttle)",

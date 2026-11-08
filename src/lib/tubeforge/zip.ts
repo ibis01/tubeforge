@@ -306,8 +306,10 @@ export function streamZip(entries: StreamZipEntry[]): ReadableStream<Uint8Array>
         });
 
         const drainReady = function* (): Generator<Buffer> {
-          while (ready.length) {
-            const c = ready.shift()!;
+          // splice(0) takes everything currently queued, in order — the
+          // length-checked shift() needed a non-null assertion to say the
+          // same thing (S58/T-58.1).
+          for (const c of ready.splice(0)) {
             compressed += c.length;
             yield* emit(c);
           }

@@ -8,7 +8,7 @@
 
 import { zaiClientFor } from "../zai-client";
 import { getCapability, type CapabilityConfig } from "./settings";
-import { providerMeta } from "./registry";
+import { providerMetaRequired } from "./registry";
 import { joinUrl, providerFetchJson } from "./http";
 
 export async function asrTranscribe(
@@ -34,7 +34,7 @@ async function zaiAsr(wavBuffer: Buffer): Promise<string> {
 }
 
 async function openaiAsr(wavBuffer: Buffer, config: CapabilityConfig): Promise<string> {
-  const meta = providerMeta("tts", "openai")!;
+  const meta = providerMetaRequired("tts", "openai");
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const key = config.apiKey?.trim();
   if (!key) throw new Error("OpenAI-compatible transcription needs an API key");

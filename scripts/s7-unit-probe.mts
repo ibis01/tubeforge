@@ -29,6 +29,13 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   if (!ok) failures++;
 };
 
+// S58 — the named-fixture guard: a missing token/row/hold becomes a labeled
+// error instead of a TypeError at the deref.
+const req = <T,>(label: string, v: T | undefined | null): T => {
+  if (v === undefined || v === null) throw new Error(`missing: ${label}`);
+  return v;
+};
+
 const sceneJson = () =>
   JSON.stringify([
     {
@@ -319,7 +326,7 @@ try {
   const crossTenant = await resolve(
     videoShaped({ musicTrackId: calmTrack.id }),
     null,
-    { mode: "track", trackId: foreign!.id }
+    { mode: "track", trackId: req("foreign org music track", foreign).id }
   );
   check(
     "a doc pick naming another org's track falls back to the row pin",

@@ -345,9 +345,12 @@ export async function analyzeScript(
     };
   }
 
-  // Merge local preflight issues into the LLM issues (dedup by category+message)
-  const seenKeys = new Set(parsed.issues!.map((i) => `${i.category}:${i.message.slice(0, 40)}`));
-  const merged = [...parsed.issues!];
+  // Merge local preflight issues into the LLM issues (dedup by category+message).
+  // `?? []` keeps the merge total when the engine omits the array (S58/T-58.1):
+  // local issues still float in, nothing crashes.
+  const llmIssues = parsed.issues ?? [];
+  const seenKeys = new Set(llmIssues.map((i) => `${i.category}:${i.message.slice(0, 40)}`));
+  const merged = [...llmIssues];
   for (const li of localIssues) {
     const key = `${li.category}:${li.message.slice(0, 40)}`;
     if (!seenKeys.has(key)) {
@@ -355,7 +358,8 @@ export async function analyzeScript(
     }
   }
 
-  const verdict = parsed.verdict!;
+  // Narrowed by the `!parsed.verdict` early return above — no assertion needed.
+  const verdict = parsed.verdict;
   return {
     verdict,
     score: parsed.score ?? 0,

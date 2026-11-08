@@ -53,6 +53,13 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok || detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
   if (!ok) failures++;
 };
+
+// S58 — the named-fixture guard: a missing token/row/hold becomes a labeled
+// error instead of a TypeError at the deref.
+const req = <T,>(label: string, v: T | undefined | null): T => {
+  if (v === undefined || v === null) throw new Error(`missing: ${label}`);
+  return v;
+};
 const json = async (r: Response) => r.json().catch(() => ({}));
 
 const LOC = "http://probe.local/api/locations";
@@ -93,7 +100,7 @@ const reqWith = (url: string, opts: RequestInit) => new NextRequest(url, opts);
   check("1.3  an anonymous PATCH -> 401", anonPatch.status === 401, anonPatch.status);
   check("1.4  an anonymous DELETE -> 401", anonDelete.status === 401, anonDelete.status);
 
-  const bearer = (await createApiToken(A.user.id, "s22 keyring probe"))!;
+  const bearer = req("s22 keyring probe token", await createApiToken(A.user.id, "s22 keyring probe"));
   const bearerGet = await locGet(reqWith(LOC, { headers: { authorization: `Bearer ${bearer}` } }));
   check("1.5  a bearer GET -> 200 (studio doors open to the keyring)", bearerGet.status === 200, bearerGet.status);
   const bearerPost = await locPost(

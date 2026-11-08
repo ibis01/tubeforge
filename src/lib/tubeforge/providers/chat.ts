@@ -1,7 +1,7 @@
 import { zaiClientFor } from "../zai-client";
 import { DEFAULT_CHAT_MODEL } from "../types";
 import { getCapability, type CapabilityConfig } from "./settings";
-import { providerMeta } from "./registry";
+import { providerMeta, providerMetaRequired } from "./registry";
 import { joinUrl, providerFetchJson } from "./http";
 import {
   admitDispatch,
@@ -188,7 +188,7 @@ async function anthropicChat(
   req: ChatRequest,
   config: CapabilityConfig,
 ): Promise<string> {
-  const meta = providerMeta("chat", "anthropic")!;
+  const meta = providerMetaRequired("chat", "anthropic");
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const model = config.model?.trim() || "claude-sonnet-4-5";
   const key = config.apiKey?.trim();
@@ -230,7 +230,7 @@ async function geminiChat(
   req: ChatRequest,
   config: CapabilityConfig,
 ): Promise<string> {
-  const meta = providerMeta("chat", "gemini")!;
+  const meta = providerMetaRequired("chat", "gemini");
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const model = config.model?.trim() || "gemini-2.5-flash";
   const key = config.apiKey?.trim();

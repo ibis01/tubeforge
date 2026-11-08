@@ -45,18 +45,28 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   if (!ok) failures++;
 };
 
+// S58 — the named-fixture guard: a missing token/row/hold becomes a labeled
+// error instead of a TypeError at the deref.
+const req = <T,>(label: string, v: T | undefined | null): T => {
+  if (v === undefined || v === null) throw new Error(`missing: ${label}`);
+  return v;
+};
+
 // The gate's global state — pre-boot so admitDispatch skips the DB bootstrap
 // (the s32-unit-probe pattern; the durability laws are that probe's business).
-const spendState = (globalThis as typeof globalThis & {
-  __tfSpend?: {
-    booted: boolean;
-    bootFailed: boolean;
-    bootPromise: Promise<void> | null;
-    recordedMicro: number;
-    holds: Map<string, number>;
-    nextHoldId: number;
-  };
-}).__tfSpend!;
+const spendState = req(
+  "spend gate global (__tfSpend)",
+  (globalThis as typeof globalThis & {
+    __tfSpend?: {
+      booted: boolean;
+      bootFailed: boolean;
+      bootPromise: Promise<void> | null;
+      recordedMicro: number;
+      holds: Map<string, number>;
+      nextHoldId: number;
+    };
+  }).__tfSpend,
+);
 function resetGate() {
   spendState.booted = true;
   spendState.bootFailed = false;
@@ -108,7 +118,7 @@ console.log("\n§2 per-hold usage slices (real admitDispatch holds)");
     const holdA = await admitDispatch({ provider: "openai", model: MODEL, estimatedMicro: est });
     check("A: admit returns a hold (pricing verified via env)", holdA !== null);
     emitUsage({ inputTokens: 200, outputTokens: 900 });
-    await holdA!.settleFromSink();
+    await req("admitDispatch hold A", holdA).settleFromSink();
     const settledRows = async () =>
       prisma.spendReservation.findMany({ where: { userId, status: "settled" } });
     let rows = await settledRows();
@@ -122,7 +132,7 @@ console.log("\n§2 per-hold usage slices (real admitDispatch holds)");
     // The fix: B settles at its own reserved estimate.
     const holdB = await admitDispatch({ provider: "openai", model: MODEL, estimatedMicro: est });
     check("B: admit returns a hold", holdB !== null);
-    await holdB!.settleFromSink(); // NO emitUsage — nothing reported
+    await req("admitDispatch hold B", holdB).settleFromSink(); // NO emitUsage — nothing reported
     rows = await settledRows();
     const rowB = rows.find((r) => r.id !== idA);
     check("B: exactly one new settled row", rows.length === 2, rows.length);
@@ -136,7 +146,7 @@ console.log("\n§2 per-hold usage slices (real admitDispatch holds)");
     const holdC = await admitDispatch({ provider: "openai", model: MODEL, estimatedMicro: est });
     emitUsage({ inputTokens: 100, outputTokens: 50 });
     emitUsage({ inputTokens: 50, outputTokens: 25 });
-    await holdC!.settleFromSink();
+    await req("admitDispatch hold C", holdC).settleFromSink();
     rows = await settledRows();
     const rowC = rows.find((r) => r.id !== idA && r.id !== rowB?.id);
     check("C: exactly three settled rows", rows.length === 3, rows.length);

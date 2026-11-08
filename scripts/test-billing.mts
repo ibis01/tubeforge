@@ -286,7 +286,7 @@ await test("the SAME event id replayed → duplicate, still exactly one grant", 
   };
   eq(await processStripeEvent(event), "processed", "first delivery processed");
   eq(await processStripeEvent(event), "duplicate", "replay acked as duplicate");
-  EVENT_IDS.push(event.id!);
+  EVENT_IDS.push(event.id);
   eq(await db.creditGrant.count({ where: { userId: user.id } }), 1, "exactly one grant row");
 });
 
@@ -331,7 +331,7 @@ await test("spendCredits auto-links the ledger row to the user's subscription", 
   ok(result.recorded, "video-call spend recorded");
   const row = await db.creditLedger.findFirst({ where: { userId: user.id, kind: "ai_call" } });
   ok(row, "ledger row exists");
-  eq(row!.subscriptionId, sub.id, "THE regression: spend is LINKED to the subscription (never null)");
+  eq(row.subscriptionId, sub.id, "THE regression: spend is LINKED to the subscription (never null)");
   const resolved = await billing.resolveUserPlan(user.id);
   eq(resolved.creditBalance, creditsToMicro(10000) - 40000, "subscription balance counts the linked spend");
 });
@@ -416,7 +416,8 @@ await test("canceled subscription cannot collect new linked spends (stays null-l
   const result = await billing.spendCredits({ userId: user.id, kind: "ai_call", microCredits: 3000 });
   ok(result.recorded, "free-tier overdraft still records the row (documented design)");
   const row = await db.creditLedger.findFirst({ where: { userId: user.id } });
-  eq(row!.subscriptionId, null, "canceled subscription collects no linked rows");
+  ok(row, "ledger row exists");
+  eq(row.subscriptionId, null, "canceled subscription collects no linked rows");
 });
 
 // ===========================================================================
@@ -517,9 +518,9 @@ await test("checkout.session.completed via the SIGNED route → Subscription row
 
   const row = await db.subscription.findUnique({ where: { userId: user.id } });
   ok(row, "checkout created the Subscription row");
-  eq(row!.status, "active", "checkout subscription is active");
-  eq(row!.stripeCustomerId, `cus_${MARK}_lc`, "stripe customer id persisted");
-  eq(row!.stripeSubscriptionId, `sub_${MARK}_lc`, "stripe subscription id persisted");
+  eq(row.status, "active", "checkout subscription is active");
+  eq(row.stripeCustomerId, `cus_${MARK}_lc`, "stripe customer id persisted");
+  eq(row.stripeSubscriptionId, `sub_${MARK}_lc`, "stripe subscription id persisted");
 
   const after = await billing.resolveUserPlan(user.id);
   eq(after.plan.tier, "creator", "post-checkout user resolves to the paid plan");
@@ -539,8 +540,10 @@ await test("payment failure: subscription.updated status=past_due → grace (pai
   const resolved = await billing.resolveUserPlan(user.id);
   eq(resolved.plan.tier, "creator", "past_due keeps the paid plan (grace)");
   eq(resolved.access, "grace", "past_due access is grace — not full, not none");
+  const subRow = await db.subscription.findUnique({ where: { id: sub.id } });
+  ok(subRow, "subscription row exists");
   eq(
-    (await db.subscription.findUnique({ where: { id: sub.id } }))!.currentPeriodEnd?.getTime(),
+    subRow.currentPeriodEnd?.getTime(),
     future * 1000,
     "period end tracked from the Stripe payload"
   );
@@ -555,12 +558,14 @@ await test("cancellation: subscription.deleted → Starter fallback, no access, 
     type: "customer.subscription.deleted",
     data: { object: { id: sub.stripeSubscriptionId } },
   });
-  eq((await db.subscription.findUnique({ where: { id: sub.id } }))!.status, "canceled", "status flipped to canceled");
+  const byId = await db.subscription.findUnique({ where: { id: sub.id } });
+  ok(byId, "subscription row exists");
+  eq(byId.status, "canceled", "status flipped to canceled");
   const resolved = await billing.resolveUserPlan(user.id);
   eq(resolved.plan.tier, "starter", "canceled user resolves to Starter");
   eq(resolved.access, "none", "canceled access is none");
   ok(resolved.subscription, "the subscription record survives for the UI");
-  eq(resolved.subscription!.status, "canceled", "UI can render the canceled state");
+  eq(resolved.subscription.status, "canceled", "UI can render the canceled state");
 });
 
 await test("refund: unknown charge.refunded event is safely acked; credit refunds flow through the refund ledger kind", async () => {
@@ -674,7 +679,8 @@ await test("FULL lifecycle chain: checkout → grant → failure → recovery gr
   resolved = await billing.resolveUserPlan(user.id);
   eq(resolved.access, "none", "step 5: cancellation ends access");
   eq(resolved.plan.tier, "starter", "step 5: back to Starter");
-  eq(resolved.subscription!.status, "canceled", "step 5: record kept for the UI");
+  ok(resolved.subscription, "step 5: record kept for the UI");
+  eq(resolved.subscription.status, "canceled", "step 5: record kept for the UI");
 
   // 6. a late invoice for the canceled sub grants NOTHING (no resurrection).
   await processStripeEvent({
@@ -686,7 +692,9 @@ await test("FULL lifecycle chain: checkout → grant → failure → recovery gr
   });
   EVENT_IDS.push(`evt_${MARK}_c6`);
   eq(await db.creditGrant.count({ where: { userId: user.id } }), 2, "step 6: canceled sub collects no new grant");
-  eq((await db.subscription.findUnique({ where: { userId: user.id } }))!.status, "canceled", "step 6: late invoice cannot resurrect the subscription");
+  const byUser = await db.subscription.findUnique({ where: { userId: user.id } });
+  ok(byUser, "subscription row exists");
+  eq(byUser.status, "canceled", "step 6: late invoice cannot resurrect the subscription");
 });
 
 // ===========================================================================
@@ -916,9 +924,9 @@ await test("reserveCredits holds the estimate and the open hold already counts a
   eq(hold.balanceMicro, 70_000, "hold result reports the post-hold balance");
   const holdRow = await db.creditLedger.findUnique({ where: { id: hold.holdId } });
   ok(holdRow, "hold ledger row exists");
-  eq(holdRow!.kind, "hold", "row kind is hold");
-  eq(holdRow!.microCredits, 30_000, "row amount is the estimate");
-  eq(holdRow!.subscriptionId, sub.id, "hold links the subscription");
+  eq(holdRow.kind, "hold", "row kind is hold");
+  eq(holdRow.microCredits, 30_000, "row amount is the estimate");
+  eq(holdRow.subscriptionId, sub.id, "hold links the subscription");
   const resolved = await billing.resolveUserPlan(user.id);
   eq(resolved.creditBalance, 70_000, "THE open hold counts against the balance");
 });
@@ -935,8 +943,8 @@ await test("settle at estimate → zero marker row; net AI spend = estimate", as
   eq(settled.balanceMicro, 60_000, "balance = grant − estimate");
   const marker = await db.creditLedger.findFirst({ where: { reconcilesId: hold.holdId } });
   ok(marker, "settlement marker row exists");
-  eq(marker!.kind, "adjustment", "marker kind");
-  eq(marker!.microCredits, 0, "marker amount");
+  eq(marker.kind, "adjustment", "marker kind");
+  eq(marker.microCredits, 0, "marker amount");
   const net = await billing.sumAICallSpends(user.id, new Date(Date.now() - 60_000), new Date(Date.now() + 60_000));
   eq(net.microCredits, 40_000, "net metered AI spend = actual (= estimate)");
 });
@@ -1102,10 +1110,10 @@ await test("E2E aiCall: success settles the hold — balance = grant − estimat
   eq(resolved.creditBalance, 98_000, "balance = grant − tts estimate (2,000)");
   const usage = await db.usageRecord.findFirst({ where: { userId: user.id } });
   ok(usage, "UsageRecord written");
-  eq(usage!.ok, true, "usage ok=true");
+  eq(usage.ok, true, "usage ok=true");
   const rows = await db.creditLedger.findMany({ where: { userId: user.id } });
   eq(rows.length, 2, "hold + settlement marker");
-  ok(rows.every((r) => r.usageRecordId === usage!.id), "both rows carry the UsageRecord link");
+  ok(rows.every((r) => r.usageRecordId === usage.id), "both rows carry the UsageRecord link");
   const net = await billing.sumAICallSpends(user.id, new Date(Date.now() - 60_000), new Date(Date.now() + 60_000));
   eq(net.microCredits, 2_000, "net AI spend = estimate");
 });
@@ -1133,7 +1141,7 @@ await test("E2E aiCall: provider failure/timeout RELEASES the hold — balance f
   eq(resolved.creditBalance, 100_000, "THE hold was released — balance fully restored");
   const usage = await db.usageRecord.findFirst({ where: { userId: user.id } });
   ok(usage, "failed call still metered (UsageRecord ok=false)");
-  eq(usage!.ok, false, "usage ok=false");
+  eq(usage.ok, false, "usage ok=false");
   const net = await billing.sumAICallSpends(user.id, new Date(Date.now() - 60_000), new Date(Date.now() + 60_000));
   eq(net.microCredits, 0, "net AI spend for the failed call = 0");
 });

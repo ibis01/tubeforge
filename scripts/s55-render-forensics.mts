@@ -35,6 +35,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "util";
 import { withCtx, hashPassword } from "../src/lib/tubeforge/tenant";
+import { must } from "../src/lib/tubeforge/must";
 import {
   runDirectorPass,
   setDirectorState,
@@ -309,7 +310,12 @@ try {
 
     // Per-scene shot executions (the same pure builder the render ran).
     const shotTables = approvedPlan.scenes.map((planScene) => {
-      const scene = parseScenes(JSON.stringify(NOVA_SCENES)).find((s) => s.index === planScene.sceneIndex)!;
+      // approvedPlan was parsed from these same scenes — a miss is a broken
+      // invariant, named (S58).
+      const scene = must(
+        `NOVA scene ${planScene.sceneIndex} in the parsed scenes`,
+        parseScenes(JSON.stringify(NOVA_SCENES)).find((s) => s.index === planScene.sceneIndex),
+      );
       const sp = buildSceneShots({ scene, planScene, measuredSec: segSec });
       return sp;
     });

@@ -51,10 +51,19 @@ export async function POST(req: NextRequest) {
     );
 
   const origin = new URL(req.url).origin;
+  // S58/T-58.1 — a real fix, not churn: the old `stripeGate().secret!` passed
+  // undefined into the Authorization header when the key was missing; the
+  // honest gate mirrors checkout's 503.
+  const gate = stripeGate();
+  if (!gate.secret)
+    return NextResponse.json(
+      { error: "Stripe is not configured on this deployment — set TUBEFORGE_STRIPE_SECRET_KEY to manage subscriptions." },
+      { status: 503 }
+    );
   const result = await stripeCreate(
     "/billing_portal/sessions",
     portalParams({ customerId, returnUrl: `${origin}/?billing=portal` }),
-    stripeGate().secret!
+    gate.secret
   );
   // Same operator-wiring rule as checkout: a Stripe 4xx (portal not enabled
   // for this account, bad customer id) is a deployment problem → 502.

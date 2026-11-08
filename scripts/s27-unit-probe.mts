@@ -71,6 +71,13 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   if (!ok) failures++;
 };
 
+// S58 — the named-fixture guard: a missing token/row/hold becomes a labeled
+// error instead of a TypeError at the deref.
+const req = <T,>(label: string, v: T | undefined | null): T => {
+  if (v === undefined || v === null) throw new Error(`missing: ${label}`);
+  return v;
+};
+
 // S32 — the user/org are created at the top so §4's sink-settle check can
 // use a REAL ctx (admitDispatch now persists a SpendReservation row with FK
 // constraints). §5-§6 reuses them; teardown cleans both up.
@@ -87,14 +94,17 @@ const org = await prisma.organization.create({
 orgId = org.id;
 
 // The gate's global state — the probe resets it between sections.
-const spendState = (globalThis as typeof globalThis & {
-  __tfSpend?: {
-    bootFailed: boolean;
-    recordedMicro: number;
-    holds: Map<string, number>;
-    localOnly: Set<string>;
-  };
-}).__tfSpend!;
+const spendState = req(
+  "spend gate global (__tfSpend)",
+  (globalThis as typeof globalThis & {
+    __tfSpend?: {
+      bootFailed: boolean;
+      recordedMicro: number;
+      holds: Map<string, number>;
+      localOnly: Set<string>;
+    };
+  }).__tfSpend,
+);
 // S47 — the gate's decision input is the DATABASE (a serialized per-admit
 // read), so resetting the world now means wiping SpendReservation and — for
 // a nonzero baseline — seeding a settled row that the next admit's shared
@@ -197,7 +207,7 @@ console.log("\n§4 the gate");
   const hold = await admitDispatch({ provider: "openai", model: "gpt-6.1-sol", estimatedMicro: 81_944 });
   check("within stop → hold returned", hold !== null);
   const before = recorded();
-  await hold!.settleFromSink(); // no emitted usage → conservative estimate settle
+  await req("admitDispatch hold", hold).settleFromSink(); // no emitted usage → conservative estimate settle
   check("no-usage success settles at the estimate", recorded() - before === 81_944, recorded() - before);
 
   await resetGate();
@@ -211,7 +221,7 @@ console.log("\n§4 the gate");
     const hold2 = await admitDispatch({ provider: "openai", model: "gpt-6.1-sol", estimatedMicro: 81_944 });
     emitUsage({ inputTokens: 100, outputTokens: 200 }); // what the transport saw
     const before2 = recorded();
-    await hold2!.settleFromSink();
+    await req("admitDispatch hold (withCtx)", hold2).settleFromSink();
     check("reported usage settles at actual cost (2200 µ$)", recorded() - before2 === 2200, recorded() - before2);
     drainUsage(); // leave the sink empty for later sections
   });
@@ -219,7 +229,7 @@ console.log("\n§4 the gate");
   await resetGate();
   const hold3 = await admitDispatch({ provider: "openai", model: "gpt-6.1-sol", estimatedMicro: 81_944 });
   const before3 = recorded();
-  await hold3!.settleUncertain(); // the provider may have billed an accepted request
+  await req("admitDispatch hold (uncertain)", hold3).settleUncertain(); // the provider may have billed an accepted request
   check("uncertain failure settles at the estimate (never released)", recorded() - before3 === 81_944, recorded() - before3);
 
   await resetGate(4_500_000);
@@ -243,7 +253,7 @@ console.log("\n§4 the gate");
     blocked2 = err;
   }
   check("outstanding reservations count (4.40 + 0.05 + 0.06 > 4.50)", blocked2 instanceof SpendBlockedError, String(blocked2));
-  await h!.settleUncertain();
+  await req("in-flight hold", h).settleUncertain();
 }
 
 // ---------- §5 + §6 the live write path (real user/org, fetch fake) ----------

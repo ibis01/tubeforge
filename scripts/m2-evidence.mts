@@ -176,11 +176,15 @@ try {
     const file = path.join(tmp, sh.imageFile);
     const exists = dirFiles.has(sh.imageFile); // resolveShotInputs' check
     const useFile = sh.source === "scene" || exists ? file : path.join(tmp, shotImageFile(1, 0));
-    if (!inputFor.has(useFile)) {
-      inputFor.set(useFile, nextInput++);
+    // Get-once (S58): first sighting claims the next input index AND pushes
+    // the still input; later sightings reuse it — identical to render.ts.
+    let input = inputFor.get(useFile);
+    if (input === undefined) {
+      input = nextInput++;
+      inputFor.set(useFile, input);
       extraInputs.push("-loop", "1", "-framerate", String(FPS), "-t", (sh.sec + 1).toFixed(3), "-i", useFile);
     }
-    return { kind: sh.moveKind, sec: sh.sec, input: inputFor.get(useFile)!, crop: sh.crop };
+    return { kind: sh.moveKind, sec: sh.sec, input, crop: sh.crop };
   });
   const graph = multiShotSceneGraph({
     dur: MEASURED_SEC,

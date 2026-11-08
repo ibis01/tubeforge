@@ -12,6 +12,7 @@ import fs from "fs";
 import path from "path";
 import { promisify } from "util";
 import type { Scene } from "./types";
+import { must } from "./must";
 import { sceneImageFile } from "./story";
 import { videoDir } from "./ai";
 import * as storage from "./storage";
@@ -223,7 +224,12 @@ export async function renderShort(opts: ShortRenderOptions): Promise<ShortRender
   const trans = sanitizeTransition(opts.transition);
   const loss = trans.style !== "cut" && scenes.length > 1 ? trans.durationSec : 0;
   const timeline = sceneTimeline(scenes, wavDurations, loss);
-  const seg = timeline.find((t) => t.scene.index === chosen.index)!;
+  // The timeline is built from the same scenes the chosen one came from —
+  // a miss is a broken invariant.
+  const seg = must(
+    `timeline segment for scene ${chosen.index}`,
+    timeline.find((t) => t.scene.index === chosen.index),
+  );
 
   const totalDur = await probeDuration(finalPath);
   const start = Math.min(seg.start, Math.max(0, totalDur - 1));

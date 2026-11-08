@@ -45,6 +45,13 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok || detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
   if (!ok) failures++;
 };
+
+// S58 — the named-fixture guard: a missing token/row/hold becomes a labeled
+// error instead of a TypeError at the deref.
+const req = <T,>(label: string, v: T | undefined | null): T => {
+  if (v === undefined || v === null) throw new Error(`missing: ${label}`);
+  return v;
+};
 const json = async (r: Response) => r.json().catch(() => ({}));
 
 const USAGE = "http://probe.local/api/account/usage";
@@ -96,7 +103,7 @@ await prisma.usageRecord.create({ data: { userId: stranger.id, organizationId: s
 // 2. the bearer law — telemetry open, privacy + destruction closed
 // =====================================================================
 {
-  const bearer = (await createApiToken(user.id, "s23 keyring probe"))!;
+  const bearer = req("s23 keyring probe token", await createApiToken(user.id, "s23 keyring probe"));
   const bh = { authorization: `Bearer ${bearer}` };
 
   const u = await usageGet(reqWith(USAGE, { headers: bh }));

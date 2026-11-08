@@ -10,6 +10,7 @@
 // steered by what the real audience rewarded.
 
 import { db } from "./tenant-db";
+import { must } from "./must";
 import type { VideoStat } from "@prisma/client";
 import { currentCtx } from "./tenant";
 import { getUserSetting, setUserSetting } from "./settings";
@@ -177,7 +178,8 @@ export async function getAnalyticsOverview(): Promise<AnalyticsOverviewDTO> {
     countPerVideo.set(row.videoId, (countPerVideo.get(row.videoId) ?? 0) + 1);
 
   const rows: AnalyticsRowDTO[] = videos.map((v) => {
-    const s = latest.get(v.id)!; // keyset came from latest
+    // The videos list is the keyset of `latest` — a miss is a broken invariant.
+    const s = must(`latest snapshot for video ${v.id}`, latest.get(v.id));
     const p = prev.get(v.id);
     return {
       videoId: v.id,

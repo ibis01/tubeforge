@@ -1,0 +1,15 @@
+TubeForge lint census — 2026-11-08 (S58 close)
+Command: npm run lint (eslint .)
+Result: 0 errors / 62 warnings (session start: 0 errors / 221 warnings)
+
+The S58 tranche: no-non-null-assertion 159 → 0, promoted to error (frozen).
+En-route catch: the duplicate prefer-const/no-useless-escape "warn" keys (later-key-wins)
+had silently demoted the T-56.6 freeze — deduped, both stay error.
+
+Remaining warning programme (unchanged order, next tranches):
+  33 react-hooks/set-state-in-effect
+  11 @typescript-eslint/no-unused-expressions
+   9 react-hooks/exhaustive-deps
+   7 @typescript-eslint/no-explicit-any
+   1 import/no-anonymous-default-export
+   1 @next/next/no-location-assign-relative-destination

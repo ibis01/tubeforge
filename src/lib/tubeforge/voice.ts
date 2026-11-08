@@ -185,7 +185,10 @@ export async function ingestCustomAudio(opts: {
     throw new Error(`Audio exceeds the ${MAX_AUDIO_BYTES / 1024 / 1024} MB limit`);
 
   // 2) Stage it and validate with ffprobe (extension hints the demuxer).
-  const ext = AUDIO_EXT_RE.test(sourceLabel) ? sourceLabel.toLowerCase().match(AUDIO_EXT_RE)![0] : ".bin";
+  // Match once — the old test()+match() pair forced a non-null assertion
+  // TS cannot see across (S58/T-58.1).
+  const extMatch = sourceLabel.toLowerCase().match(AUDIO_EXT_RE);
+  const ext = extMatch ? extMatch[0] : ".bin";
   const staged = path.join(dir, `voice-source${ext}`);
   fs.writeFileSync(staged, raw);
 

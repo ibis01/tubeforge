@@ -54,6 +54,13 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   if (!ok) failures++;
 };
 
+// S58 — the named-fixture guard: a missing token/row/hold becomes a labeled
+// error instead of a TypeError at the deref.
+const req = <T,>(label: string, v: T | undefined | null): T => {
+  if (v === undefined || v === null) throw new Error(`missing: ${label}`);
+  return v;
+};
+
 const URL_ = "http://probe.local/api/auth/change-password";
 const reqWith = (opts: RequestInit) => new NextRequest(URL_, { method: "POST", ...opts });
 
@@ -67,8 +74,8 @@ const reqWith = (opts: RequestInit) => new NextRequest(URL_, { method: "POST", .
   // S20: createApiToken now persists a registry row (real users only), but
   // the SID law never touches the DB — sign the api-scope token directly so
   // this layer stays pure.
-  const apiToken = await createSignedToken("api", 3600, process.env.TUBEFORGE_AUTH_SECRET!, { uid });
-  const stateToken = await createSignedToken("state", 60, process.env.TUBEFORGE_AUTH_SECRET!, { uid });
+  const apiToken = await createSignedToken("api", 3600, req("TUBEFORGE_AUTH_SECRET env", process.env.TUBEFORGE_AUTH_SECRET), { uid });
+  const stateToken = await createSignedToken("state", 60, req("TUBEFORGE_AUTH_SECRET env", process.env.TUBEFORGE_AUTH_SECRET), { uid });
 
   check("1.1  a browser session token yields its sid", sessionToken !== null && (await sessionIdFromRequest(
     reqWith({ headers: { cookie: `${SESSION_COOKIE}=${sessionToken}` } })

@@ -84,10 +84,18 @@ export async function POST(req: NextRequest) {
     );
 
   const origin = new URL(req.url).origin;
+  // checkoutReady() above guarantees the price exists — capture it once so
+  // the compiler can see what the guard proved (S58/T-58.1).
+  const priceId = gate.prices[tier];
+  if (!priceId)
+    return NextResponse.json(
+      { error: `Stripe is not configured on this deployment — set TUBEFORGE_STRIPE_SECRET_KEY and the tier's price env to open the checkout.` },
+      { status: 503 }
+    );
   const result = await stripeCreate(
     "/checkout/sessions",
     checkoutParams({
-      priceId: gate.prices[tier]!,
+      priceId,
       userId,
       tier,
       successUrl: `${origin}/?billing=success`,

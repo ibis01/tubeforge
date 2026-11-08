@@ -450,8 +450,10 @@ export function VoiceView() {
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {voices.map((v) => {
             const profile = byProviderVoiceId.get(v.id);
-            const isClone = Boolean(profile);
-            const displayName = isClone ? profile!.name : v.label;
+            // `!= null` (not Boolean()) so the isClone alias narrows profile
+            // in the branches below — no assertions needed (S58/T-58.1).
+            const isClone = profile != null;
+            const displayName = isClone ? profile.name : v.label;
             const usedBy = charactersByVoice.get(v.id) ?? [];
             const isDefault = defaultVoice === v.id;
             const isPlaying = playing === v.id;
@@ -466,8 +468,8 @@ export function VoiceView() {
                     <p className="font-semibold text-sm truncate">{displayName}</p>
                     <p className="text-[11px] text-muted-foreground truncate">
                       {isClone
-                        ? `Clone · ${profile!.sourceLabel ?? "sample"}${
-                            profile!.durationSec ? ` · ${profile!.durationSec.toFixed(0)}s` : ""
+                        ? `Clone · ${profile.sourceLabel ?? "sample"}${
+                            profile.durationSec ? ` · ${profile.durationSec.toFixed(0)}s` : ""
                           }`
                         : `Provider voice · ${PROVIDER_LABELS[provider] ?? provider}`}
                     </p>

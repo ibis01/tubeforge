@@ -22,6 +22,7 @@
 // REAL source in scripts/test-motion.ts (bun imports this file directly).
 
 import type { Scene } from "./types";
+import { must } from "./must";
 
 // ---------- settings ----------
 
@@ -1148,7 +1149,8 @@ export function multiShotSceneGraph(opts: {
   }
 
   list.forEach((s, i) => {
-    const pos = byInput.get(s.input)!.indexOf(i);
+    // byInput is grouped from this same list — a miss is a broken invariant.
+    const pos = must(`positions for input ${s.input}`, byInput.get(s.input)).indexOf(i);
     // S48: the shot's own focal anchor + speed multiplier ride verbatim —
     // absent values keep the scene focal + video intensity exactly.
     const shot = movementForKind(

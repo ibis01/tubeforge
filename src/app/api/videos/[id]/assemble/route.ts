@@ -160,7 +160,9 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
         { status: 400 }
       );
     const byIdx = new Map(current.map((s) => [s.index, s]));
-    const reordered = body.sceneOrder.map((i) => byIdx.get(i)!);
+    // The permutation check above guarantees every i resolves; `?? []`
+    // keeps the map total anyway (S58/T-58.1).
+    const reordered = body.sceneOrder.flatMap((i) => byIdx.get(i) ?? []);
     rowScenes = JSON.stringify(reordered);
   }
 

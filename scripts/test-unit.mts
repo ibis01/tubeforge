@@ -249,9 +249,10 @@ await test("isDuckIntensity validates exactly the catalog ids", () => {
 
 await test("duckParams: deeper intensity = lower threshold, higher ratio", () => {
   eq(duckParams("off"), null, "off must disable ducking");
-  const subtle = duckParams("subtle")!;
-  const standard = duckParams("standard")!;
-  const strong = duckParams("strong")!;
+  const subtle = duckParams("subtle");
+  const standard = duckParams("standard");
+  const strong = duckParams("strong");
+  ok(subtle != null && standard != null && strong != null, "all three intensities carry params");
   ok(subtle.threshold > standard.threshold && standard.threshold > strong.threshold,
     "threshold must fall as intensity rises");
   ok(subtle.ratio < standard.ratio && standard.ratio < strong.ratio,
@@ -337,11 +338,11 @@ await test("parseLoudnormJson: extracts the measurement from noisy stderr", () =
 size=N/A time=00:00:04.00 bitrate=N/A speed=0.1x`;
   const m = parseLoudnormJson(stderr);
   ok(m !== null, "happy-path stderr must parse");
-  approx(m!.integratedLUFS, -14.2, 1e-9);
-  approx(m!.truePeakDBTP, -1.3, 1e-9);
-  approx(m!.lra, 6.1, 1e-9);
-  approx(m!.threshLUFS, -24.3, 1e-9);
-  approx(m!.offsetLU, -0.2, 1e-9);
+  approx(m.integratedLUFS, -14.2, 1e-9);
+  approx(m.truePeakDBTP, -1.3, 1e-9);
+  approx(m.lra, 6.1, 1e-9);
+  approx(m.threshLUFS, -24.3, 1e-9);
+  approx(m.offsetLU, -0.2, 1e-9);
 });
 
 await test("parseLoudnormJson: -inf integrated loudness (silence) → null", () => {
@@ -789,7 +790,8 @@ await test("dHash pure: flat frame → zero hash, self-distance 0", () => {
   const flat = Buffer.alloc(72, 128);
   const h = dHashFromGray9x8(flat);
   eq(h, "0000000000000000", "no horizontal gradient → all bits 0");
-  eq(hammingDistanceHex(h!, h!), 0, "distance to self = 0");
+  ok(h != null, "flat frame hashes");
+  eq(hammingDistanceHex(h, h), 0, "distance to self = 0");
 });
 
 await test("dHash pure: ramps and noise behave like the duplicate detector needs", () => {
@@ -804,12 +806,15 @@ await test("dHash pure: ramps and noise behave like the duplicate detector needs
     for (let x = 0; x < 9; x++) vert[y * 9 + x] = Math.min(255, y * 40); // top→bottom ramp
   const hVert = dHashFromGray9x8(vert);
   eq(hVert, "0000000000000000", "vertical ramp has no horizontal gradient");
-  eq(hammingDistanceHex(hRamp!, hVert!), 64, "opposite patterns → max distance");
+  ok(hRamp != null && hVert != null, "ramp hashes exist");
+  eq(hammingDistanceHex(hRamp, hVert), 64, "opposite patterns → max distance");
 
   const noisy = Buffer.from(ramp);
   noisy[5] += 4;
   noisy[40] += 3; // imperceptible noise
-  const d = hammingDistanceHex(hRamp!, dHashFromGray9x8(noisy)!);
+  const hNoisy = dHashFromGray9x8(noisy);
+  ok(hNoisy != null, "noisy ramp hashes");
+  const d = hammingDistanceHex(hRamp, hNoisy);
   ok(d != null && d <= 9, `tiny noise stays under the duplicate threshold (got ${d})`);
 });
 
@@ -837,8 +842,10 @@ await test("imageHash: real ffmpeg roundtrip + directory scan", async () => {
     await execFileAsync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=640x360:d=1", "-frames:v", "1", a]);
     await execFileAsync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "smptebars=s=640x360:d=1", "-frames:v", "1", c]);
     const [ha, hc] = await Promise.all([imageHash(a), imageHash(c)]);
-    ok(ha != null && /^[0-9a-f]{16}$/.test(ha!), "testsrc hashes to 16 hex chars");
-    const dist = hammingDistanceHex(ha!, hc!);
+    ok(ha != null, "testsrc hash exists");
+    ok(hc != null, "smptebars hash exists");
+    ok(/^[0-9a-f]{16}$/.test(ha), "testsrc hashes to 16 hex chars");
+    const dist = hammingDistanceHex(ha, hc);
     ok(dist != null && dist > 0, `different patterns differ (${dist} bits)`);
 
     fs.copyFileSync(a, path.join(dir, "scene-01.png"));
@@ -1598,13 +1605,13 @@ await test("director-plan: parsePlan normalizes junk into the vocabularies", asy
     })
   );
   ok(plan !== null, "plan parsed");
-  eq(plan!.scenes.length, 2, "both scenes kept");
-  eq(plan!.scenes[0].sceneIndex, 1, "scenes sorted by index");
-  eq(plan!.scenes[0].transitionIn, "", "scene 1 transitionIn forced empty — nothing precedes it");
-  eq(plan!.scenes[1].transitionIn, "fade", "unknown transition snapped to fade");
-  eq(plan!.scenes[1].motion, "smart", "unknown motion snapped to smart");
-  eq(plan!.scenes[1].needsI2V, false, "non-boolean needsI2V coerced false");
-  const shots = plan!.scenes[1].shots;
+  eq(plan.scenes.length, 2, "both scenes kept");
+  eq(plan.scenes[0].sceneIndex, 1, "scenes sorted by index");
+  eq(plan.scenes[0].transitionIn, "", "scene 1 transitionIn forced empty — nothing precedes it");
+  eq(plan.scenes[1].transitionIn, "fade", "unknown transition snapped to fade");
+  eq(plan.scenes[1].motion, "smart", "unknown motion snapped to smart");
+  eq(plan.scenes[1].needsI2V, false, "non-boolean needsI2V coerced false");
+  const shots = plan.scenes[1].shots;
   eq(shots[0].shotIndex, 0, "shots sorted by shotIndex");
   eq(shots[0].framing, "wide", "shot 0 kept its lowercase-safe framing");
   eq(shots[1].framing, "extreme close-up", "framing lowercased into vocabulary");
@@ -1840,7 +1847,7 @@ await test("M1: legacy plan parsing — profile field stays absent (byte-identic
     })
   );
   ok(legacy !== null, "legacy plan parses");
-  ok(legacy!.profile === undefined, "legacy plan → no profile field (byte-identical)");
+  ok(legacy.profile === undefined, "legacy plan → no profile field (byte-identical)");
   // And the parsed-then-serialized round-trip carries no `profile` key.
   ok(!JSON.stringify(legacy).includes('"profile"'), "serialized legacy plan omits the profile key");
 
@@ -1853,7 +1860,8 @@ await test("M1: legacy plan parsing — profile field stays absent (byte-identic
       scenes: [{ sceneIndex: 1, mood: "", shots: [{ shotIndex: 0, camera: "static", duration: 2 }] }],
     })
   );
-  eq(withProfile!.profile, "documentary", "valid profile id preserved (case-insensitive input)");
+  ok(withProfile !== null, "profile plan parses");
+  eq(withProfile.profile, "documentary", "valid profile id preserved (case-insensitive input)");
 
   const junkProfile = parsePlan(
     JSON.stringify({
@@ -1862,7 +1870,8 @@ await test("M1: legacy plan parsing — profile field stays absent (byte-identic
       scenes: [{ sceneIndex: 1, mood: "", shots: [{ shotIndex: 0, camera: "static", duration: 2 }] }],
     })
   );
-  ok(junkProfile!.profile === undefined, "unknown profile id → undefined (NOT narrative)");
+  ok(junkProfile !== null, "junk-profile plan parses");
+  ok(junkProfile.profile === undefined, "unknown profile id → undefined (NOT narrative)");
 
   // The parse-snap set must match the catalog exactly (the runtime assert
   // in production-profiles.ts already enforces this; the test pins it).
@@ -1958,7 +1967,7 @@ await test("M1: validation — advertisement without a product-forward shot 0 re
     })
   );
   ok(noProduct !== null);
-  const issues = adv.validation(noProduct!);
+  const issues = adv.validation(noProduct);
   ok(issues.length >= 1, "non-product opening flags at least one issue");
   ok(issues.some((m) => /product/i.test(m)), "issue mentions the product gap");
   ok(issues.some((m) => /CTA/i.test(m)), "issue also flags the missing closing CTA");
@@ -1985,13 +1994,13 @@ await test("M1: validation — advertisement without a product-forward shot 0 re
     })
   );
   ok(withProduct !== null);
-  const issues2 = adv.validation(withProduct!);
+  const issues2 = adv.validation(withProduct);
   ok(!issues2.some((m) => /product/i.test(m) && /shot 0/i.test(m)), "product-forward opening clears the opening-shot check");
   ok(issues2.some((m) => /CTA/i.test(m)), "but the missing closing CTA still flags");
 
   // Narrative validation is a no-op — the compatibility profile passes any
   // well-formed plan silently.
-  eq(PRODUCTION_PROFILES["narrative"].validation(noProduct!).length, 0, "narrative validation never flags");
+  eq(PRODUCTION_PROFILES["narrative"].validation(noProduct).length, 0, "narrative validation never flags");
 });
 
 await test("M1: story regression — narrative profile output ≡ today's prompt shape", async () => {
@@ -2243,8 +2252,8 @@ await test("timeline: parseTimeline degrades bad/legacy payloads to null", async
   );
   const round = parseTimeline(serializeTimeline(original));
   ok(round !== null, "roundtrip succeeds");
-  eq(round!.sceneCount, 1, "sceneCount preserved");
-  eq(round!.scenes[0].index, 1, "scene index preserved");
+  eq(round.sceneCount, 1, "sceneCount preserved");
+  eq(round.scenes[0].index, 1, "scene index preserved");
 });
 
 // ---------------------------------------------------------------------------
@@ -2267,10 +2276,10 @@ await test("timeline: render-job consumes per-scene durationSec from the assembl
   const round = parseTimeline(serializeTimeline(timeline));
   ok(round !== null, "roundtrip succeeds");
   ok(
-    round!.scenes.every((s) => typeof s.durationSec === "number" && Number.isFinite(s.durationSec) && s.durationSec > 0),
+    round.scenes.every((s) => typeof s.durationSec === "number" && Number.isFinite(s.durationSec) && s.durationSec > 0),
     "every durationSec is a finite positive number"
   );
-  eq(round!.scenes.length, scenes.length, "one duration per scene");
+  eq(round.scenes.length, scenes.length, "one duration per scene");
 
   // A corrupt timeline (missing durationSec on one scene) must NOT be honored
   // — the runRenderJob "single bad value falls back for ALL scenes" rule.
@@ -2278,7 +2287,7 @@ await test("timeline: render-job consumes per-scene durationSec from the assembl
   corrupt.scenes[1].durationSec = undefined;
   const parsedCorrupt = parseTimeline(JSON.stringify(corrupt));
   ok(parsedCorrupt !== null, "parseTimeline still parses the partial payload");
-  const ds = parsedCorrupt!.scenes.map((s) => s.durationSec);
+  const ds = parsedCorrupt.scenes.map((s) => s.durationSec);
   ok(
     !ds.every((d) => typeof d === "number" && Number.isFinite(d) && d > 0),
     "a missing durationSec fails the runRenderJob safety check"
@@ -2570,8 +2579,9 @@ await test("shots M2: CAMERA_TO_MOVE covers every CAMERA_MOVES entry", async () 
   const { MOTION_MOVE_LABELS } = await import("../src/lib/tubeforge/motion.ts");
   const moveKinds = new Set(Object.keys(MOTION_MOVE_LABELS)); // runtime MoveKind set
   for (const move of CAMERA_MOVES) {
-    ok(CAMERA_TO_MOVE[move] !== undefined, `${move} is mapped`);
-    ok(moveKinds.has(CAMERA_TO_MOVE[move]!), `${move} → ${CAMERA_TO_MOVE[move]} is a motion.ts MoveKind`);
+    const mapped = CAMERA_TO_MOVE[move];
+    ok(mapped !== undefined, `${move} is mapped`);
+    ok(moveKinds.has(mapped), `${move} → ${mapped} is a motion.ts MoveKind`);
   }
   eq(CAMERA_TO_MOVE["not-a-real-move"] ?? "hold", "hold", "unknown → hold");
 });
@@ -2594,8 +2604,9 @@ await test("shots M2: buildSceneShots planned path — one execution per Directo
   eq(s0.source, "scene", "shot 0 = the scene's own image");
   ok(!s0.prompt, "shot 0 carries no prompt (scene image already has the addendum)");
   eq(s1.source, "extra", "shots 1+ = extra AI images");
-  ok(s1.prompt!.includes("the general's eyes"), "imagePrompt leads the extra prompt");
-  ok(s1.prompt!.startsWith("a fortress at dusk"), "scene visual opens the prompt");
+  ok(s1.prompt != null, "extra shot carries a prompt");
+  ok(s1.prompt.includes("the general's eyes"), "imagePrompt leads the extra prompt");
+  ok(s1.prompt.startsWith("a fortress at dusk"), "scene visual opens the prompt");
   eq(s1.moveKind, "diag-tl", "first handheld → diag-tl");
   eq(s2.moveKind, "tilt-up", "crane-up → tilt-up (documented approximation)");
   eq(s0.moveKind, "zoom-in", "push-in → zoom-in");
@@ -3206,7 +3217,7 @@ suiteStart("razor guard: speakableSpan");
     const start = 22.7;
     const dur = 9.94;
     const wav = 8.74;
-    const span = speakableSpan(start, dur, wav)!;
+    const span = speakableSpan(start, dur, wav);
     ok(span, "span exists");
     // lo = LEAD + 0.25 = 0.6; hi = LEAD + wav - 0.25 = 8.84 (both global).
     approx(span.startSec, start + 0.6, 1e-9, "span start = lead + edge guard");
@@ -3225,14 +3236,16 @@ suiteStart("razor guard: speakableSpan");
 
   await test("estimate path: fresh-assembly durations, floor refusal", () => {
     // No wavDurSec: estimate = dur - lead - tail, exact for fresh docs.
-    const span = speakableSpan(100, 10, undefined)!;
+    const span = speakableSpan(100, 10, undefined);
+    ok(span != null, "estimated span exists");
     approx(span.startSec, 100.6, 1e-9, "estimated start");
     approx(span.endSec, 108.9, 1e-9, "estimated end = 100 + 10 - 1.1");
     // At/below the MIN_SEG floor the real read is unknowable → refuse.
     eq(speakableSpan(0, 2.0, undefined), null, "floor duration cannot be estimated");
     eq(speakableSpan(0, 1.5, undefined), null, "trimmed below the floor");
     // Real wav rescues floor-clamped windows when known.
-    const rescued = speakableSpan(0, 2.0, 0.8)!;
+    const rescued = speakableSpan(0, 2.0, 0.8);
+    ok(rescued != null, "rescued span exists");
     approx(rescued.startSec, 0.6, 1e-9, "real wav start");
     approx(rescued.endSec, 0.9, 1e-9, "real wav end");
   });
@@ -3299,8 +3312,9 @@ suiteStart("S2 honest mix: per-boundary transitions");
     const g1 = planBlendGroups(durs, 0.5, 2);
     const g2 = planBlendGroupsMulti(durs, s, 2);
     eq(g2, g1, "blend groups");
-    const graph1 = buildTransitionGraph(durs, "fade", 0.5)!;
-    const graph2 = buildTransitionGraphMulti(durs, s)!;
+    const graph1 = buildTransitionGraph(durs, "fade", 0.5);
+    const graph2 = buildTransitionGraphMulti(durs, s);
+    ok(graph1 != null && graph2 != null, "graphs build");
     eq(graph2.video, graph1.video, "video graph");
     eq(graph2.audio, graph1.audio, "audio graph");
     const shifted1 = shiftSegmentsForBlend(segs(durs), 0.5);
@@ -3321,7 +3335,9 @@ suiteStart("S2 honest mix: per-boundary transitions");
     const off = transitionOffsetsMulti(durs, s);
     approx(off[0], 2.5, 1e-9, "offset 0");
     approx(off[1], 5.5, 1e-9, "offset 1");
-    approx(transitionTotalDurationMulti(durs, s)!, 10.5, 1e-9, "total = Σ − Σd");
+    const total = transitionTotalDurationMulti(durs, s);
+    ok(total != null, "total exists");
+    approx(total, 10.5, 1e-9, "total = Σ − Σd");
   });
 
   await test("per-boundary graph honors each seam's style + duration", () => {
@@ -3330,7 +3346,8 @@ suiteStart("S2 honest mix: per-boundary transitions");
       { style: "wipeleft", durationSec: 0.4 },
       { style: "circleopen", durationSec: 0.9 },
     ]);
-    const g = buildTransitionGraphMulti(durs, s)!;
+    const g = buildTransitionGraphMulti(durs, s);
+    ok(g != null, "graph builds");
     ok(g.video.includes("xfade=transition=wipeleft:duration=0.400:offset=2.600"), "boundary 0 style+duration");
     ok(g.video.includes("xfade=transition=circleopen:duration=0.900:offset=5.700"), "boundary 1 style+duration");
     ok(g.audio.includes("acrossfade=d=0.400"), "audio crossfade d0");
@@ -3430,7 +3447,7 @@ suiteStart("S2 honest mix: per-boundary transitions");
       ],
       sceneCount: 3, totalDurationSec: 15, generatedAt: "",
     };
-    const out = docSceneSettings(doc as never, 3)!;
+    const out = docSceneSettings(doc as never, 3);
     ok(out, "aligned doc extracts");
     eq(out[0].transitionIn, "wipeleft", "valid transition passes");
     eq(out[0].voiceLevel, 0.8, "voice level");
@@ -3454,7 +3471,8 @@ suiteStart("S2 honest mix: per-boundary transitions");
       { start: 0, duration: 3 },
       { start: 2.5, duration: 3 }, // 0.5s blend overlap
     ];
-    const chain = musicLevelAutomation(blended, [1, 0.5])!;
+    const chain = musicLevelAutomation(blended, [1, 0.5]);
+    ok(chain != null, "automation chain builds");
     ok(
       chain.startsWith("[music]volume='") && chain.endsWith("':eval=frame[mvol]"),
       "label contract (per-frame eval — once-eval would freeze t=0)"
@@ -3462,7 +3480,8 @@ suiteStart("S2 honest mix: per-boundary transitions");
     ok(chain.includes("1.000*gte(t,0.000)*lt(t,2.500)"), "scene 0 owns [0, next start)");
     ok(chain.includes("0.500*gte(t,2.500)*lt(t,5.500)"), "scene 1 owns from its start");
     // Non-finite factors read as 1 (no override), absurd values clamp at 8.
-    const clamped = musicLevelAutomation(segs([2, 2]), [Number.NaN, 100])!;
+    const clamped = musicLevelAutomation(segs([2, 2]), [Number.NaN, 100]);
+    ok(clamped != null, "clamped chain builds");
     ok(clamped.includes("1.000*gte(t,0.000)"), "NaN → 1");
     ok(clamped.includes("8.000*gte(t,2.000)"), "clamp at 8");
   });
@@ -3480,7 +3499,9 @@ suiteStart("S2 honest mix: per-boundary transitions");
     approx(off[0], 3, 1e-9, "cut boundary: no debt, offset = plain boundary");
     approx(off[1], 6.5, 1e-9, "blend after a cut: only blend debt counted");
     approx(off[2], 11.5, 1e-9, "trailing cut: no debt");
-    approx(transitionTotalDurationMulti(durs, mixed)!, 14.5, 1e-9, "total = Σ − blend debt only");
+    const total = transitionTotalDurationMulti(durs, mixed);
+    ok(total != null, "total exists");
+    approx(total, 14.5, 1e-9, "total = Σ − blend debt only");
     // Shifts: scene 2 shifts by the CUT's debt (0), scene 3 by cut+fade (0.5).
     const shifted = shiftSegmentsForBlendMulti(segs(durs), mixed, true);
     approx(shifted[1].start, 3, 1e-9, "scene after a cut: unshifted");

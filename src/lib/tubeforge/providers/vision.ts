@@ -5,7 +5,7 @@
 
 import { zaiClientFor } from "../zai-client";
 import { getCapability, type CapabilityConfig } from "./settings";
-import { providerMeta } from "./registry";
+import { providerMeta, providerMetaRequired } from "./registry";
 import { joinUrl, providerFetchJson, withTimeout } from "./http";
 import {
   admitDispatch,
@@ -115,7 +115,7 @@ async function zaiVision(req: VisionRequest, config: CapabilityConfig): Promise<
 // ---------- OpenAI-compatible ----------
 
 async function openaiVision(req: VisionRequest, config: CapabilityConfig): Promise<string> {
-  const meta = providerMeta("chat", "openai")!;
+  const meta = providerMetaRequired("chat", "openai");
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const model = config.visionModel?.trim() || config.model?.trim() || "gpt-4o-mini";
   const key = config.apiKey?.trim();
@@ -156,7 +156,7 @@ async function openaiVision(req: VisionRequest, config: CapabilityConfig): Promi
 // ---------- Anthropic ----------
 
 async function anthropicVision(req: VisionRequest, config: CapabilityConfig): Promise<string> {
-  const meta = providerMeta("chat", "anthropic")!;
+  const meta = providerMetaRequired("chat", "anthropic");
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const model = config.visionModel?.trim() || config.model?.trim() || "claude-sonnet-4-5";
   const key = config.apiKey?.trim();
@@ -213,7 +213,7 @@ async function anthropicVision(req: VisionRequest, config: CapabilityConfig): Pr
 // ---------- Google Gemini ----------
 
 async function geminiVision(req: VisionRequest, config: CapabilityConfig): Promise<string> {
-  const meta = providerMeta("chat", "gemini")!;
+  const meta = providerMetaRequired("chat", "gemini");
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const model = config.visionModel?.trim() || config.model?.trim() || "gemini-2.5-flash";
   const key = config.apiKey?.trim();

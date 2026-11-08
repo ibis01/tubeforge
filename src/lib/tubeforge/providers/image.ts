@@ -24,7 +24,7 @@
 import { zaiClientFor } from "../zai-client";
 import { redactText } from "../redact";
 import { getCapability, type CapabilityConfig } from "./settings";
-import { providerMeta } from "./registry";
+import { providerMetaRequired } from "./registry";
 import { log } from "../log";
 
 // S57/T-57.2 — the module's logger (the old [pollinations] prefix became a binding).
@@ -205,7 +205,7 @@ async function openaiImage(
   req: ImageRequest,
   config: CapabilityConfig,
 ): Promise<Buffer> {
-  const meta = providerMeta("image", "openai")!;
+  const meta = providerMetaRequired("image", "openai");
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const model = config.model?.trim() || "dall-e-3";
   const key = config.apiKey?.trim();
@@ -247,7 +247,7 @@ async function openaiImageEdit(
   req: ImageEditRequest,
   config: CapabilityConfig,
 ): Promise<Buffer | null> {
-  const meta = providerMeta("image", "openai")!;
+  const meta = providerMetaRequired("image", "openai");
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const model = config.model?.trim() || "dall-e-3";
   const key = config.apiKey?.trim();
@@ -534,7 +534,7 @@ async function pollinationsImage(
   req: ImageRequest,
   config: CapabilityConfig
 ): Promise<Buffer> {
-  const meta = providerMeta("image", "pollinations")!;
+  const meta = providerMetaRequired("image", "pollinations");
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const model = config.model?.trim() || "flux";
   const { width, height } = pollinationsSize(req.size);

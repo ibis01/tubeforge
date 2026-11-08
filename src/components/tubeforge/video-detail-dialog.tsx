@@ -585,7 +585,8 @@ export function VideoDetailDialog({
     (redo = false) => {
       const hist = scriptHistoryRef.current;
       if (redo || hist.length === 0) return;
-      const prev = hist.pop()!;
+      const prev = hist.pop();
+      if (prev === undefined) return; // unreachable: length-checked above
       setScriptHistoryLen(hist.length);
       setScriptDraft(prev);
       void saveScript(prev);
@@ -635,13 +636,16 @@ export function VideoDetailDialog({
   );
 
   if (!video) return null;
+  // The guard above narrows the prop for everything below; the const makes
+  // the narrowing visible inside the closures too (S58/T-58.1).
+  const currentVideo = video;
 
   const generateVariants = async () => {
     if (busy) return;
     setBusy("variants");
     try {
-      await fetch(`/api/videos/${video!.id}/variants`, { method: "POST" });
-      const data = await pollVariants(video!.id);
+      await fetch(`/api/videos/${currentVideo.id}/variants`, { method: "POST" });
+      const data = await pollVariants(currentVideo.id);
       setVariants(data.variants);
       toast({
         title: "A/B thumbnail set ready",
@@ -663,7 +667,7 @@ export function VideoDetailDialog({
     if (busy) return;
     setBusy(`variant-${style}`);
     try {
-      const res = await fetch(`/api/videos/${video!.id}/variants`, {
+      const res = await fetch(`/api/videos/${currentVideo.id}/variants`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ style }),
@@ -685,7 +689,7 @@ export function VideoDetailDialog({
   };
 
   const sendToCalendar = () => {
-    setScheduleVideoId(video!.id);
+    setScheduleVideoId(currentVideo.id);
     setFocusVideoId(null);
     setView("calendar");
     onClose();
@@ -2209,12 +2213,16 @@ export function VideoDetailDialog({
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
             {(() => {
+              // The enclosing {video.qc ? …} gate proved presence; the const
+              // carries it into this closure (S58/T-58.1).
+              const qc = video.qc;
+              if (!qc) return null;
               const groups = QC_GROUPS.map((g) => ({
                 title: g.title,
-                checks: video.qc!.checks.filter((c) => g.ids.includes(c.id)),
+                checks: qc.checks.filter((c) => g.ids.includes(c.id)),
               })).filter((g) => g.checks.length > 0);
               const known = new Set(QC_GROUPS.flatMap((g) => g.ids));
-              const others = video.qc!.checks.filter((c) => !known.has(c.id));
+              const others = qc.checks.filter((c) => !known.has(c.id));
               if (others.length > 0) groups.push({ title: "Other", checks: others });
               return groups.map((g) => {
                 const fails = g.checks.filter((c) => qcCheckStatus(c) === "fail").length;

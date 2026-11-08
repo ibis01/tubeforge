@@ -280,8 +280,11 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     if (stockScenes.length === 0) {
       creditLines.push("None — all visuals are generated storyboard art.");
     } else {
+      // The filter above proved s.stock; the guard keeps it total (S58/T-58.1).
       for (const s of stockScenes) {
-        creditLines.push(`Scene ${s.index}: ${s.stock!.credit} — ${s.stock!.pageUrl}`);
+        const stock = s.stock;
+        if (!stock) continue;
+        creditLines.push(`Scene ${s.index}: ${stock.credit} — ${stock.pageUrl}`);
       }
     }
     creditLines.push(

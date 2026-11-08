@@ -109,7 +109,11 @@ export function AttentionPanel() {
     const meta = KIND_META[job.kind];
     if (!meta) return;
     const vid = videoIdOf(job.entityId);
-    const [url, method] = meta.endpoint(vid)!;
+    // Some kinds have no resumable endpoint for this entity — same quiet
+    // exit as an unknown kind (S58/T-58.1).
+    const endpoint = meta.endpoint(vid);
+    if (!endpoint) return;
+    const [url, method] = endpoint;
     setResuming(job.id);
     try {
       const res = await fetch(url, {

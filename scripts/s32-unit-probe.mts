@@ -52,15 +52,25 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   if (!ok) failures++;
 };
 
+// S58 — the named-fixture guard: a missing token/row/hold becomes a labeled
+// error instead of a TypeError at the deref.
+const req = <T,>(label: string, v: T | undefined | null): T => {
+  if (v === undefined || v === null) throw new Error(`missing: ${label}`);
+  return v;
+};
+
 // The gate's global state — the probe resets it between sections.
-const spendState = (globalThis as typeof globalThis & {
-  __tfSpend?: {
-    bootFailed: boolean;
-    recordedMicro: number;
-    holds: Map<string, number>;
-    localOnly: Set<string>;
-  };
-}).__tfSpend!;
+const spendState = req(
+  "spend gate global (__tfSpend)",
+  (globalThis as typeof globalThis & {
+    __tfSpend?: {
+      bootFailed: boolean;
+      recordedMicro: number;
+      holds: Map<string, number>;
+      localOnly: Set<string>;
+    };
+  }).__tfSpend,
+);
 
 // S47 — the gate's decision input is the DATABASE (a serialized per-admit
 // read), so resetting the world now means wiping SpendReservation and — for
@@ -191,7 +201,7 @@ console.log("\n§3 durable reservations");
     check("the in-memory hold matches the persisted row", outstanding() === 81_944, outstanding());
 
     // §3.2 — settle updates the row to settled with the actual cost
-    await hold!.settleUncertain(); // conservative: settle at estimate
+    await req("admitDispatch hold", hold).settleUncertain(); // conservative: settle at estimate
     const settledRows = await prisma.spendReservation.findMany({
       where: { userId, status: "settled" },
     });

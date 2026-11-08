@@ -362,6 +362,26 @@ export function providerMeta(
   return PROVIDERS_BY_CAPABILITY[capability].find((p) => p.id === id);
 }
 
+/**
+ * Fail-fast registry lookup — for adapters that have already dispatched on
+ * the provider id and need the registry row to exist. A missing row is a
+ * deployment/build bug (adapter and registry out of sync), so it throws a
+ * named error instead of letting a `!` surface as a TypeError three lines
+ * later. S58/T-58.1.
+ */
+export function providerMetaRequired(
+  capability: CapabilityId,
+  id: string,
+): ProviderMeta {
+  const meta = providerMeta(capability, id);
+  if (!meta) {
+    throw new Error(
+      `provider registry has no ${capability} provider "${id}" — adapter and registry are out of sync`,
+    );
+  }
+  return meta;
+}
+
 /** OpenAI TTS voices. The classic six work on every tts model. */
 export const OPENAI_VOICES = [
   { id: "alloy", label: "Alloy — neutral, clear", classic: true },

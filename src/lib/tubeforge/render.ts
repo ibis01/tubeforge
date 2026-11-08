@@ -604,7 +604,9 @@ async function buildSegment(opts: {
   }
   const hasPip = pip != null && pipLogoPath != null;
   const pipChainFor = (idx: number): string =>
-    pipOverlayFilter(pip!, { pipInput: idx, frameW: W, frameH: H, inLabel: tail }).chain;
+    hasPip && pip && pipLogoPath
+      ? pipOverlayFilter(pip, { pipInput: idx, frameW: W, frameH: H, inLabel: tail }).chain
+      : "";
   if (hasPip) tail = "[vp]";
   const titleChain = titleDrawtextFilter(opts.docTitle ?? null, dur, aspect !== "16:9", tail);
   // vMap follows the chain's tail so input order and labels can never drift.
@@ -615,8 +617,8 @@ async function buildSegment(opts: {
     if (titleChain) parts.push(titleChain);
     return parts.join(";");
   };
-  const pipInputs = hasPip
-    ? ["-loop", "1", "-framerate", String(fps), "-t", (dur + 0.5).toFixed(3), "-i", pipLogoPath!]
+  const pipInputs = hasPip && pipLogoPath
+    ? ["-loop", "1", "-framerate", String(fps), "-t", (dur + 0.5).toFixed(3), "-i", pipLogoPath]
     : [];
   const visualSuffix = (inputLabel: string): string => {
     // Stock/animated footage: the doc's playback rate is a setpts on the
@@ -739,22 +741,29 @@ async function buildSegment(opts: {
       // free — each branch trims to its exact frame count, the pad only
       // guarantees a stream never ends before its trim point.
       let nextInput = 2 + audioInputCount;
-      for (const sh of shotInputs) {
-        if (inputFor.has(sh.file)) continue;
-        inputFor.set(sh.file, nextInput++);
-        extraInputs.push(
-          "-loop", "1", "-framerate", String(fps), "-t", (sh.sec + 1).toFixed(3), "-i", sh.file
-        );
-      }
-      const shotList = shotInputs.map((sh) => ({
-        kind: sh.moveKind,
-        sec: sh.sec,
-        input: inputFor.get(sh.file)!,
-        crop: sh.crop,
-        focal: sh.focal,
-        speed: sh.speed,
-        transitionOut: sh.transitionOut,
-      }));
+      // Get-once: assign each distinct shot image its input index as the
+      // list is walked — first sighting claims the next index AND pushes the
+      // still input; later sightings reuse it. Order is identical to the
+      // old two-pass loop, so indices cannot drift.
+      const shotList = shotInputs.map((sh) => {
+        let input = inputFor.get(sh.file);
+        if (input === undefined) {
+          input = nextInput++;
+          inputFor.set(sh.file, input);
+          extraInputs.push(
+            "-loop", "1", "-framerate", String(fps), "-t", (sh.sec + 1).toFixed(3), "-i", sh.file
+          );
+        }
+        return {
+          kind: sh.moveKind,
+          sec: sh.sec,
+          input,
+          crop: sh.crop,
+          focal: sh.focal,
+          speed: sh.speed,
+          transitionOut: sh.transitionOut,
+        };
+      });
       const vChain = multiShotSceneGraph({
         dur,
         settings: motion,

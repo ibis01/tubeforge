@@ -49,6 +49,13 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok || detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
   if (!ok) failures++;
 };
+
+// S58 — the named-fixture guard: a missing token/row/hold becomes a labeled
+// error instead of a TypeError at the deref.
+const req = <T,>(label: string, v: T | undefined | null): T => {
+  if (v === undefined || v === null) throw new Error(`missing: ${label}`);
+  return v;
+};
 const json = async (r: Response) => r.json().catch(() => ({}));
 
 const CHECKOUT = "http://probe.local/api/billing/checkout";
@@ -99,7 +106,7 @@ delete process.env.TUBEFORGE_STRIPE_PRICE_STUDIO;
 // 2. the session law — bearers run the studio, never the wallet
 // =====================================================================
 {
-  const bearer = (await createApiToken(user.id, "s24 keyring probe"))!;
+  const bearer = req("s24 keyring probe token", await createApiToken(user.id, "s24 keyring probe"));
   const bh = { authorization: `Bearer ${bearer}` };
 
   const p = await planGet(reqWith(PLAN, { headers: bh }));

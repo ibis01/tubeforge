@@ -30,6 +30,13 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   if (!ok) failures++;
 };
 
+// S58 — the named-fixture guard: a missing token/link becomes a labeled
+// error instead of a TypeError at the deref.
+const req = <T,>(label: string, v: T | undefined | null): T => {
+  if (v === undefined || v === null) throw new Error(`missing: ${label}`);
+  return v;
+};
+
 const URL_ = "http://probe.local/api/auth/verify-email";
 const reqWith = (opts: RequestInit) => new NextRequest(URL_, opts);
 
@@ -106,10 +113,10 @@ await prisma.user.update({
   check("2.1  an anonymous resend -> 401", anon.status === 401, anon.status);
 
   const apiToken = await createApiToken(user.id, "s21 bearer probe");
-  const bearer = await verifyPost(reqWith({ method: "POST", headers: { authorization: `Bearer ${apiToken!}` } }));
+  const bearer = await verifyPost(reqWith({ method: "POST", headers: { authorization: `Bearer ${req("s21 bearer token", apiToken)}` } }));
   check("2.2  a bearer resend -> 403 (browser-only account management)", bearer.status === 403, bearer.status);
 
-  const ok = await verifyPost(reqWith({ method: "POST", headers: cookieOf(sessionToken!) }));
+  const ok = await verifyPost(reqWith({ method: "POST", headers: cookieOf(req("session token", sessionToken)) }));
   const body = (await ok.json().catch(() => ({}))) as { ok?: boolean; verification?: { url?: string; expiresHours?: number } };
   check("2.3  a signed-in resend -> 200", ok.status === 200, ok.status);
   check("2.4  console mode returns the link", typeof body.verification?.url === "string" && body.verification.url.includes("token="));
@@ -117,11 +124,12 @@ await prisma.user.update({
 
   // the OLD parked token was voided by the fresh mint
   const oldRow = await prisma.user.findUnique({ where: { id: user.id } });
+  const oldUrl = body.verification?.url ?? "";
   check("2.6  the fresh mint replaced the stored hash (old link voided)",
-    oldRow?.emailVerifyTokenHash === sha256Hex(body.verification!.url!.split("token=")[1]!),
+    oldRow?.emailVerifyTokenHash === sha256Hex(oldUrl.split("token=")[1] ?? ""),
     { stored: oldRow?.emailVerifyTokenHash?.slice(0, 8) });
 
-  const freshUrl = body.verification!.url!;
+  const freshUrl = req("verification url", body.verification?.url);
   // S28 — the link is RELATIVE on the wire now (the register law): resolve it
   // against the probe origin the way a browser resolves it against the page.
   const consume = await verifyGet(new NextRequest(new URL(freshUrl, URL_).toString()));
@@ -131,7 +139,7 @@ await prisma.user.update({
   const after = await prisma.user.findUnique({ where: { id: user.id } });
   check("2.8  the account is verified now", Boolean(after?.emailVerifiedAt));
 
-  const again = await verifyPost(reqWith({ method: "POST", headers: cookieOf(sessionToken!) }));
+  const again = await verifyPost(reqWith({ method: "POST", headers: cookieOf(req("session token", sessionToken)) }));
   check("2.9  a resend for an already-verified account -> 400", again.status === 400, again.status);
 }
 
