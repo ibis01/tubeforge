@@ -6,21 +6,27 @@
 // the studio era (S33+ backlog P1-2).
 //
 //   PHASE 1 (enforce) — standard daemon (the S40 ship gate ENFORCING, the
-//     deployment default): 18 probes, s5→s25 (minus the special-state ones).
+//     deployment default): 16 probes, s5→s25 (minus the special-state and
+//     gateway-dependent ones — see the exclusion list below).
 //   PHASE 2 (report) — daemon rebooted with TUBEFORGE_QC_ENFORCEMENT=report
 //     (the documented operator advisory mode): s29, whose export contract
 //     predates the S40 gate — its "GET export streams a ZIP" law is the
 //     pre-gate packaging contract, honestly re-run in the mode that still
 //     carries it.
 //
+// 17 probes on the nightly schedule; s8 + s11 additionally verified
+// in-sandbox (gateway TTS) — see the exclusion list at PHASE1_PROBES.
+//
 // Out of scope, on demand only (each needs daemon-state dances documented
 // in its own header): s27 + s32 (TUBEFORGE_PRICING_VERIFIED + mid-suite
 // restarts), s28 + s30 (cookie-samesite / allowed-origins overrides).
+// Gateway-dependent (verified in the Z.ai sandbox, not on bare runners):
+// s8 + s11 — see the exclusion note at PHASE1_PROBES.
 //
 // Two shared-IP realities the runner neutralizes, both disclosed:
 //   * the middleware per-IP tiers are RAISED for the battery daemon
-//     (TUBEFORGE_RATE_WRITE=3000 / READ=9000): 19 probes through one IP
-//     would otherwise exhaust the 90/min human tier mid-battery (observed
+//     (TUBEFORGE_RATE_WRITE=3000 / READ=9000): the probe train through one
+//     IP would otherwise exhaust the 90/min human tier mid-battery (observed
 //     live: 429s from s20 onward). The tiers themselves are unit-proven.
 //   * the S46 login lockout is DB-backed and durable BY DESIGN; probes that
 //     DELIBERATELY fail logins would poison later probes' logins through
@@ -38,8 +44,18 @@ import { PrismaClient } from "@prisma/client";
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const db = new PrismaClient();
 
+// Out of scope, on demand only (each needs something a bare runner does
+// not have — documented per probe header):
+//   s8, s11  — their REAL-SYNTHESIS checks (voice swap / pace audition) ride
+//              the default TTS provider (zai: the platform-bundled SDK —
+//              works in the Z.ai sandbox, absent on a bare CI runner; the
+//              first green nightly proved the split: every other check of
+//              both probes passed, only the synthesis calls 400/502'd).
+//              Both pass in-sandbox via the gateway (piecewise, 2026-11-08).
+//   s27, s32  — TUBEFORGE_PRICING_VERIFIED + mid-suite restarts.
+//   s28, s30  — cookie-samesite / allowed-origins env overrides.
 const PHASE1_PROBES = [
-  "s5", "s7", "s8", "s10", "s11", "s12", "s13", "s14",
+  "s5", "s7", "s10", "s12", "s13", "s14",
   "s15", "s16", "s17", "s18", "s20", "s21", "s22", "s23",
   "s24", "s25",
 ];

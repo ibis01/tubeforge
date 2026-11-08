@@ -35,7 +35,7 @@ concurrency:
 
 jobs:
   battery:
-    name: Route-probe battery (19 probes, production server)
+    name: Route-probe battery (17 probes, production server)
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     # ABSOLUTE DATABASE_URL for the whole job — the lesson of the first
