@@ -1,0 +1,38 @@
+TubeForge — money-path coverage baseline, frozen at S56 (2026-11-08 UTC)
+=========================================================================
+
+Command   : npm run test:coverage
+            (scripts/test-coverage.mjs — the REAL unit + billing + queue
+            suites under Node's V8 coverage, accumulated by c8 across the
+            three runs; --include scoped to the money paths)
+Runner    : recovered sandbox, commit ~a4efe16 (T-56.1/T-56.2 in tree)
+Result    : AGGREGATE 53.63% lines (4330/8073) · 82.29% branches ·
+            77.62% functions — floor enforced at 50% (TUBEFORGE_COV_FLOOR_LINES)
+
+Per-module (lines %)
+--------------------
+  audiomix.ts    100.00   (1529 lines — the audio render path; unit suite)
+  billing.ts      94.57   (grant math, webhook, lockout, reservations)
+  qc-policy.ts   100.00   (the ship gate matrix)
+  qc.ts           83.59   (the 12-check battery + dense L4)
+  spend.ts        75.93   (the $5 door: estimates, holds, settle)
+  jobs.ts         51.14   (job rows, claim loop, retries)
+  queue.ts        52.18   (BullMQ wiring, resume contract)
+  render.ts       23.71   (ffmpeg assembly — see the honest gap below)
+  video-jobs.ts   17.15   (storyboard/render/QC orchestration — same)
+
+How to read this
+----------------
+The CORE money path (billing, spend, the QC ship gate, the audio mix) is
+covered 75–100% by the three deterministic suites — that is where the
+regression floor bites. The render/video-jobs ORCHESTRATION is low BY
+MEASUREMENT, not by omission: those layers need full ffmpeg renders and
+provider dispatches; they are exercised by the S-series route probes, the
+e2e pipeline spec, and the S54/S55 render benchmarks — none of which run
+under this harness (they boot daemons and real child processes). Closing
+that gap means a render-under-coverage suite; recorded here as the next
+step if the floor ever proves too coarse.
+
+The floor (50 aggregate lines) trips if any single suite loses its grip:
+unit dying costs ~25pp (audiomix+qc), billing ~13pp, queue ~5pp. Normal
+churn moves the aggregate by well under the 3.63pp margin.

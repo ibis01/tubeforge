@@ -128,6 +128,34 @@ jobs:
         # exit stays 0; do not "fix" by breaking the runtime guard.
         run: npm run build
 
+  coverage:
+    name: Money-path coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # S56/T-56.4 (P1-5): the REAL unit + billing + queue suites under V8
+    # coverage (c8, accumulated), --include scoped to the money paths.
+    # Fails below the 50% aggregate lines floor (first full measurement
+    # 2026-11-08: 53.63% — docs/baselines/s56-coverage-baseline-2026-11-08.txt).
+    # Parallel with check: the suites run a second time here under coverage,
+    # which the isolation buys cheaply; the critical path does not grow.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install ffmpeg (QC fixtures + render pipeline)
+        timeout-minutes: 5
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Install dependencies (postinstall bootstraps SQLite + Prisma)
+        run: npm ci
+
+      - name: "Coverage (floor: 50% aggregate lines on the money paths)"
+        run: npm run test:coverage
+
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-24.04
