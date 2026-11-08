@@ -135,7 +135,7 @@ jobs:
     # S56/T-56.4 (P1-5): the REAL unit + billing + queue suites under V8
     # coverage (c8, accumulated), --include scoped to the money paths.
     # Fails below the 50% aggregate lines floor (first full measurement
-    # 2026-11-08: 53.63% — docs/baselines/s56-coverage-baseline-2026-11-08.txt).
+    # 2026-11-08: 56.30% — docs/baselines/s56-coverage-baseline-2026-11-08.txt).
     # Parallel with check: the suites run a second time here under coverage,
     # which the isolation buys cheaply; the critical path does not grow.
     steps:

@@ -6,8 +6,15 @@ Command   : npm run test:coverage
             suites under Node's V8 coverage, accumulated by c8 across the
             three runs; --include scoped to the money paths)
 Runner    : recovered sandbox, commit ~a4efe16 (T-56.1/T-56.2 in tree)
-Result    : AGGREGATE 53.63% lines (4330/8073) · 82.29% branches ·
-            77.62% functions — floor enforced at 50% (TUBEFORGE_COV_FLOOR_LINES)
+Result    : AGGREGATE 56.30% lines (4541/8065) · 79.79% branches ·
+            79.54% functions — floor enforced at 50% (TUBEFORGE_COV_FLOOR_LINES)
+
+Correction (same day, T-56.4 fix): the first published number (53.63%,
+            4330/8073) was measured with a silently-mistyped c8 flag
+            (--tmp-directory; the real flag is --temp-directory) — the local
+            run under-collected and the CI run failed outright (ENOENT on
+            the default temp dir). With the correct flag the aggregate is
+            56.30%: MORE coverage, same floor, same story.
 
 Per-module (lines %)
 --------------------
@@ -35,4 +42,4 @@ step if the floor ever proves too coarse.
 
 The floor (50 aggregate lines) trips if any single suite loses its grip:
 unit dying costs ~25pp (audiomix+qc), billing ~13pp, queue ~5pp. Normal
-churn moves the aggregate by well under the 3.63pp margin.
+churn moves the aggregate by well under the 6.3pp margin.

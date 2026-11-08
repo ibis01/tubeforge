@@ -60,8 +60,7 @@ for (const [i, suite] of SUITES.entries()) {
   const args = [
     "node", "node_modules/c8/bin/c8.js",
     ...(i > 0 ? ["--clean=false"] : []),
-    "--silent",
-    "--tmp-directory", COV_DIR,
+    "--temp-directory", COV_DIR,
     ...MONEY_PATHS.flatMap((p) => ["--include", p]),
     "--reporter=text-summary",
     "--report-dir", COV_DIR,
@@ -79,7 +78,7 @@ for (const [i, suite] of SUITES.entries()) {
 const reportArgs = [
   "node", "node_modules/c8/bin/c8.js",
   "report",
-  "--tmp-directory", COV_DIR,
+  "--temp-directory", COV_DIR,
   ...MONEY_PATHS.flatMap((p) => ["--include", p]),
   "--reporter=text",
   "--reporter=text-summary",
