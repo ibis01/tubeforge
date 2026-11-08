@@ -97,5 +97,41 @@ clause) are revised to pin the new laws, plus a tempo-law sweep: no
 camera phrase may contain a tempo word, so no future phrase edit can
 reintroduce the collision.
 
+## 5. Gateway outage — the re-measure's first window (2026-11-09)
+
+The laws landed and were CI-verified on `0c659b8` (run 42510992378,
+6/6 green: check · coverage · postgres · build · gitleaks · e2e). The
+re-measure then hit a hard gateway wall: the FIRST i2v submission
+(social, ~18:22 UTC) returned 429, and from that moment the ENTIRE
+z.ai account throttled — not just the video bucket but llmChat too
+(probed at 18:37, 18:44, 19:06, 19:17, 19:27, 19:36, 19:45+, 20:00,
+20:10, 20:20, 20:30, 20:39, 20:49, 21:02 UTC — every probe 429,
+including after multi-minute full-silence backoff blocks and across two
+hour boundaries).
+
+Reading, stated honestly: this is NOT the 45s shared cool-down S62
+documented (that window passed long ago), and probing neither extends
+nor clears it (silence blocks changed nothing). The shape is a
+long-horizon account quota — most plausibly yesterday's S62 stage
+(~44 min of gateway video, 8 image calls, 8 vision calls, 8 director
+passes) exhausting a daily window — or a platform-side incident. The
+error body is a rate-limit shape ("Too many requests, please try again
+later"), not an auth failure; the GitHub PAT is unaffected (CI ran).
+
+**The lane is resumable by design and the stage stays OPEN until the
+measurement lands.** Resumption protocol, exactly:
+
+    node --import tsx scripts/s63-motion-vigor.mts --all      # ~40-50 min
+    node --import tsx scripts/s63-blind-score.mts             # ~8 vision calls
+
+The re-measure reuses the S62 plans and art verbatim, so NOTHING from
+the outage window contaminates the attribution: the only variable
+between the S62 clips and the S63 clips remains the motion prompt. The
+lane already survived one partial attempt (social failed on 429 with a
+failure manifest entry — reruns replace it). Falsification criteria are
+unchanged (§3). The close commit lands only on real clips + blind
+scores, per the stage law that took S62 from "assumed" to "measured" —
+a laws-only close would repeat the sin S62's audit named.
+
 Stage discipline: full local gate battery before any push; CI evidence by
 SHA for the close; doctrine wording untouched.
