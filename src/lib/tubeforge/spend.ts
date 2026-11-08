@@ -74,6 +74,10 @@
 import { randomUUID } from "node:crypto";
 
 import { currentCtx, type TenantCtx } from "./tenant";
+import { log } from "./log";
+
+// S57/T-57.2 — the module's logger (the old [spend] prefix became a binding).
+const spendLog = log.child({ mod: "spend" });
 
 // ---------- the law, as knobs ----------
 
@@ -122,9 +126,9 @@ function announceOverridesOnce(): void {
     parts.push(
       "TUBEFORGE_PRICING_VERIFIED=1 — provisional pricing is being treated as verified"
     );
-  console.warn(
-    `[spend] OVERRIDE ACTIVE: ${parts.join("; ")}. ` +
-      "Paid-dispatch protections are degraded by environment, not by source."
+  spendLog.warn(
+    "OVERRIDE ACTIVE — paid-dispatch protections are degraded by environment, not by source",
+    { overrides: parts }
   );
 }
 
@@ -714,9 +718,9 @@ export async function admitDispatch(opts: {
   } catch (err) {
     if (err instanceof SpendBlockedError) throw err; // a real gate refusal, not an outage
     spend.bootFailed = true;
-    console.error(
-      "[spend] shared admission failed — PAID dispatches blocked (fail-closed):",
-      err instanceof Error ? err.message : err
+    spendLog.error(
+      "shared admission failed — PAID dispatches blocked (fail-closed)",
+      { err: err instanceof Error ? err.message : err }
     );
     throw new SpendBootFailedError(
       `shared admission failed: ${err instanceof Error ? err.message : String(err)}`
@@ -768,9 +772,9 @@ export async function admitDispatch(opts: {
           },
         });
       } catch (err) {
-        console.warn(
-          "[spend] settle persist failed (row stays pending, conservative on next boot):",
-          err instanceof Error ? err.message : err
+        spendLog.warn(
+          "settle persist failed (row stays pending, conservative on next boot)",
+          { err: err instanceof Error ? err.message : err }
         );
       }
     }

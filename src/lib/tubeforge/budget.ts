@@ -25,12 +25,19 @@
 import { currentCtx } from "./tenant";
 import { getUserSettings } from "./settings";
 import type { CreditHold } from "./billing";
+import { log } from "./log";
 import {
   computeCostMicroUsd,
   drainUsage,
   isPaidProvider,
   type LLMUsage,
 } from "./spend";
+
+// S57/T-57.2 — the module's loggers (the old [budget]/[usage]/[ai-retry]
+// string prefixes became bindings; the lines are now structured JSON).
+const budgetLog = log.child({ mod: "budget" });
+const usageLog = log.child({ mod: "usage" });
+const retryLog = log.child({ mod: "ai-retry" });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -114,7 +121,7 @@ async function getBudgetConfig() {
       if (Number.isFinite(raw) && raw >= 1) perMin[svc] = Math.min(raw, 600);
     }
   } catch (err) {
-    console.warn("[budget] settings read failed, using defaults:", err);
+    budgetLog.warn("settings read failed, using defaults", { err });
   }
 
   budget.cfgCache.set(ctx.userId, { at: now, enabled, perMin });
@@ -144,7 +151,7 @@ function acquire(service: AiService): Promise<() => void> {
 
       if (now >= earliest && free) break;
       if (now - enteredAt > MAX_WAIT_MS) {
-        console.warn(`[budget] ${service} waiter exceeded ${MAX_WAIT_MS / 60000}min — proceeding (fail-open)`);
+        budgetLog.warn("waiter exceeded max wait — proceeding (fail-open)", { service, waitedMin: MAX_WAIT_MS / 60000 });
         break;
       }
       await sleep(Math.min(200, Math.max(50, earliest - now)));
@@ -171,7 +178,7 @@ function noteRateLimit(service: AiService, ms = RATE_LIMIT_PENALTY_MS) {
     budget.services[service].penaltyUntil,
     Date.now() + ms
   );
-  console.warn(`[budget] 429 on ${service} — shared cool-down until +${Math.round(ms / 1000)}s`);
+  budgetLog.warn("429 — shared cool-down", { service, cooldownSec: Math.round(ms / 1000) });
 }
 
 // ---------- retry core ----------
@@ -205,10 +212,7 @@ export async function withRetry<T>(
         // Rate limits (429) need much longer cool-downs than transient 500s.
         const rateLimited = /429|too many requests/i.test(msg);
         const delay = baseDelayMs * Math.pow(2, i - 1) * (rateLimited ? 4 : 1);
-        console.warn(
-          `[ai-retry] ${label} failed (attempt ${i}/${attempts}), retrying in ${delay}ms:`,
-          msg
-        );
+        retryLog.warn("call failed, retrying", { label, attempt: i, attempts, delayMs: delay, err: msg });
         await sleep(delay);
       }
     }
@@ -407,17 +411,15 @@ async function recordAiUsage(
           note: ok ? undefined : `${capability} call failed — hold released — ${label.slice(0, 60)}`,
         });
         if (!settled.settled) {
-          console.warn(
-            `[usage] hold ${hold.holdId} not settled (${settled.reason}) — balance may overstate; ${label.slice(0, 60)}`
-          );
+          usageLog.warn("hold not settled — balance may overstate", { holdId: hold.holdId, reason: settled.reason, label: label.slice(0, 60) });
         }
       } catch (err) {
         // A settlement failure leaves the hold open (fail-closed, warned) —
         // never break the pipeline that just ran the call.
-        console.warn("[usage] hold settlement failed (hold stays open):", err instanceof Error ? err.message : err);
+        usageLog.warn("hold settlement failed (hold stays open)", { err: err instanceof Error ? err.message : err });
       }
       if (!ok) {
-        console.warn(`[usage] ${service} call failed after ${attempts} attempt(s): ${label.slice(0, 80)}`);
+        usageLog.warn("call failed after attempts", { service, attempts, label: label.slice(0, 80) });
       }
       return usageRecord.id;
     }
@@ -443,9 +445,9 @@ async function recordAiUsage(
         note: `${capability} ${ok ? "ok" : "FAILED"} via ${provider} — ${label.slice(0, 60)}`,
       });
       if (!result.recorded) {
-        console.warn(
-          `[usage] credit spend rejected (${result.reason}) — balance ${result.balanceMicro} microCredits, ` +
-            `${capability} call ran without a ledger row: ${label.slice(0, 60)}`
+        usageLog.warn(
+          "credit spend rejected — call ran without a ledger row",
+          { reason: result.reason, balanceMicro: result.balanceMicro, capability, label: label.slice(0, 60) }
         );
       }
     } catch {
@@ -453,12 +455,12 @@ async function recordAiUsage(
     }
 
     if (!ok) {
-      console.warn(`[usage] ${service} call failed after ${attempts} attempt(s): ${label.slice(0, 80)}`);
+      usageLog.warn("call failed after attempts", { service, attempts, label: label.slice(0, 80) });
     }
     return usageRecord.id;
   } catch (err) {
     // Never let metering break the pipeline.
-    console.warn("[usage] record failed (non-fatal):", err instanceof Error ? err.message : err);
+    usageLog.warn("record failed (non-fatal)", { err: err instanceof Error ? err.message : err });
     return null;
   }
 }

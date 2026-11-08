@@ -56,6 +56,12 @@
 
 import { Prisma } from "@prisma/client";
 import { db as rawDb } from "@/lib/db";
+import { log } from "@/lib/tubeforge/log";
+
+// S57/T-57.2 — the module's loggers (the old [billing]/[billing/webhook]
+// string prefixes became bindings).
+const billingLog = log.child({ mod: "billing" });
+const webhookLog = log.child({ mod: "billing:webhook" });
 
 // ---------- plan catalog ----------
 
@@ -775,14 +781,14 @@ export function startStaleHoldSweeper(): void {
     try {
       const r = await releaseStaleHolds();
       if (r.released > 0)
-        console.info(
-          `[billing] stale-hold sweep released ${r.released} hold(s) ` +
-            `(${r.alreadySettled} already settled of ${r.scanned} scanned)`
+        billingLog.info(
+          "stale-hold sweep released holds",
+          { released: r.released, alreadySettled: r.alreadySettled, scanned: r.scanned }
         );
     } catch (err) {
-      console.warn(
-        "[billing] stale-hold sweep failed:",
-        err instanceof Error ? err.message : err
+      billingLog.warn(
+        "stale-hold sweep failed",
+        { err: err instanceof Error ? err.message : err }
       );
     }
   };
@@ -924,7 +930,7 @@ export async function processStripeEvent(event: StripeEvent): Promise<"processed
     await rawDb.processedWebhookEvent.create({ data: { id: eventId, type: event.type } });
   } catch (err) {
     if ((err as { code?: string } | null)?.code === "P2002") {
-      console.warn(`[billing/webhook] duplicate event ${eventId} (${event.type}) — acking without re-processing`);
+      webhookLog.warn("duplicate event — acking without re-processing", { eventId, type: event.type });
       return "duplicate";
     }
     throw err;
@@ -958,7 +964,7 @@ export async function handleStripeEvent(event: StripeEvent): Promise<void> {
       const planTier = String(meta.planTier ?? "starter");
       const plan = PLAN_DEFAULTS[planTier] ?? PLAN_DEFAULTS.starter;
       if (!userId || !customerId || !subscriptionId) {
-        console.warn("[billing/webhook] checkout.session.completed missing fields", obj);
+        webhookLog.warn("checkout.session.completed missing fields", { obj });
         break;
       }
       // The user must exist (the client_reference_id carries our userId).
@@ -966,7 +972,7 @@ export async function handleStripeEvent(event: StripeEvent): Promise<void> {
       // Stripe does not retry a permanently-unprocessable event forever.
       const userExists = await rawDb.user.findUnique({ where: { id: userId }, select: { id: true } });
       if (!userExists) {
-        console.warn(`[billing/webhook] checkout.session.completed for unknown user ${userId} — acking without a write`);
+        webhookLog.warn("checkout.session.completed for unknown user — acking without a write", { userId });
         break;
       }
       // Upsert the Subscription. Use a Plan row from the DB if one exists
@@ -1039,7 +1045,7 @@ export async function handleStripeEvent(event: StripeEvent): Promise<void> {
         where: { stripeSubscriptionId: subscriptionId },
       });
       if (!sub) {
-        console.warn("[billing/webhook] invoice.paid for unknown subscription", subscriptionId);
+        webhookLog.warn("invoice.paid for unknown subscription", { subscriptionId });
         break;
       }
       // Stage 7.1 B-6b (caught by the lifecycle integration test): a paid
@@ -1051,7 +1057,7 @@ export async function handleStripeEvent(event: StripeEvent): Promise<void> {
       // canceled too. Genuine recovery payments (past_due/unpaid) still
       // grant AND re-activate.
       if (sub.status === "canceled") {
-        console.warn(`[billing/webhook] invoice.paid for canceled subscription ${subscriptionId} — no grant, no re-activation`);
+        webhookLog.warn("invoice.paid for canceled subscription — no grant, no re-activation", { subscriptionId });
         break;
       }
       const plan = await rawDb.plan.findUnique({ where: { id: sub.planId } });

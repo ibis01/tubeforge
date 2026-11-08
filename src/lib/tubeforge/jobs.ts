@@ -19,6 +19,7 @@ import { db, rawDatabase } from "./tenant-db";
 import { currentCtx, withCtxNull, type TenantCtx } from "./tenant";
 import { errorText } from "@/lib/tubeforge/redact";
 import { JobCancelledError } from "./cancel";
+import { log } from "./log";
 import {
   createPendingJob,
   registerClosure,
@@ -28,6 +29,10 @@ import {
   onJobFinished,
   claimIsStale,
 } from "./queue";
+
+// S57/T-57.2 — the module's logger (the old [jobs]/[job:k] string prefixes
+// became bindings; the lines are now structured JSON).
+const jobsLog = log.child({ mod: "jobs" });
 
 export type JobKind =
   | "voiceover"
@@ -173,7 +178,7 @@ async function runRecovery(): Promise<void> {
       // Durable resume: handler kinds go back to the queue instead of dying.
       const resumed = await reenqueueIfHandlerKind(row.id, row.kind).catch(() => false);
       if (resumed) {
-        console.warn(`[jobs] recovered stale ${row.kind} job ${row.id} (entity ${row.entityId}) -> re-enqueued`);
+        jobsLog.warn("recovered stale job — re-enqueued", { kind: row.kind, jobId: row.id, entityId: row.entityId });
         continue;
       }
 
@@ -220,9 +225,9 @@ async function runRecovery(): Promise<void> {
           state.lastErrors.set(key(row.entityId, row.kind as JobKind), message);
         }
 
-        console.warn(`[jobs] recovered stale ${row.kind} job ${row.id} (entity ${row.entityId}) -> interrupted`);
+        jobsLog.warn("recovered stale job — interrupted", { kind: row.kind, jobId: row.id, entityId: row.entityId });
       } catch (err) {
-        console.error("[jobs] recovery failed for job", row.id, err);
+        jobsLog.error("recovery failed for job", { jobId: row.id, err });
       }
     }
   });
@@ -240,7 +245,7 @@ async function runRecovery(): Promise<void> {
 export function ensureRecovered(): Promise<void> {
   if (!state.recoveryPromise) {
     state.recoveryPromise = runRecovery()
-      .catch((err) => console.error("[jobs] recovery crashed:", err))
+      .catch((err) => jobsLog.error("recovery crashed", { err }))
       .finally(() => {
         state.recoveryPromise = null;
       });
@@ -406,10 +411,10 @@ export async function startJob(
       ).jobId;
     } catch (err) {
       // DB hiccup — run untracked (Stage-1 behavior) rather than block the stage.
-      console.error("[jobs] failed to persist job row — running untracked:", err);
+      jobsLog.error("failed to persist job row — running untracked", { err });
     }
   } else {
-    console.warn("[jobs] job started outside a tenant context — running untracked");
+    jobsLog.warn("job started outside a tenant context — running untracked");
   }
 
   if (!jobId) {
@@ -422,7 +427,7 @@ export async function startJob(
         const cancelled = err instanceof JobCancelledError;
         const message = errorText(err, `${kind} job failed`);
         state.lastErrors.set(k, message);
-        if (!cancelled) console.error(`[job:${k}] failed:`, message);
+        if (!cancelled) jobsLog.error("job failed", { key: k, err: message });
       } finally {
         state.running.delete(k);
         state.progress.delete(k);

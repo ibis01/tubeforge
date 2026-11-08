@@ -2654,3 +2654,39 @@ Gates: tsc 0 · eslint 0 errors/672 warnings (zero net vs HEAD) ·
 exact-cap + determinism, restrictedVerdictFromBatches fail-closed law,
 real-detector both-direction controls). Commits: f3b98b5 (code) + the
 docs close-out.
+
+## S57 session (2026-11-08 UTC) — the logger's in-repo half, executed against a missing PAT
+
+Recovered the sandbox (third reclaim): public clone at 9da54b4 — S56 was
+already closed there (the handoff summary was stale again); verified the
+close independently: tsc 0 · eslint 0/603 (census 602 + a90017b's
+post-census battery site) · 245/245 unit · 40/40 billing · the live CI
+badge "passing" on the closing commit (REST rate-limited this session).
+Found and fixed one defect in the close itself: a stray duplicate T-56.7
+row at TASKS.md's end.
+
+The stage (owner-directed "Next"): P0-7's in-repo half. Reconnaissance
+reshaped it — the census's 381 no-console warnings were ~378 CLI-harness
+sites; the real production debt was the 83 warn/error/info sites the
+allow-list hid from the census. Migrated 87 sites across 31 src/ files onto
+the Stage-3 logger (prefixes → child bindings, interpolations → fields);
+log.ts gained the portable sink (edge/browser console fallback — same JSON
+line); middleware stamps a fresh x-request-id on every /api/* request,
+echoed on every response incl. errors, bound via requestLog(); six routes
+adopted it. Four owned console exceptions with reasoned disables (log.ts's
+sink, email's console delivery, pwa's client line, instrumentation's boot
+last-resort). no-console: 382→0, promoted to bare error; scripts/e2e
+scoped off with the disclosure. En-route: instrumentation's try-scoped
+logger (a naive catch migration would have crashed the failure reporter),
+the empty-allow schema rejection, the multi-line disable-comment trap, the
+phantom music/http "typos" (tooling rendering artifact, hexdump-proven),
+and the suite's own stderr-capture lesson.
+
+Gates: tsc 0 · eslint 0 errors/221 warnings (603→221) · 247/247 unit (+2)
+· billing 40/40 · queue PASS · build exit 0 with the same four documented
+warnings · request-id flow proven LIVE on the standalone production server
+(fresh UUIDs on 200 and 401). NOT pushed: the reclaim ate .env with the
+PAT (due rotation anyway) — push + CI + the official close ride the
+rotated PAT; a bundle ships with the delivery. Census:
+docs/baselines/s57-lint-census-2026-11-08.txt; record:
+docs/audits/s57-reliability-record.md.

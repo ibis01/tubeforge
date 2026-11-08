@@ -54,9 +54,9 @@ export async function register(): Promise<void> {
         startVoiceServerWatchdog();
         log.info("shared voice server", { ...result });
       } catch (err) {
-        console.error(
-          "[instrumentation] voice server spawn hook failed (app continues):",
-          err instanceof Error ? err.message : String(err),
+        log.error(
+          "voice server spawn hook failed (app continues)",
+          { err: err instanceof Error ? err.message : String(err) },
         );
       }
     }
@@ -74,7 +74,13 @@ export async function register(): Promise<void> {
       error: `${message} :: ${stackLines}`,
       at: new Date().toISOString(),
     };
-    // Loud but non-fatal — see the header comment.
-    console.error("[instrumentation] queue boot FAILED (app continues without background jobs):", message);
+    // Loud but non-fatal — see the header comment. The logger loads
+    // defensively here TOO: this catch is the app's "why did boot degrade"
+    // line, so it must speak even when the failing import was the logger's
+    // own module — the raw console is the last-resort sink for exactly that.
+    const { log } = await import("./lib/tubeforge/log").catch(() => ({ log: null as null }));
+    if (log) log.error("queue boot FAILED (app continues without background jobs)", { err: message });
+    // eslint-disable-next-line no-console -- last-resort sink (logger module failed to load)
+    else console.error("[instrumentation] queue boot FAILED (app continues without background jobs):", message);
   }
 }

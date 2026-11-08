@@ -16,6 +16,10 @@ import { getVideoTopicWorld, topicWorldClause, getVideoContentPolicy } from "./s
 import { videoDir } from "./ai";
 import { focalFromToken } from "./motion";
 import { sanitizePromptForPolicy } from "./restricted-subjects";
+import { log } from "./log";
+
+// S57/T-57.2 — the module's logger (the old [shots] prefix became a binding).
+const shotsLog = log.child({ mod: "shots" });
 import type { Scene } from "./types";
 import type { MoveKind } from "./motion";
 import type { DirectorScene } from "./director-plan";
@@ -336,8 +340,9 @@ export async function ensureShotImages(opts: {
     const composed = anchor ? `${shot.prompt} ${anchor}.` : shot.prompt;
     const sanitized = sanitizePromptForPolicy(composed, contentPolicy);
     if (sanitized.substituted > 0) {
-      console.warn(
-        `[shots] scene ${opts.scene.index} shot ${shot.shotIndex}: content policy substituted ${sanitized.substituted} sentence(s) naming restricted subject(s): ${sanitized.matches.map((m) => m.entry).join(", ")}`
+      shotsLog.warn(
+        "content policy substituted sentence(s) naming restricted subject(s)",
+        { scene: opts.scene.index, shot: shot.shotIndex, substituted: sanitized.substituted, matches: sanitized.matches.map((m) => m.entry) }
       );
     }
     try {

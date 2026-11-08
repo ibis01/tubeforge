@@ -49,7 +49,16 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     // General JavaScript rules
     "prefer-const": "warn",
     "no-unused-vars": "off", // superseded by @typescript-eslint/no-unused-vars
-    "no-console": ["warn", { "allow": ["warn", "error", "info"] }],
+    // S57/T-57.3 — the structured-logger freeze: src/ (the running app) has
+    // NO console sites left; every line goes through log.ts (pino-format
+    // JSON with request ids). Promoted to a bare error (no allow list) — the class
+    // cannot grow back without failing CI. The owned exceptions carry
+    // inline eslint-disable comments with their reasons (log.ts's portable
+    // fallback sink, email.ts's console delivery channel, pwa.tsx's client
+    // line, instrumentation.ts's last-resort boot line). scripts/ and e2e/
+    // are scoped OFF below — they are operator-facing CLI harnesses where
+    // readable console output IS the interface.
+    "no-console": "error",
     "no-debugger": "warn",
     "no-empty": "off",
     "no-irregular-whitespace": "off",
@@ -79,6 +88,16 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
   ignores: [
     "src/app/api/auth/**",
   ],
+}, {
+  // S57/T-57.3 — the CLI harness scope: scripts/ and e2e/ are operator-
+  // facing tools (probes, suites, workers, evidence harnesses). Their
+  // console output is the human interface, not app observability — JSON
+  // lines there would bury the operator. The structured-logger law governs
+  // src/ only; harnesses that want structure import log.ts themselves.
+  files: ["scripts/**/*.{js,mjs,mts,ts}", "e2e/**/*.ts"],
+  rules: {
+    "no-console": "off",
+  },
 }, {
   // pack/ is a packaging artifact mirror; scripts/*.cjs are standalone ops
   // scripts executed directly with node (CommonJS by design, not app code).

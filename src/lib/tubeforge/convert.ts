@@ -22,6 +22,10 @@ import { currentCtx } from "./tenant";
 import { parseJsonLoose, videoDir } from "./ai";
 import { aiCall } from "./budget";
 import { chatComplete } from "./providers/chat";
+import { log } from "./log";
+
+// S57/T-57.2 — the module's logger (the old [convert] prefix became a binding).
+const convertLog = log.child({ mod: "convert" });
 import { sceneWavFile, normalizeScene, applyRetentionRules, isRehookPosition } from "./story";
 import { SCENE_COUNTS, type Scene } from "./types";
 
@@ -326,7 +330,7 @@ export async function convertClassicToScenes(opts: {
     const cov = coverage(wordsOf(video.script), wordsOf(scenes.map((s) => s.narration).join(" ")));
     if (scenes.length < 2 || cov < 0.6) throw new Error(`weak split (coverage ${(cov * 100).toFixed(0)}%)`);
   } catch (err) {
-    console.warn("[convert] LLM split unusable, falling back to mechanical split:", err);
+    convertLog.warn("LLM split unusable, falling back to mechanical split", { err });
     scenes = mechanicalSplit(video.script, sceneCount);
     method = "mechanical";
   }

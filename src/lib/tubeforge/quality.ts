@@ -15,6 +15,10 @@ import { parseJsonLoose } from "./ai";
 import { aiCall } from "./budget";
 import { visionComplete } from "./providers/vision";
 import { errorText } from "@/lib/tubeforge/redact";
+import { log } from "./log";
+
+// S57/T-57.2 — the module's logger (the old [quality] prefix became a binding).
+const qualityLog = log.child({ mod: "quality" });
 import { getUserSettings } from "./settings";
 import { currentCtx } from "./tenant";
 
@@ -157,7 +161,7 @@ Respond with STRICT JSON only:
     };
   } catch (err) {
     const message = errorText(err, "relevance inspection failed");
-    console.warn(`[quality] stock relevance check skipped, keeping clip: ${message}`);
+    qualityLog.warn("stock relevance check skipped, keeping clip", { err: message });
     return { checked: false, pass: null, score: null, summary: null };
   }
 }
@@ -191,7 +195,7 @@ export async function runQualityGate(opts: {
     first = await inspectImage(opts.imagePath, opts.context);
   } catch (err) {
     const message = errorText(err, "VLM inspection failed");
-    console.warn(`[quality] inspection failed, passing through: ${message}`);
+    qualityLog.warn("inspection failed, passing through", { err: message });
     await logActivity(opts.videoId, `Quality check skipped — inspector unavailable (${message})`, "error");
     return { checked: false, score: null, issues: [], summary: null, rerolled: false, previousScore: null };
   }
@@ -243,7 +247,7 @@ export async function runQualityGate(opts: {
       fs.rmSync(backup, { force: true });
     }
     const message = errorText(err, "re-roll failed");
-    console.warn(`[quality] re-roll failed, keeping original: ${message}`);
+    qualityLog.warn("re-roll failed, keeping original", { err: message });
     await logActivity(
       opts.videoId,
       `Quality gate: re-roll failed (${message}) — kept the original ${opts.kind} (scored ${first.score}/10)`,

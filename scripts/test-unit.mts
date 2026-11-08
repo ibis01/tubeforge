@@ -6099,6 +6099,101 @@ await test("S55 editSceneImage instruction: the AI-edit prompt rides the L3 sani
   eq(cleanRes.prompt, `${cleanRaw} ${policyNegativeClause("islamic-history")}`, "clean instruction: only the negative clause is added");
 });
 
+
+// ---------------------------------------------------------------------------
+// S57 — observability: request ids + the portable sink (T-57.1/T-57.2)
+// ---------------------------------------------------------------------------
+
+suiteStart("S57 — request ids + the portable sink");
+
+await test("log: requestLog binds the middleware-stamped request id", async () => {
+  const captured: string[] = [];
+  const origOut = process.stdout.write.bind(process.stdout);
+  const origErr = process.stderr.write.bind(process.stderr);
+  const origLevel = process.env.TUBEFORGE_LOG_LEVEL;
+  const collect = (chunk: unknown) => {
+    if (typeof chunk === "string") captured.push(chunk);
+    return true;
+  };
+  (process.stdout as { write: unknown }).write = collect;
+  (process.stderr as { write: unknown }).write = collect;
+  try {
+    process.env.TUBEFORGE_LOG_LEVEL = "debug";
+    const mod = await import("../src/lib/tubeforge/log.ts");
+    eq(mod.REQUEST_ID_HEADER, "x-request-id", "the header name is the contract");
+
+    // A stamped request → the child carries req; children inherit it.
+    const stamped = { headers: { get: (n: string) => (n === "x-request-id" ? "req-abc-123" : null) } };
+    const rlog = mod.requestLog(stamped, { mod: "videos:render" });
+    rlog.warn("render rejected");
+    let line = captured.map((l) => JSON.parse(l) as Record<string, unknown>).find((l) => l.msg === "render rejected");
+    ok(line, "request-bound line emitted");
+    eq(line?.req, "req-abc-123", "the request id rides the line");
+    eq(line?.mod, "videos:render", "the mod binding rides the line");
+    const nested = rlog.child({ stage: "render" });
+    captured.length = 0;
+    nested.error("nested failure");
+    line = captured.map((l) => JSON.parse(l) as Record<string, unknown>).find((l) => l.msg === "nested failure");
+    eq(line?.req, "req-abc-123", "nested children inherit the request id");
+
+    // No header → no req field (the worker, direct calls, tests).
+    captured.length = 0;
+    const bare = { headers: { get: () => null } };
+    mod.requestLog(bare, { mod: "x" }).warn("no request context");
+    line = captured.map((l) => JSON.parse(l) as Record<string, unknown>).find((l) => l.msg === "no request context");
+    ok(line, "bare line emitted");
+    eq(line?.req, undefined, "no header means no req field");
+
+    // An oversized inbound id is dropped (>128 chars — middleware always
+    // overwrites with its own 36-char UUID; this guard is for direct calls).
+    captured.length = 0;
+    const huge = { headers: { get: () => "x".repeat(129) } };
+    mod.requestLog(huge, { mod: "x" }).warn("oversized id");
+    line = captured.map((l) => JSON.parse(l) as Record<string, unknown>).find((l) => l.msg === "oversized id");
+    eq(line?.req, undefined, "an oversized inbound id is not bound");
+    eq(mod.requestIdFrom(huge as never), null, "requestIdFrom rejects the oversized id");
+  } finally {
+    (process.stdout as { write: unknown }).write = origOut;
+    (process.stderr as { write: unknown }).write = origErr;
+    if (origLevel === undefined) delete process.env.TUBEFORGE_LOG_LEVEL;
+    else process.env.TUBEFORGE_LOG_LEVEL = origLevel;
+  }
+});
+
+await test("log: the portable sink falls back to console when process streams are absent", async () => {
+  const captured: string[] = [];
+  const origLog = console.log;
+  const origErr = console.error;
+  const outDesc = Object.getOwnPropertyDescriptor(process, "stdout");
+  const errDesc = Object.getOwnPropertyDescriptor(process, "stderr");
+  const origLevel = process.env.TUBEFORGE_LOG_LEVEL;
+  (console as { log: unknown }).log = (t: string) => captured.push(t);
+  (console as { error: unknown }).error = (t: string) => captured.push(t);
+  try {
+    process.env.TUBEFORGE_LOG_LEVEL = "debug";
+    // Simulate an edge/browser bundle: process exists but has no std streams.
+    Object.defineProperty(process, "stdout", { value: {}, configurable: true });
+    Object.defineProperty(process, "stderr", { value: {}, configurable: true });
+    const mod = await import("../src/lib/tubeforge/log.ts");
+    mod.createLogger({ mod: "edge" }).info("fallback line");
+    mod.createLogger({ mod: "edge" }).error("fallback error line");
+    eq(captured.length, 2, "both levels emitted through the console fallback");
+    const info = JSON.parse(captured[0]) as Record<string, unknown>;
+    eq(info.msg, "fallback line", "the fallback line is the SAME pino-format JSON");
+    eq(info.mod, "edge", "bindings survive the fallback");
+    const errLine = JSON.parse(captured[1]) as Record<string, unknown>;
+    eq(errLine.msg, "fallback error line", "error level rides console.error in the fallback");
+    eq(errLine.level, 50, "pino error level value preserved");
+  } finally {
+    if (outDesc) Object.defineProperty(process, "stdout", outDesc);
+    if (errDesc) Object.defineProperty(process, "stderr", errDesc);
+    (console as { log: unknown }).log = origLog;
+    (console as { error: unknown }).error = origErr;
+    if (origLevel === undefined) delete process.env.TUBEFORGE_LOG_LEVEL;
+    else process.env.TUBEFORGE_LOG_LEVEL = origLevel;
+  }
+});
+
 console.log(`\n${"─".repeat(56)}`);
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);

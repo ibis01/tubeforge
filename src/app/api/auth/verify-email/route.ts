@@ -22,6 +22,7 @@ import { rawDatabase as rawDb } from "@/lib/tubeforge/tenant-db";
 import { randomToken, sha256Hex } from "@/lib/tubeforge/crypto";
 import { requireUser, sessionIdFromRequest } from "@/lib/tubeforge/tenant";
 import { sendMail, linkInResponse } from "@/lib/tubeforge/email";
+import { requestLog } from "@/lib/tubeforge/log";
 
 const VERIFY_TTL_H = 24;
 
@@ -103,7 +104,7 @@ export async function POST(req: NextRequest) {
       ].join("\n"),
     });
   } catch (err) {
-    console.warn("[auth] verification mail delivery failed (non-fatal):", err instanceof Error ? err.message : err);
+    requestLog(req, { mod: "auth:verify-email" }).warn("verification mail delivery failed (non-fatal)", { err: err instanceof Error ? err.message : err });
   }
 
   return NextResponse.json({

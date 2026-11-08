@@ -37,6 +37,10 @@
 // in Stage 3.
 
 import { rawDatabase as rawDb } from "./tenant-db";
+import { log } from "./log";
+
+// S57/T-57.2 — the module's logger (the old [claim] prefix became a binding).
+const claimLog = log.child({ mod: "claim" });
 import { withCtxNull } from "./tenant";
 import { encryptSecret } from "./crypto";
 import { verifyPassword } from "./tenant";
@@ -284,7 +288,7 @@ export async function claimLegacyForOwner(userId: string): Promise<ClaimResult> 
     // keep their table (unmanaged by Prisma since the model left the schema);
     // the moment ownership is proven, nothing legacy survives.
     await rawDb.$executeRawUnsafe(`DROP TABLE IF EXISTS "LegacySetting"`).catch((err) => {
-      console.warn("[claim] LegacySetting drop failed (rows already consumed):", err);
+      claimLog.warn("LegacySetting drop failed (rows already consumed)", { err });
     });
 
     // ---- drop the bootstrap org when it is now empty ----

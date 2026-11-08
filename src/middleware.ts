@@ -29,6 +29,7 @@ import {
   originHostTrusted,
   parseAllowedOrigins,
 } from "@/lib/tubeforge/origin-trust";
+import { REQUEST_ID_HEADER, log } from "@/lib/tubeforge/log";
 
 // Reachable without a token. /api/auth/token is deliberately NOT here —
 // minting an API token requires an authenticated session. /api/auth/status
@@ -56,13 +57,15 @@ const PUBLIC_API = new Set<string>([
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-// Warn once per process, not once per request.
+// Warn once per process, not once per request. Through the structured
+// logger (S57/T-57.2) — process-level, so no request binding.
+const mwLog = log.child({ mod: "middleware" });
 let warnedOpenGate = false;
 function warnNoSecret(): void {
   if (warnedOpenGate) return;
   warnedOpenGate = true;
-  console.warn(
-    "[TubeForge] SECURITY: TUBEFORGE_AUTH_SECRET is not set — every API answers 503 " +
+  mwLog.warn(
+    "TUBEFORGE_AUTH_SECRET is not set — every API answers 503 " +
       "(add it to .env — see .env.example; npm run setup provisions one)."
   );
 }
@@ -73,6 +76,21 @@ export async function middleware(req: NextRequest) {
   const isProd = process.env.NODE_ENV === "production";
 
   if (!pathname.startsWith("/api/")) return NextResponse.next();
+
+  // S57/T-57.1 — request correlation: every /api/* request carries a FRESH
+  // x-request-id of OURS (an inbound id is untrusted client input — always
+  // overwritten, never echoed), forwarded to the route handler AND returned
+  // on the response, error responses included: the failing client can quote
+  // it, the centralized log can be grepped for it (requestLog binds it as
+  // `req`). crypto.randomUUID is WebCrypto-safe (and Node-native since 19);
+  // the value is 36 chars of hex+dash — JSON.stringify escapes anything a
+  // crafted inbound id could have tried to inject, and we generate ours.
+  const requestId = crypto.randomUUID();
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set(REQUEST_ID_HEADER, requestId);
+  const respond = (body: unknown, status: number, headers: Record<string, string> = {}) =>
+    NextResponse.json(body, { status, headers: { [REQUEST_ID_HEADER]: requestId, ...headers } });
+  const rlog = mwLog.child({ req: requestId });
 
   // Coarse per-IP rate limit — runs BEFORE auth so unauthenticated floods
   // are shed at the door (login adds its own lockout; budget.ts caps provider
@@ -85,21 +103,22 @@ export async function middleware(req: NextRequest) {
       write ? WRITE_LIMIT : READ_LIMIT
     );
     if (!hit.ok)
-      return NextResponse.json(
+      return respond(
         { error: "Too many requests — slow down and try again shortly" },
-        { status: 429, headers: { "Retry-After": String(hit.retryAfterSec) } }
+        429,
+        { "Retry-After": String(hit.retryAfterSec) }
       );
   }
 
-  if (PUBLIC_API.has(pathname)) return NextResponse.next();
+  if (PUBLIC_API.has(pathname)) return NextResponse.next({ request: { headers: requestHeaders } });
 
   // PRODUCTION FAIL-SAFE — no secret, no data.
   if (!secret) {
     if (isProd || process.env.TUBEFORGE_REQUIRE_AUTH !== "0") {
       warnNoSecret();
-      return NextResponse.json(
+      return respond(
         { error: "TUBEFORGE_AUTH_SECRET is not configured — sign-in is unavailable" },
-        { status: 503 }
+        503
       );
     }
   }
@@ -110,9 +129,9 @@ export async function middleware(req: NextRequest) {
 
   const payload = await verifyToken(token, secret);
   if (!payload || payload.s === "state") {
-    return NextResponse.json(
+    return respond(
       { error: "Authentication required — sign in to use TubeForge" },
-      { status: 401 }
+      401
     );
   }
 
@@ -146,19 +165,20 @@ export async function middleware(req: NextRequest) {
       });
       if (!decision.ok) {
         // The operator-facing diagnostic: everything needed to configure the
-        // allow-list precisely, and nothing secret.
-        console.warn(
-          `[TubeForge] CSRF guard rejected ${req.method} ${pathname}: ` +
+        // allow-list precisely, and nothing secret — request-bound (S57), so
+        // the rejected call's own response header points at this line.
+        rlog.warn(
+          `CSRF guard rejected ${req.method} ${pathname}: ` +
             `origin=${origin} host=${req.headers.get("host") ?? "?"} ` +
             `x-forwarded-host=${req.headers.get("x-forwarded-host") ?? "?"} — ` +
             `add the origin to TUBEFORGE_ALLOWED_ORIGINS (a suffix entry like ".space-z.ai" covers every subdomain).`
         );
-        return NextResponse.json({ error: "Cross-origin request rejected" }, { status: 403 });
+        return respond({ error: "Cross-origin request rejected" }, 403);
       }
     }
   }
 
-  return NextResponse.next();
+  return NextResponse.next({ request: { headers: requestHeaders } });
 }
 
 // Runtime: Node.js (Next 16 compiles ALL middleware/proxy to Node — the

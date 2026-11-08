@@ -23,6 +23,10 @@ import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { randomUUID } from "crypto";
+import { log } from "./log";
+
+// S57/T-57.2 — the module's logger (the old voice-clone: prefixes became bindings).
+const vcLog = log.child({ mod: "voice-clone" });
 import { db } from "./tenant-db";
 import { currentCtx, withCtx, type TenantCtx } from "./tenant";
 import { getProviderCredential } from "./providers/settings";
@@ -441,15 +445,15 @@ function scheduleBackgroundAudition(opts: {
           where: { id: opts.profileId },
           data: { auditionWav: buf.toString("base64") },
         });
-        console.info(
-          `voice-clone: background audition ready for ${opts.profileId} ` +
-            `in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`,
+        vcLog.info(
+          "background audition ready",
+          { profileId: opts.profileId, elapsedSec: Number(((Date.now() - startedAt) / 1000).toFixed(1)) }
         );
       }
     } catch (err) {
-      console.warn(
-        `voice-clone: background audition failed for ${opts.profileId}: ` +
-          errorText(err, "unknown"),
+      vcLog.warn(
+        "background audition failed",
+        { profileId: opts.profileId, err: errorText(err, "unknown") }
       );
     } finally {
       inFlight.delete(opts.profileId);
@@ -694,7 +698,7 @@ export async function deleteVoiceProfile(id: string): Promise<boolean> {
         body: JSON.stringify({ voice: row.providerVoiceId, request_id: randomUUID() }),
       });
     } catch (err) {
-      console.warn(`voice-clone: platform delete failed for ${row.providerVoiceId}: ${errorText(err, "unknown")}`);
+      vcLog.warn("platform delete failed", { providerVoiceId: row.providerVoiceId, err: errorText(err, "unknown") });
     }
   }
 

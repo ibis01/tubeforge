@@ -1,0 +1,43 @@
+TubeForge — ESLint census after the S57/T-57.2+T-57.3 structured-logger tranche (2026-11-08 UTC)
+=============================================================================================
+
+Command : npx eslint .            (eslint.config.mjs)
+Result  : 0 errors · 221 warnings (S56 close: 0 errors · 603 warnings — the
+          +1 was a90017b's post-census battery-diagnostics site, folded in
+          by this tranche's rescoping)
+
+The structured-logger tranche — ZERO AND FROZEN AT ERROR:
+  no-console 382→0 (this session's start count; the S56 census recorded 381
+  before a90017b added one script-side site)
+  * src/ (the running app): every console.* site migrated onto log.ts —
+    87 raw sites across 31 files (budget 10 · story 7 · jobs 7 · billing 7 ·
+    render 5 · stock 4 · voice-clone/spend/quality 3 each · … · middleware 2 ·
+    instrumentation 2 · six route files). The old [module] string prefixes
+    became log.child({ mod }) bindings; interpolated values became fields.
+    The rule is now a bare "error" — no allow list.
+  * Four OWNED exceptions carry inline eslint-disable comments with reasons:
+    log.ts (the portable fallback sink — it IS the logger), email.ts (console
+    mode IS the delivery channel; the logger would redact the signed link),
+    pwa.tsx (client bundle — the browser console is the client's sink), and
+    instrumentation.ts (the boot-failure last resort when even the logger
+    module cannot import).
+  * scripts/** and e2e/** are scoped OFF (the CLI-harness carve-out): probes,
+    suites and evidence harnesses print operator-facing readable output by
+    design — 522 script-side console sites stay console. JSON lines there
+    would bury the operator; harnesses that want structure import log.ts
+    themselves (worker.mts already does).
+
+Census (by rule) — the remaining programme
+----------------
+  159  @typescript-eslint/no-non-null-assertion
+   33  react-hooks/set-state-in-effect
+   11  @typescript-eslint/no-unused-expressions
+    9  react-hooks/exhaustive-deps
+    7  @typescript-eslint/no-explicit-any
+    1  import/no-anonymous-default-export
+    1  @next/next/no-location-assign-relative-destination
+
+Next tranches (the S47 reduction plan, unchanged order):
+  no-non-null-assertion (159) — per-site review
+  set-state-in-effect (33) + exhaustive-deps (9) — react-hooks correctness
+  no-unused-expressions (11) — mostly probe scripts

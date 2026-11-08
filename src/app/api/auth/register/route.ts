@@ -21,6 +21,7 @@ import {
   sweepExpiredSessions,
 } from "@/lib/tubeforge/tenant";
 import { randomToken, sha256Hex } from "@/lib/tubeforge/crypto";
+import { requestLog } from "@/lib/tubeforge/log";
 import {
   checkLegacyPassword,
   claimLegacyForOwner,
@@ -161,7 +162,7 @@ export async function POST(req: NextRequest) {
         ].join("\n"),
       });
     } catch (err) {
-      console.warn("[auth] verification mail delivery failed (non-fatal):", err instanceof Error ? err.message : err);
+      requestLog(req, { mod: "auth:register" }).warn("verification mail delivery failed (non-fatal)", { err: err instanceof Error ? err.message : err });
     }
 
     const res = NextResponse.json(

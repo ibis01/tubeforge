@@ -24,6 +24,7 @@ import { zaiClientFor } from "./zai-client";
 import { zaiVideoViaClient } from "./providers/zai-video-core";
 import * as storage from "./storage";
 import { aiCall } from "./budget";
+import { log } from "./log";
 import { ensureSfx } from "./sfx";
 import { resolveSoundChoice, SFX_CATALOG, AMBIENCE_CATALOG } from "./studio-sound";
 import {
@@ -108,6 +109,9 @@ import type { DocSceneSettings } from "./timeline";
 import { MUSIC_SLIDER_GAIN } from "./music";
 import { expectedCutsForTimeline } from "./render-qc";
 import type { ExpectedCuts } from "./render-qc";
+
+// S57/T-57.2 — the module's logger (the old [render] prefix became a binding).
+const renderLog = log.child({ mod: "render" });
 
 const _execFileAsync = promisify(execFile);
 
@@ -580,7 +584,7 @@ async function buildSegment(opts: {
       }
     }
     if (!pipLogoPath)
-      console.warn(`[render] scene ${scene.index}: PIP set but no png/webp brand logo — overlay skipped`);
+      renderLog.warn("PIP set but no png/webp brand logo — overlay skipped", { scene: scene.index });
   }
   const speed =
     opts.docSpeed && opts.docSpeed > 0.49 && opts.docSpeed < 2.01 && Math.abs(opts.docSpeed - 1) > 0.02
@@ -1417,7 +1421,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     // One read each — the shot-plan block and the module-D override block
     // consume the same rows instead of re-querying.
     const approvedPlan = await getApprovedPlan(opts.videoId).catch((err) => {
-      console.warn("[render] director plan unavailable — liveliness falls back to Ken Burns:", err);
+      renderLog.warn("director plan unavailable — liveliness falls back to Ken Burns", { err });
       return null;
     });
     const motionOverrides = await getApprovedMotionMap(opts.videoId).catch(() => new Map<number, "zoom" | "pan" | "off">());
@@ -1506,7 +1510,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         // approval) has no bearing on this video — legacy path everywhere.
         if (plannedScenes > 0) shotPlans = shotPlans2;
       } catch (err) {
-        console.warn("[render] director shot plan unavailable — legacy motion path:", err);
+        renderLog.warn("director shot plan unavailable — legacy motion path", { err });
         shotPlans = null;
       }
     }
@@ -1751,11 +1755,12 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
             onProgress: (label) => opts.onProgress?.(scenes.length + 1, scenes.length + 1, label),
           });
           fs.writeFileSync(srtPath, smart.srt);
-          console.log(
-            `[render] smart captions: ${smart.cueCount} cues (${smart.method}-aligned)`
+          renderLog.info(
+            "smart captions written",
+            { cues: smart.cueCount, method: smart.method }
           );
         } catch (err) {
-          console.warn("[render] smart captions failed — falling back to scene captions:", err);
+          renderLog.warn("smart captions failed — falling back to scene captions", { err });
           fs.writeFileSync(srtPath, buildSrtFromSegments(capScenes, blended));
         }
       } else {

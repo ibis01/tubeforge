@@ -3,6 +3,10 @@
 // snippet) so users can debug 401s / wrong endpoints straight from the feed.
 
 import { redactText } from "../redact";
+import { log } from "../log";
+
+// S57/T-57.2 — the module's logger (the old [http] prefix became a binding).
+const httpLog = log.child({ mod: "http" });
 
 /**
  * Per-capability timeout matrix (ms). Replaces the flat 5-minute universal
@@ -54,7 +58,7 @@ export function timeoutFor(capability: ProviderCapability = "generic"): number {
   }
   if (raw && !warned.has(capability)) {
     warned.add(capability);
-    console.warn(`[http] ignoring invalid TUBEFORGE_TIMEOUT for ${capability}: "${raw}" (need >= 1000 ms)`);
+    httpLog.warn("ignoring invalid TUBEFORGE_TIMEOUT (need >= 1000 ms)", { capability, raw });
   }
   return DEFAULT_TIMEOUT_MS[capability];
 }

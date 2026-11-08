@@ -21,11 +21,15 @@ import { relevanceCheck } from "./quality";
 import { sceneQueries } from "./stock-query";
 import type { Scene, StockRef } from "./types";
 import { currentCtx } from "./tenant";
+import { log } from "./log";
 import {
   deleteProviderCredential,
   getProviderCredential,
   upsertProviderCredential,
 } from "./settings";
+
+// S57/T-57.2 — the module's logger (the old [stock] prefix became a binding).
+const stockLog = log.child({ mod: "stock" });
 
 const execFileAsync = promisify(execFile);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -194,8 +198,8 @@ async function pixabaySearch(query: string, key: string): Promise<StockCandidate
  */
 export async function searchAll(query: string, keys: { pexels: string; pixabay: string }): Promise<StockCandidate[]> {
   const tasks: Promise<StockCandidate[]>[] = [];
-  if (keys.pexels) tasks.push(pexelsSearch(query, keys.pexels).catch((e) => (console.warn(`[stock] pexels "${query}":`, e instanceof Error ? e.message : e), [])));
-  if (keys.pixabay) tasks.push(pixabaySearch(query, keys.pixabay).catch((e) => (console.warn(`[stock] pixabay "${query}":`, e instanceof Error ? e.message : e), [])));
+  if (keys.pexels) tasks.push(pexelsSearch(query, keys.pexels).catch((e) => (stockLog.warn("pexels search failed", { query, err: e instanceof Error ? e.message : e }), [])));
+  if (keys.pixabay) tasks.push(pixabaySearch(query, keys.pixabay).catch((e) => (stockLog.warn("pixabay search failed", { query, err: e instanceof Error ? e.message : e }), [])));
   if (tasks.length === 0) throw new Error("No stock provider is configured — add a free Pexels or Pixabay key in Settings → Stock footage");
   const results = await Promise.all(tasks);
   return results.flat();
@@ -313,8 +317,9 @@ async function fetchForScene(
         const verdict = await clipFrameVerdict(videoId, scene);
         if (verdict.pass === false) {
           await storage.remove(`${videoId}/${stockFile(scene.index)}`);
-          console.warn(
-            `[stock] scene ${scene.index}: clip rejected — relevance ${verdict.score}/10 (${verdict.summary ?? "unrelated content"})`
+          stockLog.warn(
+            "clip rejected — relevance below threshold",
+            { scene: scene.index, score: verdict.score, summary: verdict.summary ?? "unrelated content" }
           );
           continue;
         }
@@ -327,7 +332,7 @@ async function fetchForScene(
           durationSec: clip.durationSec,
         };
       } catch (err) {
-        console.warn(`[stock] download failed for scene ${scene.index}:`, err instanceof Error ? err.message : err);
+        stockLog.warn("download failed for scene", { scene: scene.index, err: err instanceof Error ? err.message : err });
       }
     }
   }

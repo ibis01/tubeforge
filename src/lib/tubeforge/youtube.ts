@@ -23,6 +23,10 @@ import { currentCtx } from "./tenant";
 import { getUserSettings, setUserSetting } from "./settings";
 import { createSignedToken, getAuthSecret, verifyToken } from "./auth-token";
 import { redactText } from "./redact";
+import { log } from "./log";
+
+// S57/T-57.2 — the module's logger (the old [youtube] prefix became a binding).
+const ytLog = log.child({ mod: "youtube" });
 import { timeoutFor, type ProviderCapability } from "./providers/http";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -499,9 +503,9 @@ export async function uploadToYouTube(input: UploadInput): Promise<UploadResult>
       );
       thumbnailSet = thumbRes.ok;
       if (!thumbRes.ok)
-        console.warn("[youtube] thumbnail set skipped:", thumbRes.status);
+        ytLog.warn("thumbnail set skipped", { status: thumbRes.status });
     } catch (err) {
-      console.warn("[youtube] thumbnail set failed (non-fatal):", err);
+      ytLog.warn("thumbnail set failed (non-fatal)", { err });
     }
   }
 

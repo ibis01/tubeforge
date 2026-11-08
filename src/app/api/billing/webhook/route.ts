@@ -34,6 +34,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { processStripeEvent, verifyStripeSignature } from "@/lib/tubeforge/billing";
+import { requestLog } from "@/lib/tubeforge/log";
 
 export async function POST(req: NextRequest) {
   const sig = req.headers.get("stripe-signature");
@@ -53,7 +54,7 @@ export async function POST(req: NextRequest) {
     // only bypass is the explicit dev opt-in — refused outright in
     // production regardless (defence in depth against a copied .env).
     if (isProduction) {
-      console.error("[billing/webhook] TUBEFORGE_STRIPE_WEBHOOK_SECRET missing in production — rejecting event");
+      requestLog(req, { mod: "billing:webhook" }).error("TUBEFORGE_STRIPE_WEBHOOK_SECRET missing in production — rejecting event");
       return NextResponse.json({ error: "Webhook misconfigured" }, { status: 500 });
     }
     if (process.env.TUBEFORGE_ALLOW_UNSIGNED_WEBHOOKS !== "1") {
@@ -62,7 +63,7 @@ export async function POST(req: NextRequest) {
         { status: 401 }
       );
     }
-    console.warn("[billing/webhook] accepting UNSIGNED event — TUBEFORGE_ALLOW_UNSIGNED_WEBHOOKS=1 (DEV ONLY)");
+    requestLog(req, { mod: "billing:webhook" }).warn("accepting UNSIGNED event — TUBEFORGE_ALLOW_UNSIGNED_WEBHOOKS=1 (DEV ONLY)");
   } else {
     // Secret configured → the signature header is mandatory, no matter the
     // environment. Missing header and bad signature are both 401.
@@ -84,7 +85,7 @@ export async function POST(req: NextRequest) {
     const outcome = await processStripeEvent(event as Parameters<typeof processStripeEvent>[0]);
     return NextResponse.json({ received: true, ...(outcome === "duplicate" ? { duplicate: true } : {}) });
   } catch (err) {
-    console.error("[billing/webhook] handler failed:", err);
+    requestLog(req, { mod: "billing:webhook" }).error("handler failed", { err });
     return NextResponse.json({ error: "Handler failed" }, { status: 500 });
   }
 }

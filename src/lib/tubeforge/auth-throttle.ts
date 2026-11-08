@@ -41,6 +41,11 @@
 // and every try must count.
 
 import { rawDatabase as rawDb } from "./tenant-db";
+import { log } from "./log";
+
+// S57/T-57.2 — the module's logger (the old [TubeForge] auth-throttle
+// prefix became a binding).
+const throttleLog = log.child({ mod: "auth-throttle" });
 
 /** Rolling window a failure counts inside (10 minutes, the S16-era law). */
 export const LOGIN_WINDOW_MS = 10 * 60 * 1000;
@@ -99,10 +104,9 @@ export async function checkLoginAllowed(
   } catch (err) {
     if (!g.__tfThrottleWarnedCheck) {
       g.__tfThrottleWarnedCheck = true;
-      console.error(
-        "[TubeForge] auth throttle: AuthAttempt read failed — login lockout is OFF until this is fixed " +
-          "(apply the S46 migration).",
-        err
+      throttleLog.error(
+        "AuthAttempt read failed — login lockout is OFF until this is fixed (apply the S46 migration).",
+        { err }
       );
     }
     return { allowed: true, retryAfterSec: 0 };
@@ -125,10 +129,9 @@ export async function recordLoginFailure(
   } catch (err) {
     if (!g.__tfThrottleWarnedRecord) {
       g.__tfThrottleWarnedRecord = true;
-      console.error(
-        "[TubeForge] auth throttle: AuthAttempt write failed — failures are NOT being counted " +
-          "(apply the S46 migration).",
-        err
+      throttleLog.error(
+        "AuthAttempt write failed — failures are NOT being counted (apply the S46 migration).",
+        { err }
       );
     }
     return;

@@ -27,6 +27,10 @@ import { allowPrivateProviderHosts } from "./providers/http";
 import { getCapability } from "./providers/settings";
 import { currentCtx } from "./tenant";
 import { getProviderCredential, getUserSettings } from "./settings";
+import { log } from "./log";
+
+// S57/T-57.2 — the module's logger (the old [llm] prefix became a binding).
+const llmLog = log.child({ mod: "llm" });
 import {
   admitDispatch,
   emitUsage,
@@ -103,7 +107,7 @@ async function readLLMSettings(): Promise<LLMSettings> {
       }
     }
   } catch (err) {
-    console.warn("[llm] settings read failed, defaulting to Z.ai:", err);
+    llmLog.warn("settings read failed, defaulting to Z.ai", { err });
   }
 
   llmGlobal.cache.set(ctx.userId, { at: now, cfg });
@@ -115,7 +119,7 @@ async function effectiveSettings(): Promise<LLMSettings> {
   const s = await readLLMSettings();
   if (s.provider === "openai" && s.baseUrl && s.apiKey) return s;
   if (s.provider === "openai")
-    console.warn("[llm] custom LLM selected but baseUrl/apiKey incomplete — using Z.ai gateway");
+    llmLog.warn("custom LLM selected but baseUrl/apiKey incomplete — using Z.ai gateway");
   // The half-configured provider's model name must NOT ride to the gateway —
   // it names a model the gateway may not serve.
   return { ...s, provider: "zai", model: "" };

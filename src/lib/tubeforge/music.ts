@@ -26,6 +26,10 @@ import { currentCtx } from "./tenant";
 import type { MusicTrack } from "@prisma/client";
 import { sanitizeDuckIntensity, type DuckIntensity } from "./audiomix";
 import { getUserSetting } from "./settings";
+import { log } from "./log";
+
+// S57/T-57.2 — the module's logger (the old [music] prefix became a binding).
+const musicLog = log.child({ mod: "music" });
 import { sanitizeMusicPick, type MusicPick } from "./studio-doc";
 
 const execFileAsync = promisify(execFile);
@@ -529,7 +533,7 @@ export function seedMusicLibrary(
   if (seedChain) return seedChain;
   seedChain = (async () => {
     const removed = await dedupeOriginals();
-    if (removed > 0) console.log(`[music] removed ${removed} duplicate original tracks`);
+    if (removed > 0) musicLog.info("removed duplicate original tracks", { removed });
     let created = 0;
     let skipped = 0;
 

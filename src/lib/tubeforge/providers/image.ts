@@ -25,6 +25,10 @@ import { zaiClientFor } from "../zai-client";
 import { redactText } from "../redact";
 import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMeta } from "./registry";
+import { log } from "../log";
+
+// S57/T-57.2 — the module's logger (the old [pollinations] prefix became a binding).
+const imageLog = log.child({ mod: "image" });
 import {
   joinUrl,
   providerFetch,
@@ -586,7 +590,7 @@ async function pollinationsImage(
       const png = await sharp(bytes).png().toBuffer();
       if (png.length > 1000) return png;
     } catch (err) {
-      console.warn("[pollinations] JPEG→PNG conversion failed, serving JPEG as-is:", err);
+      imageLog.warn("JPEG to PNG conversion failed, serving JPEG as-is", { err });
     }
   }
   return bytes;

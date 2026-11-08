@@ -9,6 +9,11 @@ import { db } from "./tenant-db";
 import { assertCtx } from "./tenant";
 import { errorText } from "@/lib/tubeforge/redact";
 import { generateCharacterPortrait, generateCharacterPoses } from "./characters";
+import { log } from "./log";
+
+// S57/T-57.2 — the module's logger (the old [portrait-job]/[poses-job]
+// prefixes became bindings).
+const charJobsLog = log.child({ mod: "character-jobs" });
 
 /** Generate the character's reference portrait. */
 export async function runPortraitJob(characterId: string): Promise<void> {
@@ -42,7 +47,7 @@ export async function runPortraitJob(characterId: string): Promise<void> {
   } catch (err) {
     // Characters have no error column — the job row carries the failure for
     // the client (serializeCharacter reads the in-memory map + Job history).
-    console.error(`[portrait-job] failed for ${characterId}:`, errorText(err, "portrait failed"));
+    charJobsLog.error("portrait job failed", { characterId, err: errorText(err, "portrait failed") });
     throw err;
   }
 }
@@ -67,7 +72,7 @@ export async function runPosesJob(characterId: string): Promise<void> {
       },
     });
   } catch (err) {
-    console.error(`[poses-job] failed for ${characterId}:`, errorText(err, "poses failed"));
+    charJobsLog.error("poses job failed", { characterId, err: errorText(err, "poses failed") });
     throw err;
   }
 }

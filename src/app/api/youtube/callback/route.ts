@@ -3,6 +3,7 @@ import { rawDatabase as rawDb } from "@/lib/tubeforge/tenant-db";
 import { withCtx, type TenantCtx } from "@/lib/tubeforge/tenant";
 import { exchangeCode, fetchChannelInfo, verifyOAuthState } from "@/lib/tubeforge/youtube";
 import { errorText } from "@/lib/tubeforge/redact";
+import { requestLog } from "@/lib/tubeforge/log";
 
 /**
  * GET — OAuth consent callback. Google redirects here with ?code & state.
@@ -76,7 +77,7 @@ export async function GET(req: NextRequest) {
         const info = await fetchChannelInfo();
         title = info.title;
       } catch (err) {
-        console.warn("[youtube] channel lookup after connect failed (non-fatal):", err);
+        requestLog(req, { mod: "youtube:callback" }).warn("channel lookup after connect failed (non-fatal)", { err });
       }
     });
 

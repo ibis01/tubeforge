@@ -13,6 +13,10 @@
 //     provider errors, API messages and URLs routinely embed keys.
 //   * `log.child(bindings)` returns a cheap derived logger; jobs bind
 //     { job: id, kind, org } once and every line inherits it.
+//   * S57/T-57.1: request correlation — middleware stamps x-request-id on
+//     every /api/* request; `requestLog(request)` binds it onto a child so
+//     every line a route handler emits carries the same `req` value the
+//     failing client can quote from its response header.
 
 import { redactText } from "./redact";
 
@@ -87,9 +91,29 @@ function emit(level: LogLevel, bindings: Record<string, unknown>, msg: string, e
     text = JSON.stringify({ level: LEVELS[level], time: Date.now(), msg, note: "bindings not serializable" });
   }
 
-  // level 40/50 → stderr, matching pino's destination convention.
-  if (LEVELS[level] >= 40) process.stderr.write(text + "\n");
-  else process.stdout.write(text + "\n");
+  writeLine(level, text);
+}
+
+/**
+ * The sink — runtime-portable on purpose (S57/T-57.2): Node writes the JSON
+ * line to stdout/stderr (pino's destination convention, level 40/50 → stderr);
+ * where `process` has no std streams (an edge-runtime bundle, the browser)
+ * the console is the only sink and receives the SAME JSON line. One logging
+ * law everywhere — middleware.ts can import this module without breaking
+ * its no-node:* constraint, and a client bundle degrades instead of crashing.
+ */
+function writeLine(level: LogLevel, text: string): void {
+  const stderr = LEVELS[level] >= 40;
+  const streams = typeof process === "undefined" ? undefined : process;
+  const sink = stderr ? streams?.stderr : streams?.stdout;
+  if (sink && typeof sink.write === "function") {
+    sink.write(text + "\n");
+    return;
+  }
+  // The fallback sink IS this logger; every other src/ console site is
+  // frozen out by T-57.3's error rule.
+  // eslint-disable-next-line no-console
+  (stderr ? console.error : console.log)(text);
 }
 
 export function createLogger(bindings: Record<string, unknown> = {}): Logger {
@@ -110,6 +134,39 @@ export function createLogger(bindings: Record<string, unknown> = {}): Logger {
  * scope; route handlers bind request ids if they need them.
  */
 export const log = createLogger({ app: "tubeforge" });
+
+/**
+ * S57/T-57.1 — the request correlation header. middleware.ts stamps a fresh
+ * value (crypto.randomUUID) on every /api/* request and echoes it on every
+ * response, error responses included; an operator holding a failing
+ * response can grep the centralized log for the exact lines that served it.
+ */
+export const REQUEST_ID_HEADER = "x-request-id";
+
+/**
+ * The id middleware stamped on this request, or null when nothing did
+ * (direct calls, the worker, tests). Structural on purpose — NextRequest,
+ * Request and test doubles all satisfy it, keeping this module free of
+ * next/server imports (the offline unit suite's law). Inbound ids are read
+ * here but never trusted for STAMPING — middleware always overwrites.
+ */
+export function requestIdFrom(request: { headers: { get(name: string): string | null } }): string | null {
+  const id = request.headers.get(REQUEST_ID_HEADER);
+  return id && id.length > 0 && id.length <= 128 ? id : null;
+}
+
+/**
+ * A child logger bound to the current request's id — P0-7's wiring.
+ * `const rlog = requestLog(request, { mod: "videos:render" })` and every
+ * line from that handler carries `req`; nested children inherit it.
+ */
+export function requestLog(
+  request: { headers: { get(name: string): string | null } },
+  bindings: Record<string, unknown> = {},
+): Logger {
+  const req = requestIdFrom(request);
+  return log.child({ ...(req ? { req } : {}), ...bindings });
+}
 
 /**
  * Back-compat bridge for the ~200 existing `console.log/warn/error` calls in

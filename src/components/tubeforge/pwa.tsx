@@ -22,6 +22,10 @@ export function ServiceWorkerRegister() {
     if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
     const register = () => {
       navigator.serviceWorker.register("/sw.js").catch((err) => {
+        // Client bundle: the browser console is the client's observability
+        // sink; routing this one line through the server logger would ship
+        // redact.ts to the browser.
+        // eslint-disable-next-line no-console
         console.warn("[pwa] service worker registration failed:", err);
       });
     };

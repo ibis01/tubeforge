@@ -21,6 +21,7 @@ import { ttsSynthesize } from "./providers/tts";
 import { imageEdit, imageGenerate, imageEditSupported } from "./providers/image";
 import * as storage from "./storage";
 import { db } from "./tenant-db";
+import { log } from "./log";
 import { getApprovedAddendum, getApprovedAppearanceClause, getApprovedWorldClause, getApprovedLocationRefKey, pacingSpeedFactor } from "./director-plan";
 import {
   policyVisualRules,
@@ -28,6 +29,9 @@ import {
   sanitizePromptForPolicy,
   type ContentPolicyId,
 } from "./restricted-subjects";
+
+// S57/T-57.2 — the module's logger (the old [story] prefix became a binding).
+const storyLog = log.child({ mod: "story" });
 
 const execFileAsync = promisify(execFile);
 
@@ -641,7 +645,7 @@ Return JSON with exactly these keys:
       contentPolicy: opts.contentPolicy,
     });
   } catch (err) {
-    console.warn("[story] scene-plan verification skipped:", err);
+    storyLog.warn("scene-plan verification skipped", { err });
   }
 
   // Narration joined = the classic script field (drives word count + fallback TTS)
@@ -756,8 +760,9 @@ export async function generateSceneImage(opts: {
   const artPromptRaw = `${scene.visual}.${topicClause ? ` ${topicClause}.` : ""}${styleClause ? ` ${styleClause}.` : ""}${directorClause ? ` ${directorClause}.` : ""}${continuityClauses ? ` ${continuityClauses}` : ""} ${scene.mood}. Wide 16:9 cinematic frame, ultra-realistic photograph shot on a full-frame cinema camera with a 35mm lens, natural depth of field, physically accurate lighting for the time of day, lifelike skin, fabric and material textures, authentic human emotion and natural body language on every person in frame, documentary realism, ONE dominant subject filling the frame, professional cinematic color grading, storytelling composition. The frame must depict exactly the moment described — the named subject is the single dominant element, and the whole frame belongs to the video's story world. Absolutely no text, no letters, no numbers, no charts, no graphs, no readable writing, no watermarks — any information in the scene must be shown as physical objects, never as writing.`;
   const sanitized = sanitizePromptForPolicy(artPromptRaw, contentPolicy);
   if (sanitized.substituted > 0) {
-    console.warn(
-      `[story] scene ${scene.index}: content policy substituted ${sanitized.substituted} sentence(s) naming restricted subject(s): ${sanitized.matches.map((m) => m.entry).join(", ")}`
+    storyLog.warn(
+      "content policy substituted sentence(s) naming restricted subject(s)",
+      { scene: scene.index, substituted: sanitized.substituted, matches: sanitized.matches.map((m) => m.entry) }
     );
   }
   const artPrompt = sanitized.prompt;
@@ -898,15 +903,17 @@ export async function generateSceneImage(opts: {
         if (secondHash && secondDist != null && secondDist < firstDist) {
           fs.rmSync(backup, { force: true });
           artHash = secondHash;
-          console.info(
-            `[story] scene ${scene.index}: near-duplicate art re-rolled (${firstDist} → ${secondDist} bits from the closest sibling)`
+          storyLog.info(
+            "near-duplicate art re-rolled",
+            { scene: scene.index, firstDist, secondDist }
           );
         } else {
           fs.copyFileSync(backup, imagePath);
           fs.rmSync(backup, { force: true });
           artHash = firstHash;
-          console.info(
-            `[story] scene ${scene.index}: near-duplicate detected (${firstDist} bits), re-roll not closer — kept the better gate score`
+          storyLog.info(
+            "near-duplicate detected, re-roll not closer — kept the better gate score",
+            { scene: scene.index, firstDist }
           );
         }
       } catch (err) {
@@ -915,18 +922,18 @@ export async function generateSceneImage(opts: {
           fs.rmSync(backup, { force: true });
         }
         artHash = firstHash;
-        console.warn(
-          `[story] scene ${scene.index}: dedupe re-roll failed, kept original:`,
-          err instanceof Error ? err.message : err
+        storyLog.warn(
+          "dedupe re-roll failed, kept original",
+          { scene: scene.index, err: err instanceof Error ? err.message : err }
         );
       }
     } else if (firstHash) {
       artHash = firstHash;
     }
   } catch (err) {
-    console.warn(
-      `[story] scene ${scene.index}: dedupe skipped:`,
-      err instanceof Error ? err.message : err
+    storyLog.warn(
+      "dedupe skipped",
+      { scene: scene.index, err: err instanceof Error ? err.message : err }
     );
   }
 
@@ -976,8 +983,9 @@ export async function editSceneImage(opts: {
   const editPromptRaw = `Edit this image: ${instruction}. Keep the overall composition, subject and framing unchanged unless the instruction asks otherwise. Photorealistic continuity with the original. Absolutely no text, no letters, no numbers, no watermarks.`;
   const sanitizedEdit = sanitizePromptForPolicy(editPromptRaw, contentPolicy);
   if (sanitizedEdit.substituted > 0) {
-    console.warn(
-      `[story] scene ${scene.index} edit: content policy substituted ${sanitizedEdit.substituted} sentence(s) naming restricted subject(s): ${sanitizedEdit.matches.map((m) => m.entry).join(", ")}`
+    storyLog.warn(
+      "edit: content policy substituted sentence(s) naming restricted subject(s)",
+      { scene: scene.index, substituted: sanitizedEdit.substituted, matches: sanitizedEdit.matches.map((m) => m.entry) }
     );
   }
   const buffer = await aiCall(

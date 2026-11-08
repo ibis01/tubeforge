@@ -21,6 +21,10 @@ import { generateScriptPackage, type ResearchBrief } from "./ai";
 import { generateSceneScriptPackage } from "./story";
 import { JobCancelledError, cancellableSleep, throwIfCancelled } from "./cancel";
 import { errorText } from "@/lib/tubeforge/redact";
+import { log } from "./log";
+
+// S57/T-57.2 — the module's logger (the old [script-job] prefix became a binding).
+const scriptJobLog = log.child({ mod: "script-job" });
 
 // Stage 2: every db access below flows through the tenant-scoped client —
 // the job body inherits the launching request's context (userId/organizationId)
@@ -188,8 +192,9 @@ export async function runScriptJob(
 
       if (rateLimited && round < STORM_ROUNDS) {
         const cooldownMin = ROUND_COOLDOWN_MIN[round - 1] ?? 20;
-        console.warn(
-          `[script-job] round ${round}/${STORM_ROUNDS} exhausted in a quota storm — cooling down ${cooldownMin} min, then retrying with a fresh backoff curve`
+        scriptJobLog.warn(
+          "round exhausted in a quota storm — cooling down, then retrying with a fresh backoff curve",
+          { round, rounds: STORM_ROUNDS, cooldownMin }
         );
         // Cancellable — a Stop press lands within 500ms mid-cool-down.
         await cancellableSleep(cooldownMin * 60_000);

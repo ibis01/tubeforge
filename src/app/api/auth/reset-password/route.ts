@@ -14,6 +14,7 @@ import { z } from "zod";
 import { rawDatabase as rawDb } from "@/lib/tubeforge/tenant-db";
 import { MIN_PASSWORD_LEN, hashPassword } from "@/lib/tubeforge/tenant";
 import { randomToken, sha256Hex } from "@/lib/tubeforge/crypto";
+import { requestLog } from "@/lib/tubeforge/log";
 import { sendMail, linkInResponse } from "@/lib/tubeforge/email";
 
 const RESET_TTL_H = 24;
@@ -87,7 +88,7 @@ export async function POST(req: NextRequest) {
           ].join("\n"),
         });
       } catch (err) {
-        console.warn("[auth] reset mail delivery failed (non-fatal):", err instanceof Error ? err.message : err);
+        requestLog(req, { mod: "auth:reset-password" }).warn("reset mail delivery failed (non-fatal)", { err: err instanceof Error ? err.message : err });
       }
       return NextResponse.json({
         ok: true,
