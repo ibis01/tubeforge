@@ -25,8 +25,7 @@ import { chatComplete } from "./providers/chat";
 import { sceneWavFile, normalizeScene, applyRetentionRules, isRehookPosition } from "./story";
 import { SCENE_COUNTS, type Scene } from "./types";
 
-import { scratchDir, materialize } from "./storage";
-import * as storage from "./storage";
+import { materialize } from "./storage";import * as storage from "./storage";
 
 // ---------- 1) Script splitting ----------
 

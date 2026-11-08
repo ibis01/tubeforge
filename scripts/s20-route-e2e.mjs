@@ -168,7 +168,7 @@ const mintB = await fetch(`${BASE}/api/auth/token`, {
   headers: H(jarB, { "content-type": "application/json" }),
   body: JSON.stringify({ name: "B's own key" }),
 });
-const mintBBody = await json(mintB);
+const _mintBBody = await json(mintB);
 check("10.1 B mints their own token -> 201", mintB.status === 201, mintB.status);
 const listB = await fetch(`${BASE}/api/auth/token`, { headers: H(jarB) });
 const listBbody = await json(listB);

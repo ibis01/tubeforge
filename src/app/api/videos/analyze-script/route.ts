@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
 
     const analysis = await analyzeScript({ script: body.script, topic, niche, tone, length });
     return NextResponse.json({ analysis });
-  } catch (err) {
+  } catch {
     return NextResponse.json(
       { error: "Script analysis failed — check Settings → AI Providers" },
       { status: 500 }

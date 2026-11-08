@@ -99,7 +99,7 @@ try {
   backupDbPath = path.join(backupDir, newest, "database.db");
   if (!fs.existsSync(backupDbPath)) fail(`backup DB not found after npm run: ${backupDbPath}`);
   ok(`backup created via npm run: ${newest}`);
-} catch (err) {
+} catch {
   console.log(`[backup-test] sqlite3 CLI missing — falling back to fs.copyFileSync for the snapshot (the VACUUM INTO path runs identically when the CLI is present).`);
   // Clean any partial backup directory npm run created.
   fs.rmSync(backupDir, { recursive: true, force: true });

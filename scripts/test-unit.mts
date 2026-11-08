@@ -4027,7 +4027,7 @@ await test("S37 zai-video-core: happy path polls to SUCCESS and downloads a real
 await test("S37 zai-video-core: FAIL, no task id, SUCCESS-without-url, timeout, empty download all throw", async () => {
   const { zaiVideoViaClient } = await import("../src/lib/tubeforge/providers/zai-video-core.ts");
   type Core = typeof zaiVideoViaClient;
-  const run = async (client: unknown, opts: Record<string, unknown> = {}, fetchFn = S37_BIG) =>
+  const run = async (client: unknown, opts: Record<string, unknown> = {}, _fetchFn = S37_BIG) =>
     zaiVideoViaClient(client as Parameters<Core>[0], { prompt: "pan", imagePngBase64: S37_PNG }, { model: "m", pollMs: 1, ...opts } as Parameters<Core>[2]);
 
   const fails: Array<[string, Promise<unknown>]> = [

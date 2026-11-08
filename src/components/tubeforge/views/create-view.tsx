@@ -5,7 +5,6 @@ import { useAppStore } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
@@ -49,7 +48,6 @@ import {
   FileText,
   Mic,
   ImageIcon,
-  Rocket,
   Check,
   Loader2,
   X,

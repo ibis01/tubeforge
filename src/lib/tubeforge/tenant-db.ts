@@ -54,7 +54,7 @@ export const ORG_SCOPED_MODELS = new Set(
 // Models whose creates also stamp the acting user (audit trail).
 const USER_STAMPED_MODELS = new Set(["activity", "job"]);
 
-const READ_OPS = new Set([
+const _READ_OPS = new Set([
   "findUnique",
   "findUniqueOrThrow",
   "findFirst",

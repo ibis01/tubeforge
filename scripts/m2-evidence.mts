@@ -36,7 +36,7 @@ import path from "node:path";
 
 const execFileAsync = promisify(execFile);
 
-const { buildSceneShots, shotImageFile, shotPrompt } = await import(
+const { buildSceneShots, shotImageFile } = await import(
   "../src/lib/tubeforge/shots.ts"
 );
 const { multiShotSceneGraph } = await import("../src/lib/tubeforge/motion.ts");

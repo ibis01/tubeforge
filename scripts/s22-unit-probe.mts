@@ -26,7 +26,6 @@ import {
   createSessionRecord,
   createSessionToken,
   hashPassword,
-  requireUser,
 } from "../src/lib/tubeforge/tenant";
 import { SESSION_COOKIE } from "../src/lib/tubeforge/auth-token";
 import {
@@ -42,7 +41,6 @@ import {
   POST as propPost,
 } from "../src/app/api/props/route";
 import {
-  PATCH as propPatch,
   DELETE as propDelete,
 } from "../src/app/api/props/[id]/route";
 

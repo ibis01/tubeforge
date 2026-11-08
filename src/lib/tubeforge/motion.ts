@@ -376,7 +376,7 @@ function allowedByMode(kind: MoveKind, mode: MotionMode): boolean {
   return true;
 }
 
-const flipPan = (k: MoveKind): MoveKind =>
+const _flipPan = (k: MoveKind): MoveKind =>
   k === "pan-left" ? "pan-right" : k === "pan-right" ? "pan-left" : k === "diag-tl" ? "diag-br" : "diag-tl";
 
 /**
@@ -464,7 +464,7 @@ function planSceneShots(
   // --- single-kind scenes: one intentional move, continued across cuts ------
   if (mandatory) {
     let k: MoveKind = mandatory.kind;
-    let a = mandatory.amp;
+    const a = mandatory.amp;
 
     // Mode overrides remap zoom<->pan while keeping the INTENT (creep in /
     // reveal out) expressed through the allowed vocabulary.
@@ -827,8 +827,8 @@ function shotZoompan(
     const cy0 = Math.min(Math.max(shot.from.y, 0), 1);
     const cy1 = Math.min(Math.max(shot.to.y, 0), 1);
     zExpr = `${fmt(z0, 4)}+${fmt(z1 - z0, 4)}*${easeExpr}`;
-    xExpr = `clip(iw*(${fmt(cx0, 4)}+${fmt(cx1 - cx0, 4)}*${easeExpr})-iw/(2*zoom)\,0\,iw-iw/zoom)`;
-    yExpr = `clip(ih*(${fmt(cy0, 4)}+${fmt(cy1 - cy0, 4)}*${easeExpr})-ih/(2*zoom)\,0\,ih-ih/zoom)`;
+    xExpr = `clip(iw*(${fmt(cx0, 4)}+${fmt(cx1 - cx0, 4)}*${easeExpr})-iw/(2*zoom),0,iw-iw/zoom)`;
+    yExpr = `clip(ih*(${fmt(cy0, 4)}+${fmt(cy1 - cy0, 4)}*${easeExpr})-ih/(2*zoom),0,ih-ih/zoom)`;
   } else if (kind === "hold") {
     // S55 — the ambient-drift static: a DECLARED static carries a tiny
     // zStart→zEnd creep (movementForKind); execute it with the standard

@@ -15,7 +15,6 @@
 // Uses the generated Prisma client, so it works for BOTH database modes
 // (SQLite local dev and Postgres) without duplicating schema knowledge here.
 
-import path from "node:path";
 import { createHash, webcrypto } from "node:crypto";
 
 const argv = process.argv.slice(2);

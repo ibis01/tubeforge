@@ -25,7 +25,6 @@ import { parseScenes } from "./story";
 import { isPrivateHostname, safeFetch } from "./net-guard";
 
 import { scratchDir } from "./storage";
-import * as storage from "./storage";
 
 export const MAX_AUDIO_BYTES = 100 * 1024 * 1024; // 100 MB source cap
 export const MAX_AUDIO_SEC = 30 * 60; // 30 minutes

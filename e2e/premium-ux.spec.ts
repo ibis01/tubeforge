@@ -1,5 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-
+import { expect, test, type APIRequestContext } from "@playwright/test";
 // Stage 4a premium-UX smoke (T-4.7) — pins the new interaction surfaces:
 //
 //   • ⌘K command palette opens, filters, and navigates

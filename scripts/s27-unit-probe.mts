@@ -46,8 +46,7 @@ import { writeFileSync } from "node:fs";
 import { withCtx, hashPassword } from "../src/lib/tubeforge/tenant";
 import { saveCapability } from "../src/lib/tubeforge/providers/settings";
 import { chatComplete } from "../src/lib/tubeforge/providers/chat";
-import { aiCall, usageOf } from "../src/lib/tubeforge/budget";
-import {
+import { aiCall, } from "../src/lib/tubeforge/budget";import {
   PRICING_VERSION,
   priceForModel,
   computeCostMicroUsd,

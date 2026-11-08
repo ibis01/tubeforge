@@ -41,7 +41,7 @@ const reg = await fetch(`${BASE}/api/auth/register`, {
   body: JSON.stringify({ email, password, name: "S24 E2E" }),
 });
 check("1.1  register -> 201", reg.status === 201, reg.status);
-const regBody = await j(reg);
+const _regBody = await j(reg);
 const setCookie = reg.headers.get("set-cookie") ?? "";
 const cookie = setCookie.split(";")[0];
 check("1.2  the session cookie arrives", cookie.startsWith("tf_session=") || cookie.length > 20, cookie.slice(0, 24));

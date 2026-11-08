@@ -87,7 +87,7 @@ const stub = http.createServer((req, res) => {
   });
 });
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function json(url, opts) {
   const res = await fetch(url, opts);

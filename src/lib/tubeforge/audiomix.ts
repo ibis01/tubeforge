@@ -29,7 +29,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { runProcess } from "./proc";
 
-const execFileAsync = promisify(execFile);
+const _execFileAsync = promisify(execFile);
 
 // ---------- delivery targets ----------
 

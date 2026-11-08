@@ -28,7 +28,7 @@ import { runProcess } from "./proc";
 
 export const AMBIENCE_ROOT = path.join(process.cwd(), "uploads", "_ambience");
 
-const BED_SEC = 60;
+const _BED_SEC = 60;
 
 /** ffmpeg filter_complex recipe per kind. */
 const RECIPES: Record<string, string> = {

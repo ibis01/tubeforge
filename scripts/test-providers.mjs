@@ -17,7 +17,6 @@
 // Usage: node scripts/test-providers.mjs [--base http://localhost:3000]
 
 import http from "node:http";
-import fs from "node:fs";
 
 const BASE = process.argv.includes("--base")
   ? process.argv[process.argv.indexOf("--base") + 1]
@@ -43,7 +42,7 @@ FAKE_WAV.write("RIFF", 0);
 FAKE_WAV.write("WAVE", 8);
 const FAKE_PNG = Buffer.alloc(3000, 1);
 const FAKE_PNG_B64 = FAKE_PNG.toString("base64");
-const TINY_PNG_B64 =
+const _TINY_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 // ---------- stub server ----------

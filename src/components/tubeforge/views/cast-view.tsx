@@ -57,7 +57,7 @@ import { clsx } from "clsx";
 
 const artStyleLabel = (id: string) =>
   ART_STYLES.find((s) => s.id === id)?.label ?? id;
-const voiceLabel = (id: string) =>
+const _voiceLabel = (id: string) =>
   VOICES.find((v) => v.id === id)?.label ?? id;
 
 /** Cache-busting image URL — re-rolls must not show a stale browser-cached PNG. */

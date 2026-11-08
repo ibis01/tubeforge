@@ -5,7 +5,7 @@
 import fs from "fs";
 
 const { PrismaClient } = await import("@prisma/client");
-const tenant = await import("../src/lib/tubeforge/tenant");
+const _tenant = await import("../src/lib/tubeforge/tenant");
 const { cloneVoice } = await import("../src/lib/tubeforge/voice-clone");
 
 const db = new PrismaClient();

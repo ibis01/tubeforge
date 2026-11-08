@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 import { NextRequest } from "next/server";
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+const _root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const db = new PrismaClient();
 
 let passed = 0;
@@ -149,7 +149,6 @@ const {
   microToCredits,
   hasCredits,
   RENDER_ESTIMATE_MICRO,
-  PLAN_DEFAULTS,
 } = billing;
 
 // ===========================================================================
@@ -413,7 +412,7 @@ await test("status matrix: active/trialing → paid plan; past_due → paid plan
 });
 
 await test("canceled subscription cannot collect new linked spends (stays null-linked, no entitlement)", async () => {
-  const { user, sub } = await makePaidUser(`${MARK}.cancel@t.test`, "canceled");
+  const { user } = await makePaidUser(`${MARK}.cancel@t.test`, "canceled");
   const result = await billing.spendCredits({ userId: user.id, kind: "ai_call", microCredits: 3000 });
   ok(result.recorded, "free-tier overdraft still records the row (documented design)");
   const row = await db.creditLedger.findFirst({ where: { userId: user.id } });

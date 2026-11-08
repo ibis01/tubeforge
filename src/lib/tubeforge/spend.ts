@@ -587,12 +587,6 @@ const spend: SpendState = (g.__tfSpend ??= {
   localOnly: new Set(),
 });
 
-function outstandingMicro(): number {
-  let sum = 0;
-  for (const v of spend.holds.values()) sum += v;
-  return sum;
-}
-
 /** S47 — one retry on a Prisma serialization conflict (P2034): the loser
  *  of a concurrent-admission race re-runs the transaction against the
  *  winner's committed rows. Any other error propagates (fail-closed). */

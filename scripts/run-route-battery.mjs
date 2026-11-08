@@ -259,7 +259,7 @@ if (LEG === "phase1" || LEG === "all") {
     killDaemon();
     process.exit(1);
   }
-  let r1 = await runPhase("enforce", PHASE1_PROBES);
+  const r1 = await runPhase("enforce", PHASE1_PROBES);
   total.failed += r1.failed;
   total.phases.push({ phase: "enforce", failed: r1.failed, failedNames: r1.failedNames });
   killDaemon();
@@ -279,7 +279,7 @@ if (LEG === "phase2" || LEG === "all") {
     killDaemon();
     process.exit(1);
   }
-  let r2 = await runPhase("report", PHASE2_PROBES);
+  const r2 = await runPhase("report", PHASE2_PROBES);
   total.failed += r2.failed;
   total.phases.push({ phase: "report", failed: r2.failed, failedNames: r2.failedNames });
   killDaemon();

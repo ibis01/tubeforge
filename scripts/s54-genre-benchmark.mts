@@ -49,7 +49,6 @@ import { PrismaClient } from "@prisma/client";
 import { execFile } from "child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "path";
 import { promisify } from "util";
 import { withCtx, hashPassword } from "../src/lib/tubeforge/tenant";
@@ -58,7 +57,6 @@ import {
   setDirectorState,
   parsePlan,
   resolveProfile,
-  type DirectorPlan,
 } from "../src/lib/tubeforge/director";
 import {
   generateSceneImage,

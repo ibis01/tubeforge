@@ -1,5 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-
+import { expect, test, type APIRequestContext } from "@playwright/test";
 // Stage 7 (T-7.3) — mobile responsiveness sweep across the new Stage 6 surfaces.
 //
 // The Stage 4a premium-UX spec covers the original 5 surfaces; this spec
@@ -90,7 +89,7 @@ test.describe("Stage 7 — mobile responsiveness (390px sweep)", () => {
       },
     });
     const createBody = (await create.json()) as { video: { id: string } };
-    const videoId = createBody.video.id;
+    const _videoId = createBody.video.id;
 
     // Open the Library — at 390px the desktop sidebar is HIDDEN (the shell
     // collapses to a Sheet; the spec's own first test pins that), so the

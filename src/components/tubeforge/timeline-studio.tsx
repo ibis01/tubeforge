@@ -4500,7 +4500,7 @@ function Inspector({ scene, scenesMeta, disabled, onDuration, onTransition, onCa
           <div className="flex gap-2">
             <div className="relative h-[52px] w-[92px] shrink-0 overflow-hidden rounded border border-white/10 bg-black/40">
               {thumbUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
+                 
                 <img src={thumbUrl} alt={`Scene ${scene.index} artwork`} className="h-full w-full object-cover" />
               ) : (
                 <div className="grid h-full place-items-center text-[9px] text-muted-foreground">no art yet</div>

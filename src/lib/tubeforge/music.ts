@@ -35,7 +35,6 @@ async function getSetting(key: string): Promise<string | null> {
   return getUserSetting(key);
 }
 
-import * as storage from "./storage";
 import { scratchDir, UPLOAD_ROOT } from "./storage";
 
 // Storage seam (T-3.7): the library ships as SYSTEM assets — local scratch

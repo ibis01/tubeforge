@@ -56,7 +56,6 @@ import {
   focalForScene,
   sanitizeMotion,
   studioCameraPlan,
-  MOTION_DEFAULTS,
   PALINDROME_LOOP_GRAPH,
   OUTPUT_SIZES,
   type MotionScenePlan,
@@ -110,7 +109,7 @@ import { MUSIC_SLIDER_GAIN } from "./music";
 import { expectedCutsForTimeline } from "./render-qc";
 import type { ExpectedCuts } from "./render-qc";
 
-const execFileAsync = promisify(execFile);
+const _execFileAsync = promisify(execFile);
 
 const FPS = 30;
 export const LEAD_SEC = 0.35; // silence before narration starts in each scene

@@ -1,5 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-
+import { expect, test, type APIRequestContext } from "@playwright/test";
 // Stage 2 COMPLETION GATE (ROADMAP.md):
 //
 //   "Two independent test accounts cannot access each other's projects,

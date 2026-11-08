@@ -36,7 +36,6 @@
 
 import { execFile } from "child_process";
 import fs from "fs";
-import path from "path";
 import { promisify } from "util";
 import {
   measureLoudness,

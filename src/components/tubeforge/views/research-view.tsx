@@ -105,13 +105,11 @@ function lengthRank(id: string): number {
 
 function IdeaCard({
   idea,
-  sessionId,
   busyId,
   onCreate,
   onGreenlight,
 }: {
   idea: ResearchIdea;
-  sessionId: string;
   busyId: string | null;
   onCreate: (title: string, sources?: ResearchSource[]) => void;
   onGreenlight: (idea: ResearchIdea) => void;
@@ -778,7 +776,6 @@ export function ResearchView() {
                   <IdeaCard
                     key={idea.id}
                     idea={idea}
-                    sessionId={active.id}
                     busyId={greenlightId}
                     onCreate={(title, sources) => sendToCreate(title, sources)}
                     onGreenlight={greenlightIdea}

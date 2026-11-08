@@ -199,7 +199,7 @@ export function sanitizeSlideSpec(raw: unknown): SlideSpec {
     ? (r.icon as SlideIcon)
     : null;
 
-  let headline = clampStr(r.headline, 120) ?? "Next slide";
+  const headline = clampStr(r.headline, 120) ?? "Next slide";
   const accentWordRaw = clampStr(r.accentWord, 40);
   // The accent word must actually appear in the headline, else the template
   // can't wrap it — drop it instead of rendering a highlight around nothing.
@@ -523,7 +523,7 @@ export interface SlideRerollResult {
   source: "llm" | "fallback";
 }
 
-const sceneImageName = (index: number) =>
+const _sceneImageName = (index: number) =>
   `scene-${String(index).padStart(2, "0")}.png`;
 
 /**
@@ -745,7 +745,7 @@ export function renderHeadline(spec: SlideSpec, brand: SlideBrand | null = null)
   const accentHex =
     brand?.accentHex && spec.accent !== "mono" ? brand.accentHex : ACCENT_HEX[spec.accent];
   if (spec.accentWord) {
-    const target = spec.accentWord.toLowerCase();
+    const _target = spec.accentWord.toLowerCase();
     // Find the word in the ALREADY-ESCAPED headline (escapes never create or
     // destroy the plain words, so a case-insensitive indexOf is safe here).
     const idx = h.toLowerCase().indexOf(esc(spec.accentWord).toLowerCase());
@@ -972,9 +972,9 @@ export function slideSegmentGraph(opts: {
   // vector-crisp PNGs — 1620x2880 keeps text clean while zoompan (which is
   // single-threaded and cost-dominated by input area) runs ~2x faster.
   const work: [number, number] = [1620, 2880];
-  const { plan, settings } = opts;
+  const { plan } = opts;
   const [W, H] = work;
-  const [ow, oh] = out;
+  const [_ow, _oh] = out;
   const fps = opts.fps;
   const totalFrames = Math.max(Math.round(opts.dur * fps), 2);
   const shotCount = Math.max(1, plan.shots.length);

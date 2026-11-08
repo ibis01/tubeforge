@@ -227,7 +227,7 @@ export async function renderShort(opts: ShortRenderOptions): Promise<ShortRender
 
   const totalDur = await probeDuration(finalPath);
   const start = Math.min(seg.start, Math.max(0, totalDur - 1));
-  let dur = Math.min(seg.duration, MAX_SHORT_SEC, totalDur - start);
+  const dur = Math.min(seg.duration, MAX_SHORT_SEC, totalDur - start);
   if (dur < 3)
     throw new Error("The chosen scene is too short to cut a Short from (needs 3s+)");
 

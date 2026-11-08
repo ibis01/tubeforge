@@ -15,7 +15,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { EmptyState } from "@/components/tubeforge/shared";
 import {
   Dialog,
   DialogContent,
@@ -320,7 +319,7 @@ export function WorldView() {
   };
 
   const toggleActive = async (kind: WorldKind, item: WorldItem) => {
-    const meta = KIND_META[kind];
+    const _meta = KIND_META[kind];
     setBusyId(item.id);
     try {
       const res = await fetch(`/api/${kind}s/${item.id}`, {

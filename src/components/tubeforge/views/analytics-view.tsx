@@ -181,7 +181,7 @@ export function AnalyticsView() {
   }
 
   const maxSeries = Math.max(1, ...data.series.map((s) => s.views));
-  const top = data.rows[0];
+  const _top = data.rows[0];
   const maxNicheViews = Math.max(1, ...data.niches.map((n) => n.views));
 
   return (

@@ -23,7 +23,7 @@ import { promisify } from "util";
 import { SFX_KINDS } from "./types";
 import { runProcess } from "./proc";
 
-const execFileAsync = promisify(execFile);
+const _execFileAsync = promisify(execFile);
 
 export const SFX_ROOT = path.join(process.cwd(), "uploads", "_sfx");
 

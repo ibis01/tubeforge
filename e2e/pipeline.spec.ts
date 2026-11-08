@@ -49,17 +49,6 @@ async function register(
   return { cookie, verificationUrl: d.verification?.url };
 }
 
-async function login(request: APIRequestContext, email: string, password: string): Promise<string> {
-  const res = await request.post("/api/auth/login", {
-    data: { email, password },
-  });
-  expect(res.status()).toBe(200);
-  const setCookie = res.headers()["set-cookie"];
-  const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)?.split(";")[0] ?? "";
-  expect(cookie.startsWith("tf_session=")).toBe(true);
-  return cookie;
-}
-
 test.describe("Stage 7 — full production pipeline (deterministic subset)", () => {
   // The end-state law: the suite deletes every account it created through
   // the account's own front door (login → POST /api/account/delete).

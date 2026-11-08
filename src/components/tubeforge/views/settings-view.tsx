@@ -20,7 +20,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  VOICES,
   NICHES,
   TONES,
   LENGTHS,

@@ -80,8 +80,8 @@ export interface ImageEditRequest extends ImageRequest {
   imagePngBase64: string;
 }
 
-const DALL_E_3_SIZES = ["1024x1024", "1792x1024", "1024x1792"];
-const GPT_IMAGE_SIZES = ["1024x1024", "1536x1024", "1024x1536"];
+const _DALL_E_3_SIZES = ["1024x1024", "1792x1024", "1024x1792"];
+const _GPT_IMAGE_SIZES = ["1024x1024", "1536x1024", "1024x1536"];
 
 export function mapImageSize(model: string, size: string): string {
   if (model.startsWith("gpt-image")) {

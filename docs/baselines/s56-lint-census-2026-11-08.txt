@@ -1,0 +1,26 @@
+TubeForge — ESLint census after the S56/T-56.6 trivial tranche (2026-11-08 UTC)
+========================================================================
+
+Command : npx eslint .            (eslint.config.mjs)
+Result  : 0 errors · 602 warnings (S47 baseline was 670; S55 close 672)
+
+The trivial tranche — FROZEN AT ZERO AND PROMOTED TO ERROR:
+  no-unused-vars (72→0) · prefer-const (3→0) · no-useless-escape (5→0)
+  (2 prefer-const sites came from the new T-56.5 runner itself — burned too)
+
+Census (by rule)
+----------------
+  381  no-console
+  159  @typescript-eslint/no-non-null-assertion
+   33  react-hooks/set-state-in-effect
+   11  @typescript-eslint/no-unused-expressions
+    9  react-hooks/exhaustive-deps
+    7  @typescript-eslint/no-explicit-any
+    1  import/no-anonymous-default-export
+    1  @next/next/no-location-assign-relative-destination
+
+Remaining programme (the S47 reduction plan, next tranches):
+  no-console (381) — rides the structured logger (P0-7)
+  no-non-null-assertion (159) — per-site review
+  set-state-in-effect (33) + exhaustive-deps (9) — react-hooks correctness
+  no-unused-expressions (11) — mostly probe scripts

@@ -294,7 +294,7 @@ async function main() {
     body: JSON.stringify({ mode: "kenburns", subtitles: true, music: true, smartCaptions: false, sceneLimit: 2 }),
   });
   ok(r.status === 202, "3a. preview render accepted (202)");
-  const rendered = await pollJob(vid, "render");
+  const _rendered = await pollJob(vid, "render");
   const previewPath = path.join("/home/z/my-project/uploads", vid, "preview.mp4");
   ok(fs.existsSync(previewPath), "3b. preview.mp4 written");
 
@@ -307,7 +307,7 @@ async function main() {
   const cuts = await cutTimes(previewPath);
   // scenes: 6s voice + 1.2 pad = 7.2s each → shots per scene = round(7.2/2.7)=3 → 2 cuts/scene = 4 total
   ok(cuts.length >= 4, "4a. multi-shot cuts present (≥4 across 2 scenes)", `cuts at ${cuts.map((t) => t.toFixed(2)).join(", ")}`);
-  const gaps = [0, ...cuts, dur].slice(1).map((t, i, arr) => t - [0, ...cuts, dur][i]).filter((g) => g > 0);
+  const gaps = [0, ...cuts, dur].slice(1).map((t, i, _arr) => t - [0, ...cuts, dur][i]).filter((g) => g > 0);
   const maxGap = Math.max(...gaps);
   ok(maxGap <= 3.3, "4b. visual change at least every ~3s (max shot gap ≤ 3.3s)", `maxGap=${maxGap.toFixed(2)}s`);
 

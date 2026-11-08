@@ -356,7 +356,7 @@ export async function getPublishDefaults(): Promise<{ privacyStatus: string; cat
 }
 
 export async function savePublishDefaults(privacyStatus: string, categoryId: string): Promise<void> {
-  const ctx = requireCtx();
+  const _ctx = requireCtx();
   await setUserSetting("ytPrivacyStatus", privacyStatus);
   await setUserSetting("ytCategoryId", categoryId);
 }

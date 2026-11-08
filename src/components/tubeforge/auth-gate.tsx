@@ -16,8 +16,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TubeForgeLogo } from "@/components/tubeforge/logo";
-import { Loader2, LogOut, ShieldCheck, Eye, EyeOff, UserPlus, KeyRound, ArrowLeft, MailCheck } from "lucide-react";
-
+import { Loader2, ShieldCheck, Eye, EyeOff, UserPlus, KeyRound, ArrowLeft, MailCheck } from "lucide-react";
 type GateState = "checking" | "signedOut" | "register" | "open" | "error";
 
 // S18 — the recovery. The two-step reset route (/api/auth/reset-password)

@@ -21,7 +21,6 @@
 //      a relative URL is same-origin by construction.
 // Run: node --import tsx scripts/s28-unit-probe.mts
 
-import { strict as assert } from "node:assert";
 import { readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 

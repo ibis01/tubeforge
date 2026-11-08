@@ -22,8 +22,7 @@ process.env.TUBEFORGE_AUTH_SECRET ??= "probe-secret-0123456789abcdef";
 
 import { NextRequest } from "next/server";
 import { PrismaClient } from "@prisma/client";
-import { createSignedToken, API_TOKEN_MAX_AGE_SEC } from "../src/lib/tubeforge/auth-token";
-import { randomToken } from "../src/lib/tubeforge/crypto";
+import { createSignedToken, } from "../src/lib/tubeforge/auth-token";import { randomToken } from "../src/lib/tubeforge/crypto";
 import {
   createApiToken,
   hashPassword,
