@@ -6265,6 +6265,70 @@ await test("log: the portable sink falls back to console when process streams ar
   }
 });
 
+// ─── S62 — the i2v motion-prompt contract (what the real-video lane rides) ───
+
+await test("S62 motion prompt: camera phrase + speed prefix + subjectAction priority", async () => {
+  const { i2vMotionPrompt } = await import("../src/lib/tubeforge/liveliness.ts");
+  const scene = {
+    index: 1, title: "s", narration: "n", visual: "a frosted bottle on wet slate",
+    camera: "static", mood: "rich brown and gold", caption: "c",
+    hostInScene: false, rehook: false, sfx: "none",
+  };
+  const planScene = {
+    sceneIndex: 1,
+    shots: [{ shotIndex: 0, camera: "zoom-in", moveSpeed: "fast", subjectAction: "condensation drips down the bottle" }],
+  };
+  const p = i2vMotionPrompt(scene as never, planScene as never);
+  ok(p.startsWith("Quick, energetic slow cinematic zoom in"), `speed prefix colors the camera phrase — got: ${p.slice(0, 60)}`);
+  ok(p.toLowerCase().includes("condensation drips down the bottle"), "shot 0's subjectAction REPLACES the generic kind clause");
+  ok(p.includes("a frosted bottle on wet slate"), "scene visual rides the prompt");
+  ok(p.includes("rich brown and gold"), "scene mood rides the prompt");
+  ok(p.endsWith("Cinematic quality, natural physics, no text."), "the I2V tail is always last");
+});
+
+await test("S62 motion prompt: planScene null → scene's legacy camera + per-kind subject clause", async () => {
+  const { i2vMotionPrompt } = await import("../src/lib/tubeforge/liveliness.ts");
+  const scene = {
+    index: 2, title: "s", narration: "n", visual: "harbor cranes at dawn",
+    camera: "pan-left", mood: "archival", caption: "c",
+    hostInScene: false, rehook: false, sfx: "none",
+  };
+  const p = i2vMotionPrompt(scene as never, null);
+  ok(p.startsWith("Smooth lateral camera pan to the left with natural parallax"), `legacy camera field seeds the phrase — got: ${p.slice(0, 60)}`);
+  ok(!p.includes("undefined"), "no undefined leaks");
+  ok(p.includes("harbor cranes at dawn") && p.includes("archival"), "visual + mood still ride");
+});
+
+await test("S62 motion prompt: the full S48 engine camera vocabulary maps to real phrases", async () => {
+  const { i2vMotionPrompt, I2V_CAMERA_PHRASES } = await import("../src/lib/tubeforge/liveliness.ts");
+  const { CAMERA_MOVES } = await import("../src/lib/tubeforge/director-plan.ts");
+  ok(CAMERA_MOVES.length >= 10, `engine vocabulary present (${CAMERA_MOVES.length} moves)`);
+  for (const cam of CAMERA_MOVES) {
+    const phrase = I2V_CAMERA_PHRASES[cam];
+    ok(typeof phrase === "string" && phrase.length > 10, `camera "${cam}" has an engine-verbatim phrase`);
+    const scene = {
+      index: 1, title: "s", narration: "n", visual: "v", camera: "static",
+      mood: "m", caption: "c", hostInScene: false, rehook: false, sfx: "none",
+    };
+    const p = i2vMotionPrompt(scene as never, { sceneIndex: 1, shots: [{ shotIndex: 0, camera: cam, moveSpeed: "normal" }] } as never);
+    ok(p.toLowerCase().includes(phrase.toLowerCase()), `camera "${cam}" phrase lands in the prompt`);
+  }
+});
+
+await test("S62 motion prompt: only slow/fast modulate — normal and absent leave the phrase bare", async () => {
+  const { i2vMotionPrompt } = await import("../src/lib/tubeforge/liveliness.ts");
+  const scene = {
+    index: 1, title: "s", narration: "n", visual: "v", camera: "static",
+    mood: "m", caption: "c", hostInScene: false, rehook: false, sfx: "none",
+  };
+  const mk = (moveSpeed?: string) =>
+    i2vMotionPrompt(scene as never, { sceneIndex: 1, shots: [{ shotIndex: 0, camera: "zoom-in", moveSpeed }] } as never);
+  ok(mk("slow").startsWith("Slow, deliberate slow cinematic zoom in"), "slow prefix = weight and reverence");
+  ok(mk("fast").startsWith("Quick, energetic slow cinematic zoom in"), "fast prefix = energy");
+  ok(mk("normal").startsWith("Slow cinematic zoom in"), "normal leaves the phrase bare");
+  ok(mk(undefined).startsWith("Slow cinematic zoom in"), "absent moveSpeed leaves the phrase bare");
+});
+
 console.log(`\n${"─".repeat(56)}`);
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);

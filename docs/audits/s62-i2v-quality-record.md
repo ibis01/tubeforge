@@ -79,9 +79,55 @@ assembled-video gates already run in the unit fixtures and E2E.
 | CogVideoX i2v (real, 5 s 1080p) | 7.6 MB MP4 — 3.7 min |
 | Raw-clip QC | black ✓ frozen ✓ aspect ✓ static ✓ flicker ✓ stutter ✓ dead-air ✓ · playable: raw-clip category mismatch (video-only, §2) · audio family: unmeasured-by-design |
 
+## 4b. The full run — all eight profiles (2026-11-08, 8/8 GREEN)
+
+| Profile | Clip | i2v time | Blind overall | Notable |
+|---|---|---|---|---|
+| narrative | 7.6 MB | 3.7 min | **4/5** | "believable slow camera pull" |
+| documentary | 7.8 MB | 8.3 min | **4/5** | consistent terrain/canal geometry |
+| explainer | 2.4 MB | 6.7 min | 3/5 | diagram static — doctrine vs motion, see findings |
+| advertisement | 7.1 MB | 6.9 min | **4/5** | artifact_load 5/5; CTA-close advisory FIRED on the real plan |
+| animation | 4.0 MB | 2.7 min | 3/5 | coherent origami subject, modest motion |
+| podcast | 4.4 MB | 6.5 min | **4/5** | "subject shifts naturally" — talking-head motion reads |
+| social | 3.8 MB | 5.1 min | 2/5 | face close-up motion minimal; hook 2.8 s advisory FIRED |
+| islamic-history | 8.8 MB | 4.1 min | 2/5 | reverent slow zoom under-reads in stills; hard policy lens PASS |
+
+Aggregate: 45.9 MB of clip evidence, ~44 min of gateway video time, every
+clip's clip-local visual lenses clean. Full prompts/timings/QC per profile:
+`validation/s62/manifest.json` (committed).
+
+**Blind rubric field means** (8 clips × 3 frames, shuffled pool A–H, one
+real vision call per letter): motion realism **3.00** · artifact load
+**3.75** · temporal coherence **4.50** · composition **4.38** · overall
+**3.25/5**.
+
+**Findings, honestly ranked:**
+
+1. **Temporal coherence and composition are the engine's strengths** (4.50
+   / 4.38) — every clip stayed the same scene across 4 seconds; no melted
+   geometry anywhere in the pool.
+2. **Subject motion under-reads on static doctrines** (motion mean 3.00).
+   The three lowest scorers are exactly the profiles whose doctrine is
+   stillness: explainer (technical diagram), social (tight face close-up),
+   islamic-history (reverent slow zoom). The lever is the
+   `I2V_SUBJECT_MOTION` clause for detail/text kinds and slow-speed
+   prompts — carried as a P2, NOT patched in this stage (changing motion
+   doctrine to score better would be teaching to the test).
+3. **The profile validation layer works on real plans** — two live
+   advisory fires (advertisement CTA-close, social hook duration) landed
+   during the run, unprompted.
+4. **The hard policy lens passes**: the islamic-history frames compose
+   around, never on — library, manuscripts, lamplight, no figures, no
+   faces; the S49 sanitizers engaged upstream and nothing needed rescuing.
+5. **Gateway reality**: back-to-back i2v submissions hit the 429 shared
+   cool-down (45 s). Production renders never see it (calls are spaced by
+   minutes of render work); the lane calibrated its retries (3 × 80 s).
+
 ## 5. Landing
 
-Evidence binaries (plans, art, clips, frames, manifest) live in
-`validation/s62/` — gitignored by size, referenced by path. The manifest
-and this record are committed. Stage close rides the full gate set + CI
-evidence by SHA, per the standing law.
+Evidence binaries (plans, art, clips, frames) live in `validation/s62/` —
+gitignored by size; the manifest, blind key, and scores are force-committed
+as the record's evidence, and this record is the distilled report. Stage
+close rides the full gate set (tsc 0 · eslint 0/20 · unit 251/251 ·
+billing 40/40 · queue exit 0 · build clean) + CI evidence by SHA, per the
+standing law.

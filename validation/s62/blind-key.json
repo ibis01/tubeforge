@@ -1,0 +1,34 @@
+[
+  {
+    "letter": "A",
+    "profile": "social"
+  },
+  {
+    "letter": "B",
+    "profile": "explainer"
+  },
+  {
+    "letter": "C",
+    "profile": "narrative"
+  },
+  {
+    "letter": "D",
+    "profile": "animation"
+  },
+  {
+    "letter": "E",
+    "profile": "islamic-history"
+  },
+  {
+    "letter": "F",
+    "profile": "advertisement"
+  },
+  {
+    "letter": "G",
+    "profile": "podcast"
+  },
+  {
+    "letter": "H",
+    "profile": "documentary"
+  }
+]

@@ -1,0 +1,152 @@
+{
+  "scoredAt": "2026-11-08T17:25:01.302Z",
+  "rubric": "motion_realism, artifact_load (5=few), temporal_coherence, composition, overall — 1..5, blind pool A–H",
+  "blind": [
+    {
+      "letter": "A",
+      "motion_realism": 2,
+      "artifact_load": 3,
+      "temporal_coherence": 4,
+      "composition": 3,
+      "overall": 2,
+      "notes": "The three frames show a nearly identical wide-eyed shocked face with minimal visible progression — mouth and gaze barely change across 3 seconds, suggesting a static image with subtle morphing rather than believable motion. Facial textures show the characteristic AI 'over-embossed' skin and forehead wrinkling, and the phone/screen edge at the bottom is mushy and ill-defined. Scene, lighting, and framing are consistent across frames, which saves temporal coherence, but the lack of meaningful motion makes this fail as video footage."
+    },
+    {
+      "letter": "B",
+      "motion_realism": 2,
+      "artifact_load": 3,
+      "temporal_coherence": 5,
+      "composition": 4,
+      "overall": 3,
+      "notes": "The engine cross-section is perfectly static across all three frames — no piston, crank, or camera movement — with the only change being a blue glow that blooms from the wrist pin down the connecting rod, reading more as an animated overlay than physical motion. Geometry is dense and mostly convincing, but the mechanism is semi-plausible AI mush (ambiguous bolt patterns, non-functional linkage shapes) typical of generated cutaways. Temporal coherence is excellent and framing is clean and product-shot-like, but the near-total absence of mechanical motion limits it as a video asset."
+    },
+    {
+      "letter": "C",
+      "motion_realism": 4,
+      "artifact_load": 4,
+      "temporal_coherence": 5,
+      "composition": 5,
+      "overall": 4,
+      "notes": "The three frames show a consistent spiral-staircase scene with a believable slow camera push-in and warming light from the center, plus a figure silhouette that grows plausibly closer. Geometry of the handrail and stair vanes shifts slightly and the glowing figure reads as mushy/unclear up close, but there is no warping, teleporting, or vanished elements. Strong framing and lighting throughout; minor artifact load only."
+    },
+    {
+      "letter": "D",
+      "motion_realism": 2,
+      "artifact_load": 4,
+      "temporal_coherence": 4,
+      "composition": 5,
+      "overall": 3,
+      "notes": "The three frames show a single coherent scene with consistent origami dragon, ink bottles, lighting and wood grain, and only minor artifacts (slight crease melting on the dragon's back and tail). However, motion is minimal — essentially the same near-still composition with only a tiny camera drift, and the background out-of-focus window content changes noticeably by 4.0s (green foliage appears) which slightly undermines coherence. As a standalone image the shot is beautifully lit and framed, but as video it reads as a still photo with subtle wobble rather than believable ongoing motion."
+    },
+    {
+      "letter": "E",
+      "motion_realism": 2,
+      "artifact_load": 3,
+      "temporal_coherence": 3,
+      "composition": 4,
+      "overall": 2,
+      "notes": "Frames 1 and 2 are nearly identical, suggesting a still or near-static hold with minimal believable motion. At 4.0s the camera appears to push in slightly and a robed figure plus a garbled dark second figure abruptly appear near the window with no presence or entry shown in earlier frames, breaking temporal continuity. Book stacks show typical AI melting/illegible spines, and the seated figure is malformed, though lighting, architecture, and overall framing remain attractive."
+    },
+    {
+      "letter": "F",
+      "motion_realism": 4,
+      "artifact_load": 5,
+      "temporal_coherence": 5,
+      "composition": 5,
+      "overall": 4,
+      "notes": "The three frames show the same bottle and coffee-bean arrangement with a slow, steady zoom-out — framing widens progressively and all objects, lighting, and geometry stay consistent with no warping or impossible structures. Motion is subtle (camera-only drift with no subject action), which is believable but low-information for verifying realistic dynamics; condensation droplet pattern shifts plausibly with the changing view. Composition is a clean, well-lit product shot with clear subject separation from the dark textured background."
+    },
+    {
+      "letter": "G",
+      "motion_realism": 4,
+      "artifact_load": 4,
+      "temporal_coherence": 5,
+      "composition": 4,
+      "overall": 4,
+      "notes": "Same podcast scene throughout: subject shifts naturally from looking down at mic (f1) to direct address (f2) to a smiling gesture with a hand appearing bottom-left (f3), a believable talking-head progression. Background shelves, plant, bokeh lights and mic rig stay consistent; only hair strand arrangement and slight shirt texture wobble suggest mild AI regen, with no melted geometry or garbled features."
+    },
+    {
+      "letter": "H",
+      "motion_realism": 4,
+      "artifact_load": 4,
+      "temporal_coherence": 5,
+      "composition": 5,
+      "overall": 4,
+      "notes": "Same Suez-canal scene persists across all three frames with consistent terrain, canal geometry, ship positions and lighting; ships and small boat progress plausibly while camera drifts slightly forward/downward. Minor AI tells include unnaturally uniform water ripple patterns, slightly soft/over-sharp dune texturing, and small boat wakes that don't quite match scale. Composition is strong with a clear leading line down the canal and well-placed foreground vessel."
+    }
+  ],
+  "unmasked": {
+    "social": {
+      "letter": "A",
+      "motion_realism": 2,
+      "artifact_load": 3,
+      "temporal_coherence": 4,
+      "composition": 3,
+      "overall": 2,
+      "notes": "The three frames show a nearly identical wide-eyed shocked face with minimal visible progression — mouth and gaze barely change across 3 seconds, suggesting a static image with subtle morphing rather than believable motion. Facial textures show the characteristic AI 'over-embossed' skin and forehead wrinkling, and the phone/screen edge at the bottom is mushy and ill-defined. Scene, lighting, and framing are consistent across frames, which saves temporal coherence, but the lack of meaningful motion makes this fail as video footage."
+    },
+    "explainer": {
+      "letter": "B",
+      "motion_realism": 2,
+      "artifact_load": 3,
+      "temporal_coherence": 5,
+      "composition": 4,
+      "overall": 3,
+      "notes": "The engine cross-section is perfectly static across all three frames — no piston, crank, or camera movement — with the only change being a blue glow that blooms from the wrist pin down the connecting rod, reading more as an animated overlay than physical motion. Geometry is dense and mostly convincing, but the mechanism is semi-plausible AI mush (ambiguous bolt patterns, non-functional linkage shapes) typical of generated cutaways. Temporal coherence is excellent and framing is clean and product-shot-like, but the near-total absence of mechanical motion limits it as a video asset."
+    },
+    "narrative": {
+      "letter": "C",
+      "motion_realism": 4,
+      "artifact_load": 4,
+      "temporal_coherence": 5,
+      "composition": 5,
+      "overall": 4,
+      "notes": "The three frames show a consistent spiral-staircase scene with a believable slow camera push-in and warming light from the center, plus a figure silhouette that grows plausibly closer. Geometry of the handrail and stair vanes shifts slightly and the glowing figure reads as mushy/unclear up close, but there is no warping, teleporting, or vanished elements. Strong framing and lighting throughout; minor artifact load only."
+    },
+    "animation": {
+      "letter": "D",
+      "motion_realism": 2,
+      "artifact_load": 4,
+      "temporal_coherence": 4,
+      "composition": 5,
+      "overall": 3,
+      "notes": "The three frames show a single coherent scene with consistent origami dragon, ink bottles, lighting and wood grain, and only minor artifacts (slight crease melting on the dragon's back and tail). However, motion is minimal — essentially the same near-still composition with only a tiny camera drift, and the background out-of-focus window content changes noticeably by 4.0s (green foliage appears) which slightly undermines coherence. As a standalone image the shot is beautifully lit and framed, but as video it reads as a still photo with subtle wobble rather than believable ongoing motion."
+    },
+    "islamic-history": {
+      "letter": "E",
+      "motion_realism": 2,
+      "artifact_load": 3,
+      "temporal_coherence": 3,
+      "composition": 4,
+      "overall": 2,
+      "notes": "Frames 1 and 2 are nearly identical, suggesting a still or near-static hold with minimal believable motion. At 4.0s the camera appears to push in slightly and a robed figure plus a garbled dark second figure abruptly appear near the window with no presence or entry shown in earlier frames, breaking temporal continuity. Book stacks show typical AI melting/illegible spines, and the seated figure is malformed, though lighting, architecture, and overall framing remain attractive."
+    },
+    "advertisement": {
+      "letter": "F",
+      "motion_realism": 4,
+      "artifact_load": 5,
+      "temporal_coherence": 5,
+      "composition": 5,
+      "overall": 4,
+      "notes": "The three frames show the same bottle and coffee-bean arrangement with a slow, steady zoom-out — framing widens progressively and all objects, lighting, and geometry stay consistent with no warping or impossible structures. Motion is subtle (camera-only drift with no subject action), which is believable but low-information for verifying realistic dynamics; condensation droplet pattern shifts plausibly with the changing view. Composition is a clean, well-lit product shot with clear subject separation from the dark textured background."
+    },
+    "podcast": {
+      "letter": "G",
+      "motion_realism": 4,
+      "artifact_load": 4,
+      "temporal_coherence": 5,
+      "composition": 4,
+      "overall": 4,
+      "notes": "Same podcast scene throughout: subject shifts naturally from looking down at mic (f1) to direct address (f2) to a smiling gesture with a hand appearing bottom-left (f3), a believable talking-head progression. Background shelves, plant, bokeh lights and mic rig stay consistent; only hair strand arrangement and slight shirt texture wobble suggest mild AI regen, with no melted geometry or garbled features."
+    },
+    "documentary": {
+      "letter": "H",
+      "motion_realism": 4,
+      "artifact_load": 4,
+      "temporal_coherence": 5,
+      "composition": 5,
+      "overall": 4,
+      "notes": "Same Suez-canal scene persists across all three frames with consistent terrain, canal geometry, ship positions and lighting; ships and small boat progress plausibly while camera drifts slightly forward/downward. Minor AI tells include unnaturally uniform water ripple patterns, slightly soft/over-sharp dune texturing, and small boat wakes that don't quite match scale. Composition is strong with a clear leading line down the canal and well-placed foreground vessel."
+    }
+  }
+}

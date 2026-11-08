@@ -360,7 +360,7 @@ async function validateProfile(brief: ProfileBrief, force: boolean): Promise<voi
       if (!buf || buf.length < 50_000) throw new Error("i2v returned an empty/invalid buffer");
       return buf;
     },
-    { attempts: 2, baseDelayMs: 8000 }
+    { attempts: 3, baseDelayMs: 20000 } // back-to-back submissions meet the gateway's 45s shared 429 cool-down — production calls are naturally spaced by render work, the lane is not
   );
   fs.writeFileSync(clipPath, clip);
   const i2vMs = Date.now() - i2vStart;

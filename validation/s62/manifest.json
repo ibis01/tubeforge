@@ -1,0 +1,1214 @@
+[
+  {
+    "profile": "narrative",
+    "ok": true,
+    "topic": "A lone lighthouse keeper's quiet nightly ritual and the storm that tested it",
+    "policy": "standard",
+    "planProfileNotes": [],
+    "shot": {
+      "framing": "wide",
+      "camera": "static",
+      "moveSpeed": "slow",
+      "duration": 2.8,
+      "imagePrompt": "Weathered stone lighthouse interior at dusk with spiral iron staircase",
+      "subjectAction": "bathed in warm amber light against deep blue shadows"
+    },
+    "artPrompt": "Weathered stone lighthouse interior at dusk with spiral iron staircase",
+    "motionPrompt": "Slow, deliberate locked-off camera — the motion lives in the subjects themselves. Bathed in warm amber light against deep blue shadows A weathered stone lighthouse interior at dusk, an old keeper climbing a spiral iron staircase with a lantern, warm amber light against deep blue shadows. warm amber, nostalgic, soft dusk light. Cinematic quality, natural physics, no text.",
+    "artBytes": 139089,
+    "clipBytes": 7936526,
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1920,
+          "height": 1080,
+          "avg_frame_rate": "31/1"
+        }
+      ],
+      "format": {
+        "duration": "5.129032",
+        "size": "7936526"
+      }
+    },
+    "qc": {
+      "passed": false,
+      "checkedAt": "2026-11-08T16:14:59.729Z",
+      "durationSec": 5.1,
+      "checks": [
+        {
+          "id": "playable",
+          "label": "Plays as a valid MP4 (H.264 video + AAC audio)",
+          "status": "fail",
+          "pass": false,
+          "value": "stream missing"
+        },
+        {
+          "id": "black-frames",
+          "label": "No unexplained black frames",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "frozen-frames",
+          "label": "No frozen imagery (motion everywhere)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "aspect",
+          "label": "16:9 frame (no squeeze/crop defects)",
+          "status": "pass",
+          "pass": true,
+          "value": "1920x1080"
+        },
+        {
+          "id": "loudness",
+          "label": "Broadcast loudness (-16 LUFS target)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "true-peak",
+          "label": "True peak ≤ -1 dBTP (no clipping after encode)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "loudness-range",
+          "label": "Consistent volume (loudness range)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "dead-air",
+          "label": "No dead air (voice or music always present)",
+          "status": "pass",
+          "pass": true,
+          "value": "none",
+          "detail": ""
+        },
+        {
+          "id": "static-shots",
+          "label": "Visual pacing — no long static stretches",
+          "status": "pass",
+          "pass": true,
+          "value": "visual change throughout",
+          "detail": ""
+        },
+        {
+          "id": "flicker",
+          "label": "Steady brightness (no flicker or pumping)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "stutter",
+          "label": "Even frame timing (no stutter)",
+          "status": "pass",
+          "pass": true,
+          "value": "even timing throughout",
+          "detail": ""
+        },
+        {
+          "id": "cut-alignment",
+          "label": "Cuts land where the timeline says (continuity)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "no timeline reconstruction",
+          "detail": "this video has no aligned timeline doc — cuts cannot be checked"
+        },
+        {
+          "id": "tail-fade",
+          "label": "Ends on a fade, not an abrupt cut",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "final 0.4s unreadable or clip too short — fade state unknown"
+        }
+      ]
+    },
+    "timingsMs": {
+      "llm": 14962,
+      "art": 31542,
+      "i2v": 224215,
+      "total": 279188
+    },
+    "planFile": "narrative.plan.json"
+  },
+  {
+    "profile": "documentary",
+    "ok": true,
+    "topic": "How the Suez Canal reshaped global trade routes and the economics of shipping",
+    "policy": "standard",
+    "planProfileNotes": [],
+    "shot": {
+      "framing": "aerial",
+      "camera": "static",
+      "moveSpeed": "normal",
+      "duration": 2.8,
+      "imagePrompt": "Aerial view of the Suez Canal cutting through the desert landscape",
+      "subjectAction": "carrying ships across the desert"
+    },
+    "artPrompt": "Aerial view of the Suez Canal cutting through the desert landscape",
+    "motionPrompt": "Locked-off camera — the motion lives in the subjects themselves. Carrying ships across the desert Aerial documentary shot of the Suez Canal cutting through desert, a massive container ship passing between sand banks, real daylight footage. documentary natural color, clear daylight. Cinematic quality, natural physics, no text.",
+    "artBytes": 171359,
+    "clipBytes": 8142495,
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1920,
+          "height": 1080,
+          "avg_frame_rate": "31/1"
+        }
+      ],
+      "format": {
+        "duration": "5.129032",
+        "size": "8142495"
+      }
+    },
+    "qc": {
+      "passed": false,
+      "checkedAt": "2026-11-08T16:27:35.441Z",
+      "durationSec": 5.1,
+      "checks": [
+        {
+          "id": "playable",
+          "label": "Plays as a valid MP4 (H.264 video + AAC audio)",
+          "status": "fail",
+          "pass": false,
+          "value": "stream missing"
+        },
+        {
+          "id": "black-frames",
+          "label": "No unexplained black frames",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "frozen-frames",
+          "label": "No frozen imagery (motion everywhere)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "aspect",
+          "label": "16:9 frame (no squeeze/crop defects)",
+          "status": "pass",
+          "pass": true,
+          "value": "1920x1080"
+        },
+        {
+          "id": "loudness",
+          "label": "Broadcast loudness (-16 LUFS target)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "true-peak",
+          "label": "True peak ≤ -1 dBTP (no clipping after encode)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "loudness-range",
+          "label": "Consistent volume (loudness range)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "dead-air",
+          "label": "No dead air (voice or music always present)",
+          "status": "pass",
+          "pass": true,
+          "value": "none",
+          "detail": ""
+        },
+        {
+          "id": "static-shots",
+          "label": "Visual pacing — no long static stretches",
+          "status": "pass",
+          "pass": true,
+          "value": "visual change throughout",
+          "detail": ""
+        },
+        {
+          "id": "flicker",
+          "label": "Steady brightness (no flicker or pumping)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "stutter",
+          "label": "Even frame timing (no stutter)",
+          "status": "pass",
+          "pass": true,
+          "value": "even timing throughout",
+          "detail": ""
+        },
+        {
+          "id": "cut-alignment",
+          "label": "Cuts land where the timeline says (continuity)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "no timeline reconstruction",
+          "detail": "this video has no aligned timeline doc — cuts cannot be checked"
+        },
+        {
+          "id": "tail-fade",
+          "label": "Ends on a fade, not an abrupt cut",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "final 0.4s unreadable or clip too short — fade state unknown"
+        }
+      ]
+    },
+    "timingsMs": {
+      "llm": 7958,
+      "art": 33062,
+      "i2v": 496298,
+      "total": 546470
+    },
+    "planFile": "documentary.plan.json"
+  },
+  {
+    "profile": "explainer",
+    "ok": true,
+    "topic": "The four strokes of an internal combustion engine, explained step by step",
+    "policy": "standard",
+    "planProfileNotes": [],
+    "shot": {
+      "framing": "wide",
+      "camera": "static",
+      "moveSpeed": "normal",
+      "duration": 2.8,
+      "imagePrompt": "Cutaway diagram of a car engine cylinder showing the piston at the top position",
+      "subjectAction": "stationary at top position"
+    },
+    "artPrompt": "Cutaway diagram of a car engine cylinder showing the piston at the top position",
+    "motionPrompt": "Locked-off camera — the motion lives in the subjects themselves. Stationary at top position Cutaway diagram of a car engine cylinder, piston sliding down, intake valve open, blue air-fuel mixture flowing in, clean technical illustration. clean, bright, technical. Cinematic quality, natural physics, no text.",
+    "artBytes": 111371,
+    "clipBytes": 2541401,
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1920,
+          "height": 1080,
+          "avg_frame_rate": "31/1"
+        }
+      ],
+      "format": {
+        "duration": "5.129032",
+        "size": "2541401"
+      }
+    },
+    "qc": {
+      "passed": false,
+      "checkedAt": "2026-11-08T16:36:12.264Z",
+      "durationSec": 5.1,
+      "checks": [
+        {
+          "id": "playable",
+          "label": "Plays as a valid MP4 (H.264 video + AAC audio)",
+          "status": "fail",
+          "pass": false,
+          "value": "stream missing"
+        },
+        {
+          "id": "black-frames",
+          "label": "No unexplained black frames",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "frozen-frames",
+          "label": "No frozen imagery (motion everywhere)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "aspect",
+          "label": "16:9 frame (no squeeze/crop defects)",
+          "status": "pass",
+          "pass": true,
+          "value": "1920x1080"
+        },
+        {
+          "id": "loudness",
+          "label": "Broadcast loudness (-16 LUFS target)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "true-peak",
+          "label": "True peak ≤ -1 dBTP (no clipping after encode)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "loudness-range",
+          "label": "Consistent volume (loudness range)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "dead-air",
+          "label": "No dead air (voice or music always present)",
+          "status": "pass",
+          "pass": true,
+          "value": "none",
+          "detail": ""
+        },
+        {
+          "id": "static-shots",
+          "label": "Visual pacing — no long static stretches",
+          "status": "pass",
+          "pass": true,
+          "value": "visual change throughout",
+          "detail": ""
+        },
+        {
+          "id": "flicker",
+          "label": "Steady brightness (no flicker or pumping)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "stutter",
+          "label": "Even frame timing (no stutter)",
+          "status": "pass",
+          "pass": true,
+          "value": "even timing throughout",
+          "detail": ""
+        },
+        {
+          "id": "cut-alignment",
+          "label": "Cuts land where the timeline says (continuity)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "no timeline reconstruction",
+          "detail": "this video has no aligned timeline doc — cuts cannot be checked"
+        },
+        {
+          "id": "tail-fade",
+          "label": "Ends on a fade, not an abrupt cut",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "final 0.4s unreadable or clip too short — fade state unknown"
+        }
+      ]
+    },
+    "timingsMs": {
+      "llm": 40424,
+      "art": 62218,
+      "i2v": 404602,
+      "total": 511557
+    },
+    "planFile": "explainer.plan.json"
+  },
+  {
+    "profile": "advertisement",
+    "ok": true,
+    "topic": "Launch ad for Aurora, a premium cold-brew coffee in a frosted glass bottle",
+    "policy": "standard",
+    "planProfileNotes": [
+      "Advertisement must close on a CTA — the last shot reads \"Aurora cold brew bottle with label facing camera\", which is not an action cue."
+    ],
+    "shot": {
+      "framing": "medium",
+      "camera": "zoom-in",
+      "moveSpeed": "normal",
+      "duration": 3,
+      "imagePrompt": "A frosted glass cold-brew coffee bottle on wet slate with condensation droplets and scattered coffee beans",
+      "subjectAction": "sitting prominently on wet slate"
+    },
+    "artPrompt": "A frosted glass cold-brew coffee bottle on wet slate with condensation droplets and scattered coffee beans",
+    "motionPrompt": "Slow cinematic zoom in. Sitting prominently on wet slate Hero product shot of a frosted glass cold-brew coffee bottle on wet slate, condensation droplets, coffee beans scattered around, dramatic backlight. rich brown and gold, premium, moody. Cinematic quality, natural physics, no text.",
+    "artBytes": 197379,
+    "clipBytes": 7424455,
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1920,
+          "height": 1080,
+          "avg_frame_rate": "31/1"
+        }
+      ],
+      "format": {
+        "duration": "5.129032",
+        "size": "7424455"
+      }
+    },
+    "qc": {
+      "passed": false,
+      "checkedAt": "2026-11-08T16:44:36.262Z",
+      "durationSec": 5.1,
+      "checks": [
+        {
+          "id": "playable",
+          "label": "Plays as a valid MP4 (H.264 video + AAC audio)",
+          "status": "fail",
+          "pass": false,
+          "value": "stream missing"
+        },
+        {
+          "id": "black-frames",
+          "label": "No unexplained black frames",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "frozen-frames",
+          "label": "No frozen imagery (motion everywhere)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "aspect",
+          "label": "16:9 frame (no squeeze/crop defects)",
+          "status": "pass",
+          "pass": true,
+          "value": "1920x1080"
+        },
+        {
+          "id": "loudness",
+          "label": "Broadcast loudness (-16 LUFS target)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "true-peak",
+          "label": "True peak ≤ -1 dBTP (no clipping after encode)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "loudness-range",
+          "label": "Consistent volume (loudness range)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "dead-air",
+          "label": "No dead air (voice or music always present)",
+          "status": "pass",
+          "pass": true,
+          "value": "none",
+          "detail": ""
+        },
+        {
+          "id": "static-shots",
+          "label": "Visual pacing — no long static stretches",
+          "status": "pass",
+          "pass": true,
+          "value": "visual change throughout",
+          "detail": ""
+        },
+        {
+          "id": "flicker",
+          "label": "Steady brightness (no flicker or pumping)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "stutter",
+          "label": "Even frame timing (no stutter)",
+          "status": "pass",
+          "pass": true,
+          "value": "even timing throughout",
+          "detail": ""
+        },
+        {
+          "id": "cut-alignment",
+          "label": "Cuts land where the timeline says (continuity)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "no timeline reconstruction",
+          "detail": "this video has no aligned timeline doc — cuts cannot be checked"
+        },
+        {
+          "id": "tail-fade",
+          "label": "Ends on a fade, not an abrupt cut",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "final 0.4s unreadable or clip too short — fade state unknown"
+        }
+      ]
+    },
+    "timingsMs": {
+      "llm": 15156,
+      "art": 65148,
+      "i2v": 413877,
+      "total": 502777
+    },
+    "planFile": "advertisement.plan.json"
+  },
+  {
+    "profile": "animation",
+    "ok": true,
+    "topic": "An animated short about a folded paper dragon who learns to fly in a rainstorm",
+    "policy": "standard",
+    "planProfileNotes": [],
+    "shot": {
+      "framing": "medium",
+      "camera": "static",
+      "moveSpeed": "slow",
+      "duration": 2.8,
+      "imagePrompt": "A tiny origami paper dragon standing on a wooden desk beside colored ink bottles",
+      "subjectAction": "standing beside ink bottles"
+    },
+    "artPrompt": "A tiny origami paper dragon standing on a wooden desk beside colored ink bottles",
+    "motionPrompt": "Slow, deliberate locked-off camera — the motion lives in the subjects themselves. Standing beside ink bottles A tiny origami paper dragon standing on a wooden desk beside colored ink bottles, looking up longingly at a painted dragon poster on the wall, animated film style. soft pastel, storybook, warm desk lamp. Cinematic quality, natural physics, no text.",
+    "artBytes": 101685,
+    "clipBytes": 4156370,
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1920,
+          "height": 1080,
+          "avg_frame_rate": "31/1"
+        }
+      ],
+      "format": {
+        "duration": "5.129032",
+        "size": "4156370"
+      }
+    },
+    "qc": {
+      "passed": false,
+      "checkedAt": "2026-11-08T16:55:48.635Z",
+      "durationSec": 5.1,
+      "checks": [
+        {
+          "id": "playable",
+          "label": "Plays as a valid MP4 (H.264 video + AAC audio)",
+          "status": "fail",
+          "pass": false,
+          "value": "stream missing"
+        },
+        {
+          "id": "black-frames",
+          "label": "No unexplained black frames",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "frozen-frames",
+          "label": "No frozen imagery (motion everywhere)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "aspect",
+          "label": "16:9 frame (no squeeze/crop defects)",
+          "status": "pass",
+          "pass": true,
+          "value": "1920x1080"
+        },
+        {
+          "id": "loudness",
+          "label": "Broadcast loudness (-16 LUFS target)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "true-peak",
+          "label": "True peak ≤ -1 dBTP (no clipping after encode)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "loudness-range",
+          "label": "Consistent volume (loudness range)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "dead-air",
+          "label": "No dead air (voice or music always present)",
+          "status": "pass",
+          "pass": true,
+          "value": "none",
+          "detail": ""
+        },
+        {
+          "id": "static-shots",
+          "label": "Visual pacing — no long static stretches",
+          "status": "pass",
+          "pass": true,
+          "value": "visual change throughout",
+          "detail": ""
+        },
+        {
+          "id": "flicker",
+          "label": "Steady brightness (no flicker or pumping)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "stutter",
+          "label": "Even frame timing (no stutter)",
+          "status": "pass",
+          "pass": true,
+          "value": "even timing throughout",
+          "detail": ""
+        },
+        {
+          "id": "cut-alignment",
+          "label": "Cuts land where the timeline says (continuity)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "no timeline reconstruction",
+          "detail": "this video has no aligned timeline doc — cuts cannot be checked"
+        },
+        {
+          "id": "tail-fade",
+          "label": "Ends on a fade, not an abrupt cut",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "final 0.4s unreadable or clip too short — fade state unknown"
+        }
+      ]
+    },
+    "timingsMs": {
+      "llm": 13666,
+      "art": 78905,
+      "i2v": 162963,
+      "total": 261623
+    },
+    "planFile": "animation.plan.json"
+  },
+  {
+    "profile": "podcast",
+    "ok": true,
+    "topic": "Why four focused hours beat twelve distracted ones — a talking-head podcast segment",
+    "policy": "standard",
+    "planProfileNotes": [],
+    "shot": {
+      "framing": "medium",
+      "camera": "static",
+      "moveSpeed": "normal",
+      "duration": 2.8,
+      "imagePrompt": "Podcast host sitting close to a broadcast microphone in a warm home studio with soft bokeh shelves behind",
+      "subjectAction": "sitting attentively at a microphone"
+    },
+    "artPrompt": "Podcast host sitting close to a broadcast microphone in a warm home studio with soft bokeh shelves behind",
+    "motionPrompt": "Locked-off camera — the motion lives in the subjects themselves. Sitting attentively at a microphone A host in a warm home studio sitting close to a broadcast microphone, soft bokeh shelves behind, intimate medium shot, natural podcast lighting. warm amber, intimate, shallow depth of field. Cinematic quality, natural physics, no text.",
+    "artBytes": 80072,
+    "clipBytes": 4565644,
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1920,
+          "height": 1080,
+          "avg_frame_rate": "31/1"
+        }
+      ],
+      "format": {
+        "duration": "5.129032",
+        "size": "4565644"
+      }
+    },
+    "qc": {
+      "passed": false,
+      "checkedAt": "2026-11-08T17:03:52.034Z",
+      "durationSec": 5.1,
+      "checks": [
+        {
+          "id": "playable",
+          "label": "Plays as a valid MP4 (H.264 video + AAC audio)",
+          "status": "fail",
+          "pass": false,
+          "value": "stream missing"
+        },
+        {
+          "id": "black-frames",
+          "label": "No unexplained black frames",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "frozen-frames",
+          "label": "No frozen imagery (motion everywhere)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "aspect",
+          "label": "16:9 frame (no squeeze/crop defects)",
+          "status": "pass",
+          "pass": true,
+          "value": "1920x1080"
+        },
+        {
+          "id": "loudness",
+          "label": "Broadcast loudness (-16 LUFS target)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "true-peak",
+          "label": "True peak ≤ -1 dBTP (no clipping after encode)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "loudness-range",
+          "label": "Consistent volume (loudness range)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "dead-air",
+          "label": "No dead air (voice or music always present)",
+          "status": "pass",
+          "pass": true,
+          "value": "none",
+          "detail": ""
+        },
+        {
+          "id": "static-shots",
+          "label": "Visual pacing — no long static stretches",
+          "status": "pass",
+          "pass": true,
+          "value": "visual change throughout",
+          "detail": ""
+        },
+        {
+          "id": "flicker",
+          "label": "Steady brightness (no flicker or pumping)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "stutter",
+          "label": "Even frame timing (no stutter)",
+          "status": "pass",
+          "pass": true,
+          "value": "even timing throughout",
+          "detail": ""
+        },
+        {
+          "id": "cut-alignment",
+          "label": "Cuts land where the timeline says (continuity)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "no timeline reconstruction",
+          "detail": "this video has no aligned timeline doc — cuts cannot be checked"
+        },
+        {
+          "id": "tail-fade",
+          "label": "Ends on a fade, not an abrupt cut",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "final 0.4s unreadable or clip too short — fade state unknown"
+        }
+      ]
+    },
+    "timingsMs": {
+      "llm": 11708,
+      "art": 39762,
+      "i2v": 392891,
+      "total": 450633
+    },
+    "planFile": "podcast.plan.json"
+  },
+  {
+    "profile": "social",
+    "ok": true,
+    "topic": "Three evening habits quietly wrecking your sleep — a scroll-stopping short",
+    "policy": "standard",
+    "planProfileNotes": [
+      "Social short hook must be ≤ 2s — scene 1 shot 0 runs 2.8s (a slow open loses the scroll)."
+    ],
+    "shot": {
+      "framing": "extreme close-up",
+      "camera": "zoom-in",
+      "moveSpeed": "fast",
+      "duration": 2.8,
+      "imagePrompt": "Extreme close-up of a face lit harshly by phone glow in a dark bedroom at night, eyes wide awake",
+      "subjectAction": "staring at phone screen"
+    },
+    "artPrompt": "Extreme close-up of a face lit harshly by phone glow in a dark bedroom at night, eyes wide awake",
+    "motionPrompt": "Quick, energetic slow cinematic zoom in. Staring at phone screen Extreme close-up of a face lit harshly by phone glow in a dark bedroom at night, eyes wide awake, dramatic side lighting, vertical video energy. dark blue with harsh phone glow, dramatic. Cinematic quality, natural physics, no text.",
+    "artBytes": 72334,
+    "clipBytes": 3969174,
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1920,
+          "height": 1080,
+          "avg_frame_rate": "31/1"
+        }
+      ],
+      "format": {
+        "duration": "5.129032",
+        "size": "3969174"
+      }
+    },
+    "qc": {
+      "passed": false,
+      "checkedAt": "2026-11-08T17:17:06.833Z",
+      "durationSec": 5.1,
+      "checks": [
+        {
+          "id": "playable",
+          "label": "Plays as a valid MP4 (H.264 video + AAC audio)",
+          "status": "fail",
+          "pass": false,
+          "value": "stream missing"
+        },
+        {
+          "id": "black-frames",
+          "label": "No unexplained black frames",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "frozen-frames",
+          "label": "No frozen imagery (motion everywhere)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "aspect",
+          "label": "16:9 frame (no squeeze/crop defects)",
+          "status": "pass",
+          "pass": true,
+          "value": "1920x1080"
+        },
+        {
+          "id": "loudness",
+          "label": "Broadcast loudness (-16 LUFS target)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "true-peak",
+          "label": "True peak ≤ -1 dBTP (no clipping after encode)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "loudness-range",
+          "label": "Consistent volume (loudness range)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "dead-air",
+          "label": "No dead air (voice or music always present)",
+          "status": "pass",
+          "pass": true,
+          "value": "none",
+          "detail": ""
+        },
+        {
+          "id": "static-shots",
+          "label": "Visual pacing — no long static stretches",
+          "status": "pass",
+          "pass": true,
+          "value": "visual change throughout",
+          "detail": ""
+        },
+        {
+          "id": "flicker",
+          "label": "Steady brightness (no flicker or pumping)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "stutter",
+          "label": "Even frame timing (no stutter)",
+          "status": "pass",
+          "pass": true,
+          "value": "even timing throughout",
+          "detail": ""
+        },
+        {
+          "id": "cut-alignment",
+          "label": "Cuts land where the timeline says (continuity)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "no timeline reconstruction",
+          "detail": "this video has no aligned timeline doc — cuts cannot be checked"
+        },
+        {
+          "id": "tail-fade",
+          "label": "Ends on a fade, not an abrupt cut",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "final 0.4s unreadable or clip too short — fade state unknown"
+        }
+      ]
+    },
+    "timingsMs": {
+      "llm": 8585,
+      "art": 37916,
+      "i2v": 304302,
+      "total": 356603
+    },
+    "planFile": "social.plan.json"
+  },
+  {
+    "profile": "islamic-history",
+    "ok": true,
+    "topic": "Bayt al-Hikma in Abbasid Baghdad — the translation movement that preserved ancient knowledge",
+    "policy": "islamic-history",
+    "planProfileNotes": [],
+    "shot": {
+      "framing": "wide",
+      "camera": "zoom-in",
+      "moveSpeed": "slow",
+      "duration": 2.8,
+      "imagePrompt": "Sunlit Abbasid library interior with towering wooden shelves of manuscripts",
+      "subjectAction": "standing tall in the library"
+    },
+    "artPrompt": "Sunlit Abbasid library interior with towering wooden shelves of manuscripts Absolutely no depiction of the Prophet Muhammad, his family, the Companions, the prophets, the angels, or God — no faces, figures, silhouettes or light-bodies of revered religious figures anywhere in frame; the moment is conveyed through architecture, calligraphy, artifacts, light and landscape only.",
+    "motionPrompt": "Slow, deliberate slow cinematic zoom in. Standing tall in the library Sunlit Abbasid library interior, towering wooden shelves of manuscripts, scholars in period dress reading at low desks, calligraphy scrolls, dust motes in light beams, no faces shown. golden daylight, reverent, dusty light beams. Cinematic quality, natural physics, no text. Absolutely no depiction of the Prophet Muhammad, his family, the Companions, the prophets, the angels, or God — no faces, figures, silhouettes or light-bodies of revered religious figures anywhere in frame; the moment is conveyed through architecture, calligraphy, artifacts, light and landscape only.",
+    "artBytes": 176910,
+    "clipBytes": 9279312,
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1920,
+          "height": 1080,
+          "avg_frame_rate": "31/1"
+        }
+      ],
+      "format": {
+        "duration": "5.129032",
+        "size": "9279312"
+      }
+    },
+    "qc": {
+      "passed": false,
+      "checkedAt": "2026-11-08T17:23:29.330Z",
+      "durationSec": 5.1,
+      "checks": [
+        {
+          "id": "playable",
+          "label": "Plays as a valid MP4 (H.264 video + AAC audio)",
+          "status": "fail",
+          "pass": false,
+          "value": "stream missing"
+        },
+        {
+          "id": "black-frames",
+          "label": "No unexplained black frames",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "frozen-frames",
+          "label": "No frozen imagery (motion everywhere)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "aspect",
+          "label": "16:9 frame (no squeeze/crop defects)",
+          "status": "pass",
+          "pass": true,
+          "value": "1920x1080"
+        },
+        {
+          "id": "loudness",
+          "label": "Broadcast loudness (-16 LUFS target)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "true-peak",
+          "label": "True peak ≤ -1 dBTP (no clipping after encode)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "loudness-range",
+          "label": "Consistent volume (loudness range)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "loudness analysis failed"
+        },
+        {
+          "id": "dead-air",
+          "label": "No dead air (voice or music always present)",
+          "status": "pass",
+          "pass": true,
+          "value": "none",
+          "detail": ""
+        },
+        {
+          "id": "static-shots",
+          "label": "Visual pacing — no long static stretches",
+          "status": "pass",
+          "pass": true,
+          "value": "visual change throughout",
+          "detail": ""
+        },
+        {
+          "id": "flicker",
+          "label": "Steady brightness (no flicker or pumping)",
+          "status": "pass",
+          "pass": true,
+          "value": "none detected",
+          "detail": ""
+        },
+        {
+          "id": "stutter",
+          "label": "Even frame timing (no stutter)",
+          "status": "pass",
+          "pass": true,
+          "value": "even timing throughout",
+          "detail": ""
+        },
+        {
+          "id": "cut-alignment",
+          "label": "Cuts land where the timeline says (continuity)",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "no timeline reconstruction",
+          "detail": "this video has no aligned timeline doc — cuts cannot be checked"
+        },
+        {
+          "id": "tail-fade",
+          "label": "Ends on a fade, not an abrupt cut",
+          "status": "unmeasured",
+          "pass": false,
+          "value": "not measured",
+          "detail": "final 0.4s unreadable or clip too short — fade state unknown"
+        }
+      ]
+    },
+    "timingsMs": {
+      "llm": 11274,
+      "art": 54095,
+      "i2v": 243602,
+      "total": 318913
+    },
+    "planFile": "islamic-history.plan.json"
+  }
+]
