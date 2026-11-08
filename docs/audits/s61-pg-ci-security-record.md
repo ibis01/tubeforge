@@ -165,7 +165,25 @@ needed a second deploy.
 The S60 close stated the law: the S59 token transited chat **twice** (its
 second transit was the S60 landing green-light itself) — **rotation is
 mandatory before S61 lands, and the replacement must not transit chat.**
-Consequently this stage is committed locally and fully gated; the push, CI
-verification, and stage close ride the owner's rotated credential
-(delivery bundle + push instructions in `download/`). CI run link and any
-fleet adjustments will be appended when it lands.
+The rotated credential arrived 2026-11-08 (one chat transit against this
+record's zero-transit standard — noted in TASKS.md; rotate again at the
+next natural milestone). The stage landed the same hour:
+
+- 3938ed0 — the implementation (this record's sections 1–5).
+- 5571b86 — the workflow-parse fix the first push caught: run
+  42496675498 completed as failure with ZERO jobs because the new
+  postgres step name held an unquoted ": " ("postinstall: generate") —
+  YAML reads colon+space as a nested mapping, so GitHub could not parse
+  ci.yml. Local gates never parse workflow files, so only the CI event
+  itself could surface it. The step name is quoted; pyyaml validates the
+  file before every workflow push from here on.
+- Run 42496779198 on 5571b86 — GREEN, 6/6 jobs (secrets · check · build
+  · coverage · postgres · e2e). The postgres job replayed the S60 story
+  authentically on postgres:17: clean chain → P3018/42P07 ("relation
+  \"Setting_pkey\" already exists") → mid-deploy self-heal → 18/18
+  migrations applied → the 27-assertion battery held (constraint names,
+  no surviving seed, the s40/s49 Video columns, the REAL sparkline SQL
+  with a seeded boolean roundtrip, full-select Video roundtrip).
+
+With that, the CI blind spot that let the S60 incident ship is a permanent
+lane; every future push proves the Postgres path.

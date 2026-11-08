@@ -2272,8 +2272,15 @@ automated coverage."
 | T-61.4 single-source the sparkline SQL | ✅ Done (2026-11-08) | Extracted the daily-usage sparkline from the route into src/lib/tubeforge/usage-sql.ts (dailyUsageSparkline) — the route and the CI probe call ONE function, so CI verifies the exact production SQL; drift is structurally impossible. The S60 portability law is documented at the single source. |
 | T-61.5 virgin-database deploy bug — found by the new lane's own local drill | ✅ Done (2026-11-08) | Reproducing the CI job locally (embedded Postgres) caught a REAL latent bug: pgRepairMissingInitTables (b8ec16f, built for PARTIAL legacy schemas) ran on a VIRGIN database first — creating VoiceProfile with no _prisma_migrations — so `migrate deploy` refused forever with P3005 ("The database schema is not empty"): a brand-new Postgres deployment could NEVER migrate. Fix: virgin (zero public tables) → deploy directly, no repairs; PLUS the in-run heal — the clean chain wedges at auth_setting MID-deploy (the survivor constraint only exists after stage2 runs), so postgresMigrate now catches the wedge fingerprint, repairs, resolves the stuck row, and redeploys ONCE. Verified end-to-end on embedded PG: one postinstall pass → wedge (P3018/42P07) → repair → all 18 migrations applied → 27/27 battery assertions → second postinstall a clean no-op. Fresh deployments now self-heal within a single build (S60's story took two). |
 | T-61.6 gates | ✅ Done (2026-11-08) | tsc 0 · eslint 0/20 (census unchanged) · unit 247/247 · billing 40/40 · queue 39/39 exit 0 (one first-run ✗ was the live preview server's claim loop winning a race on the shared dev DB — environment interference, clean on rerun) · build 57/57 (the same four documented warnings) · the embedded-PG drill above. |
+| T-61.7 landing + CI evidence | ✅ Done (2026-11-08) | The rotated PAT arrived; S61 landed as 3938ed0 (implementation) + 5571b86 (workflow-parse fix, T-61.8). GREEN run 42496779198 — 6/6 jobs (secrets · check · build · coverage · postgres · e2e); the postgres job reproduced the S60 incident IN CI: clean chain → P3018/42P07 at auth_setting → mid-deploy self-heal → 18/18 applied → 27/27 battery assertions held. |
+| T-61.8 the parse failure the lane's first push caught | ✅ Done (2026-11-08) | First push (run 42496675498 on 3938ed0) completed as failure with ZERO jobs: the new postgres step name contained an unquoted ": " ("postinstall: generate") — YAML reads colon+space as a nested mapping, so GitHub could not parse ci.yml. Local gates never parse workflow files, so only the CI event itself could surface it. Fixed by quoting the step name (5571b86); pyyaml validates all six jobs locally before every workflow push from here on. |
 
-Owner actions outstanding (unchanged by this stage, restated): set
-TUBEFORGE_ENCRYPTION_KEY on the Vercel deployment and re-store any saved
-credentials; rotate the GitHub PAT through a channel that does not put it
-in chat — S61's push waits for it.
+S61 CLOSED on CI evidence (2026-11-08): run 42496779198, 6/6 jobs green on
+5571b86. The audit's code-side P0s are all landed; the blind spot that let
+the S60 incident ship is now a permanent CI job.
+
+Owner actions outstanding (restated): set TUBEFORGE_ENCRYPTION_KEY on the
+Vercel deployment and re-store any saved credentials (the S61 watchlight
+warns until then). The GitHub PAT WAS rotated (2026-11-08) but arrived via
+chat — one transit against the record's zero-transit standard; rotate it
+again at the next natural milestone and deliver it out-of-band.
