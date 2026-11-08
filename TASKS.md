@@ -2314,3 +2314,20 @@ REAL end-to-end, blind-scored, and the motion-prompt contract pinned in
 the suite. The audit's P1 is executed: real image-to-video output is no
 longer assumed — it is measured. Carry-forward P2: subject-motion vigor
 on static doctrines (see the record's findings).
+
+## S63 — subject-motion vigor: repair what the blind scoring measured (opened 2026-11-09 UTC, owner-directed "next")
+
+S62's carry-forward P2, executed as its own stage. The receipt-level
+diagnosis sharpened the finding: the per-kind motion doctrine was never
+scored low — it was DELETED. 7/8 real director subjectActions were poses
+("stationary at top position"), and subjectAction replaced the clause
+outright; the camera phrases baked tempo words that the moveSpeed prefix
+then contradicted ("Quick, energetic slow cinematic zoom in" on social's
+real clip). Record: docs/audits/s63-motion-vigor-record.md.
+
+| Task | Status | Notes |
+|---|---|---|
+| T-63.1 the tempo law | ✅ Done (2026-11-09) | I2V_CAMERA_PHRASES is tempo-neutral (zoom-in/zoom-out/pull-out/drone lose "slow", punch-in loses "fast", diag-tl/br lose "gentle"); tempo belongs exclusively to the moveSpeed prefix. fast+zoom-in now reads "Quick, energetic cinematic zoom in" — no self-contradicting composition is possible. |
+| T-63.2 the doctrine-always-rides law | ✅ Done (2026-11-09) | subjectAction LEADS (still senior) but the per-kind I2V_SUBJECT_MOTION clause ALWAYS follows — a pose can no longer delete the motion doctrine; the subject→visual run-on gets a real sentence boundary. The per-kind clause wording is untouched (detail texture, text legibility, reverence — no teaching to the test). |
+| T-63.3 re-measure, honestly attributed | ▶ lane ready, run in flight (2026-11-09) | scripts/s63-motion-vigor.mts reuses every S62 plan + art VERBATIM (the only variable is the motion prompt) and re-runs real CogVideoX i2v + QC + frames for all eight profiles into validation/s63/; scripts/s63-blind-score.mts blind-scores under the S62 protocol (fresh seed) and unmasks a per-profile before/after. |
+| T-63.4 contract re-pinned | ✅ Done (2026-11-09) | The S62 blocks that pinned the contradictory strings verbatim are revised; a tempo-law sweep test (no camera phrase may contain a tempo word) bars the collision from returning. |

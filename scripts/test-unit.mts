@@ -3836,7 +3836,7 @@ await test("S35 i2v prompt: the FULL Director vocabulary drives generative motio
   for (const [camera, expected] of [
     ["handheld", "Organic handheld camera sway, subtle documentary shake."],
     ["crane-up", "Smooth crane rise revealing the scene from above."],
-    ["drone", "Slow aerial drone pull-back reveal."],
+    ["drone", "Aerial drone pull-back reveal."],
     ["dolly-in", "Smooth dolly move in toward the subject with natural parallax."],
   ] as const) {
     const p = i2vMotionPrompt(scene, planScene(camera) as never);
@@ -5334,12 +5334,12 @@ await test("S50 i2vMotionPrompt: the v2 vocabulary speaks, subjectAction leads, 
     }],
   } as never;
   const p = i2vMotionPrompt(scene, planScene);
-  ok(p.startsWith("Slow, deliberate gentle diagonal camera drift"),
+  ok(p.startsWith("Slow, deliberate diagonal camera drift"),
     "moveSpeed colors the camera phrase (slow → 'Slow, deliberate …')");
   ok(p.includes("Gulls banking hard over the wake"),
-    "the director's subjectAction REPLACES the generic subject clause");
-  ok(!p.includes("Natural ambient motion within the scene"),
-    "the generic per-kind clause stepped aside");
+    "the director's subjectAction LEADS the subject clauses");
+  ok(p.includes("Natural ambient motion within the scene"),
+    "S63: the per-kind motion doctrine ALWAYS rides behind the ask");
   ok(p.includes("the harbor at dawn"), "the scene visual rides the prompt");
   // Fallbacks: no plan → the scene camera + the per-kind clause.
   const bare = i2vMotionPrompt(scene, null);
@@ -6279,8 +6279,9 @@ await test("S62 motion prompt: camera phrase + speed prefix + subjectAction prio
     shots: [{ shotIndex: 0, camera: "zoom-in", moveSpeed: "fast", subjectAction: "condensation drips down the bottle" }],
   };
   const p = i2vMotionPrompt(scene as never, planScene as never);
-  ok(p.startsWith("Quick, energetic slow cinematic zoom in"), `speed prefix colors the camera phrase — got: ${p.slice(0, 60)}`);
-  ok(p.toLowerCase().includes("condensation drips down the bottle"), "shot 0's subjectAction REPLACES the generic kind clause");
+  ok(p.startsWith("Quick, energetic cinematic zoom in"), `speed prefix colors the tempo-neutral phrase — got: ${p.slice(0, 60)}`);
+  ok(p.toLowerCase().includes("condensation drips down the bottle"), "shot 0's subjectAction LEADS the subject clauses");
+  ok(p.includes("Natural ambient motion within the scene"), "the per-kind motion doctrine always rides behind the ask");
   ok(p.includes("a frosted bottle on wet slate"), "scene visual rides the prompt");
   ok(p.includes("rich brown and gold"), "scene mood rides the prompt");
   ok(p.endsWith("Cinematic quality, natural physics, no text."), "the I2V tail is always last");
@@ -6323,10 +6324,73 @@ await test("S62 motion prompt: only slow/fast modulate — normal and absent lea
   };
   const mk = (moveSpeed?: string) =>
     i2vMotionPrompt(scene as never, { sceneIndex: 1, shots: [{ shotIndex: 0, camera: "zoom-in", moveSpeed }] } as never);
-  ok(mk("slow").startsWith("Slow, deliberate slow cinematic zoom in"), "slow prefix = weight and reverence");
-  ok(mk("fast").startsWith("Quick, energetic slow cinematic zoom in"), "fast prefix = energy");
-  ok(mk("normal").startsWith("Slow cinematic zoom in"), "normal leaves the phrase bare");
-  ok(mk(undefined).startsWith("Slow cinematic zoom in"), "absent moveSpeed leaves the phrase bare");
+  ok(mk("slow").startsWith("Slow, deliberate cinematic zoom in"), "slow prefix = weight and reverence (no doubled 'slow' — the S63 tempo law)");
+  ok(mk("fast").startsWith("Quick, energetic cinematic zoom in"), "fast prefix = energy (no contradiction — the S63 tempo law)");
+  ok(mk("normal").startsWith("Cinematic zoom in"), "normal leaves the phrase bare");
+  ok(mk(undefined).startsWith("Cinematic zoom in"), "absent moveSpeed leaves the phrase bare");
+});
+
+// ─── S63 — the tempo law + the doctrine-always-rides law ───
+
+await test("S63 tempo law: no camera phrase carries a tempo word — the prefix owns tempo", async () => {
+  const { I2V_CAMERA_PHRASES } = await import("../src/lib/tubeforge/liveliness.ts");
+  const TEMPO = /\b(slow|fast|gentle|deliberate|quick|energetic|slowly|quickly)\b/i;
+  const verbs = Object.keys(I2V_CAMERA_PHRASES);
+  ok(verbs.length >= 16, `the full vocabulary is present (${verbs.length} phrases)`);
+  for (const verb of verbs) {
+    ok(!TEMPO.test(I2V_CAMERA_PHRASES[verb]), `camera phrase "${verb}" is tempo-neutral`);
+  }
+  // And no prefix × phrase composition can double or contradict tempo
+  // (the S62 receipts: "Quick, energetic slow cinematic zoom in" on social's
+  // real fast hook; "Slow, deliberate slow" on islamic-history's slow zoom).
+  const { i2vMotionPrompt } = await import("../src/lib/tubeforge/liveliness.ts");
+  const scene = {
+    index: 1, title: "s", narration: "n", visual: "v", camera: "static",
+    mood: "m", caption: "c", hostInScene: false, rehook: false, sfx: "none",
+  } as never;
+  for (const verb of verbs) {
+    for (const speed of ["slow", "fast"] as const) {
+      const p = i2vMotionPrompt(scene, { sceneIndex: 1, shots: [{ shotIndex: 0, camera: verb, moveSpeed: speed }] } as never);
+      const first = p.slice(0, p.indexOf(". "));
+      ok(
+        !/energetic[^.]*\b(slow|gentle|deliberate)\b/i.test(first) &&
+        !/deliberate[^.]*\bslow\b/i.test(first) &&
+        !/\bslow\b[^.]*\bslow\b/i.test(first) &&
+        !/\bfast\b[^.]*\bfast\b/i.test(first),
+        `no tempo collision for ${speed} + ${verb}: "${first.slice(0, 70)}"`
+      );
+    }
+  }
+});
+
+await test("S63 doctrine-always-rides: a pose subjectAction can no longer delete the motion clause", async () => {
+  const { i2vMotionPrompt, I2V_SUBJECT_MOTION } = await import("../src/lib/tubeforge/liveliness.ts");
+  const scene = {
+    index: 1, title: "s", narration: "n",
+    visual: "cutaway diagram of a car engine cylinder, piston sliding down",
+    camera: "static", mood: "clean, bright, technical", caption: "c",
+    hostInScene: false, rehook: false, sfx: "none",
+  } as never;
+  const posePlan = {
+    sceneIndex: 1,
+    shots: [{ shotIndex: 0, camera: "static", moveSpeed: "normal", subjectAction: "stationary at top position" }],
+  } as never;
+  const p = i2vMotionPrompt(scene, posePlan);
+  ok(p.includes("Stationary at top position."), "the director's pose ask LEADS verbatim");
+  ok(p.includes("Natural ambient motion within the scene"), "the per-kind motion doctrine rides behind the pose (S62: it was deleted)");
+  ok(!p.includes("Stationary at top position Cutaway"), "the subject→visual seam has a real sentence boundary");
+  ok(p.endsWith("Cinematic quality, natural physics, no text."), "the I2V tail is still last");
+  // Every kind clause is a complete sentence — the seam law depends on it.
+  for (const [kind, clause] of Object.entries(I2V_SUBJECT_MOTION)) {
+    ok(/\.$/.test(clause), `kind clause "${kind}" ends with a sentence boundary`);
+  }
+  // A trailing-period/whitespace-polluted ask is still composed cleanly.
+  const messyPlan = {
+    sceneIndex: 1,
+    shots: [{ shotIndex: 0, camera: "static", moveSpeed: "normal", subjectAction: "  sitting attentively at a microphone...  " }],
+  } as never;
+  const pm = i2vMotionPrompt(scene, messyPlan);
+  ok(pm.includes("Sitting attentively at a microphone. Natural ambient"), "ask punctuation is normalized before the clause rides");
 });
 
 console.log(`\n${"─".repeat(56)}`);

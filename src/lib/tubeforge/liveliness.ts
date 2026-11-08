@@ -151,27 +151,36 @@ export function selectChannels(input: LivelinessInput): LivelinessDecision[] {
  *  CAMERA_TO_MOVE); a generative model can actually DO them, so the phrases
  *  name the real move. S50: the table now covers the FULL v2 engine-verbatim
  *  vocabulary too — diag-tl/diag-br/punch-in used to degrade to generic
- *  drift (the same split-brain S48 killed for Ken Burns, still alive here). */
+ *  drift (the same split-brain S48 killed for Ken Burns, still alive here).
+ *
+ *  S63 — THE TEMPO LAW: every phrase here is TEMPO-NEUTRAL. Speed lives
+ *  exclusively in I2V_SPEED_PREFIX. Baking "slow cinematic zoom in" into a
+ *  phrase made the S50 prefix contradict it on real plans — social's fast
+ *  hook rendered as "Quick, energetic slow cinematic zoom in" (the model
+ *  resolves toward the weaker reading; the S62 clip under-read motion on
+ *  exactly this prompt), and islamic-history's slow zoom read "Slow,
+ *  deliberate slow". The sweep test in the suite bars tempo words from
+ *  returning. */
 export const I2V_CAMERA_PHRASES: Readonly<Record<string, string>> = {
   // The v2 engine-verbatim vocabulary (S48 CAMERA_MOVES).
   static: "locked-off camera — the motion lives in the subjects themselves",
-  "zoom-in": "slow cinematic zoom in",
-  "zoom-out": "slow cinematic zoom out revealing the scene",
+  "zoom-in": "cinematic zoom in",
+  "zoom-out": "cinematic zoom out revealing the scene",
   "pan-left": "smooth lateral camera pan to the left with natural parallax",
   "pan-right": "smooth lateral camera pan to the right with natural parallax",
   "tilt-up": "smooth camera tilt upward",
   "tilt-down": "smooth camera tilt downward",
-  "diag-tl": "gentle diagonal camera drift toward the upper left, natural parallax",
-  "diag-br": "gentle diagonal camera drift toward the lower right, natural parallax",
-  "punch-in": "fast punch-in that settles on the subject — hard emphasis, then stillness",
+  "diag-tl": "diagonal camera drift toward the upper left, natural parallax",
+  "diag-br": "diagonal camera drift toward the lower right, natural parallax",
+  "punch-in": "punch-in that settles on the subject — hard emphasis, then stillness",
   // The legacy Director verbs (pre-S48 plans; a generative model CAN honor
   // them, so unlike Ken Burns they are NOT approximated here).
   "push-in": "steady dramatic push in toward the subject",
-  "pull-out": "smooth slow pull-out revealing the wider scene",
+  "pull-out": "smooth pull-out revealing the wider scene",
   "dolly-in": "smooth dolly move in toward the subject with natural parallax",
   handheld: "organic handheld camera sway, subtle documentary shake",
   "crane-up": "smooth crane rise revealing the scene from above",
-  drone: "slow aerial drone pull-back reveal",
+  drone: "aerial drone pull-back reveal",
 };
 
 /** S50 — moveSpeed modulation: the director's per-shot speed colors the
@@ -208,10 +217,19 @@ function cap(s: string): string {
  *
  * Camera source: the approved plan's shot 0 (the scene image IS shot 0's
  * frame — the i2v seed), falling back to the scene's own legacy camera field,
- * then the generic drift. S50: shot 0's moveSpeed modulates the phrase, and
- * shot 0's subjectAction — the director's specific motion ask — REPLACES the
- * generic per-kind subject clause when present (the per-kind classifier
- * stays the fallback).
+ * then the generic drift. S50: shot 0's moveSpeed modulates the phrase
+ * (exclusively — S63's tempo law keeps the phrases themselves tempo-neutral).
+ *
+ * S63 — THE DOCTRINE-ALWAYS-RIDES LAW: shot 0's subjectAction (the
+ * director's specific ask) LEADS, but the per-kind I2V_SUBJECT_MOTION
+ * clause ALWAYS follows it. The S50 behavior — subjectAction REPLACING the
+ * clause — deleted the only motion doctrine a scene had whenever the
+ * director wrote a pose instead of an action, which is what 7 of 8 real
+ * S62 plans did ("stationary at top position" rendering as "the motion
+ * lives in the subjects themselves. Stationary at top position."). A pose
+ * grounds the subject; the kind clause carries the motion doctrine; neither
+ * deletes the other. The subject→visual seam gets a real sentence boundary
+ * (the old bare-space join ran the motion ask into the scene description).
  */
 export function i2vMotionPrompt(scene: Scene, planScene: DirectorScene | null): string {
   const kind = classifyScene(scene);
@@ -220,6 +238,8 @@ export function i2vMotionPrompt(scene: Scene, planScene: DirectorScene | null): 
   let camPhrase = (camera && I2V_CAMERA_PHRASES[camera]) || I2V_DEFAULT_CAMERA;
   const speedPrefix = shot0?.moveSpeed ? I2V_SPEED_PREFIX[shot0.moveSpeed] : undefined;
   if (speedPrefix) camPhrase = speedPrefix + camPhrase;
-  const subject = shot0?.subjectAction?.trim() || I2V_SUBJECT_MOTION[kind];
-  return `${cap(camPhrase)}. ${cap(subject)} ${scene.visual}. ${scene.mood}. ${I2V_TAIL}`;
+  const ask = shot0?.subjectAction?.trim().replace(/[.\s]+$/, "") || "";
+  const kindClause = I2V_SUBJECT_MOTION[kind];
+  const subject = ask ? `${cap(ask)}. ${kindClause}` : kindClause;
+  return `${cap(camPhrase)}. ${subject} ${scene.visual}. ${scene.mood}. ${I2V_TAIL}`;
 }
