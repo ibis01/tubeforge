@@ -2394,4 +2394,18 @@ resumption instrument). S63 stays parked; E1 is zero-gateway by design.
 | T-65.5 WHITEBOARD_ENGINE_DESIGN.md | ✅ Done (2026-11-09) | The E1 deliverable at repo root beside its E0 sibling: the doc-column decision (sixth of the house's JSON-doc family, LWW + advisory rev), the `whiteboard` 21st-kind wiring (heavy kind, default attempts, boot-recovery guard, `#wb<sceneId>` previews, the shared slides chromium deployment contract named honestly), the five-route API surface, the frame-plan editor seam (frameAt + APPLY_FRAME_FN — one motion implementation for editor and MP4), the E11 upload spec (byte cap → sniff → sanitize → budget → rasterize-before-trust → quota → provenance), the CI-lane decision (unit suite now, MONEY_PATHS via video-jobs.ts at E9), and the updated E-matrix. | The E1 deliverable proper: DB doc-column decision (Video.whiteboardProject JSON, the parsePlan precedent), the `whiteboard` JobKind wiring (heavy kind, handler registration, boot-recovery guard), the API surface (project GET/PUT, scaffold, render, scene preview, asset upload), the editor surface (frame-plan seam — one source of motion truth), upload hardening spec for E11, the CI-lane decision, and the updated E-milestone → stage mapping. |
 | T-65.6 record + delivery | ✅ Done (2026-11-09) | docs/audits/s65-whiteboard-e1-record.md (incl. the gateway probe at open — still 429 — and the benchmark regression proof: the 63.88s benchmark re-ran through the pre-flight path, ALL lenses pass, manifest diff = timestamps + renderMs only, zero rendered frames changed). | docs/audits/s65-whiteboard-e1-record.md. |
 | T-65.7 the gates | ✅ Done (2026-11-09) | tsc 0 · eslint 0 errors/20 warnings (census unchanged) · unit 302/302 · billing 40/40 · queue restart-recovery PASS · build exit 0. | Full battery on the exact tree: tsc · eslint · unit · billing · queue · build. |
-| T-65.8 landing + CI evidence | ⏳ | Push, CI polled by full SHA, close on 6/6 green. |
+| T-65.8 landing + CI evidence | ✅ Done (2026-11-09) | `0f2eaaf` pushed (99a3c3a..0f2eaaf); run 42537062681 GREEN 6/6 on the head SHA: PostgreSQL integration · Money-path coverage · Production build · Typecheck/Lint/Unit · Secret scan · E2E. |
+
+S65 CLOSED on CI evidence (2026-11-09): run 42537062681, 6/6 jobs green
+on 0f2eaaf. The E1 deliverable is landed — WHITEBOARD_ENGINE_DESIGN.md
+submitted for owner review — and the E0 audit's §6 engine-side risks are
+closed in code (302/302 contracts, the 63.88s benchmark regression-proof
+through the new pre-flight). Product implementation (E9 Phase A: the
+scaffold route, the editor view loop, the `whiteboard` kind wired end to
+end) begins on owner review of the design, per the plan's sequencing law.
+
+Standing reminders, unchanged: the Vercel encryption key + credential
+re-store (S61 watchlight), the PAT re-rotation out-of-band at the next
+natural milestone, and S63's re-measure — probe first with
+scripts/gateway-quota-probe.mts; at stage-open it was STILL 429
+(account-wide).
