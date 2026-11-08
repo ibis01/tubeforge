@@ -2046,3 +2046,46 @@ the standalone production server (fresh UUID on 200 AND 401 responses).
 The moment a rotated PAT lands: push `e2e7c1e..` (or apply the bundle),
 watch the CI run, record it, and close S57 with the reliability record's
 pending line struck.
+
+## S58 — correctness hardening: the non-null-assertion class (opened 2026-11-08 UTC, owner-directed "Next")
+
+Sprint goal: warning burn-down tranche 2 — the S56 close's carried-forward
+programme, in its stated order. The target: the **159 `!` non-null
+assertions** the S57 census recorded. The class is the riskiest of the
+remaining programme: a `!` is "I know better than the type system", and
+every wrong one is a runtime TypeError — on the money path (billing),
+the render path, or a user's screen.
+
+The reconnaissance that set the shape: **43 sites in src/ (22 files)** —
+12 `providerMeta(...)!` registry lookups across the provider adapters,
+7 Map.get/index sites riding proven invariants, the billing routes'
+gate lookups, render's pip closure, script-analysis's LLM-shape reads,
+and 4 React components where narrowing was bypassed; **116 sites in
+scripts/ (15 files)** — test fixtures and probe bindings (test-unit 49,
+test-billing 19, probes 47, evidence 1). Unlike S57's no-console, there
+is NO by-design carve-out for tests: T-56.6's trivial tranche migrated
+scripts/ sites too and froze repo-wide, so this tranche does the same —
+every `!` goes, by guard, restructure, named-invariant helper, or
+fail-fast lookup — and the rule is promoted to a bare error.
+
+Pre-verified in the recovered sandbox before the stage opened (at
+`75503b2`, clean tree): tsc 0 · eslint **0 errors/221 warnings** with
+**non-null-assertion exactly 159** (the census number, no drift) ·
+247/247 unit · 40/40 billing · queue PASS. Remote state verified
+PAT-less (`git ls-remote`): `main` still at `9da54b4` — S57's two
+commits remain unlanded; S58 stacks on top locally and rides the same
+delivery bundle.
+
+Landing constraint (unchanged from S57, on record up front): the reclaim
+ate `.env` with the GitHub PAT (due rotation anyway — standing rule
+since S33). **S58 executes and verifies locally; the push, CI runs, and
+stage close ride the owner's rotated PAT**, landing together with S57's
+commits in one bundle (`e2e7c1e..HEAD`).
+
+| Task | Status | Notes |
+|---|---|---|
+| T-58.1 the src/ tranche (43 sites, 22 files) | ⏳ | provider registry: `providerMetaRequired` (fail-fast lookup) replaces 12 adapter `!`s; `must()` named-invariant helper for the 3 provable map/find sites; restructures where total code is cleaner (render's pip closure + inputFor loop, assemble's permutation map, export's filter→for, voice's double-regex, zip's shift loop); billing routes get real guards (portal's unchecked `stripeGate().secret!` becomes a 503 — a genuine fix, checkout captures its price); React sites narrow honestly (aliased conditions, early guards, optional chaining behind existing guards); script-analysis merges `?? []` instead of asserting LLM shape. |
+| T-58.2 the scripts/ tranche (116 sites, 15 files) | ⏳ | Per-file `req()` helpers in the house harness style — a null fixture becomes a NAMED failure ("missing: loudness measure") instead of a TypeError at the deref; s21's triple-`!` URL chain destructures with `??` fallbacks; m2-evidence restructures to get-once. The S57 lesson applied: every recon line byte-verified by Read/sed before editing (one recon line showed the known tooling rendering artifact). |
+| T-58.3 the freeze + census | ⏳ | `no-non-null-assertion` promoted warn → **error** repo-wide (no carve-outs — tests get `req()`, not exemptions); census re-recorded. |
+| T-58.4 the gates | ⏳ | tsc · eslint · unit · billing · queue · `next build` — the full S57 gate set, plus the suites that exercise the migrated files. |
+| T-58.5 reliability record | ⏳ | `docs/audits/s58-reliability-record.md` — the evidence chain, the landing constraint restated, the honest list of en-route catches. |
