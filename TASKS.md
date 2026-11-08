@@ -1993,4 +1993,43 @@ and cleans up — the CI note in ci.yml was the only blocker).
 Verification (the stage's evidence chain): the **build job** proven green in-sandbox before wiring (exit 0 with and without `.env`, 57/57 pages) and green on CI from its first run (42447728691); the **billing suite** 40/40 in the exact CI order on one DB; the **coverage baseline** measured on the real suites (56.30% after the CI-taught c8-flag correction, floor 50 enforced — first green CI run 42462954735); the **nightly battery** self-contained (production-server two-phase design, janitor, throttle-clearing, readiness gates) with its full journey on record — 6/19 (split-brain DB) → 17/19 (gateway TTS) → **17/17 GREEN on the closing run 42465915313**, the DB fix reproduced in-sandbox under CI parity before landing; the **warning tranche** zeroed and frozen as errors; **Dependabot** both halves live with 8 PRs already riding the gate. Evidence: `docs/audits/s56-reliability-record.md` + `docs/baselines/s56-coverage-baseline-2026-11-08.txt` + `docs/baselines/s56-lint-census-2026-11-08.txt`.
 
 **S56 CLOSED 2026-11-08 (UTC)** — the sprint goal met: the S33+ backlog's Priority 1 closed in-repo (P1-1 billing-in-CI, P1-2 nightly battery, P1-3 build job, P1-4 first warning tranche, P1-5 coverage baseline, P1-7 Dependabot bumps), with the CI failures along the way honestly recorded and each fix evidence-directed (the c8 flag, the split-brain database, the gateway-TTS curation). Gates at close: tsc 0 · eslint 0 errors/602 warnings · 245/245 unit · CI 5 jobs green on the closing commits · nightly 17/17 + e2e green. Carried forward, explicitly: the structured logger tranche (no-console 381, P0-7's in-repo half); the remaining warning tranches; the render-under-coverage suite if the floor proves coarse; Dependabot PR triage (8 open, human merge decisions); the standing PAT rotation.
-| T-56.7 reliability record + stage close | ✅ Done (2026-11-08) | `docs/audits/s56-reliability-record.md` — CI evidence via full-SHA REST for every S56 commit (a4efe16→42447728691 · 4cb46fe→42462954735 · the c8-flag failures on a0aea54/9490a84 honestly recorded with their fix story); **the nightly battery proven GREEN on CI**: closing run 42465915313 — battery **17/17** + full e2e, after the split-brain-database fix (job-level absolute `DATABASE_URL` + per-run secrets) that the first run's 6/19 forced, reproduced in-sandbox under CI parity before the fix; **Dependabot both halves live** — 0 open security alerts (the minimatch GHSA-g3hv-75wg-m249 re-opening closed at the source by an npm override, coverage re-verified on it) and the weekly bumps already filed 8 PRs riding the gate (the typescript-7 major informatively red — merge decisions stay human); **the spend-gate law untouched and observable** (no `=0`, no forced verification, zero gateway spend this stage). Ledger: 245/245 unit · tsc 0 · eslint 0 errors/602 warnings · billing 40/40 in CI · coverage 56.30% floored at 50 in CI · build job green · 17-probe nightly + e2e green. |
+
+## S57 — observability: the structured logger's in-repo half (opened 2026-11-08 UTC, owner-directed "Next")
+
+Sprint goal: close P0-7's in-repo half — structured logs WITH REQUEST IDS on
+the running app. The reconnaissance that set the scope: the Stage-3 logger
+(`src/lib/tubeforge/log.ts`) already exists — zero-dep pino-format JSON lines,
+secret-redacting, child-capable, with a `consoleBridge` nobody ever migrated
+onto — and the S56 census's 381 no-console warnings are **~378 scripts/e2e
+CLI sites** (operator-facing output by design) plus only 3 in src/. The REAL
+production debt was invisible to the census: the rule's `allow:` list
+permitted `console.warn/error/info`, and **83 such sites across 29 src/
+files** bypass the structured logger entirely. So the tranche is: migrate
+src/ wholesale onto the logger, add the request-id binding P0-7 names, and
+freeze the class. Sentry/GlitchTip account wiring stays OUT (owner action,
+undecided vendor) — the record's own split.
+
+Pre-verified in the recovered sandbox before the stage opened (the reclaim
+ate `work/` again — third time): repo re-cloned at `9da54b4`; tsc 0 · eslint
+**0 errors/603 warnings** (the census's 602 + 1: `a90017b`'s battery FAIL
+diagnostics added a script-side console.site after the census was recorded)
+· 245/245 unit · 40/40 billing; CI on the closing commit reads green via the
+live workflow badge ("CI — passing"; the REST API is IP-rate-limited this
+session, verified by badge instead — method disclosed). One defect found in
+the close itself and fixed in this commit: `9da54b4` left a stray duplicate
+T-56.7 row at the file's end, detached from its table — deleted.
+
+Landing constraint, on record up front: the reclaim also ate the working
+`.env`, so the GitHub PAT is gone from this side — and it was due rotation
+anyway (standing rule since S33; it transited chat twice). **S57 executes
+and verifies locally; the push, CI verification, and the stage close ride
+the owner's rotated PAT.** A git bundle ships alongside the report so
+nothing is lost to a fourth reclaim.
+
+| Task | Status | Notes |
+|---|---|---|
+| T-57.1 request-id propagation | ⏳ | middleware stamps `x-request-id` (crypto.randomUUID — WebCrypto-safe, Node-pinned runtime) on every /api/* request and echoes it on every response incl. errors; `requestLog(request)` helper binds it onto the logger; the six logging routes adopt it |
+| T-57.2 the src/ console migration | ⏳ | every console.* in src/ (~86 sites / ~31 files: budget 10, story/jobs/billing 7 each, render 5, stock 4, …, middleware 2, instrumentation 2, 3 log/debug stragglers) onto `log.child({ mod })`; the `[module]` string prefixes become the binding; log.ts gains a runtime-portable sink (edge/browser fallback) so middleware can import it without breaking its no-node:* law |
+| T-57.3 the freeze | ⏳ | `no-console` promoted to **error, `allow: []`** for src/** (the two owned exceptions inline: log.ts's fallback sink, pwa.tsx's browser-console client line); **off** for scripts/** and e2e/** (CLI harness output — disclosed in the config); census re-recorded |
+| T-57.4 unit tests | ⏳ | request-id helper binding; the portable sink's fallback; the migrated modules' law (no console import left in src/) |
+| T-57.5 reliability record + honest status | ⏳ | local gates re-run; CI verification + close PENDING the rotated PAT (bundle shipped); the record says exactly what is and is not verified |
