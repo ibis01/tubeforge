@@ -90,6 +90,10 @@ import {
   type PreviewSettings,
 } from "../src/lib/tubeforge/preview-lanes";
 import type { Scene } from "../src/lib/tubeforge/types";
+import type {
+  WhiteboardProject,
+  WhiteboardScene,
+} from "../src/lib/tubeforge/whiteboard/storyboard";
 import {
   applyDeleteToDoc,
   applyDuplicateToDoc,
@@ -6391,6 +6395,570 @@ await test("S63 doctrine-always-rides: a pose subjectAction can no longer delete
   } as never;
   const pm = i2vMotionPrompt(scene, messyPlan);
   ok(pm.includes("Sitting attentively at a microphone. Natural ambient"), "ask punctuation is normalized before the clause rides");
+});
+
+// ─── S64 — the Whiteboard Engine: pure contracts (the P0 pins) ───
+//
+// The CI-lane law (s64 record §1): the unit suite pins PURE contracts —
+// path math, the sanitizer's attack surface, storyboard validation, timing
+// determinism, hand/camera math, and the library's every-drawable-extractable
+// invariant. The real-render evidence (chromium + ffmpeg) lands via the
+// sandbox benchmark — exactly how S62 split pure contracts from gateway
+// evidence.
+
+suiteStart("S64 whiteboard — the SVG security gate (sanitizeSvg)");
+
+await test("S64 sanitizer strips <script> subtrees and keeps legitimate markup", async () => {
+  const { sanitizeSvg } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const out = sanitizeSvg(
+    '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><path id="p" d="M 0 0 L 5 5"/></svg>'
+  );
+  ok(!out.includes("<script"), `script opener survived: ${out}`);
+  ok(!out.includes("alert"), `script body survived: ${out}`);
+  ok(out.includes('<path id="p"'), "legitimate path survives");
+});
+
+await test("S64 sanitizer strips event-handler attributes (quoted or bare)", async () => {
+  const { sanitizeSvg } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const out = sanitizeSvg('<svg onload="a()"><path d="M 0 0" onclick=\'b()\' onerror=c /></svg>');
+  ok(!/\son[a-z]+\s*=/i.test(out), `an on* handler survived: ${out}`);
+  ok(out.includes("<path"), "the path element itself survives");
+});
+
+await test("S64 sanitizer strips foreignObject / image / use / animate (external-content elements)", async () => {
+  const { sanitizeSvg } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const out = sanitizeSvg(
+    '<svg><foreignObject><div>x</div></foreignObject><image href="https://e/x.png"/><use xlink:href="#x"/><animate attributeName="o"/><path id="p" d="M 0 0"/></svg>'
+  );
+  ok(!/<(foreignObject|image|use|animate)\b/i.test(out), `a blocked element survived: ${out}`);
+  ok(out.includes('<path id="p"'), "legitimate path survives");
+});
+
+await test("S64 sanitizer neutralizes javascript:/data: hrefs", async () => {
+  const { sanitizeSvg } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const out = sanitizeSvg(
+    '<svg><a href="javascript:alert(1)"><path d="M 0 0"/></a><path d="M 1 1" xlink:href="data:text/html,x"/></svg>'
+  );
+  ok(!/javascript:|data:/i.test(out), `a script-y URL survived: ${out}`);
+});
+
+await test("S64 sanitizer removes XML prolog / DOCTYPE / ENTITY declarations", async () => {
+  const { sanitizeSvg } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const out = sanitizeSvg('<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY xx "y">]><svg><!ENTITY a "b"><path d="M 0 0"/></svg>');
+  ok(!out.includes("<?xml"), "prolog survived");
+  ok(!out.includes("<!DOCTYPE"), "doctype survived");
+  ok(!out.includes("<!ENTITY"), "entity survived");
+});
+
+await test("S64 sanitizer neutralizes external url() refs and script-y style payloads", async () => {
+  const { sanitizeSvg } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const out = sanitizeSvg(
+    '<svg><path d="M 0 0" style="fill:url(https://evil/x.png)"/><rect d="" style="background:url(javascript:alert(1))"/></svg>'
+  );
+  ok(!/url\(\s*"?'?https?:/i.test(out), `an external url() survived: ${out}`);
+  ok(out.includes("url(#none)"), "external url() is rewritten to the empty ref");
+  ok(!/javascript:/i.test(out), `a javascript: style payload survived: ${out}`);
+});
+
+await test("S64 sanitizer passes clean house markup through byte-identical", async () => {
+  const { sanitizeSvg } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const clean = '<svg xmlns="http://www.w3.org/2000/svg"><path id="hm-outline" d="M 100 62 C 74 26, 24 44, 24 94 Z" fill="#e63946" fill-opacity="0" stroke="#1d3557" stroke-width="5" stroke-linecap="round"/><text id="t" x="34" y="120" font-family="DejaVu Sans, sans-serif" font-size="22" fill="#457b9d" font-weight="bold">RA</text></svg>';
+  eq(sanitizeSvg(clean), clean, "legit markup must round-trip untouched");
+});
+
+suiteStart("S64 whiteboard — the path grammar + arc-length geometry");
+
+await test("S64 parsePathData tokenizes commands and numbers (scientific notation included)", async () => {
+  const { parsePathData } = await import("../src/lib/tubeforge/whiteboard/svg");
+  eq(parsePathData("M 0 0 L 10 10"), [{ cmd: "M", args: [0, 0] }, { cmd: "L", args: [10, 10] }]);
+  eq(parsePathData("M 1e2 .5 L -2.5E-1 4"), [{ cmd: "M", args: [100, 0.5] }, { cmd: "L", args: [-0.25, 4] }]);
+  eq(parsePathData("Z"), [{ cmd: "Z", args: [] }]);
+});
+
+await test("S64 normalizeCommands: implicit repeats — extra pairs after M degrade to L (same case)", async () => {
+  const { normalizeCommands, parsePathData } = await import("../src/lib/tubeforge/whiteboard/svg");
+  eq(normalizeCommands(parsePathData("M 0 0 10 10 20 20")), [
+    { cmd: "M", args: [0, 0] },
+    { cmd: "L", args: [10, 10] },
+    { cmd: "L", args: [20, 20] },
+  ]);
+  eq(normalizeCommands(parsePathData("m 5 5 10 0 0 10")), [
+    { cmd: "m", args: [5, 5] },
+    { cmd: "l", args: [10, 0] },
+    { cmd: "l", args: [0, 10] },
+  ]);
+});
+
+await test("S64 flattenPath: absolute and relative lines accumulate exact lengths", async () => {
+  const { pathSegments, totalLength } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const segs = pathSegments("M 0 0 L 3 4 L 10 4");
+  eq(segs.length, 1, "one subpath");
+  eq(segs[0].points, [{ x: 0, y: 0 }, { x: 3, y: 4 }, { x: 10, y: 4 }]);
+  eq(segs[0].lengths, [0, 5, 12]);
+  ok(!segs[0].closed, "unclosed subpath");
+  approx(totalLength(segs), 12, 1e-9);
+  const rel = pathSegments("M 0 0 l 3 4 l 7 0");
+  eq(JSON.stringify(rel), JSON.stringify(segs), "relative == absolute");
+});
+
+await test("S64 flattenPath: H/V move one axis (absolute + relative)", async () => {
+  const { pathSegments, totalLength } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const hv = pathSegments("M 0 0 H 10 V 5 h -5 v -2");
+  eq(hv[0].points, [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 5 }, { x: 5, y: 5 }, { x: 5, y: 3 }]);
+  approx(totalLength(hv), 22, 1e-9);
+});
+
+await test("S64 flattenPath: cubic C hits its endpoint and bows past the chord", async () => {
+  const { pathSegments, totalLength } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const c = pathSegments("M 0 0 C 0 100 100 100 100 0");
+  const pts = c[0].points;
+  eq(pts[pts.length - 1], { x: 100, y: 0 }, "exact endpoint");
+  ok(totalLength(c) > 120, `cubic should bow past its chord (len=${totalLength(c)})`);
+});
+
+await test("S64 flattenPath: S reflects the previous cubic control — spec-exact equivalence", async () => {
+  const { pathSegments } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const withS = pathSegments("M 0 0 C 0 100 100 100 100 0 S 200 -100 200 0");
+  const explicit = pathSegments("M 0 0 C 0 100 100 100 100 0 C 100 -100 200 -100 200 0");
+  eq(withS, explicit, "S must equal the explicit reflected-control C");
+});
+
+await test("S64 flattenPath: T reflects the previous quadratic control — spec-exact equivalence", async () => {
+  const { pathSegments } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const withT = pathSegments("M 0 0 Q 50 100 100 0 T 200 0");
+  const explicit = pathSegments("M 0 0 Q 50 100 100 0 Q 150 -100 200 0");
+  eq(withT, explicit, "T must equal the explicit reflected-control Q");
+});
+
+await test("S64 flattenPath: A arcs — semicircle and quarter-circle ≈ π·r (spec F.6 endpoint→center)", async () => {
+  const { pathSegments, totalLength, sampleAtLength } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const semi = pathSegments("M 0 0 A 50 50 0 0 1 100 0");
+  approx(totalLength(semi), Math.PI * 50, 2.5, "semicircle ≈ π·r");
+  const mid = sampleAtLength(semi, (Math.PI * 50) / 2);
+  approx(mid.point.x, 50, 1.5, "semicircle midpoint x");
+  approx(mid.point.y, -50, 1.5, "semicircle midpoint y (sweep=1 bows up)");
+  const quarter = pathSegments("M 0 0 A 50 50 0 0 1 50 50");
+  approx(totalLength(quarter), (Math.PI * 50) / 2, 1.5, "quarter ≈ π·r/2");
+  const qm = sampleAtLength(quarter, (Math.PI * 50) / 4);
+  approx(qm.point.x, 35.36, 1.5, "quarter midpoint x");
+  approx(qm.point.y, 14.64, 1.5, "quarter midpoint y");
+});
+
+await test("S64 flattenPath: Z closes the subpath; M opens a new one", async () => {
+  const { pathSegments, totalLength } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const z = pathSegments("M 0 0 L 10 0 L 10 10 Z");
+  ok(z[0].closed, "Z marks closed");
+  eq(z[0].points[z[0].points.length - 1], { x: 0, y: 0 }, "Z returns to the subpath start");
+  approx(totalLength(z), 10 + 10 + Math.sqrt(200), 1e-9, "two legs + the closing segment");
+  eq(pathSegments("M 0 0 L 5 5 M 10 10 L 20 20").length, 2, "M starts a new subpath");
+});
+
+await test("S64 sampleAtLength: position, tangent, and clamping", async () => {
+  const { pathSegments, sampleAtLength } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const p = pathSegments("M 0 0 L 10 0 L 10 10");
+  const s5 = sampleAtLength(p, 5);
+  eq(s5.point, { x: 5, y: 0 });
+  approx(s5.angle, 0, 1e-9, "tangent along +x");
+  const s15 = sampleAtLength(p, 15);
+  eq(s15.point, { x: 10, y: 5 });
+  approx(s15.angle, Math.PI / 2, 1e-9, "tangent along +y");
+  eq(sampleAtLength(p, 999).point, { x: 10, y: 10 }, "clamped past the end");
+  eq(sampleAtLength(p, -5).point, { x: 0, y: 0 }, "clamped before the start");
+});
+
+await test("S64 transformPoint: translate∘rotate∘scale matches SVG transform semantics", async () => {
+  const { transformPoint } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const t = transformPoint({ x: 1, y: 0 }, { x: 100, y: 0, scale: 2, rotateDeg: 90 });
+  approx(t.x, 100, 1e-9);
+  approx(t.y, 2, 1e-9);
+});
+
+suiteStart("S64 whiteboard — the storyboard schema (validateWhiteboardProject)");
+
+const WB_LIB = {
+  assetIds: new Set(["a1", "a2"]),
+  pathIdsByAsset: new Map([
+    ["a1", new Set(["p1", "p2"])],
+    ["a2", new Set<string>()],
+  ]),
+  textIdsByAsset: new Map([["a2", new Set(["t1"])]]),
+};
+
+const WB_SCENE: WhiteboardScene = {
+  id: "s1",
+  narration: "hello world",
+  background: "#ffffff",
+  placements: [{ assetId: "a1", placement: { x: 0, y: 0, scale: 1, rotateDeg: 0 } }],
+  animations: [{ type: "draw_path", assetId: "a1", pathId: "p1", startMs: 0, durationMs: 500 }],
+  camera: [],
+};
+
+const WB_PLAIN: WhiteboardScene = { ...WB_SCENE, animations: [] };
+
+function wbProject(scenes: unknown, extra: Record<string, unknown> = {}): unknown {
+  return { title: "T", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 }, scenes, ...extra };
+}
+
+await test("S64 storyboard: a valid project parses; empty camera gets the default keyframe", async () => {
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const r = validateWhiteboardProject(wbProject([{ ...WB_SCENE, camera: [] }]), WB_LIB);
+  if (!r.project) { ok(false, `expected valid, got: ${r.errors.join("; ")}`); return; }
+  eq(r.errors, []);
+  eq(r.project.scenes[0].camera, [{ cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 }]);
+  eq(r.project.scenes[0].id, "s1");
+});
+
+await test("S64 storyboard: unknown asset / double placement / invalid placement are rejected", async () => {
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const unknown = validateWhiteboardProject(
+    wbProject([{ ...WB_SCENE, placements: [{ assetId: "ghost", placement: { x: 0, y: 0, scale: 1, rotateDeg: 0 } }] }]),
+    WB_LIB
+  );
+  ok(unknown.project === null, "unknown asset must null the project");
+  ok(unknown.errors.some((e) => e.includes('unknown asset "ghost"')), `errors: ${unknown.errors.join("; ")}`);
+
+  const twice = validateWhiteboardProject(
+    wbProject([{
+      ...WB_SCENE,
+      placements: [
+        { assetId: "a1", placement: { x: 0, y: 0, scale: 1, rotateDeg: 0 } },
+        { assetId: "a1", placement: { x: 5, y: 5, scale: 1, rotateDeg: 0 } },
+      ],
+    }]),
+    WB_LIB
+  );
+  ok(twice.errors.some((e) => e.includes("placed twice")), `errors: ${twice.errors.join("; ")}`);
+
+  const bad = validateWhiteboardProject(
+    wbProject([{ ...WB_SCENE, placements: [{ assetId: "a1", placement: { x: 0, y: 0, scale: 0, rotateDeg: 0 } }] }]),
+    WB_LIB
+  );
+  ok(bad.errors.some((e) => e.includes("invalid placement")), `errors: ${bad.errors.join("; ")}`);
+});
+
+await test("S64 storyboard: draw_path / write_text / reveal_color reference integrity", async () => {
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const badPath = validateWhiteboardProject(
+    wbProject([{ ...WB_SCENE, animations: [{ type: "draw_path", assetId: "a1", pathId: "p9", startMs: 0, durationMs: 100 }] }]),
+    WB_LIB
+  );
+  ok(badPath.errors.some((e) => e.includes('unknown path "p9"')), `errors: ${badPath.errors.join("; ")}`);
+
+  const badText = validateWhiteboardProject(
+    wbProject([{ ...WB_SCENE, animations: [{ type: "write_text", assetId: "a2", textId: "zz", startMs: 0, durationMs: 100 }] }]),
+    WB_LIB
+  );
+  ok(badText.errors.some((e) => e.includes('unknown text "zz"')), `errors: ${badText.errors.join("; ")}`);
+
+  const badColor = validateWhiteboardProject(
+    wbProject([{ ...WB_SCENE, animations: [{ type: "reveal_color", assetId: "a1", pathId: "p9", startMs: 0, durationMs: 100 }] }]),
+    WB_LIB
+  );
+  ok(badColor.errors.some((e) => e.includes('unknown path "p9"')), `errors: ${badColor.errors.join("; ")}`);
+
+  const good = validateWhiteboardProject(
+    wbProject([{
+      ...WB_SCENE,
+      animations: [
+        { type: "write_text", assetId: "a2", textId: "t1", startMs: 0, durationMs: 100 },
+        { type: "reveal_color", assetId: "a1", startMs: 50, durationMs: 100 },
+      ],
+    }]),
+    WB_LIB
+  );
+  ok(good.project !== null, `valid mixed events rejected: ${good.errors.join("; ")}`);
+});
+
+await test("S64 storyboard: unknown animation type / bad times / bad move target rejected", async () => {
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const badType = validateWhiteboardProject(
+    wbProject([{ ...WB_SCENE, animations: [{ type: "disintegrate", assetId: "a1", startMs: 0, durationMs: 100 }] }]),
+    WB_LIB
+  );
+  ok(badType.errors.some((e) => e.includes('unknown animation type "disintegrate"')), `errors: ${badType.errors.join("; ")}`);
+
+  const badTimes = validateWhiteboardProject(
+    wbProject([{ ...WB_SCENE, animations: [{ type: "draw_path", assetId: "a1", pathId: "p1", startMs: -1, durationMs: 100 }] }]),
+    WB_LIB
+  );
+  ok(badTimes.errors.some((e) => e.includes("startMs")), `errors: ${badTimes.errors.join("; ")}`);
+
+  const badMove = validateWhiteboardProject(
+    wbProject([{ ...WB_SCENE, animations: [{ type: "move_object", assetId: "a1", startMs: 0, durationMs: 100, to: { x: "a", y: 0, scale: 1, rotateDeg: 0 } }] }]),
+    WB_LIB
+  );
+  ok(badMove.errors.some((e) => e.includes("valid target placement")), `errors: ${badMove.errors.join("; ")}`);
+
+  const goodMove = validateWhiteboardProject(
+    wbProject([{ ...WB_SCENE, animations: [{ type: "move_object", assetId: "a1", startMs: 0, durationMs: 100, to: { x: 5, y: 5, scale: 1, rotateDeg: 0 } }] }]),
+    WB_LIB
+  );
+  ok(goodMove.project !== null, `valid move rejected: ${goodMove.errors.join("; ")}`);
+});
+
+await test("S64 storyboard: malformed camera keyframes are dropped with an error; valid ones sort", async () => {
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const r = validateWhiteboardProject(
+    wbProject([{
+      ...WB_SCENE,
+      camera: [
+        { cx: "x", cy: 540, scale: 1, startMs: 0, durationMs: 0 },
+        { cx: 1000, cy: 540, scale: 1.2, startMs: 2000, durationMs: 500 },
+        { cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 },
+      ],
+    }]),
+    WB_LIB
+  );
+  ok(r.project === null && r.errors.some((e) => e.includes("malformed camera keyframe")), `errors: ${r.errors.join("; ")}`);
+
+  const sorted = validateWhiteboardProject(
+    wbProject([{
+      ...WB_SCENE,
+      camera: [
+        { cx: 1000, cy: 540, scale: 1.2, startMs: 2000, durationMs: 500 },
+        { cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 },
+      ],
+    }]),
+    WB_LIB
+  );
+  if (!sorted.project) { ok(false, `unexpected: ${sorted.errors.join("; ")}`); return; }
+  eq(sorted.project.scenes[0].camera.map((c) => c.startMs), [0, 2000], "keyframes sorted by startMs");
+});
+
+await test("S64 storyboard: defaults and clamps (dimensions, fps, hand)", async () => {
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const r = validateWhiteboardProject(
+    wbProject([WB_SCENE], { width: 99, height: 9999, fps: 999, hand: { style: "sparkly", scale: 99 } }),
+    WB_LIB
+  );
+  if (!r.project) { ok(false, `unexpected: ${r.errors.join("; ")}`); return; }
+  eq(r.project.width, 1920, "width clamps to default");
+  eq(r.project.height, 1080);
+  eq(r.project.fps, 24);
+  eq(r.project.hand.style, "marker");
+  eq(r.project.hand.scale, 4, "hand scale clamps to 4");
+});
+
+await test("S64 storyboard: missing narration nulls the project", async () => {
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const r = validateWhiteboardProject(wbProject([{ ...WB_SCENE, narration: "  " }]), WB_LIB);
+  ok(r.project === null && r.errors.some((e) => e.includes("narration missing")), `errors: ${r.errors.join("; ")}`);
+});
+
+suiteStart("S64 whiteboard — timing: narration clock, draw scheduling, the frame plan");
+
+await test("S64 timing: estimateNarrationMs — the 2.6 wps house pace, clamped [4s, 30s]", async () => {
+  const { estimateNarrationMs, WORDS_PER_SEC } = await import("../src/lib/tubeforge/whiteboard/timing");
+  eq(WORDS_PER_SEC, 2.6);
+  const words = Array.from({ length: 26 }, (_, i) => `w${i}`).join(" ");
+  eq(estimateNarrationMs(words), 10000);
+  eq(estimateNarrationMs(""), 4000, "empty narration clamps to the 4s floor");
+  eq(estimateNarrationMs(Array.from({ length: 200 }, (_, i) => `w${i}`).join(" ")), 30000, "long narration clamps to the 30s ceiling");
+});
+
+await test("S64 timing: sceneDurationMs precedence — explicit > measured VO > estimate", async () => {
+  const { sceneDurationMs } = await import("../src/lib/tubeforge/whiteboard/timing");
+  eq(sceneDurationMs({ ...WB_SCENE, durationMs: 8000 }, null), 8000, "explicit wins");
+  eq(sceneDurationMs({ ...WB_SCENE }, 5000), 5350, "VO + 350ms tail");
+  eq(sceneDurationMs({ ...WB_SCENE }, null), 4000, "2-word estimate clamps to the 4s floor");
+});
+
+await test("S64 timing: scheduleScene fills the narration window — weighted, fill-scaled, deterministic", async () => {
+  const { scheduleScene, buildGeometry, LEAD_IN_MS, HOLD_END_MS } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const geo = buildGeometry([{ id: "a1", paths: [{ id: "p1", d: "M 0 0 L 100 0" }, { id: "p2", d: "M 0 0 L 10 0" }] }]);
+  const ev = scheduleScene(WB_PLAIN, 10000, geo);
+  eq(ev.length, 2, "both paths scheduled");
+  ok(ev.every((e) => e.type === "draw_path"), "draw events");
+  eq(ev[0].startMs, LEAD_IN_MS, "first stroke starts at the lead-in");
+  // Two equal-weight strokes weight-share the whole window exactly (no cap
+  // is hit): each gets half of (duration − lead-in − hold − gap).
+  eq(ev[0].durationMs, 4285, "weight-shared fill duration");
+  eq(ev[1].startMs, LEAD_IN_MS + 4285 + 130, "pen-lift gap between strokes");
+  const last = ev[ev.length - 1];
+  eq(last.startMs + last.durationMs, 10000 - HOLD_END_MS, "the fill law: draws end exactly at the hold boundary");
+  eq(JSON.stringify(scheduleScene(WB_PLAIN, 10000, geo)), JSON.stringify(ev), "deterministic");
+
+  // Many short strokes in a tiny window: the min-clamp overflows the raw
+  // budget, so the fill factor shrinks toward its floor — and the span
+  // STILL fits the window (the pre-fill law overflowed it).
+  const many = scheduleScene(
+    WB_PLAIN,
+    4000,
+    buildGeometry([{ id: "a1", paths: Array.from({ length: 10 }, (_, i) => ({ id: `p${i}`, d: "M 0 0 L 10 0" })) }])
+  );
+  eq(many.length, 10);
+  ok(many.every((e) => e.type === "draw_path" && e.durationMs >= 120), "scaled durations respect the 120ms floor");
+  const mLast = many[many.length - 1];
+  ok(mLast.startMs + mLast.durationMs <= 4000, "clamped scene still fits its window");
+});
+
+await test("S64 timing: the editor's explicit timing is senior — no double-schedule", async () => {
+  const { scheduleScene, buildGeometry } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const geo = buildGeometry([{ id: "a1", paths: [{ id: "p1", d: "M 0 0 L 100 0" }, { id: "p2", d: "M 0 0 L 10 0" }] }]);
+  const withExplicit = scheduleScene(WB_SCENE, 10000, geo);
+  const p1Events = withExplicit.filter((e) => e.type === "draw_path" && e.pathId === "p1");
+  eq(p1Events.length, 1, "the explicit event is not re-scheduled");
+  eq(p1Events[0].startMs, 0, "the editor's start time is preserved verbatim");
+});
+
+await test("S64 timing: frameAt — progress ramp, camera drift, pen follows/rests/enters on the true path", async () => {
+  const { frameAt, buildGeometry, cameraDrift } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const geo = buildGeometry([{ id: "a1", paths: [{ id: "p1", d: "M 0 0 L 100 0" }] }]);
+  const project: WhiteboardProject = { title: "t", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 }, scenes: [WB_PLAIN] };
+  const events = [{ type: "draw_path" as const, assetId: "a1", pathId: "p1", startMs: 1000, durationMs: 1000 }];
+  const early = frameAt(project, WB_PLAIN, events, geo, 500);
+  eq(early.draws.get("a1::p1"), 0, "before start");
+  ok(early.hand.visible, "pen enters during the lead-in");
+  approx(early.hand.x, 105, 1e-6, "ease-out slide-in: 75% of the way at the half-window");
+  approx(early.hand.y, 15, 1e-6);
+  const mid = frameAt(project, WB_PLAIN, events, geo, 1500);
+  eq(mid.draws.get("a1::p1"), 0.5, "mid progress");
+  ok(mid.hand.visible, "pen visible during the stroke");
+  approx(mid.hand.x, 50, 1e-6, "pen tip at the arc-length midpoint");
+  approx(mid.hand.y, 0, 1e-6);
+  approx(mid.hand.angle, 0, 1e-9, "tangent along +x");
+  approx(mid.camera.cx, 960 + cameraDrift(1500).dx, 1e-9, "default camera + drift");
+  const done = frameAt(project, WB_PLAIN, events, geo, 3000);
+  eq(done.draws.get("a1::p1"), 1, "clamped to 1");
+  ok(done.hand.visible, "pen rests at the stroke end during the hold (no static tail)");
+  approx(done.hand.x, 100, 1e-6, "resting at the end point");
+});
+
+await test("S64 timing: cameraAt — eased keyframes + the permanent drift", async () => {
+  const { cameraAt, cameraDrift } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const scene: WhiteboardScene = {
+    ...WB_PLAIN,
+    camera: [
+      { startMs: 0, durationMs: 0, cx: 0, cy: 0, scale: 1 },
+      { startMs: 1000, durationMs: 1000, cx: 100, cy: 10, scale: 2 },
+    ],
+  };
+  const d500 = cameraDrift(500);
+  eq(cameraAt(scene, 500), { cx: d500.dx, cy: d500.dy, scale: 1 }, "before the move: first keyframe + drift");
+  const d1500 = cameraDrift(1500);
+  eq(cameraAt(scene, 1500), { cx: 50 + d1500.dx, cy: 5 + d1500.dy, scale: 1.5 }, "mid-move eased halfway + drift");
+  const dEnd = cameraDrift(99999);
+  eq(cameraAt(scene, 99999), { cx: 100 + dEnd.dx, cy: 10 + dEnd.dy, scale: 2 }, "after the move: last keyframe + drift");
+});
+
+await test("S64 timing: cameraDrift — bounded, deterministic, and always moving", async () => {
+  const { cameraDrift } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const d0 = cameraDrift(0);
+  ok(Math.abs(d0.dx) <= 96.001 && Math.abs(d0.dy) <= 66.001, "drift stays within its settle-swelled bounds");
+  const d9 = cameraDrift(9000);
+  ok(Math.abs(d9.dx) <= 32.001 && Math.abs(d9.dy) <= 22.001, "drift settles to the base amplitude once the canvas is established");
+  eq(cameraDrift(12345), cameraDrift(12345), "deterministic");
+  // Over a 10s sweep at frame cadence, ≥ 90% of consecutive frames move
+  // ≥ 0.5px — the drift keeps the frame alive for the freeze lenses.
+  let moving = 0;
+  let total = 0;
+  for (let t = 0; t < 10000; t += 1000 / 24) {
+    const a = cameraDrift(t);
+    const b = cameraDrift(t + 1000 / 24);
+    total++;
+    if (Math.hypot(b.dx - a.dx, b.dy - a.dy) >= 0.5) moving++;
+  }
+  ok(moving / total >= 0.9, `drift moves ≥0.5px/frame on ${(100 * moving / total).toFixed(1)}% of frames`);
+});
+
+await test("S64 timing: placementAt — move_object eases between base and target", async () => {
+  const { placementAt } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const scene: WhiteboardScene = {
+    ...WB_PLAIN,
+    animations: [{ type: "move_object", assetId: "a1", startMs: 1000, durationMs: 1000, to: { x: 100, y: 0, scale: 1, rotateDeg: 0 } }],
+  };
+  const base = { x: 0, y: 0, scale: 1, rotateDeg: 0 };
+  eq(placementAt(scene, "a1", base, 500), base, "before the move: base placement");
+  approx(placementAt(scene, "a1", base, 1500).x, 50, 1e-9, "halfway");
+  eq(placementAt(scene, "a1", base, 3000).x, 100, "at target");
+});
+
+await test("S64 timing: frameCount", async () => {
+  const { frameCount } = await import("../src/lib/tubeforge/whiteboard/timing");
+  eq(frameCount(10000, 24), 240);
+  eq(frameCount(100, 24), 2);
+  eq(frameCount(10, 24), 1, "never zero frames");
+});
+
+await test("S64 timing: the frame plan is a pure function — same inputs, same frames", async () => {
+  const { frameAt, buildGeometry, scheduleScene } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const { framePayload } = await import("../src/lib/tubeforge/whiteboard/render");
+  const geo = buildGeometry([{ id: "a1", paths: [{ id: "p1", d: "M 0 0 L 100 0" }, { id: "p2", d: "M 0 0 L 50 0" }] }]);
+  const project: WhiteboardProject = { title: "t", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 }, scenes: [WB_PLAIN] };
+  const seq = (): string =>
+    Array.from({ length: 24 }, (_, f) =>
+      framePayload(frameAt(project, WB_PLAIN, scheduleScene(WB_PLAIN, 4000, geo), geo, f * (4000 / 24)), 1920, 1080)
+    ).join("\n");
+  eq(seq(), seq(), "the frame plan is deterministic");
+});
+
+suiteStart("S64 whiteboard — the asset library");
+
+await test("S64 assets: every drawable is an id-carrying <path>/<text> — extraction is complete", async () => {
+  const { ASSETS, extractAsset } = await import("../src/lib/tubeforge/whiteboard/assets");
+  ok(ASSETS.length >= 9, `library present (${ASSETS.length} assets)`);
+  for (const a of ASSETS) {
+    ok(
+      !/<(circle|rect|ellipse|polygon|polyline|line|image|use|script|foreignObject)\b/i.test(a.svg),
+      `${a.id}: a non-extractable drawable is present — it would skip the progressive reveal`
+    );
+    const ex = extractAsset(a);
+    eq(ex.paths.length, (a.svg.match(/<path\b/g) ?? []).length, `${a.id}: every <path> extracted`);
+    eq(ex.texts.length, (a.svg.match(/<text\b/g) ?? []).length, `${a.id}: every <text> extracted`);
+  }
+});
+
+await test("S64 assets: loadLibrary builds the index + registers the scheduler's text metadata", async () => {
+  const { loadLibrary, HAND_TIP } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const { TEXT_CHARS_BY_ID, TEXT_ANCHORS } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const lib = loadLibrary();
+  ok(lib.assets.has("hand-marker"), "the drawing hand is in the library");
+  eq(HAND_TIP, { x: 70, y: 150 }, "the marker tip anchor");
+  eq(lib.libraryIndex.pathIdsByAsset.get("heart-main")?.size, 6, "heart-main exposes 6 drawable paths");
+  eq(lib.libraryIndex.textIdsByAsset.get("heart-labels")?.size, 5, "heart-labels exposes 5 texts");
+  eq(TEXT_CHARS_BY_ID.get("heart-labels::hl-ra"), 2, "text lengths registered");
+  eq(TEXT_ANCHORS.get("heart-labels::hl-ra"), { x: 34, y: 120, size: 22 }, "text anchors registered");
+});
+
+await test("S64 assets: extractAsset parses path data and text geometry", async () => {
+  const { extractAsset } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const ex = extractAsset({
+    id: "x",
+    viewBox: { w: 10, h: 10 },
+    tags: [],
+    svg: '<path id="p" d="M 0 0 L 3 3"/><text id="t" x="5" y="6" font-size="12">Hi</text>',
+  });
+  eq(ex.paths, [{ id: "p", d: "M 0 0 L 3 3" }]);
+  eq(ex.texts, [{ id: "t", content: "Hi", x: 5, y: 6, size: 12 }]);
+});
+
+suiteStart("S64 whiteboard — renderer pure contracts");
+
+await test("S64 render: framePayload serializes the full frame state (the applier's wire format)", async () => {
+  const { framePayload } = await import("../src/lib/tubeforge/whiteboard/render");
+  const { frameAt, buildGeometry } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const geo = buildGeometry([{ id: "a1", paths: [{ id: "p1", d: "M 0 0 L 100 0" }] }]);
+  const project: WhiteboardProject = { title: "t", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 }, scenes: [WB_PLAIN] };
+  const events = [{ type: "draw_path" as const, assetId: "a1", pathId: "p1", startMs: 0, durationMs: 1000 }];
+  const p = JSON.parse(framePayload(frameAt(project, WB_PLAIN, events, geo, 500), 1920, 1080));
+  eq(Object.keys(p).sort(), ["camera", "colors", "draws", "hand", "height", "placements", "tMs", "texts", "width"]);
+  eq(p.width, 1920);
+  eq(p.height, 1080);
+  eq(p.tMs, 500);
+  eq(p.draws, [["a1::p1", 0.5]]);
+  eq(p.hand, { visible: true, x: 50, y: 0, angle: 0 });
+});
+
+await test("S64 render: the applier resolves frame-plan keys through the registered id maps (the namespace seam)", async () => {
+  const { APPLY_FRAME_FN } = await import("../src/lib/tubeforge/whiteboard/render");
+  ok(
+    APPLY_FRAME_FN.includes("__wbDraw") && APPLY_FRAME_FN.includes("__wbText"),
+    "the applier must resolve keys via window.__wbDraw/__wbText"
+  );
+  ok(
+    APPLY_FRAME_FN.includes("drawEl(key)") && APPLY_FRAME_FN.includes("textEl(key)"),
+    "draws/texts lookups go through the map resolvers"
+  );
 });
 
 console.log(`\n${"─".repeat(56)}`);

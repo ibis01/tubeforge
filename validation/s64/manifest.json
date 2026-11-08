@@ -1,0 +1,179 @@
+{
+  "renderedAt": "2026-11-08T23:07:34.094Z",
+  "engine": "src/lib/tubeforge/whiteboard (S64 P0)",
+  "title": "How Your Heart Works — S64 whiteboard P0 benchmark",
+  "durationSec": 63.88,
+  "scenes": [
+    {
+      "id": "title",
+      "estMs": 11538,
+      "renderedMs": 11538,
+      "frames": 277,
+      "events": 9
+    },
+    {
+      "id": "chambers",
+      "estMs": 15000,
+      "renderedMs": 15000,
+      "frames": 360,
+      "events": 11
+    },
+    {
+      "id": "bloodflow",
+      "estMs": 14615,
+      "renderedMs": 14615,
+      "frames": 351,
+      "events": 15
+    },
+    {
+      "id": "beat",
+      "estMs": 13077,
+      "renderedMs": 13077,
+      "frames": 314,
+      "events": 13
+    },
+    {
+      "id": "close",
+      "estMs": 9615,
+      "renderedMs": 9615,
+      "frames": 231,
+      "events": 10
+    }
+  ],
+  "narration": [
+    {
+      "id": "title",
+      "words": 30
+    },
+    {
+      "id": "chambers",
+      "words": 39
+    },
+    {
+      "id": "bloodflow",
+      "words": 38
+    },
+    {
+      "id": "beat",
+      "words": 34
+    },
+    {
+      "id": "close",
+      "words": 25
+    }
+  ],
+  "audio": {
+    "narration": "estimated 2.6 wps (gateway throttled — no TTS this run)",
+    "music": "house bedExpression curiosity-spark"
+  },
+  "renderMs": 193818,
+  "qc": {
+    "passed": false,
+    "checkedAt": "2026-11-08T23:07:33.052Z",
+    "durationSec": 63.9,
+    "checks": [
+      {
+        "id": "playable",
+        "label": "Plays as a valid MP4 (H.264 video + AAC audio)",
+        "status": "pass",
+        "pass": true,
+        "value": "63.9s readable"
+      },
+      {
+        "id": "black-frames",
+        "label": "No unexplained black frames",
+        "status": "pass",
+        "pass": true,
+        "value": "none detected",
+        "detail": ""
+      },
+      {
+        "id": "frozen-frames",
+        "label": "No frozen imagery (motion everywhere)",
+        "status": "pass",
+        "pass": true,
+        "value": "none detected",
+        "detail": ""
+      },
+      {
+        "id": "aspect",
+        "label": "16:9 frame (no squeeze/crop defects)",
+        "status": "pass",
+        "pass": true,
+        "value": "1920x1080"
+      },
+      {
+        "id": "loudness",
+        "label": "Broadcast loudness (-16 LUFS target)",
+        "status": "pass",
+        "pass": true,
+        "value": "-16.2 LUFS",
+        "detail": "window -19.5…-13 LUFS"
+      },
+      {
+        "id": "true-peak",
+        "label": "True peak ≤ -1 dBTP (no clipping after encode)",
+        "status": "pass",
+        "pass": true,
+        "value": "-6.0 dBTP",
+        "detail": "0.2 dB tolerance covers AAC inter-sample overshoot"
+      },
+      {
+        "id": "loudness-range",
+        "label": "Consistent volume (loudness range)",
+        "status": "pass",
+        "pass": true,
+        "value": "LRA 4.7 LU",
+        "detail": "flagged above 18 LU"
+      },
+      {
+        "id": "dead-air",
+        "label": "No dead air (voice or music always present)",
+        "status": "pass",
+        "pass": true,
+        "value": "none",
+        "detail": ""
+      },
+      {
+        "id": "static-shots",
+        "label": "Visual pacing — no long static stretches",
+        "status": "pass",
+        "pass": true,
+        "value": "visual change throughout",
+        "detail": ""
+      },
+      {
+        "id": "flicker",
+        "label": "Steady brightness (no flicker or pumping)",
+        "status": "pass",
+        "pass": true,
+        "value": "none detected",
+        "detail": ""
+      },
+      {
+        "id": "stutter",
+        "label": "Even frame timing (no stutter)",
+        "status": "pass",
+        "pass": true,
+        "value": "even timing throughout",
+        "detail": ""
+      },
+      {
+        "id": "cut-alignment",
+        "label": "Cuts land where the timeline says (continuity)",
+        "status": "unmeasured",
+        "pass": false,
+        "value": "no timeline reconstruction",
+        "detail": "this video has no aligned timeline doc — cuts cannot be checked"
+      },
+      {
+        "id": "tail-fade",
+        "label": "Ends on a fade, not an abrupt cut",
+        "status": "pass",
+        "pass": true,
+        "value": "final 0.4s at -35.3 dB mean",
+        "detail": "flagged above -25 dB mean"
+      }
+    ]
+  }
+}

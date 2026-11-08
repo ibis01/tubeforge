@@ -1,0 +1,294 @@
+{
+  "title": "How Your Heart Works — S64 whiteboard P0 benchmark",
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "hand": {
+    "style": "marker",
+    "scale": 1
+  },
+  "scenes": [
+    {
+      "id": "title",
+      "narration": "Your heart beats about a hundred thousand times every single day, pushing blood to every corner of your body. So how does this fist-sized muscle actually work? Let's draw it.",
+      "background": "#ffffff",
+      "placements": [
+        {
+          "assetId": "title-hero",
+          "placement": {
+            "x": 560,
+            "y": 180,
+            "scale": 1.15,
+            "rotateDeg": 0
+          }
+        },
+        {
+          "assetId": "heart-main",
+          "placement": {
+            "x": 1080,
+            "y": 470,
+            "scale": 2.1,
+            "rotateDeg": 0
+          },
+          "order": 2
+        }
+      ],
+      "animations": [],
+      "camera": [
+        {
+          "cx": 960,
+          "cy": 540,
+          "scale": 1,
+          "startMs": 0,
+          "durationMs": 0
+        },
+        {
+          "cx": 1180,
+          "cy": 620,
+          "scale": 1.14,
+          "startMs": 300,
+          "durationMs": 10200
+        }
+      ]
+    },
+    {
+      "id": "chambers",
+      "narration": "Picture the heart as a pump with four hollow chambers — two on the right, two on the left. A wall down the middle, the septum, keeps the two sides completely separate. And that separation is the whole trick.",
+      "background": "#ffffff",
+      "placements": [
+        {
+          "assetId": "heart-main",
+          "placement": {
+            "x": 700,
+            "y": 300,
+            "scale": 2.6,
+            "rotateDeg": 0
+          }
+        },
+        {
+          "assetId": "heart-labels",
+          "placement": {
+            "x": 700,
+            "y": 300,
+            "scale": 2.6,
+            "rotateDeg": 0
+          },
+          "order": 2
+        }
+      ],
+      "animations": [],
+      "camera": [
+        {
+          "cx": 960,
+          "cy": 540,
+          "scale": 1,
+          "startMs": 0,
+          "durationMs": 0
+        },
+        {
+          "cx": 940,
+          "cy": 560,
+          "scale": 1.22,
+          "startMs": 800,
+          "durationMs": 13200
+        }
+      ]
+    },
+    {
+      "id": "bloodflow",
+      "narration": "The right side takes tired, oxygen-poor blood and pumps it to the lungs, where it swaps carbon dioxide for fresh oxygen. The bright oxygen-rich blood returns to the left side, which fires it out to the entire body.",
+      "background": "#ffffff",
+      "placements": [
+        {
+          "assetId": "heart-main",
+          "placement": {
+            "x": 640,
+            "y": 300,
+            "scale": 2.4,
+            "rotateDeg": 0
+          }
+        },
+        {
+          "assetId": "lungs",
+          "placement": {
+            "x": 1240,
+            "y": 210,
+            "scale": 1.7,
+            "rotateDeg": 0
+          },
+          "order": 2
+        },
+        {
+          "assetId": "arrow-curve",
+          "placement": {
+            "x": 1020,
+            "y": 430,
+            "scale": 1.35,
+            "rotateDeg": -12
+          },
+          "order": 3
+        },
+        {
+          "assetId": "arrow-return",
+          "placement": {
+            "x": 1240,
+            "y": 700,
+            "scale": 1.35,
+            "rotateDeg": 168
+          },
+          "order": 4
+        }
+      ],
+      "animations": [
+        {
+          "type": "reveal_color",
+          "assetId": "lungs",
+          "pathId": "lg-left",
+          "startMs": 6200,
+          "durationMs": 900
+        },
+        {
+          "type": "reveal_color",
+          "assetId": "lungs",
+          "pathId": "lg-right",
+          "startMs": 6600,
+          "durationMs": 900
+        }
+      ],
+      "camera": [
+        {
+          "cx": 960,
+          "cy": 540,
+          "scale": 1,
+          "startMs": 0,
+          "durationMs": 0
+        },
+        {
+          "cx": 1120,
+          "cy": 500,
+          "scale": 1.1,
+          "startMs": 400,
+          "durationMs": 4400
+        },
+        {
+          "cx": 900,
+          "cy": 560,
+          "scale": 1.02,
+          "startMs": 10000,
+          "durationMs": 4000
+        }
+      ]
+    },
+    {
+      "id": "beat",
+      "narration": "And the beat itself? A tiny cluster of cells, the sinoatrial node, fires an electrical spark that ripples through the muscle, squeezing the chambers in exactly the right order. That's the lub-dub you hear.",
+      "background": "#ffffff",
+      "placements": [
+        {
+          "assetId": "heart-main",
+          "placement": {
+            "x": 560,
+            "y": 250,
+            "scale": 2.3,
+            "rotateDeg": 0
+          }
+        },
+        {
+          "assetId": "spark",
+          "placement": {
+            "x": 900,
+            "y": 470,
+            "scale": 1.6,
+            "rotateDeg": 0
+          },
+          "order": 2
+        },
+        {
+          "assetId": "ecg-pulse",
+          "placement": {
+            "x": 1120,
+            "y": 640,
+            "scale": 1.6,
+            "rotateDeg": 0
+          },
+          "order": 3
+        }
+      ],
+      "animations": [],
+      "camera": [
+        {
+          "cx": 960,
+          "cy": 540,
+          "scale": 1,
+          "startMs": 0,
+          "durationMs": 0
+        },
+        {
+          "cx": 1010,
+          "cy": 640,
+          "scale": 1.28,
+          "startMs": 400,
+          "durationMs": 4000
+        },
+        {
+          "cx": 1180,
+          "cy": 720,
+          "scale": 1.08,
+          "startMs": 7600,
+          "durationMs": 4500
+        }
+      ]
+    },
+    {
+      "id": "close",
+      "narration": "All of that, sixty to a hundred times a minute, every minute of your life. Your heart never takes a weekend. Take care of it.",
+      "background": "#ffffff",
+      "placements": [
+        {
+          "assetId": "close-card",
+          "placement": {
+            "x": 380,
+            "y": 330,
+            "scale": 1.5,
+            "rotateDeg": 0
+          }
+        },
+        {
+          "assetId": "heart-main",
+          "placement": {
+            "x": 1260,
+            "y": 330,
+            "scale": 1.9,
+            "rotateDeg": 0
+          },
+          "order": 2
+        }
+      ],
+      "animations": [
+        {
+          "type": "reveal_color",
+          "assetId": "heart-main",
+          "pathId": "hm-outline",
+          "startMs": 6400,
+          "durationMs": 1000
+        }
+      ],
+      "camera": [
+        {
+          "cx": 960,
+          "cy": 540,
+          "scale": 1,
+          "startMs": 0,
+          "durationMs": 0
+        },
+        {
+          "cx": 1000,
+          "cy": 540,
+          "scale": 1.06,
+          "startMs": 400,
+          "durationMs": 8500
+        }
+      ]
+    }
+  ]
+}
