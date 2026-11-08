@@ -2121,3 +2121,67 @@ all jobs green (the one head run covers both stages' trees cumulatively —
 the S56 multi-commit-push convention, recorded in both reliability
 records). The landing PAT transited chat once — rotate before the next
 landing.
+
+## S59 — react-hooks correctness: set-state-in-effect 33 + exhaustive-deps 9 (opened 2026-11-08 UTC, owner-directed "Next")
+
+Sprint goal: warning burn-down tranche 3 — the recorded programme's next
+entry. The target: the S58 census's **42 react-hooks sites** — 33
+`set-state-in-effect` + 9 `exhaustive-deps` — across **21 files** (20
+src/ components + 1 hook; all client-side React). This class is the
+subtlest of the programme: the failure modes are cascading renders,
+stale closures, and "fix the lint, break the UX". Every fix must
+preserve observable behavior — verified not just by the suites but by a
+LIVE preview battery on the affected views (the S58 preview
+infrastructure: standalone build + daemonize + agent-browser).
+
+The reconnaissance found three honest families, not 42 one-offs:
+
+- **Family A — the sync-setState-first load** (13 sites): `load()` /
+  `refresh()` / `loadTokens()` / `loadTimeline()` called from an effect
+  whose BODY starts with a synchronous setState (`setUsageLoading(true)`
+  and kin) BEFORE the first await/then. The honest fix: the busy flag
+  becomes DERIVED state ("does the data belong to the current key?" —
+  `loadedDays !== usageDays` pattern), the loader's synchronous prefix
+  stops setting state, and every setState lands after the await where
+  the rule (correctly) allows it. Manual-refresh buttons bump the same
+  key via event handlers — legal setState — so the busy UX is identical.
+- **Family B — the prop→state mirror** (~10 sites): `setAccent(value.accent)`,
+  `setVisual(scene.visual)`, `setPickedVoice(...)`, `setC(initial)`,
+  `setScriptDraft(scene.narration)` — re-seed local editable state when
+  a prop changes. The React-documented replacement: **adjust state
+  during render** (guarded `if (seed !== value) { setSeed(...); setX(...) }`)
+  — same trigger condition, same final state, one FEWER paint (the
+  effect version always showed one stale frame).
+- **Family C — reset-on-change** (~8 sites): `setDeleteArmed(false)` /
+  `setVoiceArmed(false)` / `setPaceArmed(false)` / `setActive(0)` /
+  `setQuery("")` / `setVariants([])` / `setScriptApproved(false)` /
+  `setDraftRestored(false)` / `setPickVideo(...)` — transient state
+  cleared when a target/key changes. Same render-time-adjust idiom, or
+  a move into the open/close EVENT handler where the trigger is a
+  toggle (query-on-close, dialog resets).
+- **Family D — deps completion** (9 sites): missing `toast` (a stable
+  store action — include it, free), missing `scene`/`video`/`active`/
+  `startStock` (read each; select the specific fields or include the
+  object where the selector already narrows it), and the one COMPLEX
+  dep expression (`useAppStore((s) => s.refreshKey)` inline in the
+  array) extracted to a variable so it can be statically checked.
+- **Family E — vendored/infra** (2 sites): `use-mobile` rewritten onto
+  `useSyncExternalStore` (the canonical form — no effect at all); the
+  shadcn carousel's initial `onSelect(api)` sync call restructured onto
+  the event subscription path.
+
+| Task | Status | Notes |
+|---|---|---|
+| T-59.1 Family A — the 13 sync-first loads | ⏳ | Per-site: derive busy from key-match, loader prefix goes setState-free, setState only after await. Files: account-card, attention-panel, auth-gate, director-card, music-controls, plan-card, security-card ×2, timeline-studio L523, channels-view, research-view, voice-view, video-detail L444. |
+| T-59.2 Family B — the prop→state mirrors | ⏳ | Render-time adjust (guarded seed compare) replacing the re-seed effects. Files: brand-kit, scene-editor, video-detail L265/270, cast-view, timeline-studio L4189, create-view L382. |
+| T-59.3 Family C — the resets | ⏳ | Render-time adjust or event-handler moves. Files: command-palette ×2, timeline-studio L1217/1389/1543/4250, create-view L289/472, calendar-view L140, video-detail L318. |
+| T-59.4 Family D+E — deps + vendored | ⏳ | The 9 exhaustive-deps completions (incl. the complex-expression extraction) + use-mobile's useSyncExternalStore + carousel's restructure. |
+| T-59.5 the freeze + census | ⏳ | `react-hooks/set-state-in-effect` and `react-hooks/exhaustive-deps` promoted to **error**; census re-recorded (expect the remaining 20: unused-expressions 11, any 7, two singles). |
+| T-59.6 the gates + live battery | ⏳ | tsc · eslint · unit · billing · queue · `next build` — plus the LIVE preview battery exercising the affected views (settings/account, brand kit, command palette, timeline studio, video dialog, calendar, research, voice, channels) on the standalone server. |
+| T-59.7 reliability record | ⏳ | `docs/audits/s59-reliability-record.md` — the evidence chain, the landing constraint (the S58-close PAT transited chat once and must be rotated before the next landing), the honest list of any behavior deltas. |
+
+Landing constraint (declared up front, the standing law): S59 executes
+and verifies locally on top of `39721de`; the push, the CI runs, and the
+stage close ride a **rotated** PAT (the current one landed S57+S58 and
+transited chat once already — rotation was the recorded instruction). A
+bundle ships in the delivery so the sixth reclaim loses nothing.
