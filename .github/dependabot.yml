@@ -1,0 +1,49 @@
+# Dependabot — weekly version bumps (S56/T-56.3, closing P1-7's second half;
+# security alerts + security updates have been ON since S33 via repo settings).
+#
+# Two ecosystems, weekly (Monday 06:00 UTC — ahead of the nightly battery, so
+# a bad bump's CI failure is visible the same day it lands):
+#   npm            — minor + patch GROUPED into one PR each for dev/prod;
+#                    majors stay individual (visible, reviewed by a human)
+#   github-actions — minor + patch grouped; majors individual
+#
+# Nothing auto-merges. Every bump PR rides the full CI gate (typecheck, lint,
+# unit, queue, billing, BUILD, e2e) — if a bump breaks anything, the PR says
+# so before any merge decision. The ubuntu-24.04 runner pin (see ci.yml) is
+# what makes Playwright bumps safe to receive.
+#
+# open-pull-requests-limit is deliberately modest (5/3): this is a solo-owned
+# repo; the queue should stay reviewable, not flood.
+
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(dev-deps)"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      timezone: "UTC"
+    open-pull-requests-limit: 3
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(ci)"
