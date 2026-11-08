@@ -62,7 +62,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Two cookie jars — owner A walks the chain, stranger B probes the walls.
 const jar = { A: null, B: null };
-async function call(as, method, p, body, raw = false) {
+async function call(as, method, p, body, raw = false, timeoutMs = 120_000) {
   const headers = { ...(jar[as] ? { cookie: jar[as] } : {}) };
   let payload;
   if (body instanceof FormData) {
@@ -71,7 +71,7 @@ async function call(as, method, p, body, raw = false) {
     headers["content-type"] = "application/json";
     payload = JSON.stringify(body);
   }
-  const res = await fetch(BASE + p, { method, headers, body: payload });
+  const res = await fetch(BASE + p, { method, headers, body: payload, signal: AbortSignal.timeout(timeoutMs) });
   const setCookie = res.headers.get("set-cookie");
   if (setCookie && as) jar[as] = setCookie.split(";")[0];
   if (raw) return res;
@@ -100,15 +100,24 @@ const SCENES = [
 
 // Poll the video DTO (GET wraps it as { video, generating }) until fn(dto)
 // is truthy (or timeout with the last observed shape).
+// S56 hardening (the nightly battery finding): during a heavy render the
+// dev server can stall request handling for minutes (synchronous ffmpeg/QC
+// sections). A stall longer than undici's 300s headers-timeout used to kill
+// the whole probe with UND_ERR_HEADERS_TIMEOUT — the poller now aborts each
+// request after 30s and keeps polling; the deadline still bounds the total.
 async function pollVideo(id, fn, timeoutMs, label) {
   const deadline = Date.now() + timeoutMs;
   let last = null;
   while (Date.now() < deadline) {
-    const res = await call("A", "GET", `/api/videos/${id}`);
-    if (res.status === 200) {
-      last = res.json?.video ?? null;
-      if (last && fn(last)) return { ok: true, dto: last };
-    } else last = res;
+    try {
+      const res = await call("A", "GET", `/api/videos/${id}`, undefined, false, 30_000);
+      if (res.status === 200) {
+        last = res.json?.video ?? null;
+        if (last && fn(last)) return { ok: true, dto: last };
+      } else last = res;
+    } catch (err) {
+      if (!last) last = { error: err instanceof Error ? err.message : err };
+    }
     await sleep(700);
   }
   return { ok: false, last, label };
@@ -215,7 +224,11 @@ if (VIDEO_ID) {
   res = await call("A", "POST", `/api/videos/${VIDEO_ID}/render`, { mode: "kenburns", subtitles: true, music: true });
   check("6.3  render accepted (202 — gates passed, job enqueued)", res.status === 202, { status: res.status, error: res.json?.error });
 
-  const ren = await pollVideo(VIDEO_ID, (d) => d.hasVideo === true, 300_000, "render job");
+  // S56 (nightly battery): 600s — a COLD dev-server render (route compile +
+  // storyboard + ffmpeg + auto-QC) legitimately exceeds the old 300s budget;
+  // at 300s the poller gave up while the job was still running, then the
+  // cleanup calls stalled against the busy server and crashed the probe.
+  const ren = await pollVideo(VIDEO_ID, (d) => d.hasVideo === true, 600_000, "render job");
   check("6.4  render job completes → hasVideo true", ren.ok, ren.ok ? "" : JSON.stringify(ren.last?.json?.error ?? ren.last?.error ?? ren.last ?? "timeout").slice(0, 200));
   if (ren.ok) {
     check("6.5  a real duration was measured on the row", (ren.dto.videoDuration ?? 0) > 10, ren.dto.videoDuration);

@@ -1,0 +1,84 @@
+# TubeForge nightly battery (S56/T-56.5 — the S33+ backlog's P1-2).
+#
+# What runs every night (02:30 UTC, ahead of Monday's Dependabot wave so a
+# bad bump's failure is visible the same day it lands) and on demand:
+#
+#   battery — the durable s-series route probes (19), driven by
+#             scripts/run-route-battery.mjs against the PRODUCTION build
+#             (it builds once, then boots `npm run start` in two phases:
+#             enforce-mode for 18 probes, report-mode for s29's pre-S40
+#             export contract). The runner handles the shared-IP realities
+#             (raised middleware tiers, AuthAttempt clearing between probes,
+#             interrupted-run janitor) — all disclosed in its header.
+#   e2e     — the full Playwright suite, the same job CI runs on push.
+#
+# Why nightly at all: these probes were on-demand-only since the studio era;
+# drift in any of the 19 contracts (auth, lockout, account doors, publish
+# gates, exports, QC doors, uploads, worlds, settings, billing surfaces)
+# used to surface only when a human happened to re-run them.
+#
+# Sandbox note (recorded honestly): the runner is CHUNKED (S56_BATTERY_LEG)
+# because this development sandbox reaps long-running process trees; the
+# full "all" leg is proven piecewise in-sandbox (18/18 + s29 against the
+# production server) and runs whole on CI runners, which have no reaper.
+
+name: Nightly battery
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  battery:
+    name: Route-probe battery (19 probes, production server)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install ffmpeg (render pipeline — s11/s29 render for real)
+        timeout-minutes: 5
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Install dependencies (postinstall bootstraps SQLite + Prisma)
+        run: npm ci
+
+      - name: Battery (build + enforce phase + report phase)
+        run: node scripts/run-route-battery.mjs
+
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install ffmpeg (render pipeline)
+        timeout-minutes: 5
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E suite (boots its own dev server on :3000)
+        run: npm run test:e2e
+        env:
+          CI: true
