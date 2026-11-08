@@ -2284,3 +2284,26 @@ Vercel deployment and re-store any saved credentials (the S61 watchlight
 warns until then). The GitHub PAT WAS rotated (2026-11-08) but arrived via
 chat — one transit against the record's zero-transit standard; rotate it
 again at the next natural milestone and deliver it out-of-band.
+
+## S62 — proving real video quality: the 8-profile i2v validation lane (opened + executed 2026-11-08 UTC, owner-directed "s62")
+
+The 2026-11-08 audit's verdict after the engineering stages: the next
+milestone should be PROVEN real video quality, not more engineering. The
+audit's P1: raise render/video-job coverage, validate real image-to-video
+output, blind visual scoring "across all 7 production profiles". Reconciled
+at open time: the catalog has been EIGHT profiles since S49
+(islamic-history joined) — the lane scores all eight.
+
+| Task | Status | Notes |
+|---|---|---|
+| T-62.1 the validation harness | ✅ Done (2026-11-08) | scripts/s62-i2v-validation.mts — per profile, the ENTIRE production chain runs for real against the live gateway: director pass with the profile's own overlay + vocabularies (glm-4.6 hint, temp 0.6, parsePlan under aiCallJson retry, 2/2 scene coverage) → shot 0 scene art through the REAL image path (1344x768, S49 policy sanitize with appendNegative) → the REAL plan-aware motion prompt (i2vMotionPrompt, sanitized like render.ts) driving real CogVideoX via zaiVideoViaClient with ensureSceneClip's exact options (5s · 30fps · 1920x1080 · poll 10s×60 · one retry) → ffprobe + runQcReport + frames at 1.0/2.5/4.0s. Resumable manifest in validation/s62/ (gitignored binaries; manifest + report committed). The video capability is pinned to zai via the SAME override mechanism the Settings Test button uses — a fresh sandbox DB ships it unconfigured (registry default "fal"), while production's ensureSceneClip hard-requires zai. |
+| T-62.2 real i2v across all eight profiles | 🔄 In progress | Smoke probe GREEN on narrative (first full chain, 2026-11-08): plan 2 scenes/10 shots in 15.0 s → art 136 KB in 31.5 s → clip 7.6 MB in 3.7 min; QC clip-local lenses all pass (black/frozen/aspect/flicker/stutter/static/dead-air). Remaining seven queued. |
+| T-62.3 blind visual scoring | ⏳ Pending | Frames enter a shuffled pool (A–H, key held separately); generic quality dims scored blind (frozen motion, artifacts, coherence, aesthetic, 1–5 + notes); unmasked pass then checks per-profile conformance (advertisement product-forward open, islamic-history compose-around-not-on — the hard policy lens). |
+| T-62.4 render/video-job coverage raise | ⏳ Pending | i2vMotionPrompt's contract (camera phrases, speed prefix, subjectAction priority, planScene-null fallback) and the degrade path join the house suite — tests pin what the lane depends on. |
+| T-62.5 gates + close | ⏳ Pending | Full gate set + CI evidence by SHA; the record carries the scores table. |
+
+Raw-clip QC classification (for the record): the playable check demands
+H.264 + AAC — a raw CogVideoX clip is video-only by construction (audio is
+muxed at the audiomix stage), so playable:fail on a RAW clip is a category
+mismatch, not a defect. The lane therefore reads the clip-local visual
+lenses as binding and marks audio-bearing checks unmeasured-by-design.

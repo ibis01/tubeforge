@@ -109,3 +109,6 @@ preview/venv/
 /mini-services/
 /tests/*runtime*
 /tests/database-runtime-build.sh
+
+# S62 — real-i2v validation evidence (large binaries; report + manifest are committed)
+/validation/
