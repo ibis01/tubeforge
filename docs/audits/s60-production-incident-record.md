@@ -2,10 +2,13 @@
 
 **Date**: 2026-11-08 (UTC) · **Stage**: S60 (owner-directed "SOLVE", with a
 screenshot of the failing deployment)
-**Status**: all tasks executed and verified locally on top of `5c7912d`;
-**not pushed** — the landing rides a rotated PAT (the standing law; the S59
-token transited chat once). The deployed database heals itself on the first
-deploy of this fix.
+**Status**: CLOSED — landed 2026-11-08 (`5c7912d..5c42929`), CI run
+42491043698 green on the first attempt, the production database healed
+itself on the Vercel auto-deploy (~4 minutes post-push), and the
+authenticated production probe returned stats=200 · videos=200 · usage=200
+(probe account deleted through the front door). Landing hygiene deviation,
+recorded plainly: the owner re-sent the SAME S59 token as the green light
+(its second chat transit) — rotation owed before S61, without fail.
 
 ## The report
 
@@ -45,7 +48,8 @@ postinstall failed-row recovery and re-failed; `s20`/`s32`/`s40`/`s46`/
 fails Prisma P2022 at query time → empty-body 500.
 
 Why auth_setting fails — reproduced 1:1 on a local embedded Postgres 17
-(`scripts/pgtest/`, the harness ships in the delivery): apply the chain
+(`scripts/pgtest/` on the build box; the harness ships in the delivery as
+`s60-pgrepro/`): apply the chain
 through stage72, then `migrate deploy` →
 
 ```
@@ -139,12 +143,17 @@ performed reads and was deleted through its own front door.
 
 ## Landing + the owner's instant-heal option
 
-- **On landing this fix** (push on a rotated PAT → CI → Vercel auto-deploy),
-  the deployment's postinstall runs the repair + recovery + deploy and the
-  DB heals itself. Verify with `/api/diag`: every migration `finished`,
-  then close the diag route's public exposure (its own header comment says
-  to remove it from PUBLIC_API once the incident is closed).
-- **Manual instant heal** (no code needed): against the deployed DATABASE_URL
+- **Landed and confirmed (2026-11-08):** the push's Vercel auto-deploy ran
+  postinstall (repair → recovery → deploy) and the DB healed within ~4
+  minutes — /api/diag then showed every wedge-era migration finished and
+  public tables 29→33. The dashboard's exact failure path was re-probed
+  authenticated: stats=200, videos=200, usage=200, and the front-door
+  account delete cascaded cleanly. Remaining owner action: eyeball the
+  Dashboard in your browser, then close the diag route's public exposure
+  (remove it from PUBLIC_API — its own header comment says so).
+- **Manual instant heal** (archival — NOT needed; the deploy already healed
+  the production DB; kept for any other Postgres that walked the chain):
+  against the deployed DATABASE_URL
   from any shell with the repo checked out at `5c7912d+`:
   ```sql
   ALTER TABLE "LegacySetting" RENAME CONSTRAINT "Setting_pkey" TO "LegacySetting_pkey";

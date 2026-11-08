@@ -2238,3 +2238,20 @@ is still public (close it once this incident is confirmed healed);
 DEPLOYMENT.md's doctrine stands — Vercel is a preview surface, Fly+Neon is
 the deployment of record; whichever runs, the DB needs the migration chain,
 and this fix makes that self-healing.
+
+**CLOSED — landed, healed, and verified end to end (2026-11-08 ~14:45
+UTC).** Pushed `5c7912d..5c42929` to origin main. CI run 42491043698 on
+the head SHA: all five jobs green on the FIRST attempt (Production build ·
+Typecheck · Lint · Unit · Secret scan · Money-path coverage · E2E). The
+Vercel auto-deploy's postinstall healed the production database within
+~4 minutes of the push — /api/diag: public tables 29→33 (Setting, ApiToken,
+SpendReservation, AuthAttempt created) and finished rows present for all six
+wedge-era migrations (auth_setting, s20, s32, s40, s46, s49). The
+authenticated production probe (the owner's exact failure path): register
+201 → /api/stats 200 (full payload) → /api/videos?limit=6 200 (the P2022
+empty-body 500 is gone) → /api/account/usage 200 (the fixed SQL live on
+production Postgres) → front-door delete 200 → the dead session 401s. The
+probe account performed reads only and was deleted through its own front
+door. Landing hygiene deviation, recorded plainly: the owner re-sent the
+SAME S59 token (its second chat transit) as the landing green light —
+rotate it before S61, without fail.
