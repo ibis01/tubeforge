@@ -219,6 +219,19 @@ test.describe("S68 — whiteboard studio end-to-end", () => {
       `/api/videos/${videoId}/mp4?variant=preview`
     );
 
+    // 8c. S69 lane-attribution contract: this video row is SHARED with the
+    //     story-lane script job the create route auto-starts, and on CI (no
+    //     AI config) that job fails fast and permanently — historically
+    //     poisoning this same video.error field mid-render (the first S68
+    //     CI round's race). S69's fix: a whiteboard-mode video's script-lane
+    //     failure NEVER writes video.error (Activity + row status carry it;
+    //     the render lane owns the badge) — so once the preview has landed,
+    //     the badge MUST be clean, deterministically, whatever the script
+    //     job's timing.
+    const dtoEnd = await request.get(`/api/videos/${videoId}`, { headers: { cookie } });
+    const endBody = (await dtoEnd.json()) as { video?: { error?: string | null } };
+    eq_(endBody.video?.error ?? null, null, "video.error stays clean on a whiteboard video (S69 lane attribution)");
+
     // 8b. The artifact SERVES — the preview URL answers with video bytes
     //     (a DB flag without a servable file would be a lying badge).
     const mp4 = await request.get(`/api/videos/${videoId}/mp4?variant=preview`, {
@@ -249,4 +262,154 @@ test.describe("S68 — whiteboard studio end-to-end", () => {
     const refusedBody = (await refused.json()) as { error?: string };
     expect(refusedBody.error).toMatch(/not a scene-based video/i);
   });
+
+  test("S69 — upload gates → palette merge → render with the uploaded asset → delete", async ({ request }) => {
+    const email = `s69-${RUN}@tubeforge.test`;
+    const { cookie, verificationUrl } = await register(request, email);
+    if (verificationUrl) {
+      const v = await request.get(verificationUrl);
+      expect(v.status()).toBeLessThan(300);
+    }
+
+    const createRes = await request.post("/api/videos", {
+      headers: { cookie },
+      data: {
+        topic: `S69 upload probe ${RUN}`,
+        niche: "Motivation",
+        format: "story",
+        renderMode: "whiteboard",
+      },
+    });
+    expect(createRes.status()).toBeLessThan(300);
+    const videoId = ((await createRes.json()) as { video: { id: string } }).video.id;
+
+    // 1. The gate rejections read clearly.
+    const noViewBox = await request.post(`/api/videos/${videoId}/whiteboard/asset`, {
+      headers: { cookie },
+      multipart: {
+        file: {
+          name: "novb.svg",
+          mimeType: "image/svg+xml",
+          buffer: Buffer.from(`<svg width="100" height="50"><path id="p" d="M 0 0 L 9 9"/></svg>`),
+        },
+      },
+    });
+    expect(noViewBox.status()).toBe(400);
+    expect(((await noViewBox.json()) as { errors?: string[] }).errors?.join(" ")).toMatch(/viewBox/);
+
+    const overCap = await request.post(`/api/videos/${videoId}/whiteboard/asset`, {
+      headers: { cookie },
+      multipart: {
+        file: {
+          name: "big.svg",
+          mimeType: "image/svg+xml",
+          buffer: Buffer.alloc(256 * 1024 + 16, 0x20),
+        },
+      },
+    });
+    expect(overCap.status()).toBe(413);
+
+    // 2. A hostile-but-recoverable file: the script subtree is stripped,
+    //    the drawable survives (the pipeline neutralizes, not punishes).
+    const hostile = await request.post(`/api/videos/${videoId}/whiteboard/asset`, {
+      headers: { cookie },
+      multipart: {
+        file: {
+          name: "s69 probe.svg",
+          mimeType: "image/svg+xml",
+          buffer: Buffer.from(
+            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">` +
+              `<script>alert(1)</script>` +
+              `<path id="hp1" d="M 20 160 L 100 30 L 180 160 Z" fill="none" stroke="#1d3557" stroke-width="6" stroke-linejoin="round"/>` +
+              `<path id="hp2" d="M 70 160 L 100 110 L 130 160" fill="none" stroke="#e63946" stroke-width="6" stroke-linejoin="round"/>` +
+              `</svg>`
+          ),
+        },
+      },
+    });
+    expect(hostile.status(), "gates 1-5 pass (script stripped), raster probe real").toBe(201);
+    const up = (await hostile.json()) as { assetId: string; bytes: number; probeMs: number };
+    expect(up.assetId).toBe("up-s69-probe");
+    expect(up.probeMs).toBeGreaterThan(0);
+
+    // 3. The palette merge: GET lists the upload WITH its sanitized svg.
+    const get1 = await request.get(`/api/videos/${videoId}/whiteboard`, { headers: { cookie } });
+    expect(get1.status()).toBe(200);
+    const d1 = (await get1.json()) as {
+      library: { id: string; uploaded?: boolean; svg?: string; paths?: string[] }[];
+    };
+    const entry = d1.library.find((a) => a.id === "up-s69-probe");
+    expect(entry?.uploaded).toBe(true);
+    expect(entry?.svg).toBeTruthy();
+    expect(entry?.svg).not.toContain("<script");
+    expect(entry?.paths).toEqual(["hp1", "hp2"]);
+
+    // 4. PUT a doc PLACING the upload (rev 1), then render a scene preview
+    //    through it — the merged library must validate + RENDER the upload.
+    const project = handAuthoredProject("S69 upload board");
+    project.scenes[0].placements = [
+      { assetId: "up-s69-probe", placement: { x: 760, y: 320, scale: 2, rotateDeg: 0 }, order: 0 },
+    ];
+    const put1 = await request.put(`/api/videos/${videoId}/whiteboard`, {
+      headers: { cookie, "Content-Type": "application/json" },
+      data: { project },
+    });
+    expect(put1.status()).toBeLessThan(300);
+
+    const renderRes = await request.post(`/api/videos/${videoId}/whiteboard/render`, {
+      headers: { cookie, "Content-Type": "application/json" },
+      data: { sceneId: "scene-1" },
+    });
+    expect([200, 202]).toContain(renderRes.status());
+
+    test.setTimeout(240_000);
+    let previewUrl: string | null = null;
+    let lastError: string | null = null;
+    for (let i = 0; i < 90; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const dto = await request.get(`/api/videos/${videoId}`, { headers: { cookie } });
+      if (!dto.ok()) continue;
+      const body = (await dto.json()) as { video?: { previewUrl?: string | null; error?: string | null } };
+      lastError = body.video?.error ?? lastError;
+      if (body.video?.previewUrl) {
+        previewUrl = body.video.previewUrl;
+        break;
+      }
+    }
+    expect(previewUrl, `a render PLACING the upload must land (last video.error: ${lastError})`).toBe(
+      `/api/videos/${videoId}/mp4?variant=preview`
+    );
+    const mp4 = await request.get(`/api/videos/${videoId}/mp4?variant=preview`, { headers: { cookie } });
+    expect(mp4.status()).toBe(200);
+    expect((mp4.headers()["content-type"] ?? "")).toContain("video/");
+
+    // 5. The delete reference guard: still placed → 409 naming the scene.
+    const delRefused = await request.delete(`/api/videos/${videoId}/whiteboard/asset?assetId=up-s69-probe`, {
+      headers: { cookie },
+    });
+    expect(delRefused.status()).toBe(409);
+    expect(((await delRefused.json()) as { error?: string }).error).toMatch(/scene-1/);
+
+    // 6. Unplace → delete → the palette loses it and the object is gone.
+    const cleared = handAuthoredProject("S69 upload board");
+    const put2 = await request.put(`/api/videos/${videoId}/whiteboard`, {
+      headers: { cookie, "Content-Type": "application/json" },
+      data: { project: cleared, rev: 1 },
+    });
+    expect(put2.status()).toBeLessThan(300);
+    const del = await request.delete(`/api/videos/${videoId}/whiteboard/asset?assetId=up-s69-probe`, {
+      headers: { cookie },
+    });
+    expect(del.status()).toBe(200);
+    expect(((await del.json()) as { verified?: boolean }).verified).toBe(true);
+    const get2 = await request.get(`/api/videos/${videoId}/whiteboard`, { headers: { cookie } });
+    const d2 = (await get2.json()) as { library: { id: string; uploaded?: boolean }[] };
+    expect(d2.library.find((a) => a.id === "up-s69-probe")).toBeUndefined();
+  });
 });
+
+// A tiny local expect-helper (Playwright's expect(x).toBe works too; this
+// keeps the failure message in the runner's native form).
+function eq_(actual: unknown, expected: unknown, msg: string): void {
+  expect(actual, msg).toBe(expected);
+}

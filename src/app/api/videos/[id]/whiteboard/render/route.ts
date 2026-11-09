@@ -3,9 +3,9 @@ import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { startJob } from "@/lib/tubeforge/jobs";
 import { runWhiteboardJob } from "@/lib/tubeforge/video-jobs";
-import { loadLibrary } from "@/lib/tubeforge/whiteboard/assets";
 import { validateWhiteboardProject, validWhiteboardId } from "@/lib/tubeforge/whiteboard/storyboard";
 import { parseWhiteboardDoc } from "@/lib/tubeforge/whiteboard/whiteboard-planner";
+import { loadVideoLibrary } from "@/lib/tubeforge/whiteboard/asset-store";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -45,8 +45,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
 
   // Same gate the job will apply — refuse BEFORE the queue so the user sees
-  // the validator's errors on click, not in a failed job card.
-  const lib = loadLibrary();
+  // the validator's errors on click, not in a failed job card. S69: the
+  // gate sees the merged library — a doc that places an upload must not
+  // be refused here and then rendered there.
+  const { lib } = await loadVideoLibrary(id);
   const { project, errors } = validateWhiteboardProject(doc.project, lib.libraryIndex);
   if (!project)
     return NextResponse.json(

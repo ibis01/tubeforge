@@ -211,9 +211,32 @@ export async function runScriptJob(
           message: `Script generation failed: ${message}`,
         },
       });
+      // S69 — the video.error LANE-ATTRIBUTION decision (the S68 close's
+      // follow-up question, answered): a WHITEBOARD-mode video's error badge
+      // belongs to its render lane. The auto-started story-lane script job
+      // is a convenience for whiteboard videos (its scenes feed the
+      // scaffold); when it fails there, the failure stays in the Activity
+      // feed + the row's status (the scaffold's honest "no scenes" gate and
+      // the studio's empty state carry the explanation), and video.error is
+      // NOT written — the S68 CI race (a script failure poisoning the
+      // shared field the whiteboard render's success path clears, timing
+      // either way) is gone by construction. Classic videos keep the
+      // historical write: for them the script lane IS the money path.
+      // renderMode is re-read FRESH — the mode may have switched while this
+      // job was retrying.
+      const fresh = await db.video.findUnique({
+        where: { id: videoId },
+        select: { renderMode: true },
+      });
+      const whiteboardMode = fresh?.renderMode === "whiteboard";
       // The video row may have been deleted mid-flight — tolerate that.
       await db.video
-        .update({ where: { id: videoId }, data: { status: "failed", error: message } })
+        .update({
+          where: { id: videoId },
+          data: whiteboardMode
+            ? { status: "failed" }
+            : { status: "failed", error: message },
+        })
         .catch(() => {});
       throw err; // job registry marks the row "failed"
     }

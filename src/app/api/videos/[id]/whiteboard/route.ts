@@ -6,7 +6,6 @@ import { requireUser } from "@/lib/tubeforge/tenant";
 import { videoDir } from "@/lib/tubeforge/ai";
 import { sceneWavFile } from "@/lib/tubeforge/story";
 import { wavDurationSec } from "@/lib/tubeforge/wav";
-import { loadLibrary } from "@/lib/tubeforge/whiteboard/assets";
 import { validateWhiteboardProject, WB_BUDGETS } from "@/lib/tubeforge/whiteboard/storyboard";
 import { WB_PATH_COMMAND_BUDGET } from "@/lib/tubeforge/whiteboard/assets";
 import { WB_RENDER_FRAME_BUDGET } from "@/lib/tubeforge/whiteboard/timing";
@@ -15,6 +14,7 @@ import {
   serializeWhiteboardDoc,
 } from "@/lib/tubeforge/whiteboard/whiteboard-planner";
 import { invalidateRenderedArtifacts } from "@/lib/tubeforge/render";
+import { loadVideoLibrary } from "@/lib/tubeforge/whiteboard/asset-store";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -22,16 +22,22 @@ type Ctx = { params: Promise<{ id: string }> };
  * S67 — the Whiteboard Engine's document routes (E9 Phase A, E1 design §4).
  *
  * GET  — the doc (validated server-side before return), the editor palette
- *        (asset ids, viewBoxes, tags, drawable summaries — NOT raw SVG) and
- *        the resource budgets for client-side enforcement. S68: the MEASURED
- *        narration durations (`voMs`, WAV header math on the standing
- *        scene-NN.wav files — the same files the render's voFilesFor picks
- *        up) so the editor's playback timing agrees with the render instead
- *        of riding the narration estimate whenever a real VO exists.
- * PUT  — save the whole doc. Validation is the engine validator; its error
- *        strings are returned verbatim (no second error vocabulary). 409 on
- *        a rev mismatch with the current doc in the response. A save
- *        invalidates the stale renders exactly the way slide edits do.
+ *        (asset ids, viewBoxes, tags, drawable summaries — NOT raw SVG for
+ *        the built-ins, which ride the client bundle) and the resource
+ *        budgets for client-side enforcement. S68: the MEASURED narration
+ *        durations (`voMs`, WAV header math on the standing scene-NN.wav
+ *        files — the same files the render's voFilesFor picks up) so the
+ *        editor's playback timing agrees with the render instead of riding
+ *        the narration estimate whenever a real VO exists. S69 (Phase C):
+ *        the palette merges this video's UPLOADED assets — uploads carry
+ *        their sanitized `svg` over the wire (they cannot ride the bundle)
+ *        plus provenance; the doc validates against the SAME merged
+ *        library (one merge law, editor and renderer).
+ * PUT  — save the whole doc. Validation is the engine validator against
+ *        the merged library; its error strings are returned verbatim (no
+ *        second error vocabulary). 409 on a rev mismatch with the current
+ *        doc in the response. A save invalidates the stale renders exactly
+ *        the way slide edits do.
  */
 
 export async function GET(req: NextRequest, ctx: Ctx) {
@@ -48,20 +54,24 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 
   const doc = parseWhiteboardDoc(video.whiteboardProject);
   let project = doc?.project ?? null;
+  // S69 — the ONE merged library: built-ins + this video's uploads.
+  const { lib, uploads, uploadedAssets } = await loadVideoLibrary(id);
   if (project) {
     // Server-side validation before return: a doc the live library can no
     // longer satisfy (an asset renamed, a path gone) reads as "no project"
     // rather than poisoning the editor with an unrenderable one.
-    const lib = loadLibrary();
     const validated = validateWhiteboardProject(project, lib.libraryIndex);
     project = validated.project;
   }
 
-  // The editor palette: ids + geometry + drawables, never raw markup —
-  // the editor draws shapes from the packaged library it ships with.
-  const lib = loadLibrary();
+  // The editor palette: ids + geometry + drawables. Built-ins never ship
+  // raw markup (the client bundle carries the library); UPLOADED assets
+  // ride the wire — sanitized fragment + viewBox + provenance — because
+  // the bundle cannot know them (E9 Phase C).
   const library = [...lib.assets.values()].map((a) => {
     const ex = lib.extracted.get(a.id);
+    const upload = uploadedAssets.get(a.id);
+    const row = uploads.find((r) => r.assetId === a.id);
     return {
       id: a.id,
       w: a.viewBox.w,
@@ -69,6 +79,14 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       tags: a.tags,
       paths: ex ? ex.paths.map((p) => p.id) : [],
       texts: ex ? ex.texts.map((t) => t.id) : [],
+      ...(upload
+        ? {
+            uploaded: true as const,
+            svg: upload.svg,
+            bytes: row?.bytes ?? 0,
+            uploadedBy: row?.uploadedBy ?? "",
+          }
+        : {}),
     };
   });
 
@@ -125,8 +143,9 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
   if (!rawProject)
     return NextResponse.json({ error: "A whiteboard project is required" }, { status: 400 });
 
-  // The engine validator — its error strings go back verbatim (design §4).
-  const lib = loadLibrary();
+  // The engine validator — against the merged library (built-ins + this
+  // video's uploads); its error strings go back verbatim (design §4).
+  const { lib } = await loadVideoLibrary(id);
   const { project, errors } = validateWhiteboardProject(rawProject, lib.libraryIndex);
   if (!project)
     return NextResponse.json({ errors }, { status: 400 });

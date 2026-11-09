@@ -80,7 +80,8 @@ import {
   renderWhiteboard,
   probeDurationSec,
 } from "./whiteboard/render";
-import { loadLibrary } from "./whiteboard/assets";
+import { loadVideoLibrary } from "./whiteboard/asset-store";
+import type { WhiteboardAsset } from "./whiteboard/assets";
 import {
   parseWhiteboardDoc,
   type WhiteboardDoc,
@@ -1452,18 +1453,23 @@ export async function runSlideJob(entityId: string): Promise<void> {
 // spend is recorded, unlike the compositor render job.
 // ---------------------------------------------------------------------------
 
-/** Load + validate the doc's project against the LIVE library. Returns the
- *  normalized project or throws with the validator's verbatim errors (the
- *  design §4 law: no second error vocabulary). */
-function loadValidatedProject(doc: WhiteboardDoc): WhiteboardProject {
-  const lib = loadLibrary();
+/** Load + validate the doc's project against the LIVE merged library
+ *  (built-ins + this video's uploads, S69). Returns the normalized project
+ *  + the upload assets (the renderer needs them — its own loadLibrary
+ *  merges the same list) or throws with the validator's verbatim errors
+ *  (the design §4 law: no second error vocabulary). */
+async function loadValidatedProject(
+  doc: WhiteboardDoc,
+  videoId: string
+): Promise<{ project: WhiteboardProject; uploadedAssets: WhiteboardAsset[] }> {
+  const { lib, uploadedAssets } = await loadVideoLibrary(videoId);
   const { project, errors } = validateWhiteboardProject(doc.project, lib.libraryIndex);
   if (!project) {
     throw new Error(
       `The whiteboard project is invalid — open the Whiteboard Studio to fix it: ${errors.slice(0, 3).join(" · ")}`
     );
   }
-  return project;
+  return { project, uploadedAssets: [...uploadedAssets.values()] };
 }
 
 /** The narration WAVs that actually exist, keyed by whiteboard scene id.
@@ -1510,7 +1516,7 @@ export async function runWhiteboardJob(
       "No whiteboard project on this video yet — open the Whiteboard Studio and scaffold one first"
     );
   }
-  const project = loadValidatedProject(doc);
+  const { project, uploadedAssets } = await loadValidatedProject(doc, videoId);
 
   const outDir = path.join(videoDir(videoId), "whiteboard");
   fs.mkdirSync(outDir, { recursive: true });
@@ -1535,6 +1541,7 @@ export async function runWhiteboardJob(
         outDir,
         voFiles,
         onProgress: wbProgressGuard(entityId),
+        uploadedAssets,
       });
       const key = `${videoId}/whiteboard/preview-${sceneId}.mp4`;
       await putFromPath(key, result.file);
@@ -1583,6 +1590,7 @@ export async function runWhiteboardJob(
       voFiles,
       musicPath: musicPath ?? undefined,
       onProgress: wbProgressGuard(entityId),
+      uploadedAssets,
     });
 
     // The standard key — the existing player route, QC battery and ship gate

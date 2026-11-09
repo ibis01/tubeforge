@@ -2,11 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseScenes } from "@/lib/tubeforge/story";
-import { loadLibrary } from "@/lib/tubeforge/whiteboard/assets";
 import { validateWhiteboardProject, WB_BUDGETS } from "@/lib/tubeforge/whiteboard/storyboard";
 import { scaffoldWhiteboardProject } from "@/lib/tubeforge/whiteboard/whiteboard-planner";
 import { parseWhiteboardDoc, serializeWhiteboardDoc } from "@/lib/tubeforge/whiteboard/whiteboard-planner";
 import { invalidateRenderedArtifacts } from "@/lib/tubeforge/render";
+import { loadVideoLibrary } from "@/lib/tubeforge/whiteboard/asset-store";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -67,8 +67,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   });
 
   // Defense in depth: the planner's output passes the same validator any
-  // client PUT would — one gate for every doc that lands in the column.
-  const lib = loadLibrary();
+  // client PUT would — one gate for every doc that lands in the column
+  // (S69: against the merged library, uploads included, for the day the
+  // rule table learns to place them).
+  const { lib } = await loadVideoLibrary(id);
   const validated = validateWhiteboardProject(project, lib.libraryIndex);
   if (!validated.project)
     return NextResponse.json(

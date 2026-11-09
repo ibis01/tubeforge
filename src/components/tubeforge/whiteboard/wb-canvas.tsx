@@ -28,7 +28,7 @@
 // is the studio's form work — the canvas stays the frame-plan mirror.
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { loadLibrary } from "@/lib/tubeforge/whiteboard/assets";
+import { loadLibrary, type WhiteboardAsset } from "@/lib/tubeforge/whiteboard/assets";
 import { composeScene, framePayload, APPLY_FRAME_FN } from "@/lib/tubeforge/whiteboard/wb-page";
 import {
   buildGeometry,
@@ -64,15 +64,21 @@ export interface WbCanvasProps {
   voMs?: Record<string, number>;
   /** S68 Phase B — editing state (absent ⇒ pure playback, pointer-blind). */
   editing?: WbEditing;
+  /** S69 Phase C — the video's UPLOADED assets (the GET route's wire
+   *  payload): merged into the runtime library through the same
+   *  loadLibrary(uploads) the server validates against — the canvas and
+   *  the renderer agree on the asset universe by construction. */
+  uploadedAssets?: WhiteboardAsset[];
 }
 
 /** The per-scene draw schedule + geometry — built once per scene change. */
 function sceneRuntime(
   project: WhiteboardProject,
   sceneIndex: number,
-  voMs: Record<string, number> | undefined
+  voMs: Record<string, number> | undefined,
+  uploadedAssets: WhiteboardAsset[] | undefined
 ) {
-  const lib = loadLibrary();
+  const lib = loadLibrary(uploadedAssets ?? []);
   const geometry = buildGeometry(
     [...lib.extracted.entries()].map(([id, ex]) => ({ id, paths: ex.paths }))
   );
@@ -131,6 +137,7 @@ export default function WbCanvas({
   onEnded,
   voMs,
   editing,
+  uploadedAssets,
 }: WbCanvasProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -182,7 +189,7 @@ export default function WbCanvas({
     runtimeRef.current = null; // rebuilt lazily below, after setContent
     const iframe = iframeRef.current;
     if (!iframe) return;
-    const rt = (runtimeRef.current ??= sceneRuntime(project, sceneIndex, voMs));
+    const rt = (runtimeRef.current ??= sceneRuntime(project, sceneIndex, voMs, uploadedAssets));
     const composed = composeScene(rt.scene, project, rt.lib.assets);
     const setup = () => {
       const doc = iframe.contentDocument;
@@ -246,7 +253,7 @@ export default function WbCanvas({
     setupRef.current = setup;
 
     iframe.srcdoc = composed.html;
-  }, [project, sceneIndex, voMs]);
+  }, [project, sceneIndex, voMs, uploadedAssets]);
 
   // The iframe fires onLoad for every srcdoc swap.
   useEffect(() => {

@@ -29,6 +29,13 @@ interface LibraryEntry {
   tags: string[];
   paths: string[];
   texts: string[];
+  /** S69 (Phase C): present on UPLOADED assets — the sanitized fragment
+   *  rides the wire (built-ins ship in the client bundle), with the
+   *  manifest provenance for the palette's delete affordance. */
+  uploaded?: boolean;
+  svg?: string;
+  bytes?: number;
+  uploadedBy?: string;
 }
 
 interface WhiteboardGetResponse {
@@ -125,6 +132,17 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
     for (const e of data?.library ?? []) m.set(e.id, e);
     return m;
   }, [data?.library]);
+
+  // S69 — the uploads as engine assets, for the canvas's merged library
+  // (the same loadLibrary(uploads) merge the server validates against).
+  const uploadedAssets = useMemo(() => {
+    const list: { id: string; viewBox: { w: number; h: number }; tags: string[]; svg: string }[] = [];
+    for (const e of data?.library ?? []) {
+      if (e.uploaded && e.svg) list.push({ id: e.id, viewBox: { w: e.w, h: e.h }, tags: e.tags, svg: e.svg });
+    }
+    return list;
+  }, [data?.library]);
+  const uploadFileRef = useRef<HTMLInputElement | null>(null);
 
   // ---- Phase B mutations (all immutable, all mark dirty) -----------------
 
@@ -262,6 +280,62 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
         : undefined,
     [editing, selAsset, onPlacementDrag, onPlacementCommit, onSelect]
   );
+
+  // ---- Phase C loop (upload / delete — the §7 gates live server-side) ----
+
+  const uploadAsset = async (file: File) => {
+    setBusy("upload");
+    setError(null);
+    setNotice(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`/api/videos/${videoId}/whiteboard/asset`, {
+        method: "POST",
+        body: form,
+      });
+      const body = (await res.json()) as {
+        assetId?: string;
+        bytes?: number;
+        probeMs?: number;
+        error?: string;
+        errors?: string[];
+      };
+      if (!res.ok) {
+        setError(body.errors?.length ? body.errors.join(" · ") : (body.error ?? "Upload failed"));
+        return;
+      }
+      setNotice(`Uploaded "${body.assetId}" (${body.bytes ?? 0} B stored, raster probe ${body.probeMs ?? "?"} ms)`);
+      await load(); // refresh the palette + the merged library
+    } catch {
+      setError("Upload failed");
+    } finally {
+      setBusy(null);
+      if (uploadFileRef.current) uploadFileRef.current.value = "";
+    }
+  };
+
+  const deleteAsset = async (assetId: string) => {
+    setBusy(`delete:${assetId}`);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/videos/${videoId}/whiteboard/asset?assetId=${encodeURIComponent(assetId)}`, {
+        method: "DELETE",
+      });
+      const body = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setError(body.error ?? "Delete failed");
+        return;
+      }
+      setNotice(`Deleted "${assetId}"`);
+      await load();
+    } catch {
+      setError("Delete failed");
+    } finally {
+      setBusy(null);
+    }
+  };
 
   // ---- save / conflict ----------------------------------------------------
 
@@ -443,6 +517,7 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
         onEnded={() => setPlaying(false)}
         voMs={data?.voMs}
         editing={editingProps}
+        uploadedAssets={uploadedAssets}
       />
 
       {/* scrub + play */}
@@ -477,27 +552,100 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
       {/* ---- Phase B editor panels ---- */}
       {editing && (
         <div className="space-y-3 rounded-xl border border-white/10 bg-white/5 p-3">
-          {/* library palette */}
+          {/* library palette — built-ins (client bundle) + uploads (wire) */}
           <div>
             <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-white/40">
               Library — click to place {selAsset ? "· selected: " + selAsset : ""}
             </p>
             <div className="flex flex-wrap gap-1.5">
-              {(data?.library ?? []).map((a) => (
-                <button
-                  key={a.id}
-                  onClick={() => addPlacement(a.id)}
-                  title={a.tags.join(", ")}
-                  className={`rounded-md px-2 py-1 text-[11px] ${
-                    placedAssets.some((pl) => pl.assetId === a.id)
-                      ? "bg-white/15 text-white/70"
-                      : "bg-white/5 text-white/80 hover:bg-white/15"
-                  }`}
-                >
-                  {a.id}
-                </button>
-              ))}
+              {(data?.library ?? [])
+                .filter((a) => !a.uploaded)
+                .map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => addPlacement(a.id)}
+                    title={a.tags.join(", ")}
+                    className={`rounded-md px-2 py-1 text-[11px] ${
+                      placedAssets.some((pl) => pl.assetId === a.id)
+                        ? "bg-white/15 text-white/70"
+                        : "bg-white/5 text-white/80 hover:bg-white/15"
+                    }`}
+                  >
+                    {a.id}
+                  </button>
+                ))}
             </div>
+          </div>
+
+          {/* S69 Phase C — uploads: the §7 gates' palette surface */}
+          <div className="rounded-lg border border-white/10 bg-black/20 p-2.5">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">
+                Uploads — your SVGs (256 KB cap, sanitized + budgeted)
+              </p>
+              <label className={`${btnGhost} cursor-pointer`} title="Upload an SVG through the seven gates">
+                {busy === "upload" ? "Uploading…" : "+ Upload SVG"}
+                <input
+                  ref={uploadFileRef}
+                  type="file"
+                  accept=".svg,image/svg+xml"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void uploadAsset(f);
+                  }}
+                />
+              </label>
+            </div>
+            {(data?.library ?? []).filter((a) => a.uploaded).length === 0 ? (
+              <p className="text-[11px] text-white/35">
+                No uploads yet — add a drawing, logo or diagram you own the rights to.
+              </p>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {(data?.library ?? [])
+                  .filter((a) => a.uploaded)
+                  .map((a) => (
+                    <div
+                      key={a.id}
+                      className={`flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] ${
+                        placedAssets.some((pl) => pl.assetId === a.id)
+                          ? "bg-white/15 text-white/80"
+                          : "bg-white/5 text-white/80"
+                      }`}
+                    >
+                      {/* the per-asset drawable preview — sanitized server-side */}
+                      {a.svg && (
+                        <svg
+                          viewBox={`0 0 ${a.w} ${a.h}`}
+                          className="h-6 w-6 shrink-0"
+                          aria-hidden
+                          dangerouslySetInnerHTML={{ __html: a.svg }}
+                        />
+                      )}
+                      <button
+                        onClick={() => addPlacement(a.id)}
+                        title={a.tags.join(", ")}
+                        className="hover:underline"
+                      >
+                        {a.id}
+                      </button>
+                      <button
+                        onClick={() => void deleteAsset(a.id)}
+                        disabled={busy === `delete:${a.id}`}
+                        title={
+                          placedAssets.some((pl) => pl.assetId === a.id)
+                            ? "Remove the placements first — deleting a placed asset would brick the doc"
+                            : "Delete this upload"
+                        }
+                        className="rounded px-1 text-white/40 hover:bg-red-500/20 hover:text-red-200 disabled:opacity-40"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+              </div>
+            )}
           </div>
 
           {/* placement inspector */}

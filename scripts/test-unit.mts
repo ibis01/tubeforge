@@ -7523,7 +7523,186 @@ await test("S68 scheduler: explicit events are SENIOR — verbatim times, the fi
   }
 });
 
+suiteStart("S69 whiteboard — upload gates 1-4 (E9 Phase C / E11 §7, the pure half)");
+
+await test("S69 id derivation: filename stems slug to charset-legal up- ids", async () => {
+  const { deriveUploadAssetId } = await import("../src/lib/tubeforge/whiteboard/upload");
+  const { validWhiteboardId } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  eq(deriveUploadAssetId("My Drawing!.svg"), "up-my-drawing", "punctuation runs collapse to one dash");
+  eq(deriveUploadAssetId("logo v2.SVG"), "up-logo-v2", "case-insensitive extension, spaces slug");
+  eq(deriveUploadAssetId("  ---__---.svg"), "up-upload", "slugless stems fall back to a stable id");
+  eq(deriveUploadAssetId("a".repeat(200) + ".svg"), "up-" + "a".repeat(48), "stem caps at 48 chars");
+  for (const f of ["Heart Diagram.svg", "коин.svg", "x_1.y.svg"]) {
+    ok(validWhiteboardId(deriveUploadAssetId(f)), `id for "${f}" respects the charset law`);
+  }
+});
+
+await test("S69 sniff: valid single-root SVG yields the fragment + viewBox", async () => {
+  const { sniffSvgUpload } = await import("../src/lib/tubeforge/whiteboard/upload");
+  const doc = Buffer.from(
+    `<?xml version="1.0"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x.dtd">\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 120"><path id="p1" d="M 10 10 L 90 90" fill="none"/><text id="t1" x="9" y="20" font-size="12">hi</text></svg>`,
+    "utf8"
+  );
+  const r = sniffSvgUpload(doc);
+  ok("svg" in r, "sniff passes with a prolog + doctype (stripped, not fatal)");
+  if ("svg" in r) {
+    eq(r.viewBox, { w: 240, h: 120 }, "viewBox parsed + rounded");
+    ok(r.svg.includes('id="p1"'), "fragment carries the inner markup");
+    ok(!r.svg.includes("<svg"), "the root tag itself is not part of the fragment");
+  }
+});
+
+await test("S69 sniff: the structure walls refuse readably", async () => {
+  const { sniffSvgUpload } = await import("../src/lib/tubeforge/whiteboard/upload");
+  const bad = (s: string) => {
+    const r = sniffSvgUpload(Buffer.from(s, "utf8"));
+    ok("errors" in r, `must refuse: ${s.slice(0, 44)}…`);
+  };
+  bad(`<svg viewBox="0 0 10 10"></svg><svg viewBox="0 0 10 10"></svg>`); // two roots
+  bad(`<div><svg viewBox="0 0 10 10"></svg></div>`); // content before root
+  bad(`<svg viewBox="0 0 10 10"></svg><p>after</p>`); // content after root
+  bad(`<svg width="100" height="50"><path id="p" d="M 0 0 L 9 9"/></svg>`); // no viewBox
+  bad(`<svg viewBox="0 0 5000 100"><path id="p" d="M 0 0 L 9 9"/></svg>`); // viewBox > 4096
+  bad(`<svg viewBox="0 0 8 100"><path id="p" d="M 0 0 L 9 9"/></svg>`); // viewBox < 16
+  bad(`<svg viewBox="0 0 -100 100"><path id="p" d="M 0 0 L 9 9"/></svg>`); // negative
+  // Invalid UTF-8: a raw 0xFF byte is not a valid sequence.
+  const r = sniffSvgUpload(Buffer.from([0x3c, 0x73, 0x76, 0x67, 0x20, 0xff, 0x3e]));
+  ok("errors" in r, "invalid UTF-8 refuses (fatal decode)");
+});
+
+await test("S69 validate: the happy path passes gates 1-4 with counts", async () => {
+  const { validateUploadedSvg } = await import("../src/lib/tubeforge/whiteboard/upload");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><path id="s1" d="M 10 10 L 60 60" fill="none" stroke="#1d3557" stroke-width="6"/><path id="s2" d="M 40 10 C 60 30, 80 50, 100 90" fill="none"/><text id="cap" x="10" y="180" font-size="20">S69</text></svg>`;
+  const v = validateUploadedSvg(Buffer.from(svg, "utf8"), "Probe.svg");
+  ok(v.ok, `must pass: ${v.ok ? "" : v.errors.join(" · ")}`);
+  if (v.ok) {
+    eq(v.asset.id, "up-probe", "id derived from the filename");
+    eq(v.paths, 2, "two paths extracted");
+    eq(v.texts, 1, "one text extracted");
+    eq(v.commands, 4, "M+L + M+C = 4 expanded commands (the Ms count)");
+    ok(v.asset.svg.includes('id="s1"'), "stored markup is the sanitized fragment");
+  }
+});
+
+await test("S69 validate: the attack surface is neutralized, the asset survives", async () => {
+  const { validateUploadedSvg } = await import("../src/lib/tubeforge/whiteboard/upload");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><script>alert(1)</script><path id="ok1" d="M 5 5 L 50 50" onclick="evil()"/><path id="ok2" d="M 5 60 L 50 110" fill="none"/><image href="https://evil/x.png" x="0" y="0" width="10" height="10"/><a href="javascript:evil()"><path id="ok3" d="M 60 5 L 110 50" fill="none"/></a></svg>`;
+  const v = validateUploadedSvg(Buffer.from(svg, "utf8"), "attack.svg");
+  ok(v.ok, `gates pass (the pipeline neutralizes rather than punishes): ${v.ok ? "" : v.errors.join(" · ")}`);
+  if (v.ok) {
+    ok(!v.asset.svg.includes("<script"), "script subtree stripped");
+    ok(!/on[a-z]+\s*=/.test(v.asset.svg), "event handlers stripped");
+    ok(!v.asset.svg.includes("<image"), "image element stripped");
+    ok(!/javascript:/i.test(v.asset.svg), "javascript: hrefs stripped");
+    eq(v.paths, 3, "the three drawable paths survive");
+  }
+});
+
+await test("S69 validate: the budget walls refuse with the reasons", async () => {
+  const { validateUploadedSvg } = await import("../src/lib/tubeforge/whiteboard/upload");
+  const manyL = (n: number) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><path id="big" d="M 0 0 ${Array.from({ length: n }, (_, i) => `L ${i % 400} ${Math.floor(i / 400)}`).join(" ")}" fill="none"/></svg>`;
+  // Per-path wall: 600 implicit L commands > 512.
+  const overPath = validateUploadedSvg(Buffer.from(manyL(600), "utf8"), "overpath.svg");
+  ok(!overPath.ok, "600-command path refuses");
+  if (!overPath.ok) ok(/per-path budget/.test(overPath.errors.join(" ")), "names the per-path wall");
+  // Per-asset total: 5 paths x 450 commands = 2250 > 2048.
+  const five = (cmd: string, id: string) => `<path id="${id}" d="M 0 0 ${cmd}" fill="none"/>`;
+  const mk = (n: number) => {
+    const cmd = Array.from({ length: n }, (_, i) => `L ${i % 300} ${Math.floor(i / 300)}`).join(" ");
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">${Array.from({ length: 5 }, (_, i) => five(cmd, `p${i}`)).join("")}</svg>`;
+  };
+  const overTotal = validateUploadedSvg(Buffer.from(mk(450), "utf8"), "overtotal.svg");
+  ok(!overTotal.ok, "2250 total commands refuse");
+  if (!overTotal.ok) ok(/per-asset budget/.test(overTotal.errors.join(" ")), "names the per-asset wall");
+  // Under both walls passes: 5 x 400 = 2000 <= 2048.
+  const under = validateUploadedSvg(Buffer.from(mk(400), "utf8"), "under.svg");
+  ok(under.ok, `2000 total commands pass: ${under.ok ? "" : under.errors.join(" · ")}`);
+});
+
+await test("S69 validate: charset-violating ids + reserved ids + no drawables refuse", async () => {
+  const { validateUploadedSvg } = await import("../src/lib/tubeforge/whiteboard/upload");
+  const withId = (id: string) =>
+    Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path id="${id}" d="M 0 0 L 40 40" fill="none"/></svg>`, "utf8");
+  const bad = validateUploadedSvg(withId("we--ird"), "charset.svg");
+  ok(!bad.ok, "a -- id would corrupt the renderer's namespace seam");
+  if (!bad.ok) ok(/id charset/.test(bad.errors.join(" ")), "names the charset wall");
+  const reserved = validateUploadedSvg(withId("fine"), "Spark.svg", new Set(["up-spark"]));
+  ok(!reserved.ok, "a colliding derived id refuses");
+  if (!reserved.ok) ok(/already taken/.test(reserved.errors.join(" ")), "the collision reads clearly");
+  const empty = validateUploadedSvg(
+    Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="0" y="0" width="9" height="9"/></svg>`, "utf8"),
+    "empty.svg"
+  );
+  ok(!empty.ok, "no drawable content (rect is not a drawable) refuses");
+  // The byte cap.
+  const big = Buffer.alloc(256 * 1024 + 1, 0x20);
+  const overBytes = validateUploadedSvg(big, "big.svg");
+  ok(!overBytes.ok, "over-cap bytes refuse before any parse");
+});
+
+await test("S69 loadLibrary(uploads): the merge registers uploads beside the built-ins", async () => {
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const upload = {
+    id: "up-probe",
+    viewBox: { w: 200, h: 200 },
+    tags: ["upload"],
+    svg: `<path id="up-p1" d="M 10 10 L 80 80" fill="none" stroke="#1d3557" stroke-width="6"/>`,
+  };
+  const lib = loadLibrary([upload]);
+  ok(lib.assets.has("up-probe"), "upload registered in the merged library");
+  eq(lib.extracted.get("up-probe")?.paths.length, 1, "upload paths extracted");
+  ok(lib.libraryIndex.assetIds.has("up-probe"), "validator index sees the upload");
+  // A project placing the upload validates clean against the MERGED lib only.
+  const project = {
+    title: "Upload board",
+    width: 1920,
+    height: 1080,
+    fps: 24,
+    hand: { style: "marker" as const, scale: 1 },
+    scenes: [
+      {
+        id: "scene-1",
+        narration: "A scene that places an uploaded asset.",
+        background: "#ffffff" as const,
+        placements: [{ assetId: "up-probe", placement: { x: 300, y: 300, scale: 2, rotateDeg: 0 }, order: 0 }],
+        animations: [],
+        camera: [],
+      },
+    ],
+  };
+  const merged = validateWhiteboardProject(project, lib.libraryIndex);
+  ok(merged.project !== null, `placement validates against the merged library: ${merged.errors.join(" · ")}`);
+  const builtinOnly = loadLibrary();
+  const refused = validateWhiteboardProject(project, builtinOnly.libraryIndex);
+  ok(refused.project === null, "the same placement correctly fails against built-ins alone");
+  // Collisions throw — the route prevents them at write time; a collision at
+  // load is data corruption and says so.
+  let threw = false;
+  try {
+    loadLibrary([{ ...upload, id: "spark" }]);
+  } catch {
+    threw = true;
+  }
+  ok(threw, "an upload colliding with a built-in id throws at load");
+});
+
+await test("S69 load-time sanitize law: a re-sanitized upload is safe even if storage lied", async () => {
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const sketchy = {
+    id: "up-sketchy",
+    viewBox: { w: 100, h: 100 },
+    tags: ["upload"],
+    svg: `<path id="s1" d="M 0 0 L 50 50" fill="none"/><script>evil()</script>`,
+  };
+  const lib = loadLibrary([sketchy]);
+  const stored = lib.assets.get("up-sketchy")?.svg ?? "";
+  ok(!stored.includes("<script"), "the merge re-runs sanitizeSvg on every load (the pipeline law)");
+});
+
 console.log(`\n${"─".repeat(56)}`);
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

@@ -404,10 +404,41 @@ model Video {
   activities   Activity[]
   slots        ScheduleSlot[]
   stats        VideoStat[]
+  // S69 — the Whiteboard Engine's uploaded-asset manifest (E9 Phase C /
+  // E11 §7 gate 7): one row per user SVG registered into this video's
+  // whiteboard library. The storage object lives at
+  // <videoId>/whiteboard/assets/<assetId>.svg; bytes + the per-org count
+  // feed the quota walls (gate 6).
+  whiteboardAssetUploads WhiteboardAssetUpload[]
 
   @@index([organizationId])
   @@index([status])
   @@index([createdAt])
+}
+
+// S69 — Whiteboard Engine (E9 Phase C / E11 §7): the uploaded-asset
+// manifest. `assetId` is the library id the upload registers as (the
+// charset-legal slug of the filename, `up-` prefixed, unique per video);
+// `bytes` is the SANITIZED fragment's stored size; `uploadedBy` carries the
+// provenance the design's gate 7 asks for. Deleting the video cascades the
+// manifest (the storage layer's per-video sweep removes the objects).
+model WhiteboardAssetUpload {
+  id             String   @id @default(cuid())
+  organizationId String
+  videoId        String
+  assetId        String
+  /** The sniffed root viewBox (design §7 gate 2) — placement geometry is
+   *  viewBox-space; the row is the manifest, the object is the fragment. */
+  viewBoxW       Int
+  viewBoxH       Int
+  bytes          Int      @default(0)
+  uploadedBy     String
+  createdAt      DateTime @default(now())
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([videoId, assetId])
+  @@index([organizationId])
 }
 
 model Activity {

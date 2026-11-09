@@ -16,6 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "util";
 
+import type { WhiteboardAsset } from "./assets";
 import { loadLibrary } from "./assets";
 // S67 — the compose/applier seam lives in wb-page.ts (PURE), shared with the
 // editor's playback canvas — the design §5 one-source law in both directions.
@@ -44,6 +45,10 @@ export interface RenderWhiteboardOptions {
   /** Music bed path (FLAC/WAV); mixed at -16 dB under the final assembly. */
   musicPath?: string;
   onProgress?: (label: string, fraction: number) => void;
+  /** S69 (E9 Phase C): the video's UPLOADED assets, merged into the library
+   *  by the same loadLibrary the built-ins ride — the render sees exactly
+   *  what the editor validated against (one merge law, both sides). */
+  uploadedAssets?: WhiteboardAsset[];
 }
 
 export interface SceneRenderResult {
@@ -77,6 +82,77 @@ export async function probeDurationSec(file: string): Promise<number | null> {
   }
 }
 
+// -------------------------------------------------------------------------
+// S69 (E9 Phase C / E11 §7 gate 5) — rasterize-before-trust.
+//
+// Pathological-but-valid markup can parse fine and explode raster time
+// (the design's exact example). The probe is the SAME renderer, not a
+// separate validator: the sanitized fragment goes into a network-aborted
+// chromium context at the asset's own viewBox and must produce pixels
+// inside the wall-clock budget, or the upload dies with a readable error.
+// -------------------------------------------------------------------------
+
+export interface AssetRasterProbeResult {
+  ok: boolean;
+  ms: number;
+  error?: string;
+}
+
+/** Gate 5 — rasterize a (sanitized) uploaded asset standalone under a
+ * wall-clock budget (default 5 s, design §7.5). NEVER throws — the route
+ * turns a not-ok into a 400 with this error. */
+export async function probeAssetRasterization(
+  asset: WhiteboardAsset,
+  budgetMs = 5_000
+): Promise<AssetRasterProbeResult> {
+  const t0 = Date.now();
+  // The handle lives on a holder object — a plain `let` gets flow-narrowed
+  // to its null initializer across the closure boundary (TS cannot see the
+  // assignment run), and the finally's close would read as `never`.
+  const holder: { browser?: import("playwright").Browser } = {};
+  const timer = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), budgetMs));
+  const work = (async (): Promise<AssetRasterProbeResult> => {
+    const { chromium } = await import("playwright");
+    holder.browser = await chromium.launch({ headless: true });
+    const context = await holder.browser.newContext({
+      viewport: { width: 512, height: 512 },
+      deviceScaleFactor: 1,
+    });
+    // Security line 2, verbatim: the probe page has no network, period.
+    await context.route("**/*", (route) => route.abort());
+    const page = await context.newPage();
+    const html =
+      `<!doctype html><html><body style="margin:0">` +
+      `<svg id="probe" xmlns="http://www.w3.org/2000/svg" width="512" height="512" ` +
+      `viewBox="0 0 ${asset.viewBox.w} ${asset.viewBox.h}">` +
+      `<g>${asset.svg}</g></svg></body></html>`;
+    await page.setContent(html, { waitUntil: "load" });
+    // Force the raster: a screenshot must come back with real pixels.
+    const shot = await page.screenshot({ type: "jpeg", quality: 60 });
+    if (shot.length < 64) return { ok: false, ms: Date.now() - t0, error: "the probe rasterized to nothing" };
+    return { ok: true, ms: Date.now() - t0 };
+  })();
+  try {
+    const winner = await Promise.race([work, timer]);
+    if (winner === "timeout")
+      return {
+        ok: false,
+        ms: Date.now() - t0,
+        error: `rasterizing this SVG exceeded the ${Math.round(budgetMs / 1000)}s budget — simplify the paths (fewer points, shallower nesting)`,
+      };
+    return winner;
+  } catch (err) {
+    return {
+      ok: false,
+      ms: Date.now() - t0,
+      error: `the raster probe failed: ${err instanceof Error ? err.message.slice(0, 160) : String(err).slice(0, 160)}`,
+    };
+  } finally {
+    // The race's loser must not leak a browser process: close either way.
+    await holder.browser?.close().catch(() => {});
+  }
+}
+
 /** Render one whiteboard project to <outDir>/final.mp4. */
 export async function renderWhiteboard(
   project: WhiteboardProject,
@@ -106,7 +182,7 @@ export async function renderWhiteboard(
   }
 
   const { chromium } = await import("playwright");
-  const lib = loadLibrary();
+  const lib = loadLibrary(opts.uploadedAssets ?? []);
   const geometry = buildGeometry(
     [...lib.extracted.entries()].map(([id, ex]) => ({ id, paths: ex.paths }))
   );

@@ -245,8 +245,16 @@ export function extractAsset(asset: WhiteboardAsset): ExtractedAsset {
 }
 
 /** Load + register the library: sanitize (already at construction), extract,
- *  and feed the pure scheduler's text registries. */
-export function loadLibrary(): {
+ *  and feed the pure scheduler's text registries.
+ *
+ *  S69 (E9 Phase C / E11 §7 gate 7): `uploaded` merges per-video uploaded
+ *  assets AFTER the built-ins — the SAME registration path (sanitize on
+ *  load, extraction, the scheduler's text registries), so a placement or
+ *  event addressing an upload validates and renders through the exact code
+ *  the built-ins ride. Id collisions (an upload vs a built-in, or two
+ *  uploads) throw — the /asset route prevents them at write time, so a
+ *  collision at load is data corruption and says so. */
+export function loadLibrary(uploaded: WhiteboardAsset[] = []): {
   assets: Map<string, WhiteboardAsset>;
   extracted: Map<string, ExtractedAsset>;
   libraryIndex: {
@@ -259,8 +267,8 @@ export function loadLibrary(): {
   const extracted = new Map<string, ExtractedAsset>();
   const pathIdsByAsset = new Map<string, Set<string>>();
   const textIdsByAsset = new Map<string, Set<string>>();
-  for (const a of ASSETS) {
-    if (assets.has(a.id)) throw new Error(`duplicate whiteboard asset id: ${a.id}`);
+  const register = (a: WhiteboardAsset, origin: string): void => {
+    if (assets.has(a.id)) throw new Error(`duplicate whiteboard asset id: ${a.id} (${origin})`);
     const ex = extractAsset(a);
     assets.set(a.id, a);
     extracted.set(a.id, ex);
@@ -272,6 +280,13 @@ export function loadLibrary(): {
       TEXT_CHARS_BY_ID.set(`${a.id}::${t.id}`, t.content.length);
       TEXT_ANCHORS.set(`${a.id}::${t.id}`, { x: t.x, y: t.y, size: t.size });
     }
+  };
+  for (const a of ASSETS) register(a, "built-in library");
+  for (const u of uploaded) {
+    // The load-time sanitize law applies to uploads too — trusted-or-not,
+    // the gate is a property of the pipeline (they were sanitized at upload
+    // as well; this is defense in depth, not a second vocabulary).
+    register({ ...u, svg: sanitizeSvg(u.svg) }, "upload manifest");
   }
   return {
     assets,
