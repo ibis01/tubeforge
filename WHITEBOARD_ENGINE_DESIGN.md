@@ -199,7 +199,7 @@ route conventions.
 | `/api/videos/[id]/whiteboard` | PUT | Save the whole doc. Body `{ project, rev? }`. Validate via `validateWhiteboardProject` → `400 { errors }` on invalid (the validator's error strings, verbatim — no second error vocabulary). 409 on rev mismatch with the current doc in the response. Normalized project returned. |
 | `/api/videos/[id]/whiteboard/scaffold` | POST | The NATIVE planner (E5 phase 1, zero AI): builds a starter project from the story scenes — narration copied per scene, placements from a per-scene-kind rule table, default camera, draw schedules from the fill law. 409 if a project already exists (`force: true` to regenerate). |
 | `/api/videos/[id]/whiteboard/render` | POST | Enqueue. Payload `{ sceneId?: string }` — absent = full render (job on the videoId), present = single-scene preview at 720p/24fps without the music bed (job on `<videoId>#wb<sceneId>`, artifact `preview-<sceneId>.mp4`, sets `hasPreview`). Rejects when the project is invalid or over-budget with the exact wall it hit. |
-| `/api/videos/[id]/whiteboard/asset` | POST | SVG upload (E11-hardened, §7).multipart, byte-capped. |
+| `/api/videos/[id]/whiteboard/asset` | POST | SVG upload (E11 §7 — **executed at S69**: the seven gates in order — transport cap, sniff, sanitize, budgets, rasterize-before-trust probe, quotas, storage+manifest). DELETE removes one upload, refusing while the current project still places it. |
 
 Progress/status rides the EXISTING per-video DTO + jobs progress surface —
 no new polling route. Scene re-render replaces only that scene's artifact
@@ -231,19 +231,13 @@ shows at t=12.4s is what the MP4 will contain at t=12.4s. There is no
 second animation implementation to drift (the determinism law's
 consequence for UX, not just for QC).
 
-Phasing:
-
-- **Phase A (view):** scaffold + scrub + play + render buttons. The
-  minimum loop that makes the engine a product.
-- **Phase B (edit):** timeline event editing (times, durations), placement
-  move/resize/rotate, camera keyframes, per-scene narration text,
-  background/hand style. All edits go through PUT (validate server-side;
-  the client mirrors the budgets from GET).
-- **Phase C (assets):** palette browsing + SVG upload (§7) + per-asset
-  drawable previews.
-
-E9's stages execute these phases in order; Phase A is the first
-product-integration commit after owner review.
+- **Phase A (view): LANDED (S67)** — scaffold + scrub + play + render.
+- **Phase B (edit): LANDED (S68)** — placement/event/camera editing, measured
+  narration timing, aspect-aware scaffold.
+- **Phase C (assets): LANDED (S69)** — palette upload surface behind §7's
+  seven gates (the rasterize probe included), the one-merge law
+  (`loadLibrary(uploads)`) across routes/job/editor, per-asset drawable
+  previews, reference-guarded delete.
 
 ---
 
@@ -345,9 +339,9 @@ E11 builds the path.
 | E5 storyboard intelligence | Phase 1 (native scaffold, zero AI) **LANDED (S67)** — the keyword rule-table planner; phase 2 (LLM planner via `aiCallJson`) is gateway-blocked for verification like S63's re-measure |
 | E6 audio sync | **Wired (S67)** — the job maps the video's existing `scene-XX.wav` files into `voFiles`; real-VO verification gateway-blocked |
 | E8 renderer integration | **LANDED (S67)** — `RENDER_MODES` gains `"whiteboard"`; the engine renders to the STANDARD `final.mp4` (player/QC/ship-gate unchanged) while `runRenderJob` refuses the mode — the compositor never renders whiteboard (peer-mode law, §3.1) |
-| E9 editor | **Phase A LANDED (S67)** — scaffold + scrub/play + render, the five-route surface (four shipped; `/asset` rides E11), the `whiteboard` JobKind, the doc column. Phase B (event editing) and Phase C (palette) are the next product stages |
+| E9 editor | **Phases A + B + C LANDED (S67/S68/S69)** — the five-route surface (doc GET/PUT, scaffold, render, `/asset`), the `whiteboard` JobKind, the doc column, editable storyboard, the upload path through §7's seven gates |
 | E10 QC/benchmarks | Lens-passing proven; per-format (9:16, 1:1) benchmarks ride E9 (the engine already takes width/height/fps from the doc) |
-| E11 security hardening | §7 spec'd; execution after E9 Phase C |
+| E11 security hardening | §7 spec'd; **the upload path executed at S69** (gates 1–7 with the rasterize probe); the remaining E11 surface (per-tenant isolation audits of the manifest, upload fuzz corpus growth) rides the standing hardening cadence |
 | E12 production integration | Entitlements preview: native render is $0 → available to ALL tiers (first $0 creative mode); AI planner/TTS metered as usual. Publish path reuses the export gate + QC. Worker chromium = the slides deployment contract (§3.3) |
 
 ---

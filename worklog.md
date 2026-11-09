@@ -2888,3 +2888,85 @@ heuristic (their honesty note — the best idea in the repo). Sequencing
 unchanged: S69 remains the Whiteboard Phase B remainder + the
 video.error lane-attribution question. ROADMAP.md gains the Post-Stage-7
 2.0 tracks section.
+
+## S69 implementation (2026-11-10 UTC) — E9 Phase C: the palette takes uploads through the seven gates
+
+The stage opened with the one-probe gateway discipline (the standing outage
+watch): **PROBE-GREEN** — the quota probe's chat dispatch replied WIRED in
+547 ms (`scripts/gateway-quota-probe.mts`, exit 0). The outage window that
+blocked S63's re-measure and the LLM whiteboard planner has cleared; both
+stay gated on their own stages' launch conditions, but the wall is down.
+
+What landed (`773072e`, one commit):
+
+- **`upload.ts` — gates 1–4, PURE** (the E11 §7 order, each gate naming its
+  unit-pinned sibling): 256 KB transport cap; UTF-8-fatal + single-root
+  `<svg>` + viewBox sniff (16–4096 walls); `sanitizeSvg` (the S64 attack
+  battery — the pipeline neutralizes rather than punishes: a script subtree
+  strips, the drawables survive); 512/path + 2,048/asset command budgets
+  with `extractAsset().rejected` MUST-be-empty; `up-` id derivation from
+  the filename stem (charset-legal by construction, collisions a 409).
+- **`render.ts` — gate 5, rasterize-before-trust.**
+  `probeAssetRasterization`: the SAME network-aborted chromium rasterizes
+  the sanitized fragment at the asset's viewBox under a 5 s wall clock;
+  never throws, always closes the browser (the holder-object pattern keeps
+  TS's flow analysis from eating the handle).
+- **The manifest** (`WhiteboardAssetUpload`, migration
+  `20261110120000_s69_whiteboard_assets`, sqlite mirror synced): one row
+  per upload — viewBox, bytes, `uploadedBy` provenance; unique on
+  (videoId, assetId); cascade-on-video-delete. Gate 6: bytes ride
+  storage.put's assertQuota; counts wall at 48/video, 240/org.
+- **`/asset` route**: POST multipart through all seven gates (413 over-cap,
+  400 with the verbatim gate errors); DELETE refuses while the current
+  project still places the asset (409 naming the scenes — deleting a placed
+  asset would brick the next save with "unknown asset" and the GET would
+  quietly read "no project"), then removes row + object and VERIFIES the
+  object is gone (a stale object keeps burning org quota).
+- **One merge law**: `loadLibrary(uploads)` is what the GET/PUT/scaffold/
+  render routes, the render job (`uploadedAssets` through to
+  `renderWhiteboard`), and the editor canvas (`WbCanvas` prop →
+  `sceneRuntime`) all call. Uploads ride the wire with their sanitized
+  fragment (they cannot ride the client bundle); built-ins stay
+  bundle-only. A vanished storage object skips honestly (row stays, asset
+  stops validating) — a load that threw would take the studio down.
+- **The studio palette (Phase C)**: an Uploads group with per-asset
+  drawable previews (the sanitized fragment in a scaled `<svg>`), upload
+  through the gates, delete with the reference guard; the count in the
+  footer.
+- **The `video.error` lane-attribution decision (the S68 close's question,
+  answered)**: a whiteboard-mode video's script-lane failure no longer
+  writes `video.error` — Activity + row status carry it, the scaffold's
+  honest "no scenes" gate explains it, and the render lane owns the badge.
+  The renderMode is re-read FRESH at the final-failure write (the mode may
+  have switched mid-retry). Classic videos keep the historical write: for
+  them the script lane IS the money path. The S68 CI race is gone by
+  construction.
+- **Tests**: unit 318 → 332 with this stage (9 upload-gate contracts:
+  id derivation, sniff walls, happy-path counts, attack neutralization,
+  budget walls with the reasons, charset/reserved/no-drawable refusals,
+  the merge, the load-time sanitize law) — S70's CI-1/CI-2 suites land in
+  the next commit; e2e 27 → 28: gates → hostile-file neutralization →
+  palette merge → a REAL scene-preview render placing the upload → delete
+  guard, plus the lane-attribution contract (video.error stays clean on a
+  whiteboard video whatever the script job's timing).
+
+**Battery:** tsc 0 · eslint 0 errors (20 baseline warnings) · unit 327/327
+(pre-S70) · queue PASS · billing 40/40 · build 0 · e2e 28/28.
+
+## S69 close (2026-11-10 UTC) — CI evidence
+
+**Run 42709763518 on `773072e` — all six jobs green** (Typecheck·Lint·Unit ·
+Secret scan (gitleaks) · PostgreSQL integration · Money-path coverage ·
+Production build · E2E (Playwright), 28 tests):
+https://github.com/ibis01/tubeforge/actions/runs/42709763518
+
+Landing-gate state: origin/main = `773072e`; S67 + S68 + S69(E9 Phase B
+remainder: palette/asset management behind §7's seven gates + the
+video.error lane-attribution decision) closed on green CI. The landing PAT
+transited chat again — rotate/revoke it after this session.
+
+Next up (S70): CI-1 hook/script scoring + CI-2 packaging lint — both
+zero-new-infra (no new scopes, no new job kinds; synchronous budget-capped
+routes riding the llm.ts seam), per
+docs/audits/creator-intelligence-record.md. The gateway probe is green, so
+the LLM halves can be live-verified in the sandbox this stage.

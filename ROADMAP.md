@@ -417,8 +417,11 @@ The active tracks, one line each (detail lives in `docs/audits/` records
 and the engine design docs):
 
 1. **Whiteboard Engine E-series** (`WHITEBOARD_ENGINE_DESIGN.md`) — E9
-   Phase A/B landed (S67/S68); the Phase B remainder (palette + asset
-   management behind §7's seven gates) is the immediate milestone.
+   Phases A/B/C landed (S67/S68/S69: the editor, the editable storyboard,
+   and the upload palette behind §7's seven gates — E11's upload path
+   executed). The whiteboard loop has proven the shared contracts; the
+   E5 phase-2 LLM planner's verification window is OPEN (gateway probe
+   green 2026-11-10) and rides its own stage.
 2. **Creator Intelligence Engine** (`docs/audits/creator-intelligence-record.md`)
    — hook/script scoring (CI-1), title+thumbnail pairing lint (CI-2),
    transcript-based Shorts selection feeding the existing renderer
