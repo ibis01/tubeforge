@@ -1490,9 +1490,10 @@ await test("queue: resumableKinds covers every kind the routes start", async () 
   // in review); every one must be resumable after a crash. Since the S33
   // contract fix, resumableKinds() is DERIVED from the handler registry, so
   // this test can no longer pass with a stale list — the literal below pins
-  // exhaustiveness: all 20 JobKind values are route-started AND
+  // exhaustiveness: all 21 JobKind values are route-started AND
   // handler-registered (director + continuity joined in Stage 5, upload in
-  // Stage 6; the pre-fix copy listed only 18 and enshrined the drift).
+  // Stage 6, whiteboard in S67; the pre-fix copy listed only 18 and
+  // enshrined the drift).
   const { resumableKinds } = await import("../src/lib/tubeforge/queue-handlers.ts");
   const kinds = resumableKinds();
   const expected = [
