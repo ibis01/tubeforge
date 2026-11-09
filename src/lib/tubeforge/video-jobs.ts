@@ -95,7 +95,7 @@ import {
   renderSlidePngs,
   slideBrandFor,
 } from "./slides";
-import { get, remove, materialize, putFromPath } from "./storage";
+import { get, put, remove, materialize, putFromPath } from "./storage";
 import { promoteVariant, pickVariantStyles } from "./ai";
 import { uploadToYouTube } from "./youtube";
 import {
@@ -1542,10 +1542,16 @@ export async function runWhiteboardJob(
       // product-wide contract, and the mp4 route streams `${videoId}/
       // preview.mp4` (statVideoFile), exactly like the story lane. Writing
       // only the namespaced copy left the DTO advertising a 404 — a lying
-      // badge the S68 e2e caught live. The namespaced copy stays for
-      // per-scene history; invalidateRenderedArtifacts already deletes BOTH
-      // keys on the next doc edit (the sweep pattern predates this).
-      await putFromPath(`${videoId}/preview.mp4`, result.file);
+      // badge the S68 e2e caught live. The copy re-reads the LANDED
+      // object: putFromPath RENAMES the render output into the namespaced
+      // key when both live in the same directory (its zero-copy fast
+      // path), so a second putFromPath on result.file would stat a
+      // renamed-away source — the exact ENOENT the S68 driver run pinned
+      // on 2026-11-09. The namespaced copy stays for per-scene history;
+      // invalidateRenderedArtifacts already deletes BOTH keys on the next
+      // doc edit (the sweep pattern predates this), and both keys occupy
+      // org bytes, so both are quota-attributed like any other put.
+      await put(`${videoId}/preview.mp4`, await get(key));
       await db.video.update({ where: { id: videoId }, data: { hasPreview: true, error: null } });
       await db.activity.create({
         data: {
