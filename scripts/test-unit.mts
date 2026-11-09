@@ -7703,6 +7703,111 @@ await test("S69 load-time sanitize law: a re-sanitized upload is safe even if st
 
 console.log(`\n${"─".repeat(56)}`);
 
+suiteStart("S70 creator intelligence — CI-1 hook scoring (deterministic anchor)");
+
+await test("S70 hook scorer: specific + tense beats vague, evidence in the notes", async () => {
+  const { scoreHookHeuristic } = await import("../src/lib/tubeforge/hook-score");
+  const strong = scoreHookHeuristic("Why 47% of marathon runners quit before mile 20 — and how to avoid it");
+  const vague = scoreHookHeuristic("Amazing secrets about things you won't believe");
+  ok(strong.total > vague.total, `specific hook (${strong.total}) beats vague (${vague.total})`);
+  ok(strong.specificity >= 50, "a number + concrete nouns lift specificity (52 for this hook)");
+  ok(strong.notes.some((x) => /number/.test(x)), "the evidence names the number signal");
+  ok(vague.notes.some((x) => /vague filler/.test(x)), "the vague hook's filler is named");
+  eq(strong.heuristic, true, "every score is labeled a heuristic");
+  eq(vague.heuristic, true, "the doctrine applies to weak hooks too");
+  // ALL-CAPS + stacked bangs are noise, not tension.
+  const shouting = scoreHookHeuristic("THIS ONE TRICK WILL CHANGE YOUR LIFE!!!!");
+  ok(shouting.total < 60, "shouting reads as noise");
+  ok(shouting.notes.some((x) => /ALL-CAPS|exclamation/.test(x)), "the penalties are named");
+  // Degenerate input.
+  const empty = scoreHookHeuristic("hi");
+  eq(empty.total, 0, "a sub-two-word string is not a hook");
+});
+
+await test("S70 retention beats ride the story engine's own spine", async () => {
+  const { markRetentionBeats } = await import("../src/lib/tubeforge/hook-score");
+  const { isRehookPosition } = await import("../src/lib/tubeforge/story");
+  const beats = markRetentionBeats(10);
+  eq(beats[0].kind, "hook", "scene 1 is the hook");
+  for (const b of beats.slice(1)) {
+    eq(b.kind, "rehook", `scene ${b.at + 1} marked as a rehook`);
+    ok(isRehookPosition(b.at), "rehooks land exactly on the engine's every-3rd map");
+  }
+  eq(markRetentionBeats(0), [], "no scenes, no beats — asked for, never invented");
+});
+
+await test("S70 title-promise check: missing concrete terms are the gap", async () => {
+  const { verifyTitlePromise } = await import("../src/lib/tubeforge/hook-score");
+  const good = verifyTitlePromise("How Your Heart Works", "Today we look at how your heart works, beat by beat.");
+  ok(good.delivers, "the opening names the title's terms");
+  const gap = verifyTitlePromise("How Your Heart Works", "Welcome back to the channel — let's get into it.");
+  ok(!gap.delivers, "an opening with no heart-words fails the promise");
+  ok(gap.missing.includes("heart"), "the missing term is named");
+  eq(gap.heuristic, true, "labeled a heuristic");
+});
+
+suiteStart("S70 creator intelligence — CI-2 packaging lint (the pairing)");
+
+await test("S70 packaging lint: truncation, vagueness, duplication, thumb text", async () => {
+  const { lintPackagingDeterministic } = await import("../src/lib/tubeforge/packaging-lint");
+  const byId = (checks: { id: string }[], id: string) => checks.find((c) => c.id === id);
+
+  // Truncation: past 70 chars the tail is invisible nearly everywhere.
+  const long = lintPackagingDeterministic({
+    title: "How Your Heart Works — the complete 12 minute tour of the human cardiovascular system explained",
+  });
+  eq(byId(long, "title-truncation")?.severity, "warn", "a 100+ char title warns on truncation");
+
+  const fits = lintPackagingDeterministic({ title: "How Your Heart Works" });
+  eq(byId(fits, "title-truncation")?.severity, "ok", "a short title fits every width");
+
+  // Vagueness: clickbait markers with nothing concrete.
+  const vague = lintPackagingDeterministic({ title: "You Won't Believe This One Trick" });
+  eq(byId(vague, "title-vagueness")?.severity, "warn", "unfalsifiable phrasing warns");
+
+  const concrete = lintPackagingDeterministic({ title: "Why 47% of Runners Quit at Mile 20" });
+  eq(byId(concrete, "title-vagueness")?.severity, "ok", "numbers + nouns are concrete");
+
+  // Duplication: the thumbnail repeating the title wastes the pairing.
+  const dup = lintPackagingDeterministic({
+    title: "How Your Heart Works",
+    thumbnailText: "how your heart works",
+  });
+  eq(byId(dup, "pairing-duplication")?.severity, "warn", ">=60% word overlap warns");
+
+  const pair = lintPackagingDeterministic({
+    title: "How Your Heart Works",
+    thumbnailText: "100,000 beats a day",
+  });
+  eq(byId(pair, "pairing-duplication")?.severity, "ok", "complementary thumb text passes");
+
+  // Thumb text length: too many words stops reading at grid size.
+  const wordy = lintPackagingDeterministic({
+    title: "T",
+    thumbnailText: "one two three four five six seven eight nine ten eleven",
+  });
+  eq(byId(wordy, "thumb-text-length")?.severity, "warn", "11 overlay words warn");
+});
+
+await test("S70 packaging lint: the report aggregates honestly, no VLM invented", async () => {
+  const { lintPackaging } = await import("../src/lib/tubeforge/packaging-lint");
+  const clean = await lintPackaging({ title: "How Your Heart Works" });
+  eq(clean.heuristic, true, "the report is labeled a heuristic");
+  eq(clean.vlmJudged, false, "no image → no VLM claim");
+  ok(clean.score > 70, `a clean pairing scores high (${clean.score})`);
+  ok(
+    clean.checks.some((c) => c.id === "vlm-lookability" && /No thumbnail image/.test(c.message)),
+    "the missing thumbnail is ASKED for, never invented"
+  );
+  const messy = await lintPackaging({
+    title: "You Won't Believe This One Trick — the ultimate guide to amazing secrets of incredible things",
+    thumbnailText: "you won't believe this one trick secret",
+  });
+  ok(messy.score < clean.score, "warns drag the pairing score down");
+  ok(messy.score >= 0 && messy.score <= 100, "score stays in range");
+});
+
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

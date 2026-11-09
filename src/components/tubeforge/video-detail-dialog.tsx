@@ -69,6 +69,7 @@ import {
   ImageIcon,
   Rocket,
   Loader2,
+  Sparkles,
   Trash2,
   FileText,
   Tag,
@@ -547,6 +548,71 @@ export function VideoDetailDialog({
   const scriptSyncedRef = useRef<string | null>(null);
   const scriptHistoryRef = useRef<string[]>([]);
   const [scriptHistoryLen, setScriptHistoryLen] = useState(0);
+
+  // ---------- S70 Creator Intelligence CI-1 — the Hook lab (heuristic) ----------
+  // Panel-scores N candidate openers (deterministic anchor + LLM judge);
+  // proposes, never auto-edits — every score labeled a heuristic.
+  const [hookPanel, setHookPanel] = useState<{
+    candidates: { text: string; formula: string; panelScore: number; score: { total: number; notes: string[] }; judgeScore?: number; judgeVerdict?: string }[];
+    judged: boolean;
+    titlePromise: { delivers: boolean; missing: string[] };
+    beats: { at: number; kind: string; label: string }[];
+  } | null>(null);
+  const [hookBusy, setHookBusy] = useState(false);
+  const runHookPanel = useCallback(async () => {
+    const v = video;
+    if (!v) return;
+    setHookBusy(true);
+    try {
+      const res = await fetch(`/api/videos/${v.id}/script/hook-panel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "panel", candidates: 5 }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "The hook panel failed");
+      setHookPanel(body);
+    } catch (e) {
+      toast({
+        title: "Hook panel failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setHookBusy(false);
+    }
+  }, [video, toast]);
+
+  // ---------- S70 CI-2 — the packaging lint (title + thumbnail as ONE pairing) ----------
+  const [packLint, setPackLint] = useState<{
+    score: number;
+    vlmJudged: boolean;
+    checks: { id: string; severity: "ok" | "warn" | "error"; message: string }[];
+  } | null>(null);
+  const [lintBusy, setLintBusy] = useState(false);
+  const runPackagingLint = useCallback(async () => {
+    const v = video;
+    if (!v || !pubTitle.trim()) return;
+    setLintBusy(true);
+    try {
+      const res = await fetch(`/api/videos/${v.id}/publish/packaging-lint`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: pubTitle }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Packaging lint failed");
+      setPackLint(body.report);
+    } catch (e) {
+      toast({
+        title: "Packaging lint failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setLintBusy(false);
+    }
+  }, [video, pubTitle, toast]);
 
   // Re-sync the draft when the SERVER's script changes (first load,
   // regeneration) — never while the user is mid-edit.
@@ -3371,6 +3437,81 @@ export function VideoDetailDialog({
         </>
       )}
 
+      {/* S70 CI-1 — the Hook lab: panel-scored opener candidates + the
+          retention beats + the title-promise check. Every score is a
+          HEURISTIC (labeled); the panel PROPOSES — copy what earns its place,
+          nothing auto-edits. */}
+      <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] p-3">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
+            Hook lab <span className="normal-case tracking-normal opacity-70">— panel-scored openers (heuristic)</span>
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={hookBusy || Boolean(busy)}
+            onClick={() => void runHookPanel()}
+            className="border-white/15 bg-white/4 h-7 text-xs px-2.5"
+            title="Generate 5 candidate openers from different formula families and panel-score them (deterministic anchor + LLM judge)"
+          >
+            {hookBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+            {hookPanel ? "Re-roll the panel" : "Generate hook panel"}
+          </Button>
+        </div>
+        {hookPanel && (
+          <div className="space-y-2">
+            <div className="space-y-1.5">
+              {hookPanel.candidates.map((c, i) => (
+                <div
+                  key={c.text}
+                  className="flex items-start gap-2 rounded-lg border border-white/8 bg-black/20 px-2.5 py-1.5"
+                >
+                  <span
+                    className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${
+                      i === 0 ? "bg-emerald-500/15 text-emerald-300" : "bg-white/8 text-white/60"
+                    }`}
+                    title={c.score.notes.join(" · ")}
+                  >
+                    {c.panelScore}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs text-white/85 leading-snug">{c.text}</p>
+                    <p className="text-[10px] text-white/40 mt-0.5">
+                      {c.formula} · det {c.score.total}
+                      {c.judgeScore !== undefined ? ` · judge ${c.judgeScore}` : ""}
+                      {c.judgeVerdict ? ` — ${c.judgeVerdict}` : ""}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => void navigator.clipboard?.writeText(c.text)}
+                    className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-white/50 hover:bg-white/10 hover:text-white/80"
+                    title="Copy this opener"
+                  >
+                    Copy
+                  </button>
+                </div>
+              ))}
+            </div>
+            <p className="text-[10px] text-white/40">
+              {hookPanel.judged ? "LLM judge active" : "deterministic scores only (judge unavailable)"} · every score is a
+              heuristic, never a predictor{hookPanel.candidates.length > 0 ? ` · winner: det 60% + judge 40% blend` : ""}
+            </p>
+            {hookPanel.beats.length > 0 && (
+              <p className="text-[10px] text-white/40">
+                Retention beats — {hookPanel.beats.map((b) => `scene ${b.at + 1} (${b.kind})`).join(" · ")}
+              </p>
+            )}
+            <p
+              className={`text-[10px] ${hookPanel.titlePromise.delivers ? "text-emerald-300/80" : "text-amber-300/80"}`}
+            >
+              {hookPanel.titlePromise.delivers
+                ? "The opening delivers the title's promise."
+                : `Title promise gap — the opening never says: ${hookPanel.titlePromise.missing.join(", ")}`}
+            </p>
+          </div>
+        )}
+      </div>
+
       {/* ASR accuracy check (moved from the Package tab, T-4.4) */}
       <div className="mt-6">
         <div className="flex items-center justify-between gap-2 mb-2">
@@ -3653,6 +3794,58 @@ export function VideoDetailDialog({
             disabled={pubBusy}
             aria-label="Video title"
           />
+          {/* S70 CI-2 — the pairing lint badge: title + thumbnail linted as
+              ONE unit (truncation, duplication, vagueness; VLM lookability
+              when a thumbnail stands). Proposes — it never blocks the ship. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={lintBusy || pubBusy || !pubTitle.trim()}
+              onClick={() => void runPackagingLint()}
+              className="border-white/15 bg-white/4 h-7 text-xs px-2.5"
+              title="Lint the title + thumbnail as one pairing — every score is a heuristic"
+            >
+              {lintBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+              Lint the pairing
+            </Button>
+            {packLint && (
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums border ${
+                  packLint.score >= 80
+                    ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/25"
+                    : packLint.score >= 50
+                      ? "bg-amber-500/10 text-amber-300 border-amber-500/25"
+                      : "bg-red-500/10 text-red-300 border-red-500/25"
+                }`}
+                title="A heuristic — never a predicted CTR"
+              >
+                pairing {packLint.score}/100 · heuristic
+              </span>
+            )}
+          </div>
+          {packLint && (
+            <ul className="space-y-1 text-[11px] leading-snug">
+              {packLint.checks
+                .filter((c) => c.severity !== "ok")
+                .map((c) => (
+                  <li
+                    key={c.id}
+                    className={
+                      c.severity === "error" ? "text-red-300/90" : "text-amber-300/90"
+                    }
+                  >
+                    {c.severity === "error" ? "✕" : "△"} {c.message}
+                  </li>
+                ))}
+              {packLint.checks.every((c) => c.severity === "ok") && (
+                <li className="text-emerald-300/80">
+                  ✓ the pairing passes every deterministic check
+                  {packLint.vlmJudged ? " + the VLM lookability pass" : ""}
+                </li>
+              )}
+            </ul>
+          )}
           <Textarea
             value={pubDesc}
             onChange={(e) => setPubDesc(e.target.value)}
