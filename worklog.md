@@ -2690,3 +2690,39 @@ PAT (due rotation anyway) — push + CI + the official close ride the
 rotated PAT; a bundle ships with the delivery. Census:
 docs/baselines/s57-lint-census-2026-11-08.txt; record:
 docs/audits/s57-reliability-record.md.
+
+## S66 close (2026-11-09 UTC) — the sandbox reconciled, the E2 prototype landed as contrib/
+
+The sandbox had diverged into an independent lineage (initial import → workspace
+restructure → a parallel whiteboard E0–E2 track: audit, design, working 1080p
+prototype) that never touched origin. This session merged the two histories and
+landed the surviving value directly on main:
+
+- **`8d974d1` — feat(s66): reconcile the sandbox lineage.** Linear on top of
+  s65 (`c17ffcd`), 33 files +5516/−1, the product app unchanged. The whiteboard
+  E2 prototype ships as `contrib/whiteboard-e2/` (PLAN.md's E0→E12 matrix, the
+  animator/composer/encoder/rasterizer engine, the 10-asset SVG library, the
+  test + sample-render entry points, and the old-lineage editing-studio/tts
+  files marked superseded by `timeline-studio.tsx` / `providers/tts.ts` /
+  `settings/voices`). `contrib` is excluded from tsconfig and eslint, so the CI
+  contract is untouched by construction. The landing-gate tooling
+  (`scripts/tf-ci-poll.mjs`, `tf_s66_push.sh`, `tf_s66_ci_watch.sh`) ships
+  alongside.
+- **Secret history fixed before it could leak.** The sandbox lineage had
+  committed a literal `.env` blob in its initial commits; the outgoing history
+  was rewritten (filter-branch index-filter) to purge it, gc'd, and re-scanned
+  (0 token patterns, no env blobs) before any push.
+- **One CI lesson, paid once:** the first push (`2fcb14e`, since replaced)
+  carried a brand-new ROOT commit, and gitleaks-action's `<oldest>^..after`
+  range is unreadable for root commits — the job failed on "unknown revision"
+  with NO leak found. The linear rebuild removed the root commit from the range
+  and the job went green. Note for future landings: never push new-root-commit
+  ranges; append to main.
+- **CI evidence:** run 42651425835 on `8d974d1` — all six jobs green
+  (Production build · Typecheck·Lint·Unit · Secret scan (gitleaks) ·
+  Money-path coverage · PostgreSQL integration · E2E):
+  https://github.com/ibis01/tubeforge/actions/runs/42651425835
+
+E-series follow-up: pick the engine that carries E3+ (main's P0/E1 engine vs
+the prototype's path-following hand + asset library), port the winner's gaps,
+delete the loser. The landing PAT transited chat — rotate/revoke it now.
