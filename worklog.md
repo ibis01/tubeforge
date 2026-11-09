@@ -2772,3 +2772,90 @@ event editing, and the standing risks unchanged (gateway 429 → S63 resume
 gated on a green probe; production `TUBEFORGE_ENCRYPTION_KEY` on Vercel;
 the 8 open dependency PRs — majors tested individually). The landing PAT
 transited chat again — rotate/revoke it now.
+
+## S68 implementation (2026-11-09 UTC) — E9 Phase B: the storyboard becomes editable
+
+Three commits staged locally, unpushed (the landing PAT died mid-session —
+both chat-exposed tokens are revoked; a fresh one is needed for the push):
+
+- **`77ec643` — feat(s68): whiteboard E9 Phase B — the storyboard becomes
+  editable.** The Studio stops being read-only: placement
+  add/patch/remove/reorder with drag (buffer + commit), animation-event
+  editing, camera-key editing, scene-level controls. The GET doc route
+  surfaces `voMs` — MEASURED narration via WAV header math on the standing
+  `scene-NN.wav` files — so editor playback agrees with the render instead
+  of riding the estimate (roadmap item ④). The scaffold planner accepts
+  optional `width`/`height`/`fps`: 9:16 and 1:1 boards remap placements
+  proportionally, and the default camera key centers on the REAL
+  dimensions — the hardcoded 16:9 center (960, 540) put a 9:16 board's
+  viewport off its right edge; validator, timing fallback (`cameraAt` now
+  takes width/height) and planner all agree. Plus `e2e/whiteboard.spec.ts`
+  (9 steps: auth → doc workflow → a REAL scene-preview render) and ~120
+  lines of unit tests.
+- **`37136a8` — fix(s68): the whiteboard scene preview lands the standard
+  preview key.** The e2e's first live run caught TWO things: the spec
+  polled a nonexistent `hasPreview` wire field (fixed to `previewUrl` +
+  artifact-SERVES assertion), and the underlying truth — the whiteboard
+  scene-preview job wrote only the namespaced copy while the mp4 route
+  streams `${videoId}/preview.mp4` (statVideoFile): the DTO advertised a
+  404, a lying badge.
+- **`f2f92bc` — fix(s68): the preview copy reads the landed object; the
+  e2e harness raises its own rate ceilings.** The standard-key copy via a
+  second `putFromPath(result.file)` stat'd a RENAMED-AWAY source —
+  putFromPath's same-dirname fast path MOVES the render output into the
+  namespaced key first. `ENOENT ... stat '.../whiteboard/final.mp4'`, job
+  requeued, video.error poisoned. A temp raw-stack probe in the queue's
+  catch (added and removed) pinned it; the copy now reads the landed
+  object (`put(standard, get(namespaced))`) — driver-agnostic, both keys
+  occupy org bytes so both stay quota-attributed. Separately: the e2e
+  suite is one IP making a studio-load of writes (27 tests in <2 min),
+  which brushes the middleware's per-IP WRITE_LIMIT (90/min) — victims
+  alternated by file order (whiteboard once, premium-ux the next run).
+  The playwright webServer now boots its own server with raised
+  `TUBEFORGE_RATE_*` ceilings; production defaults untouched.
+
+One anomaly, watched: `storyboard/upload/route.ts` vanished from the
+working tree mid-session (git checkout restored it; no recurrence through
+the rest of the battery — cause unknown, possibly the earlier tool-session
+crash). Verify bytes, not glyphs — and verify the tree, not memory.
+
+**Local battery before the push:** tsc 0 · eslint 0 errors (20 baseline
+warnings) · unit 318/318 · queue PASS · billing 40/40 · build exit 0 ·
+**e2e 27/27 TWICE** (the second run re-ordered specs; both green under the
+raised harness ceilings). Push + CI evidence pending a live PAT.
+
+## S68 close (2026-11-09 UTC) — CI evidence, two landing-gate lessons paid
+
+The push went through once the PAT proved alive (its first API probe had
+returned 401 — transient or API-path-specific; git-transport auth with the
+same token worked immediately after). Two CI rounds were spent learning:
+
+- **Round 1 (`f2f92bc`, run 42695107021) — E2E failed 5/6, and it was a
+  RACE, not the render.** The create route auto-starts a story-lane
+  script job for every story-format video; on CI (no `.z-ai-config`) it
+  fails fast and permanently ~10s in, writing its error to the SAME
+  `video.error` field the whiteboard render's success path clears. The
+  spec's fail-fast error check saw the transient poison mid-render and
+  threw — the preview landed seconds later. Locally the standing gateway
+  outage made the script job retry slowly, so the race never showed.
+  Fix `5fce4d7`: poll `previewUrl` only, last-seen error attached to the
+  expect message. Product follow-up noted for S69+: whether a
+  whiteboard-mode video's `video.error` should carry story-lane job
+  failures at all.
+- **Round 2 (`5fce4d7`, run 42697192000, attempt 1) — infra flake:**
+  `Install ffmpeg` timed out at 5 minutes (apt mirror hiccup); the suite
+  never started. Re-run of the failed job — green.
+
+**CI evidence: run 42697192000 on `5fce4d7` (attempt 2) — all six jobs
+green** (Typecheck·Lint·Unit · Production build · Secret scan (gitleaks) ·
+PostgreSQL integration · Money-path coverage · E2E (Playwright), 27 tests):
+https://github.com/ibis01/tubeforge/actions/runs/42697192000
+
+Landing-gate state: origin/main = `5fce4d7`, S67 + S68(E9 Phase B) both
+closed on green CI. The landing PAT transited chat — rotate/revoke it now.
+
+Next up (S69 candidates): the E9 Phase B remainder — palette/asset
+management surface (E11's `/asset` route still behind §7's seven gates),
+the video.error lane-attribution question above, and the standing
+gateway-dependent items (S63 motion remeasurement, LLM whiteboard planner)
+still gated on the one-probe resumption discipline.
