@@ -110,7 +110,9 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
 }, {
   // pack/ is a packaging artifact mirror; scripts/*.cjs are standalone ops
   // scripts executed directly with node (CommonJS by design, not app code).
-  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills", "pack/**", "scripts/**/*.cjs"]
+  // contrib/ is archived reference engineering (S66) — deliberately outside
+  // the product's lint surface, same contract as examples/.
+  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills", "pack/**", "scripts/**/*.cjs", "contrib/**"]
 }];
 
 export default eslintConfig;

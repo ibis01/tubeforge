@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" preserveAspectRatio="xMidYMid meet">
+  <!-- Lightbulb: stroke-only ink illustration. Pen starts at the screw base,
+       draws the glass envelope, the filament, and the screw threads. -->
+  <g stroke="#111827" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path id="bulb-glass" d="M 100 30 C 60 30 40 70 60 110 C 70 125 70 140 70 150 L 130 150 C 130 140 130 125 140 110 C 160 70 140 30 100 30 Z" />
+    <path id="bulb-filament" d="M 80 90 C 80 70 90 60 100 70 C 110 60 120 70 120 90" />
+    <path id="bulb-screw" d="M 75 160 L 125 160 M 78 170 L 122 170 M 82 180 L 118 180" />
+  </g>
+</svg>

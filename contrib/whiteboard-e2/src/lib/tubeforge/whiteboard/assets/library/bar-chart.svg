@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" preserveAspectRatio="xMidYMid meet">
+  <!-- Bar chart: axis + 4 bars. -->
+  <g stroke="#111827" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path id="chart-axis" d="M 30 170 L 30 30 M 30 170 L 180 170" />
+    <path id="chart-bar1" d="M 50 130 L 80 130 L 80 170 L 50 170 Z" />
+    <path id="chart-bar2" d="M 90 110 L 120 110 L 120 170 L 90 170 Z" />
+    <path id="chart-bar3" d="M 130 70 L 160 70 L 160 170 L 130 170 Z" />
+    <path id="chart-arrow" d="M 60 100 L 90 80 L 130 50" />
+  </g>
+</svg>
