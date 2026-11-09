@@ -947,7 +947,7 @@ await test("timeoutFor: no timeout regression — youtube.ts routes through the 
     .filter((l) => /\bfetch\(/.test(l) && !/ytFetch\(/.test(l)).length;
   eq(rawFetch, 1, "exactly one raw fetch remains — inside ytFetch itself");
   const viaHelper = (src.match(/ytFetch\(/g) ?? []).length;
-  eq(viaHelper, 9, "8 call sites + the helper definition all route through ytFetch");
+  eq(viaHelper, 10, "9 call sites + the helper definition all route through ytFetch (S72's retention fetch joined the matrix)");
 });
 
 suiteStart("Stage 3 — queue claim liveness (multi-process safety)");
@@ -7861,6 +7861,99 @@ await test("S70 self-containment: the Shorts speech window and payoff ending", a
   ok(tooThin.notes.some((n) => /too thin/.test(n)), "thinness is named");
   ok(tooLong.notes.some((n) => /Shorts window/.test(n)), "over-length is named");
   ok(inWindow.notes.some((n) => /payoff/.test(n)), "the payoff ending is named");
+});
+
+
+suiteStart("S72 CI-4 — retention analysis (the pure half)");
+
+await test("S72 retention: cliffs surface with evidence, mapped through the timeline projection", async () => {
+  const { analyzeRetentionCurve } = await import("../src/lib/tubeforge/retention");
+  const { assembleTimeline } = await import("../src/lib/tubeforge/timeline");
+  const mkScene = (index: number, narration: string) => ({
+    index, title: `Scene ${index}`, narration, visual: "a frame", camera: "zoom-in",
+    mood: "neutral", caption: "", hostInScene: false, rehook: false, sfx: "none",
+  });
+  // Three meaty scenes (word-count estimates drive the projection when no
+  // WAVs stand — the same estimates the assemble route rides).
+  const scenes = [
+    mkScene(1, "First scene sets the stage with a clear subject and a promise about what follows next in this video."),
+    mkScene(2, "Second scene delivers the core explanation with detail and momentum, carrying the argument forward."),
+    mkScene(3, "Final scene lands the payoff and closes the loop, restating the promise in concrete terms."),
+  ];
+  const timeline = assembleTimeline(scenes, {});
+  const durationSec = timeline.scenes.reduce((a, t) => a + t.durationSec, 0);
+
+  // A cliff mid-scene-2: find a tRatio inside scene 2's window, a little
+  // after its start (NOT a boundary).
+  const s2 = timeline.scenes[1];
+  const cliffSec = s2.startSec + s2.durationSec * 0.6;
+  const cliffRatio = cliffSec / durationSec;
+  const points = [
+    { tRatio: 0, watchRatio: 1 },
+    { tRatio: cliffRatio - 0.02, watchRatio: 0.9 },
+    { tRatio: cliffRatio, watchRatio: 0.63 }, // −30% of the REMAINING audience: a hard cliff
+    { tRatio: cliffRatio + 0.05, watchRatio: 0.61 }, // 2% wiggle = noise, not a finding
+    { tRatio: 1, watchRatio: 0.55 },
+  ];
+  const f = analyzeRetentionCurve(points, durationSec, scenes, null);
+  eq(f.heuristic, true, "labeled a heuristic");
+  eq(f.drops.length, 1, "one cliff above threshold, the wiggle filtered");
+  const d = f.drops[0];
+  eq(d.sceneIndex, 2, "the cliff maps to scene 2");
+  eq(d.atSceneBoundary, false, "mid-scene, not a boundary");
+  ok(Math.abs(d.magnitude - 0.3) < 0.01, `magnitude is the share of the REMAINING audience (${d.magnitude.toFixed(2)})`);
+  ok(/mid-scene 2/.test(d.suggestion), "the suggestion names the scene and the pacing read");
+  ok(d.narrationExcerpt.includes("Second scene"), "the words on screen are the evidence");
+  ok(f.averageWatchRatio > 0.5 && f.averageWatchRatio < 1, "average ratio computed");
+});
+
+await test("S72 retention: a boundary cliff reads as an opener problem; caps + tolerance", async () => {
+  const { analyzeRetentionCurve } = await import("../src/lib/tubeforge/retention");
+  const mkScene = (index: number, narration: string) => ({
+    index, title: `S${index}`, narration, visual: "v", camera: "zoom-in",
+    mood: "neutral", caption: "", hostInScene: false, rehook: false, sfx: "none",
+  });
+  const scenes = [
+    mkScene(1, "One short opener line."),
+    mkScene(2, "The middle scene carries the weight of the explanation with numbers and momentum to spare."),
+    mkScene(3, "The closing scene restates and lands the payoff in concrete terms for the viewer."),
+  ];
+  // A cliff exactly at scene 2's start: the projection puts it there
+  // (tRatio derived from the timeline itself in this test).
+  const { assembleTimeline } = await import("../src/lib/tubeforge/timeline");
+  const timeline = assembleTimeline(scenes, {});
+  const durationSec = timeline.scenes.reduce((a, t) => a + t.durationSec, 0);
+  const boundaryRatio = timeline.scenes[1].startSec / durationSec;
+  const points = [
+    { tRatio: 0, watchRatio: 1 },
+    { tRatio: Math.max(0, boundaryRatio - 0.01), watchRatio: 0.95 },
+    { tRatio: boundaryRatio, watchRatio: 0.6 },
+    { tRatio: 1, watchRatio: 0.5 },
+  ];
+  const f = analyzeRetentionCurve(points, durationSec, scenes, null);
+  eq(f.drops.length, 1, "one finding");
+  eq(f.drops[0].atSceneBoundary, true, "detected as a scene-boundary cliff");
+  ok(/opens with a cliff/.test(f.drops[0].suggestion), "the suggestion reads as an opener problem");
+
+  // Six cliffs → at most 5 surface (the actionable head), time-ordered.
+  const many = Array.from({ length: 12 }, (_, i) => ({
+    tRatio: (i + 1) / 13,
+    watchRatio: 1 - 0.09 * (i + 1) >= 0 ? 1 - 0.09 * (i + 1) : 0,
+  }));
+  const capped = analyzeRetentionCurve([{
+    tRatio: 0, watchRatio: 1,
+  }, ...many], 100, [], null);
+  ok(capped.drops.length <= 5, `capped at 5 findings (${capped.drops.length})`);
+
+  // The tolerant parse: junk is null, never a throw.
+  const { parseRetentionReport } = await import("../src/lib/tubeforge/retention");
+  eq(parseRetentionReport(null), null, "null column → null");
+  eq(parseRetentionReport("{not json"), null, "invalid JSON → null");
+  eq(parseRetentionReport(JSON.stringify({ nope: 1 })), null, "wrong shape → null");
+  const doc = parseRetentionReport(
+    JSON.stringify({ youtubeId: "abc", fetchedAt: "2026-11-10T00:00:00Z", videoDurationSec: 90, points: [], averageWatchRatio: 0.4, drops: [] })
+  );
+  ok(doc !== null && doc.youtubeId === "abc", "a well-formed report parses");
 });
 
 

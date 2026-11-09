@@ -614,6 +614,33 @@ export function VideoDetailDialog({
     }
   }, [video, pubTitle, toast]);
 
+  // ---------- S72 CI-4 — Retention Intelligence (attached to the row) ----------
+  const [retention, setRetention] = useState<{
+    averageWatchRatio: number;
+    fetchedAt: string;
+    drops: { atSec: number; sceneIndex: number | null; atSceneBoundary: boolean; magnitude: number; narrationExcerpt: string; suggestion: string }[];
+  } | null>(null);
+  const [retBusy, setRetBusy] = useState(false);
+  const syncRetention = useCallback(async () => {
+    const v = video;
+    if (!v) return;
+    setRetBusy(true);
+    try {
+      const res = await fetch(`/api/videos/${v.id}/retention`, { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Retention sync failed");
+      setRetention(body.report);
+    } catch (e) {
+      toast({
+        title: "Retention sync failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setRetBusy(false);
+    }
+  }, [video, toast]);
+
   // Re-sync the draft when the SERVER's script changes (first load,
   // regeneration) — never while the user is mid-edit.
   useEffect(() => {
@@ -3911,6 +3938,63 @@ export function VideoDetailDialog({
               <span className="text-[11px] text-muted-foreground">{pubProgress}</span>
             )}
           </div>
+        </div>
+      )}
+
+      {/* S72 CI-4 — Retention Intelligence: the drop-off findings attached
+          to the row. PROPSES — every finding shows its evidence (the cliff,
+          the scene, the words on screen) and waits for the human; the
+          findings are labeled a heuristic, never a verdict. */}
+      {video.youtubeUrl && (
+        <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
+              Retention findings{" "}
+              <span className="normal-case tracking-normal opacity-70">— drop-off moments mapped to scenes (heuristic)</span>
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={retBusy}
+              onClick={() => void syncRetention()}
+              className="border-white/15 bg-white/4 h-7 text-xs px-2.5"
+              title="Pull the audience retention curve (YouTube Analytics) and map the cliffs to this video's scenes"
+            >
+              {retBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+              {retention ? "Re-sync retention" : "Sync retention"}
+            </Button>
+          </div>
+          {retention && (
+            <>
+              <p className="text-[10px] text-white/40">
+                avg watch ratio {Math.round(retention.averageWatchRatio * 100)}% · synced{" "}
+                {new Date(retention.fetchedAt).toLocaleString()} · a heuristic, never a verdict
+              </p>
+              {retention.drops.length === 0 ? (
+                <p className="text-[11px] text-emerald-300/80">
+                  ✓ no cliff above the noise threshold — the audience holds steady
+                </p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {retention.drops.map((d, i) => (
+                    <li key={i} className="rounded-lg border border-white/8 bg-black/20 px-2.5 py-1.5">
+                      <p className="text-[11px] text-amber-200/90 leading-snug">
+                        {d.atSec.toFixed(0)}s ·{" "}
+                        {d.sceneIndex != null
+                          ? `${d.atSceneBoundary ? "scene boundary" : "mid-scene"} ${d.sceneIndex}`
+                          : "classic script"}{" "}
+                        · −{Math.round(d.magnitude * 100)}% of remaining viewers
+                      </p>
+                      {d.narrationExcerpt && (
+                        <p className="text-[10px] text-white/40 mt-0.5 italic">“{d.narrationExcerpt}…”</p>
+                      )}
+                      <p className="text-[11px] text-white/70 mt-0.5">{d.suggestion}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
         </div>
       )}
     </DialogFooter>

@@ -398,6 +398,11 @@ model Video {
   // an advisory `rev` integer INSIDE the doc the editor echoes on save.
   whiteboardProject String?
 
+  // S72 (CI-4) — Retention Intelligence: the ingested retention curve +
+  // the drop-off findings mapped to scenes (the eighth JSON doc column;
+  // null = never synced or the video is not published).
+  retentionReport String?
+
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)

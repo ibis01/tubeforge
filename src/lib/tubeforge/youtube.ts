@@ -34,6 +34,11 @@ const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const SCOPES = [
   "https://www.googleapis.com/auth/youtube.upload",
   "https://www.googleapis.com/auth/youtube.readonly",
+  // S72 (CI-4) — retention ingestion needs the YouTube ANALYTICS API, a
+  // separate scope from the Data API. Accounts connected before this scope
+  // was added keep their old grant: the Analytics call 403s and the sync
+  // route says to reconnect (prompt=consent re-asks on every connect).
+  "https://www.googleapis.com/auth/yt-analytics.readonly",
 ].join(" ");
 
 /**
@@ -348,6 +353,76 @@ export async function fetchVideoStats(youtubeIds: string[]): Promise<Map<string,
 }
 
 // ---------- per-user connection settings (privacy status / category) ----------
+
+// ---------- S72 (CI-4): the YouTube Analytics API — retention curves ----------
+
+export interface RetentionCurvePoint {
+  /** Elapsed video time as a ratio of total duration (0..1). */
+  tRatio: number;
+  /** Fraction of the audience still watching at tRatio (0..1). */
+  watchRatio: number;
+}
+
+/** The audience retention curve for ONE published video (Analytics API v2:
+ *  audienceWatchRatio bucketed by elapsedVideoTimeRatio, channel==MINE).
+ *  `durationSec` is the row's own videoDuration — the caller maps ratios to
+ *  seconds with it. A 403 means the connected account never granted the
+ *  analytics scope — surfaced as a readable reconnect instruction. */
+export async function fetchRetentionCurve(
+  youtubeVideoId: string,
+  publishedAt: Date | null
+): Promise<RetentionCurvePoint[]> {
+  const token = await getAccessToken();
+  // The Analytics API wants calendar dates. Start at the publish date (or a
+  // 90-day window for legacy rows) and end today; retention is stable after
+  // the first days, so the window shape does not skew the curve.
+  const end = new Date();
+  const start = publishedAt && publishedAt > new Date(0) ? publishedAt : new Date(end.getTime() - 90 * 864e5);
+  if (start > end) start.setTime(end.getTime());
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  const params = new URLSearchParams({
+    ids: "channel==MINE",
+    "start-date": fmt(start),
+    "end-date": fmt(end),
+    metrics: "audienceWatchRatio",
+    dimensions: "elapsedVideoTimeRatio",
+    filters: `video==${youtubeVideoId}`,
+    sort: "elapsedVideoTimeRatio",
+  });
+  const res = await ytFetch(
+    `https://youtubeanalytics.googleapis.com/v2/reports?${params.toString()}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = (body as { error?: { message?: string; errors?: { reason?: string }[] } }).error;
+    const reason = err?.errors?.[0]?.reason ?? "";
+    if (res.status === 403 || /insufficientPermissions|forbidden/i.test(reason)) {
+      throw new Error(
+        "This channel was connected before the analytics scope existed — reconnect it in Settings → Channel to grant retention access"
+      );
+    }
+    throw new Error(
+      `Retention fetch failed (${res.status}): ${err?.message ?? `HTTP ${res.status}`}`
+    );
+  }
+  const data = (await res.json()) as {
+    columnHeaders?: { name: string; dataType: string }[];
+    rows?: (string | number)[][];
+  };
+  const tCol = data.columnHeaders?.findIndex((c) => c.name === "elapsedVideoTimeRatio") ?? -1;
+  const wCol = data.columnHeaders?.findIndex((c) => c.name === "audienceWatchRatio") ?? -1;
+  if (tCol === -1 || wCol === -1) return [];
+  const points: RetentionCurvePoint[] = [];
+  for (const row of data.rows ?? []) {
+    const t = Number(row[tCol]);
+    const w = Number(row[wCol]);
+    if (Number.isFinite(t) && Number.isFinite(w)) points.push({ tRatio: t, watchRatio: w });
+  }
+  return points;
+}
+
+// ---------- per-user publish settings (privacy status / category) ----------
 
 export async function getPublishDefaults(): Promise<{ privacyStatus: string; categoryId: string }> {
   const ctx = currentCtx();

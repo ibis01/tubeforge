@@ -153,5 +153,16 @@ test.describe("S70 — creator intelligence (CI-lane contracts)", () => {
       data: { mode: "score", hook: "" },
     });
     expect(noHook.status()).toBe(400);
+
+    // ---- CI-4: retention needs a published video — the honest refusal ----
+    const retRes = await request.post(`/api/videos/${videoId}/retention`, {
+      headers: { cookie },
+      data: {},
+    });
+    expect(retRes.status()).toBe(409);
+    expect(((await retRes.json()) as { error?: string }).error).toMatch(/not published/i);
+    const retGet = await request.get(`/api/videos/${videoId}/retention`, { headers: { cookie } });
+    expect(retGet.status()).toBe(200);
+    expect(((await retGet.json()) as { report: unknown }).report).toBeNull();
   });
 });
