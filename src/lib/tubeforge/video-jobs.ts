@@ -45,7 +45,7 @@ import { ingestCustomAudio } from "./voice";
 import { deriveStatus } from "./status";
 import { runQualityGate } from "./quality";
 import { renderVideo, invalidateRenderedArtifacts } from "./render";
-import { renderShort } from "./shorts";
+import { draftColdStartOpener, pickBestScene, renderShort } from "./shorts";
 import { convertClassicToScenes } from "./convert";
 import { verifyNarration } from "./verify";
 import { generateEngagementKit } from "./comments";
@@ -935,10 +935,28 @@ export async function runShortJob(
         : "auto";
 
   try {
+    // S70 CI-3 — when the self-containment heuristic picks the moment, the
+    // clip's first caption line gets rewritten for cold-start viewers (a
+    // garnish, never a dependency: a gateway hiccup keeps the narration's
+    // own opening). User-pinned scenes keep their words verbatim. The pick
+    // is re-derived through the SAME pure seam renderShort uses (filter +
+    // pickBestScene) — same input, same output, no drift.
+    let openerOverride: string | null = null;
+    if (source === "auto") {
+      const candidates = scenes.filter((s) => s.narration && s.visual);
+      const autoScene = pickBestScene(candidates);
+      if (autoScene) {
+        openerOverride = await draftColdStartOpener({
+          topic: video.topic,
+          sceneNarration: autoScene.narration,
+        });
+      }
+    }
     const result = await renderShort({
       videoId,
       scenes,
       sceneIndex,
+      openerOverride,
       motion: sanitizeMotion({
         mode: video.motionMode,
         intensity: video.motionIntensity,

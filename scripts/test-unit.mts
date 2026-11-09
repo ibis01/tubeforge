@@ -7808,6 +7808,62 @@ await test("S70 packaging lint: the report aggregates honestly, no VLM invented"
 });
 
 
+suiteStart("S70 CI-3 — Shorts self-containment (the moment-pick seam)");
+
+await test("S70 self-containment: a cold-start clip outscores a backward-pointing one", async () => {
+  const { selfContainmentScore, pickBestScene } = await import("../src/lib/tubeforge/shorts");
+  const cold = selfContainmentScore({
+    narration: "Marathon runners quit at mile 20 for one reason: fuel. Here is how to avoid the wall.",
+    caption: "The 7 secrets nobody tells you",
+    hostInScene: true,
+  });
+  const dangling = selfContainmentScore({
+    narration: "So that is why it fails every single time, and that is the real problem here.",
+    caption: "",
+    hostInScene: false,
+  });
+  ok(cold.score > dangling.score, `self-contained (${cold.score}) beats dangling (${dangling.score})`);
+  ok(cold.selfContained, "the cold clip reads standalone");
+  ok(!dangling.selfContained, "the dangling clip does not");
+  eq(cold.heuristic, true, "labeled a heuristic");
+  ok(cold.notes.includes("hook-y caption"), "the caption signal is named");
+  ok(
+    dangling.notes.some((n) => /backward reference/.test(n)),
+    "the dangling opener is named"
+  );
+  // The seam law: same signature, deterministic.
+  const mk = (narration: string, caption: string, index: number) => ({
+    index, title: "t", narration, visual: "v", camera: "zoom-in", mood: "neutral",
+    caption, hostInScene: false, rehook: false, sfx: "none",
+  });
+  const a = pickBestScene([mk("So this is why it broke.", "", 1), mk("Batteries fail in cold weather for 3 reasons. Here they are.", "Why batteries die", 2)]);
+  const b = pickBestScene([mk("So this is why it broke.", "", 1), mk("Batteries fail in cold weather for 3 reasons. Here they are.", "Why batteries die", 2)]);
+  eq(a?.index, 2, "the self-contained scene is picked");
+  eq(a?.index, b?.index, "deterministic — same input, same pick");
+  eq(pickBestScene([]), null, "no scenes, no pick");
+});
+
+await test("S70 self-containment: the Shorts speech window and payoff ending", async () => {
+  const { selfContainmentScore } = await import("../src/lib/tubeforge/shorts");
+  const inWindow = selfContainmentScore({
+    narration:
+      "Sleep is not downtime. During deep sleep your brain flushes waste, your muscles repair, and your memories move into long-term storage. Skip it and every system pays. Here is what eight hours actually buys you.",
+    caption: "Why sleep matters",
+    hostInScene: false,
+  });
+  const tooThin = selfContainmentScore({ narration: "Yes. Exactly that.", caption: "", hostInScene: false });
+  const tooLong = selfContainmentScore({
+    narration: "word ".repeat(140).trim() + " The end.",
+    caption: "",
+    hostInScene: false,
+  });
+  ok(tooThin.score < inWindow.score, `a two-word scene scores below a full clip (${tooThin.score} < ${inWindow.score})`);
+  ok(tooThin.notes.some((n) => /too thin/.test(n)), "thinness is named");
+  ok(tooLong.notes.some((n) => /Shorts window/.test(n)), "over-length is named");
+  ok(inWindow.notes.some((n) => /payoff/.test(n)), "the payoff ending is named");
+});
+
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

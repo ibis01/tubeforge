@@ -10,9 +10,11 @@
 //      null (the hook heuristic), junk and out-of-range indices fall back
 //      to the heuristic, non-story reads null, never a crash and never a
 //      selected path;
-//   5. the heuristic itself still rules when no pick stands — the pre-S10
-//      behavior byte-for-byte (pickBestScene is the same function the cut
-//      falls back to).
+//   5. the heuristic itself still rules when no pick stands — S70 CI-3
+//      updated the seam IN PLACE: pickBestScene now scores transcript
+//      SELF-CONTAINMENT (a cold-start viewer owes the clip nothing), so
+//      the pinned expectation is the new doctrine: a self-contained,
+//      hook-carrying clip beats a backward-pointing one.
 // Run: node --import tsx scripts/s10-unit-probe.mts
 import {
   sanitizeShortPick,
@@ -238,19 +240,21 @@ check(
 // 5. the fallback itself — the heuristic the cut defers to (pure, REAL module)
 // =====================================================================
 check(
-  "pickBestScene still rules the unpicked doc — the pre-S10 doctrine, hook-first",
+  "pickBestScene rides self-containment (S70 CI-3) — cold-start clip beats backward-pointing one",
   (() => {
     const scenes = parseScenes(sceneJson());
     const best = pickBestScene(scenes);
     if (!best) return false;
-    // a scene with a hook-y caption must outscore plain narration
-    const hooked = parseScenes(
+    // scene 2 names its subject, carries a hook-y caption, lands a payoff;
+    // scene 1 opens on "So that is why it…" — a cold viewer has no
+    // antecedent, and it never says WHAT fails.
+    const pair = parseScenes(
       JSON.stringify([
-        { ...scenes[0], caption: "", narration: "Plain words about a quiet hill." },
-        { ...scenes[1], caption: "The 7 secrets nobody tells you", narration: "This one carries numbers and a hook." },
+        { ...scenes[0], caption: "", narration: "So that is why it fails every single time, and that is the real problem here." },
+        { ...scenes[1], caption: "The 7 secrets nobody tells you", narration: "Marathon runners quit at mile 20 for one reason: fuel. Here is how to avoid the wall." },
       ])
     );
-    return pickBestScene(hooked)?.index === 2;
+    return pickBestScene(pair)?.index === 2;
   })()
 );
 
