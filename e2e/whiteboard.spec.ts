@@ -192,20 +192,30 @@ test.describe("S68 — whiteboard studio end-to-end", () => {
     // preview exists) — there is no `hasPreview` boolean on the wire (the
     // DB flag is serialize-internal; polling a nonexistent field was the
     // original draft's bug, caught by the local driver run 2026-11-09).
+    //
+    // NOTE the ERROR field: this video row is SHARED with the story-lane
+    // script job the create route auto-starts, and on CI (no AI config)
+    // that job fails fast and permanently ~10s in — its error text rides
+    // the same `video.error` the whiteboard render's success path CLEARS.
+    // Throwing on any error sighting raced that poison (the first CI run's
+    // failure: the preview actually landed seconds later); poll previewUrl
+    // only and attach the last seen error to the expect message instead —
+    // a genuinely failed render still fails here, with its error text.
     test.setTimeout(240_000);
     let previewUrl: string | null = null;
+    let lastError: string | null = null;
     for (let i = 0; i < 90; i++) {
       await new Promise((r) => setTimeout(r, 2000));
       const dto = await request.get(`/api/videos/${videoId}`, { headers: { cookie } });
       if (!dto.ok()) continue;
       const body = (await dto.json()) as { video?: { previewUrl?: string | null; error?: string | null } };
-      if (body.video?.error) throw new Error(`preview render failed: ${body.video.error}`);
+      lastError = body.video?.error ?? lastError;
       if (body.video?.previewUrl) {
         previewUrl = body.video.previewUrl;
         break;
       }
     }
-    expect(previewUrl, "the scene preview must land within the poll window").toBe(
+    expect(previewUrl, `the scene preview must land within the poll window (last video.error: ${lastError})`).toBe(
       `/api/videos/${videoId}/mp4?variant=preview`
     );
 
