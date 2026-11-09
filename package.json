@@ -29,7 +29,9 @@
     "worker:daemon": "python3 scripts/daemonize.py scripts/worker-daemon.log npm run worker",
     "check": "npm run typecheck && npm run lint && npm run test && npm run test:billing",
     "test:e2e": "playwright test",
-    "test:billing": "node --import tsx scripts/test-billing.mts"
+    "test:billing": "node --import tsx scripts/test-billing.mts",
+    "test:whiteboard-e2": "node --import tsx scripts/test-whiteboard-e2.mts",
+    "whiteboard:e2-sample": "node --import tsx scripts/render-sample-whiteboard-e2.mts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -65,6 +67,7 @@
     "@radix-ui/react-toggle-group": "^1.1.10",
     "@radix-ui/react-tooltip": "^1.2.7",
     "@reactuses/core": "^6.0.5",
+    "@resvg/resvg-js": "^2.6.2",
     "@tanstack/react-query": "^5.82.0",
     "@tanstack/react-table": "^8.21.3",
     "class-variance-authority": "^0.7.1",
