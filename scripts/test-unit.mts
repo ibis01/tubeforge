@@ -1499,7 +1499,7 @@ await test("queue: resumableKinds covers every kind the routes start", async () 
     "script", "research", "stock", "voiceover", "storyboard", "scene",
     "render", "short", "convert", "verify", "comments", "thumbnail",
     "variants", "slide", "portrait", "poses", "qc", "upload",
-    "director", "continuity",
+    "director", "continuity", "whiteboard",
   ];
   for (const k of expected) {
     ok(kinds.includes(k), `"${k}" is resumable`);
@@ -6882,7 +6882,7 @@ await test("S64 timing: frameCount", async () => {
 
 await test("S64 timing: the frame plan is a pure function — same inputs, same frames", async () => {
   const { frameAt, buildGeometry, scheduleScene } = await import("../src/lib/tubeforge/whiteboard/timing");
-  const { framePayload } = await import("../src/lib/tubeforge/whiteboard/render");
+  const { framePayload } = await import("../src/lib/tubeforge/whiteboard/wb-page");
   const geo = buildGeometry([{ id: "a1", paths: [{ id: "p1", d: "M 0 0 L 100 0" }, { id: "p2", d: "M 0 0 L 50 0" }] }]);
   const project: WhiteboardProject = { title: "t", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 }, scenes: [WB_PLAIN] };
   const seq = (): string =>
@@ -6935,7 +6935,7 @@ await test("S64 assets: extractAsset parses path data and text geometry", async 
 suiteStart("S64 whiteboard — renderer pure contracts");
 
 await test("S64 render: framePayload serializes the full frame state (the applier's wire format)", async () => {
-  const { framePayload } = await import("../src/lib/tubeforge/whiteboard/render");
+  const { framePayload } = await import("../src/lib/tubeforge/whiteboard/wb-page");
   const { frameAt, buildGeometry } = await import("../src/lib/tubeforge/whiteboard/timing");
   const geo = buildGeometry([{ id: "a1", paths: [{ id: "p1", d: "M 0 0 L 100 0" }] }]);
   const project: WhiteboardProject = { title: "t", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 }, scenes: [WB_PLAIN] };
@@ -6950,7 +6950,7 @@ await test("S64 render: framePayload serializes the full frame state (the applie
 });
 
 await test("S64 render: the applier resolves frame-plan keys through the registered id maps (the namespace seam)", async () => {
-  const { APPLY_FRAME_FN } = await import("../src/lib/tubeforge/whiteboard/render");
+  const { APPLY_FRAME_FN } = await import("../src/lib/tubeforge/whiteboard/wb-page");
   ok(
     APPLY_FRAME_FN.includes("__wbDraw") && APPLY_FRAME_FN.includes("__wbText"),
     "the applier must resolve keys via window.__wbDraw/__wbText"
@@ -7199,6 +7199,188 @@ await test("S65 budgets: renderWhiteboard refuses an over-budget project BEFORE 
     threw = err;
   }
   ok(threw instanceof Error && /frame budget/.test(threw.message), `expected the budget wall, got: ${String(threw)}`);
+});
+
+// ---------- suite: S67 — the E2 reconciliation port + E9 Phase A ----------
+
+suiteStart("S67 whiteboard — the ported E2 library (reconciliation)");
+
+await test("S67 port: the library grew to 18 assets and every drawable survives the laws", async () => {
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  ok(lib.assets.size >= 18, `expected ≥18 assets (10 S64 + 8 ported), got ${lib.assets.size}`);
+  for (const [id, ex] of lib.extracted) {
+    eq(ex.rejected, [], `asset ${id}: no extraction rejections (id-charset + command walls)`);
+    // heart-labels is text-only — a drawable asset is paths OR texts.
+    ok(ex.paths.length > 0 || ex.texts.length > 0, `asset ${id}: has drawables`);
+    for (const p of ex.paths) {
+      ok(p.d.length > 0 && p.d.length < 4096, `asset ${id}/${p.id}: path data sane`);
+    }
+  }
+  const ported = ["arrow-growth", "bar-chart", "check-badge", "clock", "coin", "globe", "lightbulb", "rocket"];
+  for (const id of ported) ok(lib.assets.has(id), `ported asset ${id} registered`);
+});
+
+await test("S67 port: every ported path is a SINGLE subpath (the S64 seam constraint)", async () => {
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const { parsePathData } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const lib = loadLibrary();
+  // A mid-path M teleports the drawing hand and restarts the dash reveal —
+  // the benchmark-proven geometry is single-subpath, so the port splits.
+  for (const [assetId, ex] of lib.extracted) {
+    for (const p of ex.paths) {
+      const starts = parsePathData(p.d).filter((c) => c.cmd.toUpperCase() === "M").length;
+      eq(starts, 1, `${assetId}/${p.id}: exactly one M (single subpath)`);
+    }
+  }
+});
+
+await test("S67 port: every ported path sits inside the expanded-command budget", async () => {
+  const { loadLibrary, WB_PATH_COMMAND_BUDGET } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const { countPathCommands } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const lib = loadLibrary();
+  for (const [, ex] of lib.extracted) {
+    for (const p of ex.paths) {
+      ok(countPathCommands(p.d) <= WB_PATH_COMMAND_BUDGET, `path ${p.id} within the command wall`);
+    }
+  }
+});
+
+// ---------- suite: S67 — the native scaffold planner ----------
+
+suiteStart("S67 whiteboard — the native scaffold planner (E5 phase 1)");
+
+const SCENES_IN = [
+  { index: 1, title: "Opening", narration: "Money moves faster than ever before in global markets." },
+  { index: 2, title: "The idea", narration: "One idea can change how an entire industry measures success." },
+  { index: 3, title: "Growth", narration: "And growth compounds when the data backs the decision." },
+  { index: 4, title: "Close", narration: "So remember: the next launch begins with a single check." },
+];
+
+await test("S67 scaffold: deterministic, narration-copied, budgeted, validator-clean", async () => {
+  const { scaffoldWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/whiteboard-planner");
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const a = scaffoldWhiteboardProject({ scenes: SCENES_IN, topic: "Markets" });
+  const b = scaffoldWhiteboardProject({ scenes: SCENES_IN, topic: "Markets" });
+  eq(JSON.stringify(a), JSON.stringify(b), "determinism: same scenes → byte-identical project");
+  eq(a.scenes.length, 4, "one whiteboard scene per story scene");
+  eq(a.scenes.map((s) => s.id), ["scene-1", "scene-2", "scene-3", "scene-4"], "ids mirror the story indexes");
+  eq(a.scenes.map((s) => s.narration), SCENES_IN.map((s) => s.narration), "narration copied verbatim");
+  for (const s of a.scenes) {
+    eq(s.animations, [], "events empty — the engine's fill law schedules at render");
+    ok(s.placements.length > 0, `scene ${s.id}: has placements`);
+    eq(s.camera.length, 1, `scene ${s.id}: default camera`);
+  }
+  const lib = loadLibrary();
+  const validated = validateWhiteboardProject(a, lib.libraryIndex);
+  ok(validated.project !== null, `scaffold validates clean: ${validated.errors.join(" · ")}`);
+});
+
+await test("S67 scaffold: the keyword rule table picks from the library tags", async () => {
+  const { scaffoldWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/whiteboard-planner");
+  const p = scaffoldWhiteboardProject({
+    scenes: [
+      { index: 1, title: "t", narration: "How the idea took hold." },
+      { index: 2, title: "t", narration: "The revenue doubled." },
+      { index: 3, title: "t", narration: "Across the world." },
+      { index: 4, title: "t", narration: "The final beat stands alone." },
+    ],
+    topic: "t",
+  });
+  // scene 1 = opener: title-hero first, then the keyword pick for "idea".
+  eq(p.scenes[0].placements[0].assetId, "title-hero", "opener carries the title card");
+  eq(p.scenes[0].placements[1].assetId, "lightbulb", "idea → lightbulb");
+  eq(p.scenes[1].placements[0].assetId, "coin", "revenue → coin");
+  eq(p.scenes[2].placements[0].assetId, "globe", "world → globe");
+  // scene 4 = closer: the stat card leads, the concept rides under it.
+  eq(p.scenes[3].placements[0].assetId, "close-card", "closer carries the stat card");
+});
+
+await test("S67 scaffold: no-cue scenes rotate the fallback cycle deterministically", async () => {
+  const { scaffoldWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/whiteboard-planner");
+  // Truly cue-free copy: no keyword-table hit anywhere, so the rotation
+  // alone decides — and the rotation is position-indexed, i.e. stable.
+  const noCue = Array.from({ length: 6 }, (_, i) => ({
+    index: i + 1,
+    title: `Beat ${i + 1}`,
+    narration: `Beat ${i + 1}: an ordinary sentence about the subject.`,
+  }));
+  const p = scaffoldWhiteboardProject({ scenes: noCue, topic: "t" });
+  const picks = p.scenes.map((s) => s.placements[s.placements.length - 1].assetId);
+  eq(new Set(picks).size, 6, "six no-cue scenes → six distinct rotating picks");
+  const again = scaffoldWhiteboardProject({ scenes: noCue, topic: "t" });
+  eq(JSON.stringify(p), JSON.stringify(again), "rotation is deterministic, not ambient");
+});
+
+await test("S67 scaffold: opener gets the title card, closer gets the stat card", async () => {
+  const { scaffoldWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/whiteboard-planner");
+  const p = scaffoldWhiteboardProject({ scenes: SCENES_IN, topic: "t" });
+  ok(p.scenes[0].placements.some((pl) => pl.assetId === "title-hero"), "opener: title-hero present");
+  ok(p.scenes[p.scenes.length - 1].placements.some((pl) => pl.assetId === "close-card"), "closer: close-card present");
+  // A single-scene project is its own opener AND closer — opener wins (the
+  // title card carries the beat; close-cards need a story behind them).
+  const solo = scaffoldWhiteboardProject({
+    scenes: [{ index: 1, title: "t", narration: "One beat only." }],
+    topic: "t",
+  });
+  ok(solo.scenes[0].placements.some((pl) => pl.assetId === "title-hero"), "solo scene keeps the opener treatment");
+});
+
+await test("S67 scaffold: the scene-count wall refuses beyond the project budget", async () => {
+  const { scaffoldWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/whiteboard-planner");
+  const { WB_BUDGETS } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const tooMany = Array.from({ length: WB_BUDGETS.scenesPerProject + 1 }, (_, i) => ({
+    index: i + 1, title: `t${i}`, narration: `beat ${i}`,
+  }));
+  let threw: unknown = null;
+  try {
+    scaffoldWhiteboardProject({ scenes: tooMany, topic: "t" });
+  } catch (err) { threw = err; }
+  ok(threw instanceof Error && /scene project budget/.test(threw.message), `expected the wall, got: ${String(threw)}`);
+  // And an empty story is a readable error, not a broken doc.
+  threw = null;
+  try { scaffoldWhiteboardProject({ scenes: [], topic: "t" }); } catch (err) { threw = err; }
+  ok(threw instanceof Error && /at least one/.test(threw.message), `expected the empty-story error, got: ${String(threw)}`);
+});
+
+// ---------- suite: S67 — the doc column + job plumbing ----------
+
+suiteStart("S67 whiteboard — doc parse/serialize + job entity ids");
+
+await test("S67 doc: tolerant parse discipline — null on junk, never a throw", async () => {
+  const { parseWhiteboardDoc, serializeWhiteboardDoc } = await import("../src/lib/tubeforge/whiteboard/whiteboard-planner");
+  eq(parseWhiteboardDoc(null), null, "null column");
+  eq(parseWhiteboardDoc(""), null, "empty column");
+  eq(parseWhiteboardDoc("not json {"), null, "unparseable");
+  eq(parseWhiteboardDoc(JSON.stringify({ rev: 3 })), null, "missing project");
+  eq(parseWhiteboardDoc(JSON.stringify({ project: {} })), null, "missing rev");
+  eq(parseWhiteboardDoc(JSON.stringify({ rev: 0, project: {} })), null, "rev below 1");
+  eq(parseWhiteboardDoc(JSON.stringify({ rev: 1.5, project: {} })), null, "non-integer rev");
+  const doc = { rev: 7, project: { title: "T", width: 1920, height: 1080, fps: 24, hand: { style: "marker" as const, scale: 1 }, scenes: [] } };
+  eq(parseWhiteboardDoc(serializeWhiteboardDoc(doc))?.rev, 7, "roundtrip keeps the rev");
+});
+
+await test("S67 jobs: splitEntityId('#wb') carries charset-legal scene ids only", async () => {
+  const { splitEntityId } = await import("../src/lib/tubeforge/video-jobs.ts");
+  const [v1, s1] = splitEntityId("abc123#wbscene-3", "#wb");
+  eq(v1, "abc123", "video id split");
+  eq(s1, "scene-3", "whiteboard scene id suffix");
+  const [, s2] = splitEntityId("abc123#wbev--il", "#wb");
+  eq(s2, null, "an id with the namespace separator degrades to null (full render) — never a corrupt address");
+  const [v3, s3] = splitEntityId("abc123", "#wb");
+  eq(v3, "abc123");
+  eq(s3, null, "plain videoId = full render");
+});
+
+await test("S67 jobs: parseWhiteboardPayload is tolerant of junk payloads", async () => {
+  const { parseWhiteboardPayload } = await import("../src/lib/tubeforge/queue-handlers.ts");
+  eq(parseWhiteboardPayload(undefined), {}, "no payload");
+  eq(parseWhiteboardPayload(null), {}, "null payload");
+  eq(parseWhiteboardPayload("junk"), {}, "wrong type");
+  eq(parseWhiteboardPayload({ sceneId: 42 }), {}, "wrong type inside");
+  eq(parseWhiteboardPayload({ sceneId: "  scene-2  " }), { sceneId: "scene-2" }, "trimmed");
+  eq(parseWhiteboardPayload({ sceneId: "x".repeat(100) }), { sceneId: "x".repeat(64) }, "length-capped");
 });
 
 console.log(`\n${"─".repeat(56)}`);

@@ -236,9 +236,16 @@ export async function invalidateRenderedArtifacts(
   videoId: string,
   opts: { slidePngs?: boolean } = {}
 ): Promise<void> {
+  // S67 — whiteboard artifacts join the stale set: the per-scene encodes and
+  // the scene previews die with everything else when the storyboard, the
+  // whiteboard project doc, the slide designs or the brand kit change
+  // (design §2.3: a project edit invalidates final.mp4 + previews exactly
+  // the way slide-design edits do). The preview-<id> charset is the engine's
+  // id law ([A-Za-z0-9_.-], storyboard.ts), so the pattern cannot miss a
+  // legal id — and a hostile id can never reach this key space anyway.
   const stalePattern = opts.slidePngs
-    ? /\/(final\.mp4|preview\.mp4|subtitles\.srt|scene-\d{2}\.mp4|slide-\d{2}\.png)$/
-    : /\/(final\.mp4|preview\.mp4|subtitles\.srt|scene-\d{2}\.mp4)$/;
+    ? /\/(final\.mp4|preview\.mp4|subtitles\.srt|scene-\d{2}\.mp4|slide-\d{2}\.png|whiteboard\/(scene-\d+\.mp4|preview-[A-Za-z0-9_.-]+\.mp4))$/
+    : /\/(final\.mp4|preview\.mp4|subtitles\.srt|scene-\d{2}\.mp4|whiteboard\/(scene-\d+\.mp4|preview-[A-Za-z0-9_.-]+\.mp4))$/;
   const keys = await storage.list(videoId).catch(() => [] as string[]);
   const stale = keys.filter((k) => stalePattern.test(k));
   await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));

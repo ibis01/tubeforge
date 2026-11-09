@@ -85,6 +85,74 @@ export const ASSETS: WhiteboardAsset[] = [
     <text id="cc-small" x="60" y="164" font-family="DejaVu Sans, sans-serif" font-size="40" fill="#457b9d">beats every minute</text>
     <path id="cc-box" d="M 48 34 L 48 190 L 640 190 L 640 34 Z" fill="none" stroke="#e63946" stroke-width="5" stroke-linecap="round"/>
   `),
+  // ---------------------------------------------------------------------------
+  // S67 — the E2 reconciliation port: eight concept assets from the archived
+  // prototype library (contrib/whiteboard-e2, shapes preserved). Two honest
+  // adaptations, both recorded in docs/audits/s67-…record.md:
+  //   1. Ink recolored to the house palette (#1d3557, accents #e63946 /
+  //      #457b9d / #e9c46a) so the library sits beside the benchmark set —
+  //      the prototype's near-black #111827 read as a different pen.
+  //   2. Every path is a SINGLE subpath: the prototype packed multi-M paths
+  //      (growth-axis, chart-axis, coin-dollar, bulb-screw), but the S64
+  //      dash-reveal + hand-follow geometry is benchmark-proven on
+  //      single-subpath paths only (a mid-path M teleports the hand). The
+  //      split is semantic, not cosmetic — each subpath becomes its own
+  //      drawable the scheduler times separately.
+  // ---------------------------------------------------------------------------
+  A("arrow-growth", { w: 200, h: 200 }, ["business", "growth", "trend", "up", "arrow"], `
+    <path id="ag-axis-y" d="M 30 170 L 30 40" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round"/>
+    <path id="ag-axis-x" d="M 30 170 L 170 170" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round"/>
+    <path id="ag-line" d="M 40 150 L 70 120 L 100 130 L 140 70" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="ag-head" d="M 130 60 L 150 60 L 150 80" fill="none" stroke="#e63946" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  `),
+  A("bar-chart", { w: 200, h: 200 }, ["business", "data", "chart", "stat", "graph"], `
+    <path id="bc-axis-y" d="M 30 170 L 30 30" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round"/>
+    <path id="bc-axis-x" d="M 30 170 L 180 170" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round"/>
+    <path id="bc-bar1" d="M 50 130 L 80 130 L 80 170 L 50 170 Z" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="bc-bar2" d="M 90 110 L 120 110 L 120 170 L 90 170 Z" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="bc-bar3" d="M 130 70 L 160 70 L 160 170 L 130 170 Z" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="bc-trend" d="M 60 100 L 90 80 L 130 50" fill="none" stroke="#e63946" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  `),
+  A("check-badge", { w: 200, h: 200 }, ["business", "check", "done", "quality", "verified"], `
+    <path id="cb-outer" d="M 100 25 L 115 35 L 130 30 L 138 45 L 155 50 L 152 67 L 165 80 L 155 93 L 162 110 L 145 117 L 145 135 L 128 135 L 120 150 L 105 142 L 90 152 L 82 137 L 65 137 L 65 120 L 48 113 L 55 97 L 45 82 L 60 70 L 55 53 L 72 48 L 78 33 L 95 38 Z" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="cb-check" d="M 75 95 L 95 115 L 130 75" fill="none" stroke="#e63946" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  `),
+  A("clock", { w: 200, h: 200 }, ["time", "clock", "deadline", "schedule"], `
+    <path id="cl-outer" d="M 100 30 C 60 30 30 60 30 100 C 30 140 60 170 100 170 C 140 170 170 140 170 100 C 170 60 140 30 100 30 Z" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="cl-tick12" d="M 100 40 L 100 55" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round"/>
+    <path id="cl-tick3" d="M 160 100 L 145 100" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round"/>
+    <path id="cl-tick6" d="M 100 160 L 100 145" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round"/>
+    <path id="cl-tick9" d="M 40 100 L 55 100" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round"/>
+    <path id="cl-hour" d="M 100 100 L 100 70" fill="none" stroke="#457b9d" stroke-width="6" stroke-linecap="round"/>
+    <path id="cl-minute" d="M 100 100 L 130 100" fill="none" stroke="#e63946" stroke-width="6" stroke-linecap="round"/>
+  `),
+  A("coin", { w: 200, h: 200 }, ["money", "coin", "cost", "price", "revenue"], `
+    <path id="cn-outer" d="M 100 30 C 60 30 30 60 30 100 C 30 140 60 170 100 170 C 140 170 170 140 170 100 C 170 60 140 30 100 30 Z" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="cn-inner" d="M 100 50 C 70 50 50 70 50 100 C 50 130 70 150 100 150 C 130 150 150 130 150 100 C 150 70 130 50 100 50 Z" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="cn-dollar-stem" d="M 100 70 L 100 130" fill="none" stroke="#e9c46a" stroke-width="6" stroke-linecap="round"/>
+    <path id="cn-dollar-s" d="M 85 85 C 85 75 95 70 100 75 C 105 70 115 75 115 85 C 115 95 105 95 100 100 C 95 105 85 105 85 115 C 85 125 95 130 100 125 C 105 130 115 125 115 115" fill="none" stroke="#e9c46a" stroke-width="6" stroke-linecap="round"/>
+  `),
+  A("globe", { w: 200, h: 200 }, ["world", "global", "internet", "international"], `
+    <path id="gl-outer" d="M 100 30 C 60 30 30 60 30 100 C 30 140 60 170 100 170 C 140 170 170 140 170 100 C 170 60 140 30 100 30 Z" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="gl-equator" d="M 30 100 L 170 100" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round"/>
+    <path id="gl-meridian" d="M 100 30 L 100 170" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round"/>
+    <path id="gl-arc-west" d="M 60 50 C 80 80 80 120 60 150" fill="none" stroke="#457b9d" stroke-width="6" stroke-linecap="round"/>
+    <path id="gl-arc-east" d="M 140 50 C 120 80 120 120 140 150" fill="none" stroke="#457b9d" stroke-width="6" stroke-linecap="round"/>
+  `),
+  A("lightbulb", { w: 200, h: 200 }, ["idea", "innovation", "insight", "think"], `
+    <path id="lb-glass" d="M 100 30 C 60 30 40 70 60 110 C 70 125 70 140 70 150 L 130 150 C 130 140 130 125 140 110 C 160 70 140 30 100 30 Z" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="lb-filament" d="M 80 90 C 80 70 90 60 100 70 C 110 60 120 70 120 90" fill="none" stroke="#e9c46a" stroke-width="6" stroke-linecap="round"/>
+    <path id="lb-screw-1" d="M 75 160 L 125 160" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round"/>
+    <path id="lb-screw-2" d="M 78 170 L 122 170" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round"/>
+    <path id="lb-screw-3" d="M 82 180 L 118 180" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round"/>
+  `),
+  A("rocket", { w: 200, h: 200 }, ["launch", "startup", "speed", "rocket", "growth"], `
+    <path id="rk-body" d="M 100 30 C 120 50 130 90 130 130 L 70 130 C 70 90 80 50 100 30 Z" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="rk-window" d="M 100 70 C 95 70 90 75 90 80 C 90 85 95 90 100 90 C 105 90 110 85 110 80 C 110 75 105 70 100 70 Z" fill="none" stroke="#457b9d" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="rk-fin-l" d="M 70 110 L 50 150 L 70 150 Z" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="rk-fin-r" d="M 130 110 L 150 150 L 130 150 Z" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="rk-flame" d="M 85 140 C 90 160 95 175 100 175 C 105 175 110 160 115 140" fill="none" stroke="#e63946" stroke-width="6" stroke-linecap="round"/>
+  `),
   // The drawing hand: a marker held in a stylized hand. The marker tip is
   // the asset's anchor: (70, 150). The renderer translates the hand so the
   // TIP lands on the path point (asset inner translate −tip) and applies a

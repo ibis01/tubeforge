@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" preserveAspectRatio="xMidYMid meet">
-  <!-- Check badge: scalloped circle + check mark. -->
-  <g stroke="#111827" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none">
-    <path id="badge-outer" d="M 100 25 L 115 35 L 130 30 L 138 45 L 155 50 L 152 67 L 165 80 L 155 93 L 162 110 L 145 117 L 145 135 L 128 135 L 120 150 L 105 142 L 90 152 L 82 137 L 65 137 L 65 120 L 48 113 L 55 97 L 45 82 L 60 70 L 55 53 L 72 48 L 78 33 L 95 38 Z" />
-    <path id="badge-check" d="M 75 95 L 95 115 L 130 75" />
-  </g>
-</svg>

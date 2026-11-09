@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" preserveAspectRatio="xMidYMid meet">
-  <!-- Coin: outer circle + inner circle + dollar sign. -->
-  <g stroke="#111827" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none">
-    <path id="coin-outer" d="M 100 30 C 60 30 30 60 30 100 C 30 140 60 170 100 170 C 140 170 170 140 170 100 C 170 60 140 30 100 30 Z" />
-    <path id="coin-inner" d="M 100 50 C 70 50 50 70 50 100 C 50 130 70 150 100 150 C 130 150 150 130 150 100 C 150 70 130 50 100 50 Z" />
-    <path id="coin-dollar" d="M 100 70 L 100 130 M 85 85 C 85 75 95 70 100 75 C 105 70 115 75 115 85 C 115 95 105 95 100 100 C 95 105 85 105 85 115 C 85 125 95 130 100 125 C 105 130 115 125 115 115" />
-  </g>
-</svg>

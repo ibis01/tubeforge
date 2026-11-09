@@ -112,3 +112,5 @@ preview/venv/
 
 # S62 — real-i2v validation evidence (large binaries; report + manifest are committed)
 /validation/
+# S67 — sandbox proof artifacts (the proof SCRIPT is committed; its rendered mp4s/frames are not)
+/scratch/

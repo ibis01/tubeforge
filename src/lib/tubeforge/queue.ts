@@ -43,8 +43,9 @@ const CLAIM_BATCH = 4;
  * gated per-org (below); this cap protects the process itself.
  */
 const MAX_ACTIVE_PER_PROCESS = Number(process.env.TUBEFORGE_MAX_ACTIVE_JOBS ?? 8);
-/** Heavy ffmpeg kinds subject to the per-organization cap. */
-const HEAVY_KINDS: readonly JobKind[] = ["render", "short", "convert"];
+/** Heavy ffmpeg kinds subject to the per-organization cap. S67: whiteboard
+ *  joins — chromium + ffmpeg is the same CPU/RAM class (design §3.2). */
+const HEAVY_KINDS: readonly JobKind[] = ["render", "short", "convert", "whiteboard"];
 /** Per-org concurrent heavy jobs (ffmpeg is CPU/RAM bound). */
 const MAX_HEAVY_PER_ORG = Number(process.env.TUBEFORGE_MAX_RENDER_CONCURRENCY ?? 2);
 /** Retry backoff: 30s, 60s, 120s … capped at 10 min, +0–2s jitter. */

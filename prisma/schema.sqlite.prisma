@@ -396,6 +396,13 @@ model Video {
   // column, never the profile.
   contentPolicy String?
 
+  // Whiteboard Engine (S67 / E1 design §2.1) — the validated WhiteboardProject
+  // JSON doc (scenes, placements, animation events, camera keyframes), the
+  // sixth JSON doc column. Null = the video never opened the whiteboard
+  // editor. Concurrency: last-write-wins (the house rule for `scenes`) with
+  // an advisory `rev` integer INSIDE the doc the editor echoes on save.
+  whiteboardProject String?
+
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)

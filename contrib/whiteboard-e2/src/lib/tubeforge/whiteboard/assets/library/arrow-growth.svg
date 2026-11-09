@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" preserveAspectRatio="xMidYMid meet">
-  <!-- Arrow growth: zig-zag upward arrow. -->
-  <g stroke="#111827" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none">
-    <path id="growth-axis" d="M 30 170 L 30 40 M 30 170 L 170 170" />
-    <path id="growth-line" d="M 40 150 L 70 120 L 100 130 L 140 70" />
-    <path id="growth-arrow" d="M 130 60 L 150 60 L 150 80" />
-  </g>
-</svg>

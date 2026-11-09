@@ -127,6 +127,13 @@ export const RENDER_MODES = [
     eta: "≈ 1–3 min",
   },
   {
+    id: "whiteboard",
+    label: "Whiteboard",
+    icon: "PenTool",
+    desc: "Hand-drawn explainer — a native engine draws each scene stroke-by-stroke with a following hand, camera drift and your narration (no image gen, $0)",
+    eta: "≈ 2–6 min",
+  },
+  {
     id: "animated",
     label: "Full AI animation",
     icon: "Clapperboard",

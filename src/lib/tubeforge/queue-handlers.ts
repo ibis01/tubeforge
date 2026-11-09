@@ -49,6 +49,7 @@ import {
   runSlideJob,
   runQcJob,
   runUploadJob,
+  runWhiteboardJob,
   type PublishJobOptions,
   splitEntityId,
   type VoiceoverJobSource,
@@ -292,6 +293,16 @@ function parseShortPayload(payload: unknown): { sceneIndex?: number | null } {
   return {};
 }
 
+/** S67 — the whiteboard job's payload: an optional scene id for the
+ *  single-scene preview. Tolerant decode: junk shapes degrade to the full
+ *  render (the entityId's #wb suffix stays the durable truth anyway —
+ *  runWhiteboardJob prefers the suffix when the payload disagrees). */
+export function parseWhiteboardPayload(payload: unknown): { sceneId?: string } {
+  const raw = asRecord(payload)?.sceneId;
+  if (typeof raw === "string" && raw.trim()) return { sceneId: raw.trim().slice(0, 64) };
+  return {};
+}
+
 /** T-6.3 — the publish options survive a crash so the resumed upload uses
  *  the SAME title/description/privacy the user picked. Strings are
  *  clamped to YouTube's API limits; junk shapes degrade to safe defaults
@@ -370,6 +381,13 @@ export function registerDefaultHandlers(): void {
   registerJobHandler("qc", (videoId) => runQcJob(videoId));
   registerJobHandler("upload", (videoId, payload) =>
     runUploadJob(videoId, parsePublishPayload(payload))
+  );
+
+  // S67 — Whiteboard Engine: full render (plain videoId) + scene preview
+  // (<videoId>#wb<sceneId>). Default attempts (2): a whiteboard re-run is
+  // deterministic local work at zero marginal API cost (design §3.2).
+  registerJobHandler("whiteboard", (entityId, payload) =>
+    runWhiteboardJob(entityId, parseWhiteboardPayload(payload))
   );
 
   // Character stages — Stage 3 close-out

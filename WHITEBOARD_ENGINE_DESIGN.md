@@ -342,10 +342,10 @@ E11 builds the path.
 | E1 technical design | **THIS DOCUMENT (S65)** + the §6 hardening landed |
 | E2 prototype | DONE (S64 P0) — 63.88s benchmark, all QC lenses green |
 | E3/E4/E7 drawing/hand/camera | DONE at P0 fidelity; refinement rides E9 Phase B |
-| E5 storyboard intelligence | Phase 1 (native scaffold, zero AI) lands WITH E9 Phase A; phase 2 (LLM planner via `aiCallJson`) is gateway-blocked for verification like S63's re-measure |
-| E6 audio sync | Engine-ready (`voFiles` + measured durations + the §6 pre-flight); real-VO verification gateway-blocked |
-| E8 renderer integration | P0 proven; the compositor-mode union gains `"whiteboard"` at E9 |
-| E9 editor | Phase A/B/C — the FIRST product-integration stages, after owner review of this design |
+| E5 storyboard intelligence | Phase 1 (native scaffold, zero AI) **LANDED (S67)** — the keyword rule-table planner; phase 2 (LLM planner via `aiCallJson`) is gateway-blocked for verification like S63's re-measure |
+| E6 audio sync | **Wired (S67)** — the job maps the video's existing `scene-XX.wav` files into `voFiles`; real-VO verification gateway-blocked |
+| E8 renderer integration | **LANDED (S67)** — `RENDER_MODES` gains `"whiteboard"`; the engine renders to the STANDARD `final.mp4` (player/QC/ship-gate unchanged) while `runRenderJob` refuses the mode — the compositor never renders whiteboard (peer-mode law, §3.1) |
+| E9 editor | **Phase A LANDED (S67)** — scaffold + scrub/play + render, the five-route surface (four shipped; `/asset` rides E11), the `whiteboard` JobKind, the doc column. Phase B (event editing) and Phase C (palette) are the next product stages |
 | E10 QC/benchmarks | Lens-passing proven; per-format (9:16, 1:1) benchmarks ride E9 (the engine already takes width/height/fps from the doc) |
 | E11 security hardening | §7 spec'd; execution after E9 Phase C |
 | E12 production integration | Entitlements preview: native render is $0 → available to ALL tiers (first $0 creative mode); AI planner/TTS metered as usual. Publish path reuses the export gate + QC. Worker chromium = the slides deployment contract (§3.3) |

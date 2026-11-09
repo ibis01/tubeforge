@@ -117,6 +117,15 @@ export async function POST(req: NextRequest) {
       ? String(body.renderMode)
       : "kenburns";
 
+    // S67 — whiteboard is a story-format mode (the E1 design §2.2 law):
+    // a classic-script batch row with it is a contradiction, refused here
+    // (400) instead of a video that can never render.
+    if (renderMode === "whiteboard" && format !== "story")
+      return NextResponse.json(
+        { error: "Whiteboard mode needs a scene-based story — create the row with format \"story\"" },
+        { status: 400 }
+      );
+
     const character = characterId
       ? await db.character.findUnique({ where: { id: characterId } })
       : null;

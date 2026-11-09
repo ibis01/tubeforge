@@ -113,6 +113,15 @@ export async function POST(req: NextRequest) {
       ? String(body.renderMode)
       : "kenburns";
 
+    // S67 — whiteboard is a story-format mode (the E1 design §2.2 law):
+    // creating a classic-script video with it is a contradiction, and a 400
+    // here beats a video that can never render.
+    if (renderMode === "whiteboard" && format !== "story")
+      return NextResponse.json(
+        { error: "Whiteboard mode needs a scene-based story — create the video with format \"story\"" },
+        { status: 400 }
+      );
+
     // S49 — the content policy (Islamic visual protection). Snapped against
     // the real ids; unknown/absent = null (the "standard" policy — today's
     // behavior). Deliberate human choice, recorded on the row, read by every

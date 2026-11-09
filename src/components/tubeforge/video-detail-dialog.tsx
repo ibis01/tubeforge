@@ -32,6 +32,7 @@ import { TransitionControlsCard, type TransitionPickerValue } from "@/components
 import { InlineCloneSetup } from "@/components/tubeforge/inline-clone-setup";
 import { BrandKitCard } from "@/components/tubeforge/brand-kit";
 import { SceneEditorDialog } from "@/components/tubeforge/scene-editor";
+import WhiteboardStudio from "@/components/tubeforge/whiteboard/whiteboard-studio";
 import { DirectorCard } from "@/components/tubeforge/director-card";
 import { TimelineStudio } from "@/components/tubeforge/timeline-studio";
 import { CircleCheck, CircleX, CircleHelp, Ban, Brush } from "lucide-react";
@@ -3818,7 +3819,22 @@ export function VideoDetailDialog({
                 {scriptTab}
               </TabsContent>
               <TabsContent value="storyboard" className="mt-4">
-                {storyboardTab}
+                {renderMode === "whiteboard" ? (
+                  /* S67 — the Whiteboard Studio owns this tab in whiteboard
+                     mode: scaffold → scrub/play (the frame-plan seam) →
+                     render. The scene grid / Director card return for every
+                     other mode. */
+                  <WhiteboardStudio
+                    videoId={video.id}
+                    hasVideo={video.hasVideo}
+                    onRenderQueued={() => {
+                      void refreshVideo(video.id);
+                      bumpRefresh();
+                    }}
+                  />
+                ) : (
+                  storyboardTab
+                )}
               </TabsContent>
               <TabsContent value="video" className="mt-4">
                 {videoTab}

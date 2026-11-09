@@ -77,6 +77,17 @@ import { resolveTransition, transitionSummary, sanitizeTransitionStyle, TRANSITI
 import type { TransitionSettings } from "./transitions";
 import { sanitizeMotion } from "./motion";
 import {
+  renderWhiteboard,
+  probeDurationSec,
+} from "./whiteboard/render";
+import { loadLibrary } from "./whiteboard/assets";
+import {
+  parseWhiteboardDoc,
+  type WhiteboardDoc,
+} from "./whiteboard/whiteboard-planner";
+import { validateWhiteboardProject, validWhiteboardId, type WhiteboardProject } from "./whiteboard/storyboard";
+import { sceneWavFile } from "./story";
+import {
   loadSlideDeck,
   planSlides,
   rerollSlideSpec,
@@ -84,7 +95,7 @@ import {
   renderSlidePngs,
   slideBrandFor,
 } from "./slides";
-import { get, remove, materialize } from "./storage";
+import { get, remove, materialize, putFromPath } from "./storage";
 import { promoteVariant, pickVariantStyles } from "./ai";
 import { uploadToYouTube } from "./youtube";
 import {
@@ -498,6 +509,15 @@ export async function runRenderJob(
   const video = await db.video.findUnique({ where: { id: videoId } });
   if (!video) return;
   if (video.format !== "story") return;
+
+  // S67 — whiteboard is a peer MODE with its own job kind and its own studio
+  // route. The compositor never renders it: a legacy or hand-rolled client
+  // hitting POST /render on a whiteboard video gets a readable refusal
+  // instead of a silently wrong kenburns render.
+  if (video.renderMode === "whiteboard")
+    throw new Error(
+      "This video renders through the Whiteboard Studio — the compositor does not render mode whiteboard"
+    );
 
   const scenes = parseScenes(video.scenes);
   if (scenes.length === 0)
@@ -1415,6 +1435,214 @@ export async function runSlideJob(entityId: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// S67 — the Whiteboard Engine (E9 Phase A): full renders + scene previews.
+//
+// entityId contract (the `#`-split the scene/slide jobs use):
+//   `<videoId>`              — full render: every scene, project fps + size,
+//                              narration WAVs when present, the house music
+//                              bed when enabled; artifact = the STANDARD
+//                              `${videoId}/final.mp4` (the player, the QC
+//                              battery, and the ship gate work unchanged),
+//                              per-scene encodes under `whiteboard/`.
+//   `<videoId>#wb<sceneId>`  — single-scene preview: 720p/24fps, no music
+//                              bed; artifact `whiteboard/preview-<sceneId>.mp4`,
+//                              sets `hasPreview` (the T-3.7 flag).
+//
+// $0 native rendering (design §1 law 5): no generation API is touched — no
+// spend is recorded, unlike the compositor render job.
+// ---------------------------------------------------------------------------
+
+/** Load + validate the doc's project against the LIVE library. Returns the
+ *  normalized project or throws with the validator's verbatim errors (the
+ *  design §4 law: no second error vocabulary). */
+function loadValidatedProject(doc: WhiteboardDoc): WhiteboardProject {
+  const lib = loadLibrary();
+  const { project, errors } = validateWhiteboardProject(doc.project, lib.libraryIndex);
+  if (!project) {
+    throw new Error(
+      `The whiteboard project is invalid — open the Whiteboard Studio to fix it: ${errors.slice(0, 3).join(" · ")}`
+    );
+  }
+  return project;
+}
+
+/** The narration WAVs that actually exist, keyed by whiteboard scene id.
+ *  The scaffold names scenes `scene-<index>` after the story scene index —
+ *  the only mapping the WAV layout (sceneWavFile) supports; hand-authored
+ *  scene ids ride the narration estimate (documented Phase A degradation). */
+function voFilesFor(project: WhiteboardProject, videoId: string): Map<string, string> {
+  const voFiles = new Map<string, string>();
+  for (const scene of project.scenes) {
+    const m = /^scene-(\d+)$/.exec(scene.id);
+    if (!m) continue;
+    const index = Number(m[1]);
+    if (!Number.isInteger(index) || index < 1 || index > 999) continue;
+    const wav = path.join(videoDir(videoId), sceneWavFile(index));
+    if (fs.existsSync(wav)) voFiles.set(scene.id, wav);
+  }
+  return voFiles;
+}
+
+/** Progress → the jobs surface, with the cancellation checkpoint. Throwing
+ *  JobCancelledError from onProgress aborts the engine between frames;
+ *  scene granularity is what the design promises and what lands. */
+function wbProgressGuard(entityId: string) {
+  return (label: string, fraction: number): void => {
+    if (isJobCancelled(entityId, "whiteboard")) throw new JobCancelledError();
+    setJobProgress(entityId, "whiteboard", Math.round(fraction * 100), 100, label);
+  };
+}
+
+export async function runWhiteboardJob(
+  entityId: string,
+  opts: { sceneId?: string } = {}
+): Promise<void> {
+  const ctx = assertCtx("runWhiteboardJob");
+  const [videoId, wbSuffix] = splitEntityId(entityId, "#wb");
+  const sceneId = opts.sceneId ?? wbSuffix ?? null;
+
+  const video = await db.video.findUnique({ where: { id: videoId } });
+  if (!video) return; // deleted while queued — end quietly
+  if (video.renderMode !== "whiteboard") return; // mode changed while queued
+  const doc = parseWhiteboardDoc(video.whiteboardProject);
+  if (!doc) {
+    throw new Error(
+      "No whiteboard project on this video yet — open the Whiteboard Studio and scaffold one first"
+    );
+  }
+  const project = loadValidatedProject(doc);
+
+  const outDir = path.join(videoDir(videoId), "whiteboard");
+  fs.mkdirSync(outDir, { recursive: true });
+
+  try {
+    if (sceneId !== null) {
+      // ---- single-scene preview: 720p/24fps, no music bed (design §4) ----
+      const scene = project.scenes.find((s) => s.id === sceneId);
+      if (!scene) {
+        throw new Error(`Whiteboard scene "${sceneId}" does not exist in this project`);
+      }
+      const scale = 720 / project.height;
+      const previewProject: WhiteboardProject = {
+        ...project,
+        width: Math.max(320, Math.round((project.width * scale) / 2) * 2),
+        height: 720,
+        fps: 24,
+        scenes: [scene],
+      };
+      const voFiles = voFilesFor(previewProject, videoId);
+      const result = await renderWhiteboard(previewProject, {
+        outDir,
+        voFiles,
+        onProgress: wbProgressGuard(entityId),
+      });
+      const key = `${videoId}/whiteboard/preview-${sceneId}.mp4`;
+      await putFromPath(key, result.file);
+      await db.video.update({ where: { id: videoId }, data: { hasPreview: true, error: null } });
+      await db.activity.create({
+        data: {
+          organizationId: video.organizationId,
+          userId: ctx.userId,
+          videoId,
+          stage: "render",
+          message: `Whiteboard preview rendered — scene "${sceneId}" (720p, ${voFiles.size > 0 ? "with narration" : "silent draft"})`,
+        },
+      });
+      return;
+    }
+
+    // ---- full render: the project's own size/fps, VO + the music bed ----
+    const voFiles = voFilesFor(project, videoId);
+    let musicPath: string | null = null;
+    let musicWhy = "no music";
+    if (await isMusicEnabledForVideo(video)) {
+      const planAudio = await getApprovedAudioMap(videoId);
+      const resolved = await resolveMusicForVideo(video, planAudio.musicMood, null);
+      if (resolved) {
+        musicPath = trackAbsolutePath(resolved.track);
+        musicWhy = `music: ${resolved.why}`;
+      }
+    }
+
+    const result = await renderWhiteboard(project, {
+      outDir,
+      voFiles,
+      musicPath: musicPath ?? undefined,
+      onProgress: wbProgressGuard(entityId),
+    });
+
+    // The standard key — the existing player route, QC battery and ship gate
+    // never learn whiteboard exists (the design's "peer MODE" law).
+    await putFromPath(`${videoId}/final.mp4`, result.file);
+    // Per-scene encodes (design §2.3) — Phase B's scene re-render swaps one
+    // of these and concats; Phase A stores them so that path is honest.
+    for (let i = 0; i < result.scenes.length; i++) {
+      await putFromPath(`${videoId}/whiteboard/scene-${i + 1}.mp4`, result.scenes[i].file);
+    }
+    const durationSec = (await probeDurationSec(result.file)) ?? 0;
+
+    await db.video.update({
+      where: { id: videoId },
+      data: {
+        hasVideo: true,
+        videoDuration: Math.round(durationSec * 10) / 10,
+        error: null,
+      },
+    });
+
+    // The QC battery rides the standing final.mp4 (runQcJob re-derives
+    // everything from the row). A crashed battery never fails the render —
+    // the artifact exists whatever the probes say (the S45 law).
+    try {
+      await runQcJob(videoId);
+    } catch {
+      /* QC evidence stays absent — never stale */
+    }
+
+    await db.activity.create({
+      data: {
+        organizationId: video.organizationId,
+        userId: ctx.userId,
+        videoId,
+        stage: "render",
+        message: `Whiteboard rendered (${project.scenes.length} scene${project.scenes.length === 1 ? "" : "s"}, ${Math.round(durationSec)}s, ${voFiles.size > 0 ? "narrated" : "silent draft"}, ${musicWhy})`,
+      },
+    });
+  } catch (err) {
+    if (err instanceof JobCancelledError) {
+      await db.video.update({ where: { id: videoId }, data: { error: null } });
+      await db.activity
+        .create({
+          data: {
+            organizationId: video.organizationId,
+            userId: ctx.userId,
+            videoId,
+            stage: "render",
+            message: "Whiteboard render cancelled — completed scenes kept, run it again to restart",
+          },
+        })
+        .catch(() => {});
+      throw err;
+    }
+    const message = errorText(err, "Whiteboard render failed");
+    await db.video.update({ where: { id: videoId }, data: { error: message } });
+    await db.activity
+      .create({
+        data: {
+          organizationId: video.organizationId,
+          userId: ctx.userId,
+          videoId,
+          stage: "render",
+          level: "error",
+          message: `Whiteboard render failed: ${message}`,
+        },
+      })
+      .catch(() => {});
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // helpers
 
 /**
@@ -1426,11 +1654,17 @@ export async function runSlideJob(entityId: string): Promise<void> {
  */
 export function splitEntityId(
   entityId: string,
-  marker: "#scene" | "#slide"
+  marker: "#scene" | "#slide" | "#wb"
 ): [string, string | null] {
   const idx = entityId.indexOf(marker);
   if (idx === -1) return [entityId, null];
   const suffix = entityId.slice(idx + marker.length);
+  // #scene/#slide suffixes are numeric scene indexes; #wb carries a
+  // whiteboard SCENE ID (the engine's charset-legal id — "scene-3", a
+  // hand-authored id). Validating it with the id-charset law keeps a
+  // corrupt composite id from silently degrading a preview job into a
+  // full-render one (suffix null = full render downstream).
+  if (marker === "#wb") return [entityId.slice(0, idx), validWhiteboardId(suffix) ? suffix : null];
   return [entityId.slice(0, idx), /^\d+$/.test(suffix) ? suffix : null];
 }
 

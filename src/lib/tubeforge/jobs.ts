@@ -54,7 +54,8 @@ export type JobKind =
   | "script" // (re)generate the script package — retry after a failed create, or re-roll
   | "director" // Stage 5 — LLM shot-list pass (AI suggests, human approves)
   | "continuity" // Stage 5 — VLM per-scene character-continuity check
-  | "qc"; // Stage 6 — re-run the QC battery against the existing final.mp4
+  | "qc" // Stage 6 — re-run the QC battery against the existing final.mp4
+  | "whiteboard"; // S67 — Whiteboard Engine full render / scene preview (E9 Phase A)
 
 export type JobStatus = "pending" | "running" | "done" | "failed" | "interrupted" | "cancelled";
 
@@ -120,6 +121,7 @@ const STAGE_LABEL: Record<string, string> = {
   director: "director pass", // Stage 5 — was missing from this map until the
   continuity: "continuity check", // S33 contract-drift fix caught the family
   qc: "quality check",
+  whiteboard: "whiteboard render", // S67
 };
 
 /** Human label for an interrupted stage ("voiceover" -> "Voiceover"). */
@@ -176,6 +178,28 @@ async function runRecovery(): Promise<void> {
       if (!claimIsStale(row.claimedBy)) continue;
 
       // Durable resume: handler kinds go back to the queue instead of dying.
+      // S67 — the whiteboard FULL render's idempotence wall first: a render
+      // whose final.mp4 already landed (crash between the last assembly and
+      // the row update) must be marked done, not re-enqueued — re-rendering
+      // an 18-minute chromium job to no effect is exactly the waste the
+      // budget laws exist to prevent. Scene previews (composite
+      // <videoId>#wb<sceneId> entityIds) re-render cheaply at 720p and ride
+      // the normal resume; only the full-render rows (plain videoId) gate.
+      if (row.kind === "whiteboard" && row.entityId === baseEntityId(row.entityId)) {
+        const wbVideo = await rawDb.video.findUnique({ where: { id: row.entityId } });
+        if (wbVideo && wbVideo.hasVideo && wbVideo.renderMode === "whiteboard") {
+          await rawDb.job.update({
+            where: { id: row.id },
+            data: { status: "done", endedAt: new Date() },
+          });
+          jobsLog.warn("recovered stale whiteboard job — artifact already landed, marked done", {
+            kind: row.kind,
+            jobId: row.id,
+            entityId: row.entityId,
+          });
+          continue;
+        }
+      }
       const resumed = await reenqueueIfHandlerKind(row.id, row.kind).catch(() => false);
       if (resumed) {
         jobsLog.warn("recovered stale job — re-enqueued", { kind: row.kind, jobId: row.id, entityId: row.entityId });
@@ -196,7 +220,7 @@ async function runRecovery(): Promise<void> {
         // interrupted pass simply tells the user to re-run. Unreachable today
         // while every kind is handler-registered; this is the defense for the
         // day one isn't.)
-        if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "slide", "verify", "comments", "upload", "short", "convert", "script", "stock", "qc", "director", "continuity"].includes(row.kind)) {
+        if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "slide", "verify", "comments", "upload", "short", "convert", "script", "stock", "qc", "director", "continuity", "whiteboard"].includes(row.kind)) {
           const videoId = baseEntityId(row.entityId);
           const video = await rawDb.video.findUnique({ where: { id: videoId } });
           // Only set the error if the artifact never landed (completed after the row went stale).
@@ -215,7 +239,8 @@ async function runRecovery(): Promise<void> {
               (row.kind === "convert" && video.format === "story") ||
               (row.kind === "script" && Boolean(video.script)) ||
               (row.kind === "stock" && Boolean(video.scenes && video.scenes.includes('"stock"'))) ||
-              (row.kind === "qc" && Boolean(video.qcReport));
+              (row.kind === "qc" && Boolean(video.qcReport)) ||
+              (row.kind === "whiteboard" && video.hasVideo);
             if (!artifactLanded && !video.error)
               await rawDb.video.update({ where: { id: videoId }, data: { error: message } });
           }
@@ -459,6 +484,7 @@ export function jobSnapshot(videoId: string): {
   script: boolean;
   stock: boolean;
   qc: boolean;
+  whiteboard: boolean;
 } {
   return {
     voiceover: isJobRunning(videoId, "voiceover"),
@@ -474,6 +500,7 @@ export function jobSnapshot(videoId: string): {
     script: isJobRunning(videoId, "script"),
     stock: isJobRunning(videoId, "stock"),
     qc: isJobRunning(videoId, "qc"),
+    whiteboard: isJobRunning(videoId, "whiteboard"),
   };
 }
 

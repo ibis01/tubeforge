@@ -160,8 +160,19 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     }
     data.characterId = body.characterId;
   }
-  if (RENDER_MODES.some((m) => m.id === body.renderMode))
+  // S67 — whiteboard is a story-format mode (the E1 design §2.2 law:
+  // narration comes from scenes). Switching a classic-script video over
+  // returns 409 with the convert-first hint — the existing convert job
+  // turns script → story, after which the mode switch succeeds.
+  if (RENDER_MODES.some((m) => m.id === body.renderMode)) {
+    if (body.renderMode === "whiteboard" && video.format !== "story") {
+      return NextResponse.json(
+        { error: "Whiteboard needs a scene-based story — convert the script first (the Convert button on the Script tab), then switch the mode" },
+        { status: 409 }
+      );
+    }
     data.renderMode = String(body.renderMode);
+  }
 
   // S12 — the cover's STYLE (the subject's sibling axis: S9 picked WHICH
   // moment the cover depicts, this picks WHAT the art looks like). The
