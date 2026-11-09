@@ -42,12 +42,27 @@ const KEYWORD_PICKS: { re: RegExp; assetId: string }[] = [
 const FALLBACK_CYCLE = ["lightbulb", "bar-chart", "rocket", "globe", "clock", "coin", "check-badge", "arrow-growth"] as const;
 
 /** The concept library grid: a 320px board sits left-of-center; the
- *  title/close cards span the top when their scene kind calls for them. */
+ *  title/close cards span the top when their scene kind calls for them.
+ *  S68: the constants are 16:9 scene-space and are PROPORTIONALLY remapped
+ *  to the project's real dimensions (9:16 / 1:1 scaffolds place sensibly —
+ *  the 16:9 numbers stay the exact defaults). */
 const CONCEPT_PLACEMENT: Placement = { x: 800, y: 420, scale: 1.6, rotateDeg: 0 };
 const TITLE_PLACEMENT: Placement = { x: 460, y: 120, scale: 1.25, rotateDeg: 0 };
 const CLOSE_PLACEMENT: Placement = { x: 460, y: 380, scale: 1.25, rotateDeg: 0 };
 /** A second concept under the close card (the last scene still teaches). */
 const CLOSE_CONCEPT_PLACEMENT: Placement = { x: 820, y: 560, scale: 1.4, rotateDeg: 0 };
+
+/** Remap a 16:9 scene-space placement onto (width × height). Positions
+ *  scale by axis; the scale factor keeps the 1920-wide reference size for
+ *  16:9 and shrinks/grows with board width for other aspects (assets must
+ *  stay on a 1080-tall board: their pixel size follows the WIDTH ratio so a
+ *  9:16 board at 1080 wide draws the same asset size it would at 1080 wide
+ *  in 16:9 — vertical space is what changes, not ink size). */
+function remapPlacement(pl: Placement, width: number, height: number): Placement {
+  const fx = width / 1920;
+  const fy = height / 1080;
+  return { x: Math.round(pl.x * fx), y: Math.round(pl.y * fy), scale: pl.scale * fx, rotateDeg: pl.rotateDeg };
+}
 
 function pickForScene(narration: string, position: number): string {
   for (const { re, assetId } of KEYWORD_PICKS) {
@@ -62,10 +77,17 @@ function pickForScene(narration: string, position: number): string {
  * The caller has already enforced the scene-count wall (≤
  * WB_BUDGETS.scenesPerProject) — this function refuses beyond it rather
  * than silently truncating (a silent truncation would read as success).
+ *
+ * S68 — `width`/`height`/`fps` are OPTIONAL and default to the house
+ * 1920×1080@24 (existing callers unchanged); placements remap
+ * proportionally and the default camera key centers on the real board.
  */
 export function scaffoldWhiteboardProject(input: {
   scenes: ScaffoldSceneInput[];
   topic: string;
+  width?: number;
+  height?: number;
+  fps?: number;
 }): WhiteboardProject {
   if (input.scenes.length === 0) {
     throw new Error("whiteboard scaffold needs at least one story scene");
@@ -76,6 +98,23 @@ export function scaffoldWhiteboardProject(input: {
     );
   }
 
+  // Same clamp grammar as the validator (the one gate every doc passes):
+  // out-of-band numbers fall back to the house defaults rather than
+  // producing a project the validator would bend behind the planner's back.
+  const width =
+    typeof input.width === "number" && input.width >= 320 && input.width <= 3840
+      ? Math.round(input.width)
+      : 1920;
+  const height =
+    typeof input.height === "number" && input.height >= 320 && input.height <= 3840
+      ? Math.round(input.height)
+      : 1080;
+  const fps =
+    typeof input.fps === "number" && input.fps >= 12 && input.fps <= 60
+      ? Math.round(input.fps)
+      : 24;
+  const remap = (pl: Placement) => remapPlacement(pl, width, height);
+
   const scenes: WhiteboardScene[] = input.scenes.map((s, i) => {
     const isFirst = i === 0;
     const isLast = i === input.scenes.length - 1 && input.scenes.length > 1;
@@ -83,23 +122,23 @@ export function scaffoldWhiteboardProject(input: {
 
     if (isFirst) {
       // The opener: the hero title card up top, the lead concept below.
-      placements.push({ assetId: "title-hero", placement: TITLE_PLACEMENT, order: 0 });
+      placements.push({ assetId: "title-hero", placement: remap(TITLE_PLACEMENT), order: 0 });
       placements.push({
         assetId: pickForScene(`${s.title} ${s.narration}`, i),
-        placement: CONCEPT_PLACEMENT,
+        placement: remap(CONCEPT_PLACEMENT),
         order: 1,
       });
     } else if (isLast) {
-      placements.push({ assetId: "close-card", placement: CLOSE_PLACEMENT, order: 0 });
+      placements.push({ assetId: "close-card", placement: remap(CLOSE_PLACEMENT), order: 0 });
       placements.push({
         assetId: pickForScene(`${s.title} ${s.narration}`, i),
-        placement: CLOSE_CONCEPT_PLACEMENT,
+        placement: remap(CLOSE_CONCEPT_PLACEMENT),
         order: 1,
       });
     } else {
       placements.push({
         assetId: pickForScene(`${s.title} ${s.narration}`, i),
-        placement: CONCEPT_PLACEMENT,
+        placement: remap(CONCEPT_PLACEMENT),
         order: 0,
       });
     }
@@ -110,15 +149,15 @@ export function scaffoldWhiteboardProject(input: {
       background: "#ffffff",
       placements,
       animations: [], // scheduleScene's fill law owns the draw schedule
-      camera: [{ cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 }],
+      camera: [{ cx: width / 2, cy: height / 2, scale: 1, startMs: 0, durationMs: 0 }],
     };
   });
 
   return {
     title: input.topic ? `Whiteboard — ${input.topic}`.slice(0, 120) : "Whiteboard",
-    width: 1920,
-    height: 1080,
-    fps: 24,
+    width,
+    height,
+    fps,
     hand: { style: "marker", scale: 1 },
     scenes,
   };

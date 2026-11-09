@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import fs from "node:fs";
+import path from "node:path";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
+import { videoDir } from "@/lib/tubeforge/ai";
+import { sceneWavFile } from "@/lib/tubeforge/story";
+import { wavDurationSec } from "@/lib/tubeforge/wav";
 import { loadLibrary } from "@/lib/tubeforge/whiteboard/assets";
 import { validateWhiteboardProject, WB_BUDGETS } from "@/lib/tubeforge/whiteboard/storyboard";
 import { WB_PATH_COMMAND_BUDGET } from "@/lib/tubeforge/whiteboard/assets";
@@ -18,7 +23,11 @@ type Ctx = { params: Promise<{ id: string }> };
  *
  * GET  — the doc (validated server-side before return), the editor palette
  *        (asset ids, viewBoxes, tags, drawable summaries — NOT raw SVG) and
- *        the resource budgets for client-side enforcement.
+ *        the resource budgets for client-side enforcement. S68: the MEASURED
+ *        narration durations (`voMs`, WAV header math on the standing
+ *        scene-NN.wav files — the same files the render's voFilesFor picks
+ *        up) so the editor's playback timing agrees with the render instead
+ *        of riding the narration estimate whenever a real VO exists.
  * PUT  — save the whole doc. Validation is the engine validator; its error
  *        strings are returned verbatim (no second error vocabulary). 409 on
  *        a rev mismatch with the current doc in the response. A save
@@ -63,10 +72,34 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     };
   });
 
+  // S68 — measured narration per scene (WAV header math; the render's
+  // ffprobe reports the same duration for the PCM WAVs the TTS lane writes).
+  // Only `scene-<n>` ids map to the WAV layout — hand-authored scene ids
+  // ride the narration estimate, exactly like the render (one mapping law).
+  const voMs: Record<string, number> = {};
+  if (project) {
+    const dir = videoDir(id);
+    for (const scene of project.scenes) {
+      const m = /^scene-(\d+)$/.exec(scene.id);
+      if (!m) continue;
+      const index = Number(m[1]);
+      if (!Number.isInteger(index) || index < 1 || index > 999) continue;
+      const wav = path.join(dir, sceneWavFile(index));
+      if (!fs.existsSync(wav)) continue;
+      try {
+        const sec = wavDurationSec(fs.readFileSync(wav));
+        if (sec > 0) voMs[scene.id] = Math.round(sec * 1000);
+      } catch {
+        /* unreadable/odd header → the scene rides the estimate */
+      }
+    }
+  }
+
   return NextResponse.json({
     project,
     rev: doc?.rev ?? 0,
     library,
+    voMs,
     budgets: {
       ...WB_BUDGETS,
       pathCommandsPerPath: WB_PATH_COMMAND_BUDGET,

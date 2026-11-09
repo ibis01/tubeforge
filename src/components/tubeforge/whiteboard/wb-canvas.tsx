@@ -1,6 +1,7 @@
 "use client";
 
 // S67 — the whiteboard playback canvas (E9 Phase A, E1 design §5).
+// S68 — Phase B: the canvas becomes the EDIT surface.
 //
 // THE SEAM: this component plays a scene by calling the engine's PURE frame
 // plan (timing.ts frameAt) and applying it with THE SAME page-side applier
@@ -9,18 +10,45 @@
 // chromium renderer uses. Scrubbable playback is correct BY CONSTRUCTION:
 // what the editor shows at t=12.4s is what the MP4 will contain at t=12.4s.
 // There is no second animation implementation to drift.
-import { useEffect, useRef } from "react";
+//
+// S68 viewport law: the iframe is laid out at the PROJECT's real pixel size
+// (width × height — exactly the chromium viewport the renderer uses) and
+// scaled to fit the dialog with a CSS transform. Phase A let the 1920px SVG
+// clip inside a smaller viewport (a top-left crop, with the camera math
+// assuming board.clientWidth = 1920); the transform keeps that client width
+// pixel-identical to the render while showing the WHOLE board. Every
+// coordinate the editing overlay computes goes through the same camera
+// transform the applier applies (translate(tx,ty) scale(s), tx = W/2 − cx·s),
+// so pointer hits land on the ink they appear to touch.
+//
+// Editing contract (Phase B scope): drag a placement to move it — the live
+// drag patches the SAME transform attribute the applier writes, and the
+// commit flows back to the studio (which owns the doc and PUTs it).
+// Everything else (add/remove/scale/rotate/z-order, events, camera keys)
+// is the studio's form work — the canvas stays the frame-plan mirror.
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { loadLibrary } from "@/lib/tubeforge/whiteboard/assets";
 import { composeScene, framePayload, APPLY_FRAME_FN } from "@/lib/tubeforge/whiteboard/wb-page";
 import {
   buildGeometry,
+  cameraAt,
   frameAt,
   frameCount,
   scheduleScene,
   sceneDurationMs,
 } from "@/lib/tubeforge/whiteboard/timing";
+import type { Placement } from "@/lib/tubeforge/whiteboard/svg";
 import type { WhiteboardProject } from "@/lib/tubeforge/whiteboard/storyboard";
+
+export interface WbEditing {
+  selectedAssetId: string | null;
+  /** Live-drag reporter (the studio mirrors it into its edit buffer). */
+  onPlacementDrag: (assetId: string, placement: Placement) => void;
+  /** Commit on pointer-up (the studio writes it into the project). */
+  onPlacementCommit: (assetId: string, placement: Placement) => void;
+  onSelect: (assetId: string | null) => void;
+}
 
 export interface WbCanvasProps {
   project: WhiteboardProject;
@@ -31,24 +59,82 @@ export interface WbCanvasProps {
   /** Throttled (~10 Hz) time reporter for the studio's slider. */
   onTime: (tMs: number) => void;
   onEnded: () => void;
+  /** S68 — measured narration durations (scene id → ms) from the GET route;
+   *  present ⇒ the canvas times the scene exactly like the render will. */
+  voMs?: Record<string, number>;
+  /** S68 Phase B — editing state (absent ⇒ pure playback, pointer-blind). */
+  editing?: WbEditing;
 }
 
 /** The per-scene draw schedule + geometry — built once per scene change. */
-function sceneRuntime(project: WhiteboardProject, sceneIndex: number) {
+function sceneRuntime(
+  project: WhiteboardProject,
+  sceneIndex: number,
+  voMs: Record<string, number> | undefined
+) {
   const lib = loadLibrary();
   const geometry = buildGeometry(
     [...lib.extracted.entries()].map(([id, ex]) => ({ id, paths: ex.paths }))
   );
   const scene = project.scenes[sceneIndex];
-  // The editor rides the narration ESTIMATE (sceneDurationMs with no VO);
-  // the render re-derives the real window from the measured WAV — the
-  // plan's law that the timing engine, not the editor, owns durations.
-  const durationMs = sceneDurationMs(scene, null);
+  // S68 — the editor rides the MEASURED VO when one exists (the GET route's
+  // voMs), else the narration estimate: the same precedence
+  // (explicit > VO-measured > estimate) the render's sceneDurationMs applies.
+  const durationMs = sceneDurationMs(scene, voMs?.[scene.id] ?? null);
   return { lib, geometry, scene, durationMs, events: scheduleScene(scene, durationMs, geometry) };
 }
 
-export default function WbCanvas({ project, sceneIndex, playing, seek, onTime, onEnded }: WbCanvasProps) {
+/** Placement bbox corners in SCENE space: R(rot)·s·(u,v) + (x,y) over the
+ *  asset's viewBox corners. The overlay outline and the hit-test share it. */
+function placementCorners(
+  assetW: number,
+  assetH: number,
+  pl: Placement
+): { x: number; y: number }[] {
+  const r = (pl.rotateDeg * Math.PI) / 180;
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+  return (
+    [
+      { u: 0, v: 0 },
+      { u: assetW, v: 0 },
+      { u: assetW, v: assetH },
+      { u: 0, v: assetH },
+    ] as const
+  ).map(({ u, v }) => ({
+    x: pl.x + (u * cos - v * sin) * pl.scale,
+    y: pl.y + (u * sin + v * cos) * pl.scale,
+  }));
+}
+
+/** Ray-cast point-in-polygon (scene space). */
+function pointInPoly(p: { x: number; y: number }, poly: { x: number; y: number }[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x;
+    const yi = poly[i].y;
+    const xj = poly[j].x;
+    const yj = poly[j].y;
+    const intersect =
+      yi > p.y !== yj > p.y && p.x < ((xj - xi) * (p.y - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+export default function WbCanvas({
+  project,
+  sceneIndex,
+  playing,
+  seek,
+  onTime,
+  onEnded,
+  voMs,
+  editing,
+}: WbCanvasProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<SVGSVGElement>(null);
   const runtimeRef = useRef<ReturnType<typeof sceneRuntime> | null>(null);
   const tRef = useRef(0);
   const rafRef = useRef<number | null>(null);
@@ -56,19 +142,47 @@ export default function WbCanvas({ project, sceneIndex, playing, seek, onTime, o
   const setupRef = useRef<(() => void) | null>(null);
   const applyFrameRef = useRef<((tMs: number) => void) | null>(null);
   const cbRef = useRef({ onTime, onEnded });
+  const lastDragRef = useRef(new Map<string, Placement>());
+
+  // The fit scale: state drives the render (transform + overlay viewBox);
+  // the ref mirrors it for EVENT-TIME math (the pointer handlers must never
+  // read a stale closure — they read the ref).
+  const [scaleK, setScaleK] = useState(1);
+  const scaleKRef = useRef(1);
+
   useEffect(() => {
     // The latest-callback ref — assigned in an effect, never during render
     // (React's ref rules; the loop reads it at frame time).
     cbRef.current = { onTime, onEnded };
   }, [onTime, onEnded]);
 
-  // Rebuild the page when the scene changes; reset the clock.
+  // The fit-to-dialog scale: container width / project width. The iframe
+  // itself stays at the project's real pixel size (the renderer's layout).
   useEffect(() => {
-    tRef.current = 0;
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const ro = new ResizeObserver(() => {
+      const k = wrap.clientWidth / project.width;
+      const clamped = Number.isFinite(k) && k > 0 ? k : 1;
+      scaleKRef.current = clamped;
+      setScaleK(clamped);
+    });
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  }, [project.width]);
+
+  // Rebuild the page when the scene changes; reset the clock. S68: an EDIT
+  // commit changes `project` without changing the scene — rebuild the page
+  // (fresh compose + schedule from the new doc) but KEEP the scrub position.
+  const prevSceneRef = useRef(-1);
+  useEffect(() => {
+    const sceneChanged = prevSceneRef.current !== sceneIndex;
+    prevSceneRef.current = sceneIndex;
+    if (sceneChanged) tRef.current = 0;
     runtimeRef.current = null; // rebuilt lazily below, after setContent
     const iframe = iframeRef.current;
     if (!iframe) return;
-    const rt = (runtimeRef.current ??= sceneRuntime(project, sceneIndex));
+    const rt = (runtimeRef.current ??= sceneRuntime(project, sceneIndex, voMs));
     const composed = composeScene(rt.scene, project, rt.lib.assets);
     const setup = () => {
       const doc = iframe.contentDocument;
@@ -115,8 +229,8 @@ export default function WbCanvas({ project, sceneIndex, playing, seek, onTime, o
       const script = doc.createElement("script");
       script.textContent = `window.__wbApply = (${APPLY_FRAME_FN});`;
       doc.body.appendChild(script);
-      // First frame paints immediately.
-      applyFrame(0);
+      // First frame paints immediately (at the preserved scrub position).
+      applyFrame(tRef.current);
     };
 
     const applyFrame = (tMs: number) => {
@@ -132,7 +246,7 @@ export default function WbCanvas({ project, sceneIndex, playing, seek, onTime, o
     setupRef.current = setup;
 
     iframe.srcdoc = composed.html;
-  }, [project, sceneIndex]);
+  }, [project, sceneIndex, voMs]);
 
   // The iframe fires onLoad for every srcdoc swap.
   useEffect(() => {
@@ -184,14 +298,202 @@ export default function WbCanvas({ project, sceneIndex, playing, seek, onTime, o
     cbRef.current.onTime(tRef.current);
   }, [seek]);
 
+  // ---- S68 Phase B — the editing overlay --------------------------------
+  // Scene-space ↔ wrapper-pixel through the SAME transform the applier
+  // applies to the camera group: q = s·p + (W/2 − s·cx, H/2 − s·cy), then
+  // the CSS scale k. cameraAt includes the deterministic drift, so the
+  // overlay tracks the ink exactly at the scrub position. The geom closure
+  // is refreshed into a ref every render; pointer handlers read the ref
+  // (never a stale render's closure).
+  type Geom = {
+    rt: ReturnType<typeof sceneRuntime>;
+    s: number;
+    toPx: (p: { x: number; y: number }) => { x: number; y: number };
+    fromPx: (px: number, py: number) => { x: number; y: number };
+  };
+  const geomRef = useRef<(() => Geom | null) | null>(null);
+  const computeGeom = useCallback((): Geom | null => {
+    const rt = runtimeRef.current;
+    const k = scaleKRef.current;
+    if (!rt || !k) return null;
+    const cam = cameraAt(rt.scene, project.width, project.height, tRef.current);
+    const s = cam.scale;
+    const tx = project.width / 2 - cam.cx * s;
+    const ty = project.height / 2 - cam.cy * s;
+    const toPx = (p: { x: number; y: number }) => ({
+      x: (p.x * s + tx) * k,
+      y: (p.y * s + ty) * k,
+    });
+    const fromPx = (px: number, py: number) => ({
+      x: (px / k - tx) / s,
+      y: (py / k - ty) / s,
+    });
+    return { rt, s, toPx, fromPx };
+  }, [project.width, project.height]);
+  // The pointer handlers + overlay read THIS ref — refreshed after every
+  // render so event-time math never sees a stale closure.
+  useEffect(() => {
+    geomRef.current = computeGeom;
+  }, [computeGeom]);
+
+  const drawOverlay = useCallback(() => {
+    const svg = overlayRef.current;
+    const geom = geomRef.current?.() ?? null;
+    if (!svg) return;
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    if (!editing || !geom) return;
+    for (const pl of geom.rt.scene.placements) {
+      const asset = geom.rt.lib.assets.get(pl.assetId);
+      if (!asset) continue;
+      // The live drag wins over the committed doc — the outline tracks the
+      // pointer, not the last save.
+      const live = lastDragRef.current.get(pl.assetId);
+      const shown = live ?? pl.placement;
+      const selected = pl.assetId === editing.selectedAssetId;
+      const pts = placementCorners(asset.viewBox.w, asset.viewBox.h, shown)
+        .map(geom.toPx)
+        .map((p) => `${p.x},${p.y}`)
+        .join(" ");
+      const poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+      poly.setAttribute("points", pts);
+      poly.setAttribute("fill", "none");
+      poly.setAttribute("stroke", selected ? "#22d3ee" : "rgba(255,255,255,0.28)");
+      poly.setAttribute("stroke-width", selected ? "2.5" : "1.5");
+      poly.setAttribute("stroke-dasharray", selected ? "" : "6 4");
+      svg.appendChild(poly);
+    }
+  }, [editing]);
+  useEffect(() => {
+    drawOverlay();
+  }, [drawOverlay, project, sceneIndex, seek, scaleK, voMs]);
+
+  // Pointer interactions (edit mode only): hit-test topmost, drag moves.
+  useEffect(() => {
+    const svg = overlayRef.current;
+    if (!svg || !editing) return;
+    let drag: { assetId: string; grabDX: number; grabDY: number; orig: Placement } | null = null;
+
+    const localPoint = (e: PointerEvent) => {
+      const rect = svg.getBoundingClientRect();
+      return { px: e.clientX - rect.left, py: e.clientY - rect.top };
+    };
+    const hitTest = (px: number, py: number) => {
+      const geom = geomRef.current?.() ?? null;
+      if (!geom) return null;
+      const p = geom.fromPx(px, py);
+      // Topmost = LAST in the array (composeScene draws in array order).
+      for (let i = geom.rt.scene.placements.length - 1; i >= 0; i--) {
+        const pl = geom.rt.scene.placements[i];
+        const asset = geom.rt.lib.assets.get(pl.assetId);
+        if (!asset) continue;
+        if (pointInPoly(p, placementCorners(asset.viewBox.w, asset.viewBox.h, pl.placement)))
+          return pl;
+      }
+      return null;
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      const { px, py } = localPoint(e);
+      const hit = hitTest(px, py);
+      const geom = geomRef.current?.() ?? null;
+      if (!hit || !geom) {
+        editing.onSelect(null);
+        return;
+      }
+      editing.onSelect(hit.assetId);
+      const p = geom.fromPx(px, py);
+      drag = {
+        assetId: hit.assetId,
+        grabDX: p.x - hit.placement.x,
+        grabDY: p.y - hit.placement.y,
+        orig: { ...hit.placement },
+      };
+      try {
+        svg.setPointerCapture(e.pointerId);
+      } catch {
+        /* pointer already gone */
+      }
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      if (!drag) return;
+      const geom = geomRef.current?.() ?? null;
+      const iframe = iframeRef.current;
+      if (!geom || !iframe) return;
+      const { px, py } = localPoint(e);
+      const p = geom.fromPx(px, py);
+      const next: Placement = {
+        x: Math.round(p.x - drag.grabDX),
+        y: Math.round(p.y - drag.grabDY),
+        scale: drag.orig.scale,
+        rotateDeg: drag.orig.rotateDeg,
+      };
+      // Live patch — the SAME attribute write the applier performs for
+      // placements (wb-page APPLY_FRAME_FN's placements loop).
+      const g = iframe.contentDocument?.getElementById(`g-${drag.assetId}`);
+      if (g)
+        g.setAttribute(
+          "transform",
+          `translate(${next.x} ${next.y}) rotate(${next.rotateDeg}) scale(${next.scale})`
+        );
+      lastDragRef.current.set(drag.assetId, next);
+      editing.onPlacementDrag(drag.assetId, next);
+      drawOverlay();
+    };
+    const onPointerUp = (e: PointerEvent) => {
+      if (!drag) return;
+      try {
+        svg.releasePointerCapture(e.pointerId);
+      } catch {
+        /* already released */
+      }
+      const last = lastDragRef.current.get(drag.assetId);
+      if (last) editing.onPlacementCommit(drag.assetId, last);
+      lastDragRef.current.delete(drag.assetId);
+      drag = null;
+    };
+    svg.addEventListener("pointerdown", onPointerDown);
+    svg.addEventListener("pointermove", onPointerMove);
+    svg.addEventListener("pointerup", onPointerUp);
+    svg.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      svg.removeEventListener("pointerdown", onPointerDown);
+      svg.removeEventListener("pointermove", onPointerMove);
+      svg.removeEventListener("pointerup", onPointerUp);
+      svg.removeEventListener("pointercancel", onPointerUp);
+    };
+    // The handlers read editing + drawOverlay through the closure — rebind
+    // per identity change (the studio passes memoized objects/callbacks).
+  }, [editing, drawOverlay]);
+
   return (
-    <div className="w-full overflow-hidden rounded-xl border border-white/10 bg-black/40" style={{ aspectRatio: `${project.width} / ${project.height}` }}>
-      <iframe
-        ref={iframeRef}
-        title="Whiteboard preview"
-        sandbox="allow-same-origin allow-scripts"
-        className="h-full w-full border-0"
-      />
+    <div
+      ref={wrapRef}
+      className="relative w-full overflow-hidden rounded-xl border border-white/10 bg-black/40"
+      style={{ aspectRatio: `${project.width} / ${project.height}` }}
+    >
+      <div
+        className="absolute left-0 top-0 origin-top-left"
+        style={{
+          width: project.width,
+          height: project.height,
+          transform: `scale(${scaleK})`,
+        }}
+      >
+        <iframe
+          ref={iframeRef}
+          title="Whiteboard preview"
+          sandbox="allow-same-origin allow-scripts"
+          className="border-0"
+          style={{ width: project.width, height: project.height }}
+        />
+      </div>
+      {editing && (
+        <svg
+          ref={overlayRef}
+          className="absolute inset-0 h-full w-full cursor-move touch-none"
+          viewBox={`0 0 ${project.width * scaleK} ${project.height * scaleK}`}
+        />
+      )}
     </div>
   );
 }

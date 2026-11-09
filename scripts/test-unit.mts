@@ -6835,11 +6835,30 @@ await test("S64 timing: cameraAt — eased keyframes + the permanent drift", asy
     ],
   };
   const d500 = cameraDrift(500);
-  eq(cameraAt(scene, 500), { cx: d500.dx, cy: d500.dy, scale: 1 }, "before the move: first keyframe + drift");
+  eq(cameraAt(scene, 1920, 1080, 500), { cx: d500.dx, cy: d500.dy, scale: 1 }, "before the move: first keyframe + drift");
   const d1500 = cameraDrift(1500);
-  eq(cameraAt(scene, 1500), { cx: 50 + d1500.dx, cy: 5 + d1500.dy, scale: 1.5 }, "mid-move eased halfway + drift");
+  eq(cameraAt(scene, 1920, 1080, 1500), { cx: 50 + d1500.dx, cy: 5 + d1500.dy, scale: 1.5 }, "mid-move eased halfway + drift");
   const dEnd = cameraDrift(99999);
-  eq(cameraAt(scene, 99999), { cx: 100 + dEnd.dx, cy: 10 + dEnd.dy, scale: 2 }, "after the move: last keyframe + drift");
+  eq(cameraAt(scene, 1920, 1080, 99999), { cx: 100 + dEnd.dx, cy: 10 + dEnd.dy, scale: 2 }, "after the move: last keyframe + drift");
+});
+
+await test("S68 timing: cameraAt — the empty-camera fallback centers on the project's own dimensions", async () => {
+  const { cameraAt, cameraDrift } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const bare: WhiteboardScene = { ...WB_PLAIN, camera: [] };
+  const t = 4000;
+  const d = cameraDrift(t); // the permanent drift rides on EVERY fallback
+  // 16:9 keeps the historical center…
+  const c169 = cameraAt(bare, 1920, 1080, t);
+  approx(c169.cx, 960 + d.dx, 1e-9, "16:9 fallback centers at 960 + drift");
+  approx(c169.cy, 540 + d.dy, 1e-9, "16:9 fallback centers at 540 + drift");
+  // …but the point of S68: a 9:16 board must NOT carry a 16:9 center —
+  // cx 960 of a 1080-wide canvas pinned the viewport to its right edge.
+  const c916 = cameraAt(bare, 1080, 1920, t);
+  approx(c916.cx, 540 + d.dx, 1e-9, "9:16 fallback centers at width/2");
+  approx(c916.cy, 960 + d.dy, 1e-9, "9:16 fallback centers at height/2");
+  const c11 = cameraAt(bare, 1080, 1080, t);
+  approx(c11.cx, 540 + d.dx, 1e-9, "1:1 fallback centers at width/2");
+  approx(c11.cy, 540 + d.dy, 1e-9, "1:1 fallback centers at height/2");
 });
 
 await test("S64 timing: cameraDrift — bounded, deterministic, and always moving", async () => {
@@ -7382,6 +7401,126 @@ await test("S67 jobs: parseWhiteboardPayload is tolerant of junk payloads", asyn
   eq(parseWhiteboardPayload({ sceneId: 42 }), {}, "wrong type inside");
   eq(parseWhiteboardPayload({ sceneId: "  scene-2  " }), { sceneId: "scene-2" }, "trimmed");
   eq(parseWhiteboardPayload({ sceneId: "x".repeat(100) }), { sceneId: "x".repeat(64) }, "length-capped");
+});
+
+// ---------- suite: S68 — Phase B editing + aspect laws ----------
+
+suiteStart("S68 whiteboard — aspect-aware scaffold, validator camera key, scheduler precedence");
+
+await test("S68 scaffold: 9:16 / 1:1 boards carry their own center and proportionally placed ink", async () => {
+  const { scaffoldWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/whiteboard-planner");
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+
+  // 9:16 — the historical bug this kills: the default camera pinned (960, 540)
+  // on a 1080-wide board = the viewport sitting at the right edge.
+  const p916 = scaffoldWhiteboardProject({
+    scenes: SCENES_IN,
+    topic: "Shorts",
+    width: 1080,
+    height: 1920,
+  });
+  eq(p916.width, 1080, "width taken");
+  eq(p916.height, 1920, "height taken");
+  for (const s of p916.scenes) {
+    eq(s.camera[0].cx, 540, `scene ${s.id}: camera centers at width/2`);
+    eq(s.camera[0].cy, 960, `scene ${s.id}: camera centers at height/2`);
+  }
+  // 16:9 placements remap by the axis ratios: x·(1080/1920) = 800·0.5625 = 450,
+  // y·(1920/1080) = 420·1.7̄ = 746.67 → 747.
+  const concept = p916.scenes[1].placements[0];
+  eq(concept.placement.x, 450, "concept x remaps by width/1920");
+  eq(concept.placement.y, 747, "concept y remaps by height/1080");
+  // Determinism extends to the dims: same input → byte-identical.
+  const p916b = scaffoldWhiteboardProject({ scenes: SCENES_IN, topic: "Shorts", width: 1080, height: 1920 });
+  eq(JSON.stringify(p916), JSON.stringify(p916b), "9:16 scaffold is deterministic");
+  // And every aspect validates clean against the one gate.
+  const lib = loadLibrary();
+  const v = validateWhiteboardProject(p916, lib.libraryIndex);
+  ok(v.project !== null, `9:16 scaffold validates clean: ${v.errors.join(" · ")}`);
+
+  // 1:1 — 1080×1080.
+  const p11 = scaffoldWhiteboardProject({ scenes: SCENES_IN, topic: "Square", width: 1080, height: 1080 });
+  eq(p11.scenes[0].camera[0].cx, 540, "1:1 camera centers at width/2");
+  eq(p11.scenes[0].camera[0].cy, 540, "1:1 camera centers at height/2");
+});
+
+await test("S68 scaffold: out-of-band dims fall back to the house 1920×1080@24", async () => {
+  const { scaffoldWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/whiteboard-planner");
+  const junk1 = scaffoldWhiteboardProject({ scenes: SCENES_IN, topic: "t", width: 9999, height: -5, fps: 120 });
+  eq(junk1.width, 1920, "width beyond 3840 → default");
+  eq(junk1.height, 1080, "negative height → default");
+  eq(junk1.fps, 24, "fps beyond 60 → default");
+  const junk2 = scaffoldWhiteboardProject({ scenes: SCENES_IN, topic: "t", width: "wide" as unknown as number });
+  eq(junk2.width, 1920, "non-numeric width → default");
+});
+
+await test("S68 validator: a doc with no camera key gets a DIMENSION-AWARE default", async () => {
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  const base = {
+    title: "T",
+    fps: 24,
+    hand: { style: "marker" as const, scale: 1 },
+    scenes: [
+      {
+        id: "scene-1",
+        narration: "A narration sentence for the scene.",
+        background: "#ffffff" as const,
+        placements: [{ assetId: "spark", placement: { x: 100, y: 100, scale: 1, rotateDeg: 0 } }],
+        animations: [],
+        camera: [], // the validator MUST insert the default key
+      },
+    ],
+  };
+  const v169 = validateWhiteboardProject({ ...base, width: 1920, height: 1080 }, lib.libraryIndex);
+  eq(v169.project?.scenes[0].camera[0].cx, 960, "16:9 default key centers at 960");
+  eq(v169.project?.scenes[0].camera[0].cy, 540, "16:9 default key centers at 540");
+  const v916 = validateWhiteboardProject({ ...base, width: 1080, height: 1920 }, lib.libraryIndex);
+  eq(v916.project?.scenes[0].camera[0].cx, 540, "9:16 default key centers at width/2 — the S68 fix");
+  eq(v916.project?.scenes[0].camera[0].cy, 960, "9:16 default key centers at height/2");
+  // Explicit keys are never touched.
+  const explicit = validateWhiteboardProject(
+    {
+      ...base,
+      width: 1080,
+      height: 1920,
+      scenes: [{ ...base.scenes[0], camera: [{ cx: 10, cy: 20, scale: 1.5, startMs: 0, durationMs: 0 }] }],
+    },
+    lib.libraryIndex
+  );
+  eq(explicit.project?.scenes[0].camera[0].cx, 10, "explicit key preserved");
+  eq(explicit.project?.scenes[0].camera[0].scale, 1.5, "explicit zoom preserved");
+});
+
+await test("S68 scheduler: explicit events are SENIOR — verbatim times, the fill law takes the rest", async () => {
+  const { scheduleScene } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const { buildGeometry } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const lib = loadLibrary();
+  const geo = buildGeometry([...lib.extracted.entries()].map(([id, ex]) => ({ id, paths: ex.paths })));
+  // spark carries 6 drawable paths; claim ONE with hand-authored timing.
+  const explicit = { type: "draw_path" as const, assetId: "spark", pathId: "sp-core", startMs: 1234, durationMs: 567 };
+  const scene: WhiteboardScene = {
+    id: "scene-1",
+    narration: "One sentence of narration for this edited scene.",
+    background: "#ffffff",
+    placements: [{ assetId: "spark", placement: { x: 200, y: 200, scale: 1, rotateDeg: 0 }, order: 0 }],
+    animations: [explicit],
+    camera: [{ cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 }],
+  };
+  const events = scheduleScene(scene, 8000, geo);
+  const pinned = events.find((e) => e.type === "draw_path" && e.assetId === "spark" && e.pathId === "sp-core");
+  ok(pinned, "the explicit event survives");
+  eq(pinned?.startMs, 1234, "explicit startMs verbatim (senior — not re-scheduled)");
+  eq(pinned?.durationMs, 567, "explicit durationMs verbatim");
+  // The OTHER five paths still draw (the fill law schedules the unclaimed).
+  const scheduled = events.filter((e) => e.type === "draw_path" && e.pathId !== "sp-core");
+  eq(scheduled.length, 5, "unclaimed paths ride the fill law");
+  for (const e of scheduled) {
+    ok(e.startMs >= 400, `scheduled stroke ${e.pathId} starts after the lead-in`);
+  }
 });
 
 console.log(`\n${"─".repeat(56)}`);

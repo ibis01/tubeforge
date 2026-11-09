@@ -173,6 +173,14 @@ export function validateWhiteboardProject(
   if (typeof raw !== "object" || raw === null) return { project: null, errors: ["not an object"] };
   const p = raw as Record<string, unknown>;
 
+  // S68 — the project dimensions parsed ONCE here (same clamp as the tail):
+  // the default camera key inserted below must center on the dimensions the
+  // project will actually carry, or a 9:16 board starts with its viewport
+  // pinned to a 16:9 center (960, 540 — off the right edge of a 1080-wide
+  // canvas).
+  const projW = typeof p.width === "number" && p.width >= 320 && p.width <= 3840 ? Math.round(p.width) : 1920;
+  const projH = typeof p.height === "number" && p.height >= 320 && p.height <= 3840 ? Math.round(p.height) : 1080;
+
   const scenes: WhiteboardScene[] = [];
   if (!Array.isArray(p.scenes) || p.scenes.length === 0) {
     return { project: null, errors: ["scenes must be a non-empty array"] };
@@ -308,7 +316,8 @@ export function validateWhiteboardProject(
       }
       camera.push({ cx: e.cx, cy: e.cy, scale: e.scale, startMs: e.startMs, durationMs: e.durationMs });
     }
-    if (camera.length === 0) camera.push({ cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 });
+    if (camera.length === 0)
+      camera.push({ cx: projW / 2, cy: projH / 2, scale: 1, startMs: 0, durationMs: 0 });
     camera.sort((a, b) => a.startMs - b.startMs);
     scenes.push({
       id,
@@ -338,8 +347,8 @@ export function validateWhiteboardProject(
   return {
     project: {
       title: typeof p.title === "string" && p.title ? p.title : "Untitled whiteboard",
-      width: typeof p.width === "number" && p.width >= 320 && p.width <= 3840 ? Math.round(p.width) : 1920,
-      height: typeof p.height === "number" && p.height >= 320 && p.height <= 3840 ? Math.round(p.height) : 1080,
+      width: projW,
+      height: projH,
       fps: typeof p.fps === "number" && p.fps >= 12 && p.fps <= 60 ? Math.round(p.fps) : 24,
       hand: { style: handStyle, scale: handScale },
       scenes,

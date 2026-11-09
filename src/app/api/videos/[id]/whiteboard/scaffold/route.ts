@@ -46,7 +46,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
 
   const body = await req.json().catch(() => ({}));
-  const force = (body as Record<string, unknown> | null)?.force === true;
+  const b = (body ?? {}) as Record<string, unknown>;
+  const force = b.force === true;
   const existing = parseWhiteboardDoc(video.whiteboardProject);
   if (existing && !force)
     return NextResponse.json(
@@ -54,9 +55,15 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: 409 }
     );
 
+  // S68 — optional board geometry (16:9 / 9:16 / 1:1 exports): absent or
+  // out-of-band numbers fall back to the house 1920×1080@24 inside the
+  // planner (the same clamp grammar the validator applies).
   let project = scaffoldWhiteboardProject({
     scenes: scenes.map((s) => ({ index: s.index, title: s.title, narration: s.narration })),
     topic: video.topic,
+    width: typeof b.width === "number" ? b.width : undefined,
+    height: typeof b.height === "number" ? b.height : undefined,
+    fps: typeof b.fps === "number" ? b.fps : undefined,
   });
 
   // Defense in depth: the planner's output passes the same validator any

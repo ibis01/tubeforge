@@ -189,9 +189,21 @@ export function cameraDrift(tMs: number): { dx: number; dy: number } {
   };
 }
 
-/** Interpolate the camera at scene time t (ms), plus the permanent drift. */
-export function cameraAt(scene: WhiteboardScene, tMs: number): FrameCameraState {
-  const keys = scene.camera.length > 0 ? scene.camera : [{ cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 }];
+/** Interpolate the camera at scene time t (ms), plus the permanent drift.
+ *  S68: the empty-camera fallback centers on the PROJECT's own dimensions —
+ *  the hardcoded 16:9 center (960, 540) put a 9:16 board's viewport at its
+ *  right edge (cx 960 of a 1080-wide canvas). The validator still inserts
+ *  the dimension-aware key for stored docs; this fallback covers in-memory
+ *  scenes so both layers agree. */
+export function cameraAt(
+  scene: WhiteboardScene,
+  width: number,
+  height: number,
+  tMs: number
+): FrameCameraState {
+  const keys = scene.camera.length > 0
+    ? scene.camera
+    : [{ cx: width / 2, cy: height / 2, scale: 1, startMs: 0, durationMs: 0 }];
   let state = { cx: keys[0].cx, cy: keys[0].cy, scale: keys[0].scale };
   for (let i = 1; i < keys.length; i++) {
     const k = keys[i];
@@ -357,7 +369,7 @@ export function frameAt(
     colors,
     placements,
     hand: handAt(events, scene, geometry, tMs),
-    camera: cameraAt(scene, tMs),
+    camera: cameraAt(scene, project.width, project.height, tMs),
   };
 }
 
