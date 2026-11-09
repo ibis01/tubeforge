@@ -423,11 +423,14 @@ and the engine design docs):
    E5 phase-2 LLM planner's verification window is OPEN (gateway probe
    green 2026-11-10) and rides its own stage.
 2. **Creator Intelligence Engine** (`docs/audits/creator-intelligence-record.md`)
-   — hook/script scoring (CI-1), title+thumbnail pairing lint (CI-2),
-   transcript-based Shorts selection feeding the existing renderer
-   (CI-3), retention ingestion mapped to scenes (CI-4, needs the
-   Analytics API scope). Proposes, never auto-edits; every score labeled
-   a heuristic.
+   — **LANDED (S70–S72)**: hook/script scoring (CI-1), title+thumbnail
+   pairing lint (CI-2), transcript-based Shorts selection feeding the
+   existing renderer (CI-3), and retention ingestion mapped to scenes
+   (CI-4, the `yt-analytics.readonly` scope + the retentionReport doc
+   column). Every module proposes-never-auto-edits and labels every score
+   a heuristic. The record's unscheduled tail (chapters, query targeting,
+   channel audit, competitor benchmarking, performance learning) stays
+   recorded.
 3. **Visual Consistency platform service** — not verified as complete.
 4. **Video Critic and Repair foundation** — not verified as complete.
 5. **Universal timeline contract and editor** — pending; the Whiteboard

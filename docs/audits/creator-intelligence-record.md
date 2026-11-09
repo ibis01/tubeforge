@@ -104,12 +104,16 @@ feeding Topic Radar beyond the current keyword overlap.
 
 The S68 close set S69 as the Whiteboard E9 Phase B remainder (palette and
 asset management behind `WHITEBOARD_ENGINE_DESIGN.md` §7's seven gates)
-plus the `video.error` lane-attribution question. That stands. The
-Creator Intelligence Engine starts at **S70 = CI-1 + CI-2** — both are
-LLM+deterministic work with zero new infrastructure (no new scopes, no
-new job kinds; CI-1 rides the script lane, CI-2 the publish form) — and
-CI-3/CI-4 follow once the Whiteboard loop has proven the shared
-project/timeline contracts they will consume.
+plus the `video.error` lane-attribution question. That stood: S69 landed
+(both items), and the Engine followed — **S70 = CI-1 + CI-2** (both
+LLM+deterministic work with zero new infrastructure; CI-1 rides the
+script lane, CI-2 the publish form), **S71 = CI-3** (the pickBestScene
+seam upgrade + the cold-start opener), **S72 = CI-4** (the Analytics
+scope, the retention doc column, the scene-mapped findings). All four
+modules shipped 2026-11-10, live-verified against the green gateway (the
+S69 opening probe) and CI-proven 6/6 per stage. The standing disciplines
+held everywhere: proposes-never-auto-edits, every score labeled a
+heuristic, missing data asked for and never invented.
 
 ## 6. License and attribution
 

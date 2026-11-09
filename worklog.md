@@ -2970,3 +2970,101 @@ zero-new-infra (no new scopes, no new job kinds; synchronous budget-capped
 routes riding the llm.ts seam), per
 docs/audits/creator-intelligence-record.md. The gateway probe is green, so
 the LLM halves can be live-verified in the sandbox this stage.
+
+## S70 implementation + close (2026-11-10 UTC) — Creator Intelligence CI-1 + CI-2
+
+The Engine opens (the decision record's build order, step 1). Both modules
+are zero-new-infra: no new scopes, no new job kinds — synchronous
+budget-capped routes riding the llm.ts seam through budget.ts's choke
+point. The stage's gateway probe (S69's opening) was GREEN, so the LLM
+halves are LIVE-VERIFIED this stage, not just unit-pinned.
+
+- **CI-1 Hook & Script Intelligence** (`hook-score.ts` +
+  `POST /api/videos/[id]/script/hook-panel`): `scoreHookHeuristic` — the
+  PURE deterministic anchor (specificity: numbers/named specifics vs vague
+  filler; tension: stakes/negation/questions; promise: payoff markers +
+  second person + length discipline; clarity penalties for ALL-CAPS and
+  stacked bangs; the evidence rides in notes). `generateHookPanel` — N
+  candidates from distinct formula families (strict JSON), panel-scored
+  60% deterministic + 40% LLM judge; a judge hiccup degrades to
+  deterministic-only, honestly labeled. `markRetentionBeats` cites the
+  story engine's own rehook spine (isRehookPosition — never re-invented);
+  `verifyTitlePromise` names the concrete terms the opening never says.
+  The script tab gains the Hook lab (ranked candidates, copy affordances,
+  beats, the promise check). Live probe: 5 families, judged=true, winner =
+  top rank, 4.5 s (`scripts/s70-hook-panel-probe.mts`).
+- **CI-2 Packaging Intelligence** (`packaging-lint.ts` +
+  `POST /api/videos/[id]/publish/packaging-lint`): title + thumbnail
+  linted as ONE pairing — render-width truncation (soft 60/hard 70),
+  duplication (>= 60% word overlap wastes the second surface), vagueness
+  (clickbait markers with nothing concrete; capitalization is NOT evidence
+  — YouTube titles are title-case), thumb-text grid-size readability —
+  plus the VLM lookability pass (llmVision) when a thumbnail stands. The
+  publish review panel gains the lint badge + findings; the lint runs on
+  the DRAFT title the form holds. Proposes, never blocks.
+
+**CI evidence: run 42713482891 on `d8af04f` — all six jobs green.**
+Battery: tsc 0 · eslint 0 (20 baseline warnings) · unit 332/332 · queue
+PASS · billing 40/40 · build 0 · e2e 29/29 (the new creator-intelligence
+spec pins the CI-safe halves; the LLM halves carry the live probe).
+
+## S71 implementation + close (2026-11-10 UTC) — CI-3: the Shorts moment reads its own transcript
+
+The record's step 2: transcript-based SELF-CONTAINMENT scoring replaces
+keyword density in `pickBestScene` — the pure-function seam stays (same
+signature), the s10 probe's pinned expectation updates to the new doctrine
+(a cold-start clip beats a backward-pointing one).
+
+- `selfContainmentScore` (pure): dangling-opener penalty ("So that's why
+  it…" points backward at content the clip does not carry), pronoun-subject
+  detection (it/they/this assume the viewer knows who), hook markers kept,
+  payoff-ending reward, the 30-110-word Shorts speech window, host face
+  time. Evidence in notes; every score labeled a heuristic.
+- `draftColdStartOpener` — the LLM garnish (strict JSON, <= 34 chars to fit
+  one caption flash); FAILS NULL so the Short still cuts on the narration's
+  own opening. Live probe: "Why does the heart fail?" (24 chars, 539 ms,
+  `scripts/s71-cold-start-probe.mts`).
+- `runShortJob` drafts the opener only when the heuristic picked the
+  moment, re-deriving the pick through the SAME pure seam renderShort uses;
+  user-pinned scenes keep their words verbatim; `renderShort` swaps
+  chunks[0] when an override stands.
+
+**CI evidence: run 42714728568 on `47c318e` — all six jobs green.**
+Battery: tsc 0 · eslint 0 · unit 334/334 · queue PASS · billing 40/40 ·
+build 0 · e2e 29/29.
+
+## S72 implementation + close (2026-11-10 UTC) — CI-4: retention ingestion mapped to scenes
+
+The record's final module: retention-curve ingestion through the YouTube
+ANALYTICS API — a new OAuth scope — with drop-off moments mapped to
+scenes, narration text and pacing; recommendations attach to the video
+row. Proposes, never auto-edits.
+
+- `youtube.ts`: SCOPES gains `yt-analytics.readonly` (pre-scope
+  connections keep their old grant; the 403 surfaces as a readable
+  reconnect instruction). `fetchRetentionCurve` rides the D-09 timeout
+  matrix (call-site count 9 -> 10, the unit pin updated honestly).
+- `retention.ts` — the PURE analysis, with the honest detector: a cliff is
+  RELATIVE to the curve's own decay (median per-point loss of remaining
+  audience x2, floored at 5%) — a steadily-decaying curve, however steep,
+  has no localized cliff, and normal attrition can never read as a
+  finding. Cliffs map through the SAME assembleTimeline projection the
+  assemble route builds (measured WAV durations when they stand), carry
+  the words-on-screen excerpt, and read as opener problems (boundary) or
+  pacing problems (mid-scene). Capped at 5; labeled a heuristic.
+- The `retentionReport` doc column (the eighth on Video) + GET/POST
+  `/api/videos/[id]/retention` (unpublished/empty-curve -> honest 409s);
+  the video detail dialog gains the Retention findings card for published
+  videos — per-finding evidence (timestamp, scene, magnitude, narration
+  excerpt, suggestion) that waits for the human.
+
+**CI evidence: run 42716543895 on `379ea89` — all six jobs green.**
+Battery: tsc 0 · eslint 0 · unit 336/336 · queue PASS · billing 40/40 ·
+build 0 · e2e 29/29.
+
+The Creator Intelligence Engine is LANDED: CI-1..CI-4 all shipped, each
+obeying the adopted disciplines (proposes-never-auto-edits; every score
+labeled a heuristic; missing data asked for, never invented). The record's
+"later, unscheduled" list (chapters, query targeting, channel audit,
+competitor benchmarking, performance learning) stays recorded for a future
+stage.
