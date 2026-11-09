@@ -1538,6 +1538,14 @@ export async function runWhiteboardJob(
       });
       const key = `${videoId}/whiteboard/preview-${sceneId}.mp4`;
       await putFromPath(key, result.file);
+      // S68 — the STANDARD preview key too: hasPreview/previewUrl is the
+      // product-wide contract, and the mp4 route streams `${videoId}/
+      // preview.mp4` (statVideoFile), exactly like the story lane. Writing
+      // only the namespaced copy left the DTO advertising a 404 — a lying
+      // badge the S68 e2e caught live. The namespaced copy stays for
+      // per-scene history; invalidateRenderedArtifacts already deletes BOTH
+      // keys on the next doc edit (the sweep pattern predates this).
+      await putFromPath(`${videoId}/preview.mp4`, result.file);
       await db.video.update({ where: { id: videoId }, data: { hasPreview: true, error: null } });
       await db.activity.create({
         data: {

@@ -184,20 +184,38 @@ test.describe("S68 — whiteboard studio end-to-end", () => {
     expect(rBody.scope).toBe("preview");
 
     // Poll the DTO until the preview lands (bounded — the sandbox render of
-    // a ~4s scene took ~8s wall; CI's runner gets a generous ceiling).
-    let hasPreview = false;
-    for (let i = 0; i < 60; i++) {
+    // a ~4s scene took ~8s warm; a COLD dev server (CI) spends its first
+    // minute compiling routes, so the window is generous and the test clock
+    // is raised to fit it).
+    //
+    // NOTE the DTO field: VideoDTO exposes `previewUrl` (null until the
+    // preview exists) — there is no `hasPreview` boolean on the wire (the
+    // DB flag is serialize-internal; polling a nonexistent field was the
+    // original draft's bug, caught by the local driver run 2026-11-09).
+    test.setTimeout(240_000);
+    let previewUrl: string | null = null;
+    for (let i = 0; i < 90; i++) {
       await new Promise((r) => setTimeout(r, 2000));
       const dto = await request.get(`/api/videos/${videoId}`, { headers: { cookie } });
       if (!dto.ok()) continue;
-      const body = (await dto.json()) as { video?: { hasPreview?: boolean; error?: string | null } };
-      if (body.video?.hasPreview) {
-        hasPreview = true;
+      const body = (await dto.json()) as { video?: { previewUrl?: string | null; error?: string | null } };
+      if (body.video?.error) throw new Error(`preview render failed: ${body.video.error}`);
+      if (body.video?.previewUrl) {
+        previewUrl = body.video.previewUrl;
         break;
       }
-      if (body.video?.error) throw new Error(`preview render failed: ${body.video.error}`);
     }
-    expect(hasPreview, "the scene preview must land within the poll window").toBe(true);
+    expect(previewUrl, "the scene preview must land within the poll window").toBe(
+      `/api/videos/${videoId}/mp4?variant=preview`
+    );
+
+    // 8b. The artifact SERVES — the preview URL answers with video bytes
+    //     (a DB flag without a servable file would be a lying badge).
+    const mp4 = await request.get(`/api/videos/${videoId}/mp4?variant=preview`, {
+      headers: { cookie },
+    });
+    expect(mp4.status()).toBe(200);
+    expect((mp4.headers()["content-type"] ?? "")).toContain("video/");
 
     // 9. Cross-mode refusal — a classic (kenburns) video cannot render
     //    through the whiteboard lane (the peer-MODE law).
