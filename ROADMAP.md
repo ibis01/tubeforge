@@ -407,3 +407,34 @@ The audit informed the following adjustments:
 6. **Stage 7 extended by 1 week** (weeks 29–33 instead of 25–28) — adding automated cross-tenant isolation tests to CI (the audit's biggest risk recommendation: "automated cross-tenant isolation tests in CI from Stage 2 onward, not as a Stage 7 QA item").
 
 Total: 33 weeks (audit-adjusted) vs 28 weeks (original plan). For a focused 2-3 person team. For a solo developer, expect ~40-52 weeks.
+
+---
+
+## Post-Stage-7 — TubeForge 2.0 tracks (the shared-systems era, in flight)
+
+Stage 7 closed into the era the stage records track as S-series stages.
+The active tracks, one line each (detail lives in `docs/audits/` records
+and the engine design docs):
+
+1. **Whiteboard Engine E-series** (`WHITEBOARD_ENGINE_DESIGN.md`) — E9
+   Phase A/B landed (S67/S68); the Phase B remainder (palette + asset
+   management behind §7's seven gates) is the immediate milestone.
+2. **Creator Intelligence Engine** (`docs/audits/creator-intelligence-record.md`)
+   — hook/script scoring (CI-1), title+thumbnail pairing lint (CI-2),
+   transcript-based Shorts selection feeding the existing renderer
+   (CI-3), retention ingestion mapped to scenes (CI-4, needs the
+   Analytics API scope). Proposes, never auto-edits; every score labeled
+   a heuristic.
+3. **Visual Consistency platform service** — not verified as complete.
+4. **Video Critic and Repair foundation** — not verified as complete.
+5. **Universal timeline contract and editor** — pending; the Whiteboard
+   loop proves the shared contracts first.
+6. **Audio / motion graphics / character animation / documentary / 3D
+   engines, asset marketplace** — pending, sequenced after the shared
+   systems they consume.
+
+Standing risks tracked in the worklog: Z.ai gateway outage (S63
+remeasurement and the LLM whiteboard planner gated on the one-probe
+resumption discipline), production `TUBEFORGE_ENCRYPTION_KEY` on Vercel
+(owner-side, unverified), and the open dependency PRs (majors tested
+individually, never batch-merged).

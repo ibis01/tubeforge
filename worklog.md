@@ -2859,3 +2859,32 @@ management surface (E11's `/asset` route still behind §7's seven gates),
 the video.error lane-attribution question above, and the standing
 gateway-dependent items (S63 motion remeasurement, LLM whiteboard planner)
 still gated on the one-probe resumption discipline.
+
+## Creator Intelligence Engine — decision recorded (2026-11-10, pre-S69)
+
+An external comparison against `Jakeschincariol/youtube-agent-skill` (MIT,
+11 Claude skills + 6 Python tools, advisory documents only — no render, no
+publish) recommended a Creator Intelligence Engine. The recommendation was
+ground-truthed against the tree before adoption, and the comparison's
+table needed real corrections: **Auto-Shorts already ships** (`shorts.ts`:
+deterministic `pickBestScene`, 9:16 crop + punch-in, caption re-burn — the
+gap is transcript-based moment selection, not extraction); `publish-
+suggest.ts` already drafts title/description/tags by tone; `story.ts`
+already places structural rehooks; `analytics.ts` already closes the
+stats → Topic Radar loop. The genuine gaps: scored hook ALTERNATIVES,
+title+thumbnail linted as ONE pairing, retention ingestion (needs the
+YouTube Analytics API scope — current OAuth is upload+readonly only), and
+chapters.
+
+Decision (docs/audits/creator-intelligence-record.md): the Engine joins
+the 2.0 shared systems as native services — typed, tested, budget-capped,
+provider-independent; NOT the Claude-skill architecture, no wholesale
+copy. Build order: CI-1 hook/script scoring, CI-2 packaging lint (both
+zero-new-infra, S70), CI-3 Shorts selection (upgrades `pickBestScene`
+behind the same pure-function seam; the renderer below is already
+CI-proven), CI-4 retention mapped to scenes (new scope + token refresh).
+Adopted disciplines: proposes-never-auto-edits, and every score labeled a
+heuristic (their honesty note — the best idea in the repo). Sequencing
+unchanged: S69 remains the Whiteboard Phase B remainder + the
+video.error lane-attribution question. ROADMAP.md gains the Post-Stage-7
+2.0 tracks section.
