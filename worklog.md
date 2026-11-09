@@ -2726,3 +2726,49 @@ landed the surviving value directly on main:
 E-series follow-up: pick the engine that carries E3+ (main's P0/E1 engine vs
 the prototype's path-following hand + asset library), port the winner's gaps,
 delete the loser. The landing PAT transited chat — rotate/revoke it now.
+
+## S67 close (2026-11-09 UTC) — the reconciliation decided, E9 Phase A in the product
+
+The E-series question the S66 merge deferred is answered, and the Whiteboard
+Engine's first product integration landed with it:
+
+- **`e2a20e1` — feat(s67): whiteboard reconciliation — the canonical engine
+  wins, E9 Phase A lands.** 55 files +1983/−5559. RECONCILIATION:
+  `src/lib/tubeforge/whiteboard/` is the one engine (E3+, CI-evidenced since
+  S64/S65); `contrib/whiteboard-e2/` is retired in full — the
+  capability-by-capability verdict + supersession map live in
+  `docs/audits/s67-whiteboard-e9a-record.md`. Ported: the prototype's 8
+  concept assets (house ink, single-subpath splits — the S64 seam law).
+  Deferred with reasons: fade events, per-event draw easing, left/right
+  hands, the zod layer. E9 PHASE A: `Video.whiteboardProject` (the sixth
+  JSON doc column; additive migration + sqlite mirror), `renderMode
+  "whiteboard"` with the story-format law enforced at create/PATCH/render,
+  JobKind `whiteboard` (the 21st) with boot-recovery idempotence,
+  `runWhiteboardJob` → the STANDARD final.mp4 + per-scene 720p/24 previews,
+  GET/PUT + POST `/scaffold` + POST `/render` routes, the Studio editor
+  (`whiteboard-studio` + `wb-canvas` in the Storyboard tab), the native
+  zero-AI scaffold planner, the frame-plan seam (`wb-page.ts`) shared by
+  renderer and playback canvas, and stale-artifact sweep coverage.
+- **`7644690` — test(s67): the queue suite learns the 21st kind.** The
+  landing preflight caught a CI-breaker the feat commit missed: the queue
+  suite still pinned the handler registry at 20 kinds, so "no stray handler
+  kinds" failed at 21. Caught locally before any push was spent — the unit
+  suite's registry pin was updated in the feat commit, the queue literal
+  was not. The exact drift class the S33 contract fix exists for.
+- **Local battery before the push** (the recycled sandbox re-bootstrapped:
+  the SQLite Prisma client regenerated via postinstall, matching CI's check
+  job): tsc 0 · eslint 0 errors · unit 313/313 · queue PASS · billing 40/40
+  · money-path coverage 55.15% (floor 50) · build exit 0. One false alarm
+  en route: ci.yml's `branches:` line READ as `ain]` in rendered output —
+  the display layer eating `[m` as an ANSI escape; `od` proved the bytes
+  intact (`branches: [main]`). Verify bytes, not glyphs.
+- **CI evidence:** run 42670081950 on `7644690` — all six jobs green
+  (Typecheck·Lint·Unit · Production build · Secret scan (gitleaks) ·
+  PostgreSQL integration · Money-path coverage · E2E (Playwright)):
+  https://github.com/ibis01/tubeforge/actions/runs/42670081950
+
+Follow-ups: E11 asset routes (§7's seven-gate hardening first), Phase B
+event editing, and the standing risks unchanged (gateway 429 → S63 resume
+gated on a green probe; production `TUBEFORGE_ENCRYPTION_KEY` on Vercel;
+the 8 open dependency PRs — majors tested individually). The landing PAT
+transited chat again — rotate/revoke it now.
