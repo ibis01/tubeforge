@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { startJob, isJobRunning, lastJobError } from "@/lib/tubeforge/jobs";
-import { runDirectorJob, runContinuityJob } from "@/lib/tubeforge/video-jobs";
+import { runDirectorJob, runConsistencyJob } from "@/lib/tubeforge/video-jobs";
 import {
   parsePlan,
   parseConsistency,
@@ -79,14 +79,19 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const profile = typeof body?.profile === "string" ? body.profile : undefined;
 
   if (action === "check") {
-    const scenes = (video.scenes ? JSON.parse(video.scenes) : []) as { hostInScene?: boolean }[];
-    if (!scenes.some((s) => s?.hostInScene))
+    // S77 — the check action now starts the UNIFIED consistency engine
+    // (identity reused + style cohesion + the style contract), not the
+    // identity-only continuity pass. Style needs NO cast, so the gate is
+    // "scenes exist" — a no-cast video still gets its style judged, and the
+    // engine reports the identity dimension honestly unavailable.
+    const scenes = video.scenes ? (JSON.parse(video.scenes) as unknown[]) : [];
+    if (scenes.length === 0)
       return NextResponse.json(
-        { error: "No cast scenes to check — the continuity check runs on scenes with the recurring host" },
+        { error: "No scenes to check — the consistency engine runs on scene-format videos with a scene script" },
         { status: 400 }
       );
     await db.video.update({ where: { id }, data: { error: null } });
-    const accepted = await startJob(id, "continuity", () => runContinuityJob(id));
+    const accepted = await startJob(id, "consistency", () => runConsistencyJob(id, "manual"));
     return NextResponse.json({ accepted, generating: { check: true } }, { status: accepted ? 202 : 200 });
   }
 

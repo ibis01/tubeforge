@@ -1674,10 +1674,10 @@ export function VideoDetailDialog({
   const storyboardTab = (
     <div className="space-y-4">
       {/* Stage 5 — AI Director: proposes the shot plan, human approves; VLM
-          continuity flags + one-click repaint for drifted scenes. */}
+          consistency flags (S77: identity + style) + one-click repaint for
+          drifted scenes. */}
       <DirectorCard
         videoId={video.id}
-        hasCast={Boolean(video.characterName)}
         storyGenerating={boardGenerating || busy === "storyboard"}
         onRepaintScene={(sceneIndex, instruction) => void rerollScene(sceneIndex, instruction)}
       />

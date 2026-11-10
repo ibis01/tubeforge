@@ -24,6 +24,7 @@ import {
   SearchCheck,
   Layers,
   RefreshCcwDot,
+  ShieldCheck,
 } from "lucide-react";
 
 const KIND_META: Record<
@@ -59,6 +60,12 @@ const KIND_META: Record<
     label: "scene split",
     icon: RefreshCcwDot,
     endpoint: (id) => [`/api/videos/${id}/convert`, "POST"],
+  },
+  // S77 — the Visual Consistency Engine (identity + style + contract).
+  consistency: {
+    label: "consistency",
+    icon: ShieldCheck,
+    endpoint: (id) => [`/api/videos/${id}/consistency`, "POST"],
   },
   verify: {
     label: "narration check",

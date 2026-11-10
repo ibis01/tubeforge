@@ -1490,17 +1490,17 @@ await test("queue: resumableKinds covers every kind the routes start", async () 
   // in review); every one must be resumable after a crash. Since the S33
   // contract fix, resumableKinds() is DERIVED from the handler registry, so
   // this test can no longer pass with a stale list — the literal below pins
-  // exhaustiveness: all 21 JobKind values are route-started AND
+  // exhaustiveness: all 22 JobKind values are route-started AND
   // handler-registered (director + continuity joined in Stage 5, upload in
-  // Stage 6, whiteboard in S67; the pre-fix copy listed only 18 and
-  // enshrined the drift).
+  // Stage 6, whiteboard in S67, consistency in S77; the pre-fix copy listed
+  // only 18 and enshrined the drift).
   const { resumableKinds } = await import("../src/lib/tubeforge/queue-handlers.ts");
   const kinds = resumableKinds();
   const expected = [
     "script", "research", "stock", "voiceover", "storyboard", "scene",
     "render", "short", "convert", "verify", "comments", "thumbnail",
     "variants", "slide", "portrait", "poses", "qc", "upload",
-    "director", "continuity", "whiteboard",
+    "director", "continuity", "whiteboard", "consistency",
   ];
   for (const k of expected) {
     ok(kinds.includes(k), `"${k}" is resumable`);
@@ -8509,6 +8509,282 @@ await test("S75: the whiteboard render's duration probe runs BEFORE putFromPath 
     probeIdx < putIdx,
     "the duration probe moved AFTER the put again (0.0s rows under the local driver)"
   );
+});
+
+// ---------------------------------------------------------------------------
+// S77 — Visual Consistency Engine: the pure contract (design
+// docs/design/s77-visual-consistency.md §10 — verdict math, the style
+// contract, batching, the strict-JSON reply parser, proposals, history,
+// the back-compat parse, and the prompt laws).
+// ---------------------------------------------------------------------------
+
+const {
+  verdictFromScore,
+  worstVerdict,
+  sceneScoreOf,
+  sceneVerdictOf,
+  overallScoreOf,
+  deriveStyleContract,
+  approvedColorGrade,
+  buildStyleBatches,
+  parseStyleVerdicts,
+  buildRepairProposals,
+  pushHistory,
+  parseConsistencyReport,
+  STYLE_SYSTEM,
+} = await import("../src/lib/tubeforge/visual-consistency.ts");
+
+await test("S77: verdictFromScore keeps the family thresholds (80/55) — shared with the continuity pass", () => {
+  eq(verdictFromScore(100), "consistent");
+  eq(verdictFromScore(80), "consistent", "80 is still consistent (the continuity boundary)");
+  eq(verdictFromScore(79), "drift");
+  eq(verdictFromScore(55), "drift");
+  eq(verdictFromScore(54), "off");
+  eq(verdictFromScore(0), "off");
+});
+
+await test("S77: worstVerdict ranks off < drift < consistent", () => {
+  eq(worstVerdict("consistent", "drift"), "drift");
+  eq(worstVerdict("drift", "consistent"), "drift");
+  eq(worstVerdict("off", "drift"), "off");
+  eq(worstVerdict("consistent", "consistent"), "consistent");
+  eq(worstVerdict("off", "off"), "off");
+});
+
+await test("S77: sceneScoreOf takes the MIN checked dimension — the binding constraint is the honest number", () => {
+  const identity = { score: 85, verdict: "consistent" as const, issues: [] };
+  const style = { score: 40, verdict: "off" as const, issues: ["palette shifts warmer"] };
+  eq(sceneScoreOf({ identity, style }), 40, "min across dimensions");
+  eq(sceneVerdictOf({ identity, style }), "off", "worst verdict wins");
+  eq(sceneScoreOf({ identity }), 85, "single dimension passes through");
+  eq(sceneVerdictOf({ identity }), "consistent");
+  // An unavailable dimension never drags a judged scene down (§2).
+  const unavailable = { score: null, verdict: "unavailable" as const, issues: ["style judge reply was malformed"] };
+  eq(sceneScoreOf({ identity, style: unavailable }), 85);
+  eq(sceneVerdictOf({ identity, style: unavailable }), "consistent");
+  // Nothing checked → null score, "unavailable" verdict — never a fake zero.
+  eq(sceneScoreOf({}), null);
+  eq(sceneVerdictOf({}), "unavailable");
+  eq(sceneScoreOf({ style: unavailable }), null);
+  eq(sceneVerdictOf({ style: unavailable }), "unavailable");
+});
+
+await test("S77: overallScoreOf averages EVERY checked dimension; honest zero when nothing checked", () => {
+  const scenes = [
+    {
+      sceneIndex: 1,
+      score: 70,
+      verdict: "off" as const,
+      issues: [],
+      dims: {
+        identity: { score: 90, verdict: "consistent" as const, issues: [] },
+        style: { score: 70, verdict: "drift" as const, issues: [] },
+      },
+    },
+    {
+      sceneIndex: 2,
+      score: 80,
+      verdict: "consistent" as const,
+      issues: [],
+      dims: { identity: { score: 80, verdict: "consistent" as const, issues: [] } },
+    },
+  ];
+  eq(overallScoreOf(scenes).overall, 80, "mean of 90+70+80");
+  eq(overallScoreOf(scenes).checkedCount, 3, "three dimension scores");
+  eq(overallScoreOf([]).overall, 0, "honest zero (V1 parity — the card renders a number)");
+  eq(overallScoreOf([]).checkedCount, 0);
+  const dead = [{ sceneIndex: 1, score: null, verdict: "unavailable" as const, issues: [], dims: { style: { score: null, verdict: "unavailable" as const, issues: [] } } }];
+  eq(overallScoreOf(dead).overall, 0);
+  eq(overallScoreOf(dead).checkedCount, 0, "unavailable scores never count");
+});
+
+await test("S77: deriveStyleContract — mode majority, first-seen tie-break, config outliers, null → default", () => {
+  const contract = deriveStyleContract(
+    [
+      { sceneIndex: 1, style: "default" },
+      { sceneIndex: 2, style: "anime" },
+      { sceneIndex: 3, style: "default" },
+      { sceneIndex: 4, style: null },
+      { sceneIndex: 5, style: "  " },
+    ],
+    "  teal-orange  "
+  );
+  eq(contract.majority, "default", "3 of 5 scenes (nulls resolve to default)");
+  eq(contract.styles.join(","), "default,anime", "distinct, first-seen order");
+  eq(contract.outliers.join(","), "2", "the anime scene is the config outlier");
+  eq(contract.colorGrade, "teal-orange", "grade trimmed");
+
+  const tie = deriveStyleContract(
+    [{ sceneIndex: 1, style: "a" }, { sceneIndex: 2, style: "b" }],
+    null
+  );
+  eq(tie.majority, "a", "tie breaks to first-seen");
+  eq(tie.outliers.join(","), "2");
+  eq(tie.colorGrade, null);
+});
+
+await test("S77: approvedColorGrade mirrors the addendum read — approved plan, first scene's first shot", () => {
+  eq(approvedColorGrade("proposed", '{"scenes":[{"sceneIndex":1,"shots":[{"colorGrade":"x"}]}]}'), null, "unapproved plan is inert");
+  eq(approvedColorGrade("approved", null), null, "no plan → no grade");
+  eq(approvedColorGrade("approved", "corrupt json {"), null, "corrupt plan degrades to null (parsePlan law)");
+  eq(
+    approvedColorGrade("approved", '{"scenes":[{"sceneIndex":1,"shots":[{"colorGrade":" teal-orange "},{"colorGrade":"ignored"}]}]}'),
+    "teal-orange",
+    "first shot of scene 1, trimmed"
+  );
+  eq(approvedColorGrade("approved", '{"scenes":[{"sceneIndex":2,"shots":[{"colorGrade":"x"}]}]}'), null, "no scene 1 → null");
+});
+
+await test("S77: buildStyleBatches chunks in story order", () => {
+  const seven = buildStyleBatches([1, 2, 3, 4, 5, 6, 7]);
+  eq(seven.length, 2, "7 scenes / max 6 → two batches");
+  eq(seven[0].join(","), "1,2,3,4,5,6");
+  eq(seven[1].join(","), "7", "order kept across the boundary");
+  eq(buildStyleBatches([1, 2, 3], 2).map((b) => b.join(",")).join("|"), "1,2|3");
+  eq(buildStyleBatches([]).length, 0, "nothing painted → nothing to batch");
+  eq(buildStyleBatches([9, 9], 0).length, 2, "max clamps to ≥1");
+});
+
+await test("S77: parseStyleVerdicts — STRING keys, clamped scores, missing scene → unavailable (never a fail)", () => {
+  const parsed = parseStyleVerdicts(
+    '{"scores":{"2":92,"3":40,"4":"77","5":150,"6":-5},"issues":{"3":["palette shifts warmer"],"4":[1,"grain heavy",null]}}',
+    [2, 3, 4, 5, 6, 7]
+  );
+  ok(parsed, "reply parses");
+  eq(parsed!.get(2)!.score, 92);
+  eq(parsed!.get(2)!.verdict, "consistent");
+  eq(parsed!.get(3)!.score, 40);
+  eq(parsed!.get(3)!.verdict, "off");
+  eq(parsed!.get(3)!.issues[0], "palette shifts warmer");
+  eq(parsed!.get(4)!.score, 77, "string-number keys coerce");
+  eq(parsed!.get(4)!.verdict, "drift");
+  eq(parsed!.get(4)!.issues.join(","), "grain heavy", "non-string issues dropped");
+  eq(parsed!.get(5)!.score, 100, "clamped high");
+  eq(parsed!.get(6)!.score, 0, "clamped low");
+  eq(parsed!.get(7)!.verdict, "unavailable", "a scene the reply skipped is unavailable");
+  eq(parsed!.get(7)!.score, null);
+  eq(parsed!.get(7)!.issues[0], "no verdict returned");
+});
+
+await test("S77: parseStyleVerdicts — malformed reply → null; the caller marks the whole batch unavailable (§0.3)", () => {
+  eq(parseStyleVerdicts("not json at all", [1, 2]), null);
+  eq(parseStyleVerdicts('{"issues":{}}', [1]), null, "no scores object → null");
+  eq(parseStyleVerdicts("", [1]), null);
+});
+
+await test("S77: buildRepairProposals — flagged scenes only, identity passthrough + style template, capped at 8", () => {
+  const contract = deriveStyleContract([{ sceneIndex: 1, style: "default" }], null);
+  const mk = (
+    sceneIndex: number,
+    verdict: "consistent" | "drift" | "off" | "unavailable",
+    dims: { identity?: { score: number | null; verdict: "consistent" | "drift" | "off" | "unavailable"; issues: string[] }; style?: { score: number | null; verdict: "consistent" | "drift" | "off" | "unavailable"; issues: string[] } }
+  ) => ({ sceneIndex, score: null, verdict, issues: [], dims });
+
+  const proposals = buildRepairProposals(
+    [
+      mk(1, "drift", { identity: { score: 60, verdict: "drift", issues: ["outfit changed to a red jacket"] } }),
+      mk(2, "off", { identity: { score: 90, verdict: "consistent", issues: [] }, style: { score: 30, verdict: "off", issues: ["palette shifts warmer"] } }),
+      mk(3, "consistent", { identity: { score: 95, verdict: "consistent", issues: [] } }),
+      mk(4, "unavailable", { style: { score: null, verdict: "unavailable", issues: ["style judge reply was malformed"] } }),
+    ],
+    contract
+  );
+  eq(proposals.length, 2, "consistent + unavailable scenes propose nothing");
+  eq(proposals[0].sceneIndex, 1);
+  eq(proposals[0].dimension, "identity");
+  eq(proposals[0].instruction, "outfit changed to a red jacket", "the VLM's own diagnosis passes through — the human edits it");
+  eq(proposals[1].sceneIndex, 2);
+  eq(proposals[1].dimension, "style");
+  ok(proposals[1].instruction.includes("dominant look"), "the style template names the majority");
+  ok(proposals[1].instruction.includes("palette shifts warmer"), "the style issue is the constraint core");
+  ok(proposals[1].instruction.includes("Keep the composition and subject"), "the AI-edit framing law rides along");
+
+  const many = Array.from({ length: 9 }, (_, i) =>
+    mk(i + 1, "drift", { identity: { score: 50, verdict: "drift", issues: [`issue ${i + 1}`] } })
+  );
+  eq(buildRepairProposals(many, contract).length, 8, "the report cap holds");
+});
+
+await test("S77: pushHistory — bounded ledger, newest last, cap 12", () => {
+  const base = Array.from({ length: 12 }, (_, i) => ({ at: `2026-01-01T00:00:${String(i).padStart(2, "0")}Z`, overall: i, triggered: "manual" }));
+  const next = pushHistory(base, { at: "2026-01-02T00:00:00.000Z", overall: 99, triggered: "storyboard" });
+  eq(next.length, 12, "the cap holds");
+  eq(next[0].overall, 1, "the oldest entry dropped");
+  eq(next[11].overall, 99, "newest last");
+  eq(next[11].triggered, "storyboard");
+  eq(pushHistory([], { at: "x", overall: 1, triggered: "manual" }).length, 1);
+});
+
+await test("S77: parseConsistencyReport — a legacy V1 identity-only row parses with EMPTY additive fields (never fabricated)", () => {
+  const v1 = JSON.stringify({
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    overall: 75,
+    scenes: [{ sceneIndex: 1, score: 75, verdict: "drift", issues: ["hair length differs"] }],
+  });
+  const parsed = parseConsistencyReport(v1);
+  ok(parsed, "V1 parses");
+  eq(parsed!.schema, 2);
+  eq(parsed!.overall, 75);
+  eq(parsed!.checkedAt, "2026-01-01T00:00:00.000Z");
+  eq(parsed!.scenes[0]!.score, 75);
+  eq(parsed!.scenes[0]!.verdict, "drift");
+  eq(parsed!.scenes[0]!.dims.identity!.score, 75, "the V1 verdict IS the identity dimension");
+  eq(parsed!.scenes[0]!.dims.style, undefined, "no fabricated style dimension");
+  eq(parsed!.styleContract.styles.length, 0, "empty contract — not a made-up one");
+  eq(parsed!.proposals.length, 0);
+  eq(parsed!.history.length, 0);
+  eq(parsed!.checkedCount, 1);
+  eq(parsed!.engine.identity, true);
+  eq(parsed!.engine.style, false);
+});
+
+await test("S77: parseConsistencyReport — V2 roundtrip keeps dims, contract, proposals and history; junk → null", () => {
+  const v2 = {
+    schema: 2,
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    overall: 66,
+    checkedCount: 3,
+    scenes: [
+      {
+        sceneIndex: 1,
+        score: 60,
+        verdict: "drift",
+        issues: ["outfit changed"],
+        dims: {
+          identity: { score: 60, verdict: "drift", issues: ["outfit changed"] },
+          style: { score: 72, verdict: "drift", issues: ["palette shifts"] },
+        },
+      },
+      { sceneIndex: 2, score: null, verdict: "unavailable", issues: ["no verdict returned"], dims: { style: { score: null, verdict: "unavailable", issues: ["no verdict returned"] } } },
+    ],
+    styleContract: { styles: ["default", "anime"], majority: "default", outliers: [2], colorGrade: "teal-orange" },
+    proposals: [{ sceneIndex: 1, dimension: "identity", instruction: "outfit changed" }],
+    history: [{ at: "2026-01-01T00:00:00.000Z", overall: 70, triggered: "storyboard" }],
+    engine: { identity: true, style: true, unavailable: [] },
+  };
+  const parsed = parseConsistencyReport(JSON.stringify(v2));
+  ok(parsed, "V2 parses");
+  eq(parsed!.schema, 2);
+  eq(parsed!.checkedCount, 3);
+  eq(parsed!.scenes[0]!.dims.style!.score, 72);
+  eq(parsed!.scenes[1]!.score, null, "null scores survive the roundtrip");
+  eq(parsed!.scenes[1]!.verdict, "unavailable");
+  eq(parsed!.styleContract.majority, "default");
+  eq(parsed!.proposals.length, 1);
+  eq(parsed!.history.length, 1);
+  eq(parsed!.engine.style, true);
+  eq(parseConsistencyReport("nope{{"), null, "corrupt JSON → null");
+  eq(parseConsistencyReport('{"foo":1}'), null, "no scenes array → null");
+  eq(parseConsistencyReport(null), null);
+  eq(parseConsistencyReport(undefined), null);
+});
+
+await test("S77: the style prompt's laws are pinned — style-only judgement, strict JSON, per-scene reply completeness", () => {
+  ok(STYLE_SYSTEM.includes("Judge ONLY visual style cohesion"), "style is the only thing this judge scores");
+  ok(STYLE_SYSTEM.includes("Ignore subject matter"), "subjects are irrelevant to style cohesion");
+  ok(STYLE_SYSTEM.includes("identity is judged elsewhere"), "the dimension split is explicit — no double-judging identity");
+  ok(STYLE_SYSTEM.includes("STRICT JSON"), "the reply contract is strict JSON");
+  ok(STYLE_SYSTEM.includes("Every labelled scene index MUST appear"), "a skipped scene is unavailable — the prompt fights that at the source");
 });
 
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);

@@ -103,7 +103,9 @@ import {
   JobCancelledError,
   isJobCancelled,
   setJobProgress,
+  startJob,
 } from "./jobs";
+import { runConsistencyEngine } from "./visual-consistency";
 
 /** Character inputs for scene art — derived from video.characterId. */
 async function castOptsFor(video: {
@@ -327,6 +329,20 @@ export async function runStoryboardJob(videoId: string): Promise<void> {
         message: `Storyboard painted — ${scenes.length} scenes${castOpts ? ` (host: ${castOpts.name})` : ""}`,
       },
     });
+
+    // S77 auto-chain — the fresh paint is judged while it's new (design §7).
+    // Style cohesion needs ≥2 painted scenes; the engine itself reports
+    // honestly when it has less. `startJob` is idempotent (a check already
+    // queued/running for this video returns false) and the chain FAILS OPEN:
+    // an enqueue hiccup must never fail a storyboard that just succeeded —
+    // the manual check route remains (§0.3).
+    if (scenes.length >= 2) {
+      await startJob(videoId, "consistency", () => runConsistencyJob(videoId, "storyboard")).catch(
+        () => {
+          /* fail-open — the manual consistency route is the fallback */
+        }
+      );
+    }
   } catch (err) {
     if (err instanceof Error && err.message === "__CANCELLED__") {
       await db.video.update({
@@ -1160,6 +1176,38 @@ export async function runContinuityJob(videoId: string): Promise<void> {
         stage: "continuity",
         level: "error",
         message: `Continuity check failed: ${message}`,
+      },
+    });
+    throw err;
+  }
+}
+
+/**
+ * S77 — the Visual Consistency Engine job body: identity (reused) + style
+ * batches + the deterministic style contract + repair proposals, one V2
+ * report on Video.consistency. `triggered` records HOW the run started
+ * (storyboard auto-chain / manual / queue resume) in the report's ledger.
+ */
+export async function runConsistencyJob(
+  videoId: string,
+  triggered: string = "manual"
+): Promise<void> {
+  const ctx = assertCtx("runConsistencyJob");
+  const video = await db.video.findUnique({ where: { id: videoId } });
+  if (!video) return;
+  try {
+    await runConsistencyEngine(videoId, { triggered });
+  } catch (err) {
+    const message = errorText(err, "Consistency check failed");
+    await db.video.update({ where: { id: videoId }, data: { error: message } });
+    await db.activity.create({
+      data: {
+        organizationId: video.organizationId,
+        userId: ctx.userId,
+        videoId,
+        stage: "consistency",
+        level: "error",
+        message: `Consistency check failed: ${message}`,
       },
     });
     throw err;

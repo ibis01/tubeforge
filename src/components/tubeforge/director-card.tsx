@@ -33,14 +33,22 @@ import type { DirectorPlan } from "@/lib/tubeforge/director-plan";
 
 interface ContinuityScene {
   sceneIndex: number;
-  score: number;
-  verdict: "consistent" | "drift" | "off";
+  score: number | null; // null = nothing checkable ran for this scene (S77 dims may all be unavailable)
+  verdict: "consistent" | "drift" | "off" | "unavailable";
   issues: string[];
+  /** S77 — the per-dimension truth behind the unified verdict (optional:
+   *  legacy V1 reports predate it). */
+  dims?: {
+    identity?: { verdict?: string };
+    style?: { verdict?: string };
+  };
 }
 interface ContinuityReport {
   checkedAt: string;
   overall: number;
   scenes: ContinuityScene[];
+  /** S77 — how many dimensions actually returned a score; 0 = honest zero. */
+  checkedCount?: number;
 }
 interface ProfileOption {
   id: string;
@@ -71,17 +79,17 @@ function verdictBadge(v: ContinuityScene["verdict"]) {
     return <Badge className="border-emerald-500/30 bg-emerald-500/15 text-emerald-200" variant="outline">consistent</Badge>;
   if (v === "drift")
     return <Badge className="border-amber-500/30 bg-amber-500/15 text-amber-200" variant="outline">drift</Badge>;
+  if (v === "unavailable")
+    return <Badge className="border-white/15 bg-white/5 text-white/60" variant="outline">unavailable</Badge>;
   return <Badge className="border-red-500/30 bg-red-500/15 text-red-200" variant="outline">off</Badge>;
 }
 
 export function DirectorCard({
   videoId,
-  hasCast,
   onRepaintScene,
   storyGenerating,
 }: {
   videoId: string;
-  hasCast: boolean;
   onRepaintScene: (sceneIndex: number, instruction?: string) => void;
   storyGenerating: boolean;
 }) {
@@ -158,7 +166,7 @@ export function DirectorCard({
         return;
       }
       toast({
-        title: action === "plan" ? "AI Director is watching the dailies…" : "Continuity check started…",
+        title: action === "plan" ? "AI Director is watching the dailies…" : "Consistency check started…",
         description:
           action === "plan"
             ? profile && profile !== "narrative"
@@ -330,12 +338,13 @@ export function DirectorCard({
               <Loader2 className="h-3.5 w-3.5 animate-spin" /> Planning shots…
             </span>
           )}
-          {hasCast && (
-            <Button size="sm" variant="outline" disabled={checking || generating} onClick={() => void act("check")}>
-              <ShieldCheck className={`h-3.5 w-3.5 ${checking ? "animate-pulse" : ""}`} />
-              {checking ? "Checking…" : "Check continuity"}
-            </Button>
-          )}
+          {/* S77 — style cohesion needs NO cast; the route validates scenes
+              and the engine reports the identity dimension honestly when a
+              video has none. */}
+          <Button size="sm" variant="outline" disabled={checking || generating} onClick={() => void act("check")}>
+            <ShieldCheck className={`h-3.5 w-3.5 ${checking ? "animate-pulse" : ""}`} />
+            {checking ? "Checking…" : "Check consistency"}
+          </Button>
         </div>
       </div>
 
@@ -513,11 +522,14 @@ export function DirectorCard({
         <div className="space-y-2 border-t border-white/8 pt-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <p className="text-xs text-muted-foreground">
-              Continuity — overall{" "}
+              Consistency — overall{" "}
               <span className={`tf-num font-semibold ${data.consistency.overall >= 80 ? "text-emerald-300" : data.consistency.overall >= 55 ? "text-amber-300" : "text-red-300"}`}>
                 {data.consistency.overall}%
               </span>{" "}
               across {data.consistency.scenes.length} scene(s)
+              {data.consistency.checkedCount === 0 && (
+                <span className="text-white/50"> — nothing was checkable yet (no painted cast art / fewer than two scenes)</span>
+              )}
             </p>
           </div>
           <div className="space-y-1.5">
@@ -526,11 +538,19 @@ export function DirectorCard({
                 <div className="flex items-center gap-2 text-[11px]">
                   <span className="tf-num w-8 text-white/70">S{c.sceneIndex}</span>
                   <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/8">
-                    <div className={`h-full ${scoreColor(c.score)}`} style={{ width: `${c.score}%` }} />
+                    {/* null score = nothing was checkable — a neutral empty bar,
+                        never a fake red zero (S77 §0.3) */}
+                    <div className={`h-full ${c.score === null ? "bg-white/20" : scoreColor(c.score)}`} style={{ width: c.score === null ? "0%" : `${c.score}%` }} />
                   </div>
-                  <span className="tf-num w-8 text-right text-white/70">{c.score}</span>
+                  <span className="tf-num w-8 text-right text-white/70">{c.score === null ? "—" : c.score}</span>
                   {verdictBadge(c.verdict)}
-                  {c.verdict !== "consistent" && (
+                  {c.dims?.identity?.verdict && c.dims.identity.verdict !== "consistent" && c.dims.identity.verdict !== "unavailable" && (
+                    <Badge className="border-white/15 bg-white/5 text-white/60" variant="outline">identity</Badge>
+                  )}
+                  {c.dims?.style?.verdict && c.dims.style.verdict !== "consistent" && c.dims.style.verdict !== "unavailable" && (
+                    <Badge className="border-white/15 bg-white/5 text-white/60" variant="outline">style</Badge>
+                  )}
+                  {(c.verdict === "drift" || c.verdict === "off") && (
                     <>
                       <Button
                         size="sm"

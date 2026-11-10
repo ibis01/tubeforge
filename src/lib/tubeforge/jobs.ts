@@ -54,6 +54,7 @@ export type JobKind =
   | "script" // (re)generate the script package — retry after a failed create, or re-roll
   | "director" // Stage 5 — LLM shot-list pass (AI suggests, human approves)
   | "continuity" // Stage 5 — VLM per-scene character-continuity check
+  | "consistency" // S77 — Visual Consistency Engine (identity + style + contract)
   | "qc" // Stage 6 — re-run the QC battery against the existing final.mp4
   | "whiteboard"; // S67 — Whiteboard Engine full render / scene preview (E9 Phase A)
 
@@ -120,6 +121,7 @@ const STAGE_LABEL: Record<string, string> = {
   script: "script",
   director: "director pass", // Stage 5 — was missing from this map until the
   continuity: "continuity check", // S33 contract-drift fix caught the family
+  consistency: "consistency check", // S77 — Visual Consistency Engine
   qc: "quality check",
   whiteboard: "whiteboard render", // S67
 };

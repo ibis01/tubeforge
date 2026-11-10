@@ -3770,3 +3770,41 @@ re-rolls were already correct (`pollScene` watches the scene flag).
 identical to baseline). Also recorded: the operator's final
 implementation priority (13 rows, Critical → P3) into ROADMAP.md as
 the governing order after the S74/S76 close-out, with per-row status.
+
+## S77 — the Visual Consistency Engine, Phase A: identity was one dimension, style had no judge at all (2026-11-11)
+
+**The P0 mandate** (the user's final priority row 4; S76 §3 Phase 1):
+build the first shared quality system before any new engine. The audit
+map showed the fragments — the identity-only continuity pass (style
+explicitly IGNORED by its own prompt), the per-image quality gate,
+dHash duplicate detection, and zero cross-scene style drift detection
+anywhere. Three judges, three scales, one overwritten JSON snapshot,
+and a check nobody ran automatically.
+
+**The engine:** `visual-consistency.ts` unifies behind ONE V2 envelope
+on the EXISTING `Video.consistency` column (back-compat pinned — V1
+rows parse with empty additive fields, never fabricated ones): identity
+(the existing pass, reused verbatim), NEW cross-scene style cohesion
+(≤6-image batches through the budget choke point, strict-JSON replies,
+missing scenes → "unavailable", never a fail), the deterministic style
+contract (mode majority + config outliers + the approved plan's color
+grade — zero AI), min-across/worst-of scene unification, capped repair
+proposals (propose-never-auto-edit — firing one is the existing
+storyboard AI-edit flow), and a bounded 12-entry history ledger.
+
+**Wiring:** job kind "consistency" registered on the live registry
+(resume/cancel derive — the exhaustive-pins test caught the 22nd kind
+by design); auto-chain after a full storyboard paint (≥2 scenes,
+fail-open enqueue); `POST/GET /api/videos/[id]/consistency`; the
+director route's Check action now starts the UNIFIED engine, cast-gate
+relaxed (style needs no cast); the director card grew the unavailable
+badge, the honest "—" empty bar, and identity/style chips; the
+attention panel gained the resume entry.
+
+**Laws held:** zero generation-prompt changes (S74's paired measurement
+renders from frozen prompts); fail-open everywhere (a VLM error is
+recorded "unavailable", never a passing score); every model call rides
+aiCall's metering + credit reservation. 370/370 unit, typecheck 0,
+lint 0 errors on touched files. Phase B tail recorded, not built: the
+dedicated appearance pass, targeted repaint re-checks, the user
+setting, shot-art lock coverage, org-wide scoring.

@@ -44,6 +44,7 @@ import {
   runCommentsJob,
   runDirectorJob,
   runContinuityJob,
+  runConsistencyJob,
   runThumbnailJob,
   runVariantsJob,
   runSlideJob,
@@ -368,6 +369,10 @@ export function registerDefaultHandlers(): void {
   registerJobHandler("comments", (videoId) => runCommentsJob(videoId));
   registerJobHandler("director", (videoId) => runDirectorJob(videoId));
   registerJobHandler("continuity", (videoId) => runContinuityJob(videoId));
+  // S77 — the unified engine (identity reused + style + contract). A resumed
+  // row records "resume" in the report's ledger; fresh runs record their
+  // own trigger (storyboard auto-chain / manual).
+  registerJobHandler("consistency", (videoId) => runConsistencyJob(videoId, "resume"));
   registerJobHandler("thumbnail", (videoId) => runThumbnailJob(videoId));
   registerJobHandler("variants", (videoId) => runVariantsJob(videoId));
   registerJobHandler("slide", (entityId) => runSlideJob(entityId));
