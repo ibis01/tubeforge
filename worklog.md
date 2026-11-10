@@ -3450,3 +3450,37 @@ entitlement decision list. Local commits: 409808f (reconciliation
 docs) + f9fd0fd (E10 + engine fixes) + this receipt. All unpushed —
 the compromised PAT blocks the push cycle. S74 remains watcher-
 automated (job 521163, next fire 18:30 UTC), 0/8, independent.
+
+## Landing receipt — the push cycle unblocked (2026-11-10 ~16:45 UTC)
+
+**The rotated PAT arrived; the gate opened.** tf-push.sh (askpass,
+plain-URL, no-token-in-args) landed the queued stack in one motion:
+250da9d → 3da04cf — 1cae7db (S74 probe receipt + watcher re-phase),
+409808f (the front documents reconciled to the live source; the three
+product decisions became architecture constraints), f9fd0fd + b320f04
++ 3da04cf (E10 benchmark + four engine fixes + second-round receipts).
+
+**First CI run on 3da04cf: 5/6 — Typecheck·Lint·Unit failed at the
+lint step** (Unit never ran): one error,
+`@typescript-eslint/no-non-null-assertion` at
+scripts/s75-e10-benchmark.mts:331 (the ffprobe audio-rate probe).
+Fixed by extracting the optional-chain result into a local — no
+semantics change. Unit suite verified locally before re-push:
+352 passed, 0 failed. Re-landed as 0f323bb.
+
+**CI on 0f323bb: 6/6 green** — Secret scan, Money-path coverage,
+PostgreSQL integration, Typecheck·Lint·Unit, Production build, and
+E2E (Playwright — skipped on the red run, real this time) all success.
+The repo's "HEAD is green" invariant is restored at 0f323bb.
+
+**Credential hygiene during the landing:** TF_TOKEN env-only
+(per-command prefix, never exported into the session), one-shot 0700
+askpass removed by the exit trap; the token never entered a URL, a
+process argument, or disk; the outbound secret gate ran clean on both
+pushes; env + /tmp verified zero-residue afterward. The token did
+transit chat (twice, by necessity) — rotate again when convenient;
+the push gate is unchanged and ready for the next landing.
+
+**S74 unchanged:** 0/8, watcher-automated (job 521163, next fire
+18:30 UTC today), independent of all of the above. The E10
+benchmark's gateway-free proof stands.
