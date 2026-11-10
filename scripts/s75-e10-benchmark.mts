@@ -328,7 +328,8 @@ async function ffprobeVideo(file: string): Promise<FfprobeResult> {
     ]);
     const ap = JSON.parse(a.stdout) as { streams?: { codec_name?: string; sample_rate?: string }[] };
     audioCodec = ap.streams?.[0]?.codec_name ?? null;
-    audioRate = ap.streams?.[0]?.sample_rate ? Number(ap.streams![0].sample_rate) : null;
+    const sr = ap.streams?.[0]?.sample_rate;
+    audioRate = sr ? Number(sr) : null;
   } catch { /* no audio stream */ }
   return {
     width: v.width ?? 0,
