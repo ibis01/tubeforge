@@ -127,7 +127,17 @@ already built and tested. A staging environment (Fly + Neon branch + Stripe
 test mode) is the target for the launch drills: backup restore, load testing,
 the YouTube test-channel smoke, and the Stripe lifecycle rehearsal.
 
+
 ## License
 
-Not yet chosen — a tracked launch decision (S33+ backlog, P0). Until a
-`LICENSE` file lands, all rights are reserved.
+TubeForge is proprietary software.
+
+Copyright (c) 2026 Tubeforge.
+All rights reserved.
+
+No permission is granted to reproduce, distribute,
+modify, or commercially exploit this software without
+written authorization from the copyright holder.
+
+For licensing enquiries, contact the copyright holder.
+
