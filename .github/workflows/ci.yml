@@ -81,16 +81,32 @@ jobs:
 
       - name: Install ffmpeg (QC fixtures + render pipeline)
         # S47/T-47.10: step-level timeout — run #81's apt step stalled for the
-        # whole job budget and surfaced as a confusing "cancelled" job. A
-        # 5-minute cap turns a stall into a fast, visible, re-runnable failure.
-        # 2026-11-10 hardening (4th stall observed: S68 run 42697192000, S74
-        # runs 42811386568 / 42816234222 / 42828406739 — all the same shape:
-        # apt-get update hangs silently for the full 5 minutes on a slow
-        # mirror): per-request 30s timeouts + 3 fetch retries make a bad
-        # mirror fail fast and recover within the step budget instead of
-        # stalling into the step timeout.
-        timeout-minutes: 5
-        run: sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update -qq && sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y -qq ffmpeg
+        # whole job budget and surfaced as a confusing "cancelled" job.
+        # 2026-11-10 (5 stalls across 4 runs — 42697192000, 42811386568,
+        # 42816234222, 42828406739, 42829548961 — all the same shape: apt
+        # produces ZERO output and hangs past its own per-request timeouts;
+        # two jobs' fresh runners stalled SIMULTANEOUSLY in 42829548961,
+        # which is the boot-time unattended-upgrades dpkg-lock race):
+        # wait the lock out explicitly (GitHub's documented pattern — an
+        # apt lock wait has no timeout of its own), then try apt twice with
+        # per-request timeouts. Distro ffmpeg stays the source of truth.
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          sudo systemd-run --property="After=apt-daily.service apt-daily-upgrade.service" --wait /bin/true 2>/dev/null || true
+          for ATTEMPT in 1 2; do
+            if sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update -qq && \
+               sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y -qq ffmpeg; then
+              ffmpeg -version | head -1
+              exit 0
+            fi
+            if [ "$ATTEMPT" -eq 1 ]; then
+              echo "apt attempt 1 failed — retrying in 45s"
+              sleep 45
+            fi
+          done
+          echo "apt failed twice"
+          exit 1
 
       - name: Install dependencies (postinstall bootstraps SQLite + Prisma)
         run: npm ci
@@ -153,8 +169,26 @@ jobs:
           cache: npm
 
       - name: Install ffmpeg (QC fixtures + render pipeline)
-        timeout-minutes: 5
-        run: sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update -qq && sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y -qq ffmpeg
+        # 2026-11-10: dpkg-lock wait + retry (see the main job's step for the
+        # full receipt) — the boot-time unattended-upgrades race was stalling
+        # fresh runners past every in-apt timeout.
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          sudo systemd-run --property="After=apt-daily.service apt-daily-upgrade.service" --wait /bin/true 2>/dev/null || true
+          for ATTEMPT in 1 2; do
+            if sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update -qq && \
+               sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y -qq ffmpeg; then
+              ffmpeg -version | head -1
+              exit 0
+            fi
+            if [ "$ATTEMPT" -eq 1 ]; then
+              echo "apt attempt 1 failed — retrying in 45s"
+              sleep 45
+            fi
+          done
+          echo "apt failed twice"
+          exit 1
 
       - name: Install dependencies (postinstall bootstraps SQLite + Prisma)
         run: npm ci
@@ -237,8 +271,25 @@ jobs:
           cache: npm
 
       - name: Install ffmpeg (render pipeline)
-        timeout-minutes: 5
-        run: sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update -qq && sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y -qq ffmpeg
+        # 2026-11-10: dpkg-lock wait + retry (see the main job's step for the
+        # full receipt).
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          sudo systemd-run --property="After=apt-daily.service apt-daily-upgrade.service" --wait /bin/true 2>/dev/null || true
+          for ATTEMPT in 1 2; do
+            if sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update -qq && \
+               sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y -qq ffmpeg; then
+              ffmpeg -version | head -1
+              exit 0
+            fi
+            if [ "$ATTEMPT" -eq 1 ]; then
+              echo "apt attempt 1 failed — retrying in 45s"
+              sleep 45
+            fi
+          done
+          echo "apt failed twice"
+          exit 1
 
       - name: Install dependencies
         run: npm ci

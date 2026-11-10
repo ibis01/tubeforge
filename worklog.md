@@ -3288,11 +3288,16 @@ is compromised by definition and MUST be rotated/revoked
 (GitHub → Settings → Developer settings → Personal access tokens) before
 the next push cycle.
 
-**CI flake, hardened (same session):** the 4th ffmpeg-install stall (run
-42828406739 on the security-fix commit — the same silent apt-mirror hang
-as S68 run 42697192000 and S74 runs 42811386568 / 42816234222) moved this
-from "rerun and note" to "fix": all five apt-get sites in ci.yml +
-nightly.yml now carry `-o Acquire::http::Timeout=30 -o
-Acquire::https::Timeout=30 -o Acquire::Retries=3` — a bad mirror fails
-fast and retries within the 5-minute step budget instead of stalling into
-the step timeout. The S47 comment block records the full receipt.
+**CI flake, hardened (same session):** the ffmpeg-install stall hit a 5th
+time (run 42829548961 — and this time BOTH the Typecheck·Lint·Unit and
+Money-path runners hung SIMULTANEOUSLY with zero apt output, even with
+per-request timeouts+retries already in place). That signature — fresh
+runners, simultaneous, zero output, immune to apt's own timeouts — is
+the boot-time unattended-upgrades dpkg-lock race (an apt lock wait has
+no timeout of its own). All five ffmpeg-install sites in ci.yml +
+nightly.yml now: wait the apt-daily services out explicitly (GitHub's
+documented `systemd-run --property=After=…` pattern), then try apt
+twice with 30s per-request timeouts + 3 fetch retries and a 45s gap;
+step budget raised to 8 minutes to fit the lock wait. Distro ffmpeg
+stays the source of truth. Receipts: runs 42697192000, 42811386568,
+42816234222, 42828406739, 42829548961.
