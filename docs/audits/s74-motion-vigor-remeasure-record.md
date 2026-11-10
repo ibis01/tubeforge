@@ -144,6 +144,22 @@ only on real clips + blind scores, per the stage law that took S62 from
 "assumed" to "measured" — a laws-only close would repeat the sin S62's
 audit named.
 
+**Probe receipt (2026-11-10 14:24 UTC, at the security-fix HEAD
+`250da9d`): still 429.** The cheap llm probe
+(`scripts/gateway-quota-probe.mts`, one tiny chat dispatch through the
+app's own stack) returned the account-level throttle after the standard
+backoffs — the outage window that opened right after the S74 pilot (art
++ pair renders landed clean, then the hard throttle) persists through
+the security-fix landing (`8b1d8f4` → `e0b8fa6` → `250da9d`, CI 6/6 on
+run 42831139570). Gateway recovery is therefore NOT verified; the lane
+stays gated. A 3×/day watcher (job 521163, fires 18:30 / 01:30 /
+11:30 UTC — the last slot timed to when the pilot's own burn ages out
+of the pool's rolling-24h budget, per the S54 forensics) probes ONCE
+per cycle (every request costs a pool slot for 24h, success or 429 —
+the window is never raced) and hands off to the probe-first resume lane
+on the first green reply, so the measurement starts without a manual
+step.
+
 Stage discipline: full local gate battery before any push; CI evidence by
 SHA for the close; doctrine wording untouched (S63's T-63.1 / T-63.2
 laws are unchanged — S74 measures them, does not revise them).

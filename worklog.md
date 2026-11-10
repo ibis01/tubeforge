@@ -3309,3 +3309,44 @@ own run 42829548961 supplied the lock-race evidence), and the lock-wait
 fix (`e0b8fa6`) are all landed; the S74 measurement remains OPEN,
 gateway-gated, cron watcher armed. The chat-transited PAT is still
 compromised — rotate/revoke before the next push cycle.
+
+### S74 probe receipt (2026-11-10 UTC) — the gate re-verified at the security-fix HEAD
+
+Repo state confirmed in sync: local = origin/main = `250da9d` (the docs
+receipt for the security-fix landing), working tree clean. Sandbox
+credential sweep: remote URL plain HTTPS, no `.netrc`/`.git-credentials`,
+no `ghp_` pattern anywhere in the tree — the compromised PAT exists only
+in chat history, reinforcing the rotation requirement.
+
+The cheap gateway probe (`scripts/gateway-quota-probe.mts`, one tiny chat
+dispatch through the app's own stack) at 14:24 UTC and again 14:31 UTC:
+**still 429** after the standard backoffs — the account-level window
+that opened after the S74 pilot persists through the security-fix
+landing. Recovery NOT verified; the lane stays gated, 0/8 pairs (the
+`--status` run also confirms the lane is healthy in this rebuilt
+sandbox — committed S62 manifest readable, no partial S74 state).
+
+**Watcher re-phased (job 521163, same name `s74-lane-watcher`).** The
+prior 8-hour fixed-rate job (520831) was replaced — not for cadence
+(the platform caps cron at 3 executions/day, which 8-hour spacing
+already matched) but for PHASE: the old job's next fire was ~13.5h out,
+a dead zone that would waste a cleared window. The new job fires 3×/
+day at 18:30 / 01:30 / 11:30 UTC (Lagos 19:30 / 02:30 / 12:30): 6.8h
+into the window (a cheap lottery ticket), 13.5h in, and the
+high-probability slot ~23.5h in — when the pilot's own burn (art + 2
+clips, ~10:30–11:30 UTC today) has aged out of the pool's rolling-24h
+budget (S54 forensics: `x-ratelimit-remaining-daily` is a POOL counter,
+shared across sandboxes; requests age out over 24h). Each fire probes
+ONCE (S54: every request costs a pool slot for 24h, success or 429 —
+never race the window) and hands off to the probe-first resume lane
+(`scripts/s74-resume.sh` → paced pair renders → blind scorer) on the
+first green reply. Execution timeout 2h fits the 40–60-min lane;
+MaxConcurrency 1 prevents overlap (the lane's `/tmp/s74-lane.lock` is
+the second guard). The close commit still requires real clips + blind
+scores.
+
+Push posture this session: NO push — the chat-transited PAT is
+compromised and MUST be rotated before the next push cycle. Post-
+rotation, the gate is `TF_TOKEN=<new pat> bash scripts/tf-push.sh`
+(askpass, plain URL, token never in args or on disk). Recommended: a
+fine-grained PAT scoped to this one repo, contents:write only.
