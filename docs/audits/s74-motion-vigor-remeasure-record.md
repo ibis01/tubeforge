@@ -128,17 +128,21 @@ scan (gitleaks) · PostgreSQL integration · Money-path coverage · E2E
 (the Typecheck·Lint·Unit job needed one rerun — the known Install-ffmpeg
 apt-mirror flake last seen in S68; the rerun was green).
 
-The review fixes (the follow-up commit) tighten the automation before
-the measurement relies on it: the blind scorer now REJECTS malformed
-replies instead of clamping them to fabricated 1s (strict per-dimension
-validation, retry on malformed only — a 429 is never retried, per the
-resumption discipline), the shell scripts resolve the repo root from
-their own location, and every entry point follows the probe-first
-policy. The measurement (8 paired i2v renders + 16 blind vision calls)
-runs when the gateway window clears, via the lane supervisor. The close
-commit lands only on real clips + blind scores, per the stage law that
-took S62 from "assumed" to "measured" — a laws-only close would repeat
-the sin S62's audit named.
+The review fixes (the follow-up commit `c6db273`) tighten the automation
+before the measurement relies on it: the blind scorer now REJECTS
+malformed replies instead of clamping them to fabricated 1s (strict
+per-dimension validation, retry on malformed only — a 429 is never
+retried, per the resumption discipline), the shell scripts resolve the
+repo root from their own location, and every entry point follows the
+probe-first policy. **CI evidence: run 42816234222 on `c6db273` — all
+six jobs green** (one ffmpeg-install apt-mirror flake rerun — the same
+S68-round-2 shape):
+https://github.com/ibis01/tubeforge/actions/runs/42816234222. The
+measurement (8 paired i2v renders + 16 blind vision calls) runs when the
+gateway window clears, via the lane supervisor. The close commit lands
+only on real clips + blind scores, per the stage law that took S62 from
+"assumed" to "measured" — a laws-only close would repeat the sin S62's
+audit named.
 
 Stage discipline: full local gate battery before any push; CI evidence by
 SHA for the close; doctrine wording untouched (S63's T-63.1 / T-63.2

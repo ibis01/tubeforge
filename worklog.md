@@ -3220,4 +3220,18 @@ artifacts did not survive the rebuild) and states the current
 measurement state as 0/8. CI evidence for `90b5c68` is recorded:
 run 42811386568, all six jobs green (one ffmpeg-flake rerun).
 
-Battery on this commit: tsc 0 · eslint 0 (20 baseline) · unit 346/346.
+Battery on this commit: tsc 0 · eslint 0 (20 baseline) · unit 346/346 ·
+queue PASS · billing 40/40 · build 0 · e2e 30/30.
+
+**CI evidence: run 42816234222 on `c6db273` — all six jobs green** (one
+ffmpeg-install apt-mirror flake rerun — the same S68-round-2 shape, now
+three occurrences across the S74 push cycle; a candidate CI-hardening
+follow-up to give the apt step per-request timeouts is noted but not
+taken in this commit to keep scope tight):
+https://github.com/ibis01/tubeforge/actions/runs/42816234222
+
+Landing-gate state: origin/main = `c6db273`; S74 code + review fixes
+LANDED on green CI. The measurement (8 paired i2v renders + 16 blind
+vision calls) stays OPEN — gateway-gated, still 429 as of 2026-11-10
+~13:30 UTC. The cron watcher (job 520831, every 8h) probes first and
+auto-resumes the lane the moment the window clears.
