@@ -70,6 +70,9 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<ErrorState>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // S73 (E5 phase 2): opt in to the LLM scaffold planner — the native rule
+  // table stays the free default; the model pass is metered.
+  const [aiPlanner, setAiPlanner] = useState(false);
 
   // Phase B working state: the buffer is the doc-under-edit; `dirty` marks
   // unsaved changes; the canvas plays the BUFFER so edits preview live.
@@ -391,14 +394,41 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
       const res = await fetch(`/api/videos/${videoId}/whiteboard/scaffold`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(force ? { force: true } : {}),
+        body: JSON.stringify({
+          ...(force ? { force: true } : {}),
+          ...(aiPlanner ? { planner: "llm" } : {}),
+        }),
       });
-      const body = (await res.json()) as { error?: string };
+      const body = (await res.json()) as {
+        error?: string;
+        planner?: "llm" | "native";
+        plannerReport?: {
+          servedScenes: number;
+          fallbackScenes: number[];
+          degraded: boolean;
+          degradeReason?: string;
+        };
+      };
       if (!res.ok) {
         setError(body.error ?? "Scaffold failed");
         return;
       }
-      setNotice(force ? "Whiteboard regenerated from the story scenes" : "Whiteboard scaffolded from the story scenes");
+      const verb = force ? "regenerated" : "scaffolded";
+      if (body.plannerReport?.degraded) {
+        // The honest label: the AI pass failed and the rule table stood in.
+        setNotice(
+          `Whiteboard ${verb} — the AI planner was unavailable, so the native rule table built the board (${body.plannerReport.degradeReason ?? "gateway unavailable"})`
+        );
+      } else if (body.planner === "llm") {
+        const served = body.plannerReport?.servedScenes ?? 0;
+        const fellBack = body.plannerReport?.fallbackScenes ?? [];
+        setNotice(
+          `Whiteboard ${verb} — the AI planner placed the concepts on ${served} scene${served === 1 ? "" : "s"}` +
+            (fellBack.length > 0 ? ` (scenes ${fellBack.join(", ")} kept the rule-table picks)` : "")
+        );
+      } else {
+        setNotice(force ? "Whiteboard regenerated from the story scenes" : "Whiteboard scaffolded from the story scenes");
+      }
       await load();
     } finally {
       setBusy(null);
@@ -454,17 +484,29 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
     return (
       <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-6 text-sm">
         <p className="text-white/70">
-          No whiteboard yet. The native scaffold builds a starter board from this video&apos;s
-          story scenes — narration per scene, library assets from a keyword rule table, and the
-          engine&apos;s fill-law draw schedule. Zero AI, zero cost.
+          No whiteboard yet. The scaffold builds a starter board from this video&apos;s
+          story scenes — narration per scene, concept assets, and the engine&apos;s
+          fill-law draw schedule. The native rule table is zero AI, zero cost; the
+          optional AI planner reads the scenes and picks the concepts itself.
         </p>
-        <button
-          onClick={() => void scaffold(false)}
-          disabled={busy !== null}
-          className="mt-3 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-medium hover:bg-white/20 disabled:opacity-50"
-        >
-          {busy === "scaffold" ? "Scaffolding…" : "Scaffold from the story"}
-        </button>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => void scaffold(false)}
+            disabled={busy !== null}
+            className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-medium hover:bg-white/20 disabled:opacity-50"
+          >
+            {busy === "scaffold" ? (aiPlanner ? "Planning…" : "Scaffolding…") : aiPlanner ? "Scaffold with the AI planner" : "Scaffold from the story"}
+          </button>
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-white/60">
+            <input
+              type="checkbox"
+              checked={aiPlanner}
+              onChange={(e) => setAiPlanner(e.target.checked)}
+              className="accent-white"
+            />
+            AI planner picks the concepts (metered)
+          </label>
+        </div>
         {error && <p className="mt-2 text-xs text-red-300">{error}</p>}
       </div>
     );
@@ -905,8 +947,9 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
           onClick={() => void scaffold(true)}
           disabled={busy !== null}
           className={btnFaint}
+          title={aiPlanner ? "Regenerate with the AI planner (metered)" : "Regenerate with the native rule table (free)"}
         >
-          Regenerate from story
+          Regenerate from story{aiPlanner ? " (AI planner)" : ""}
         </button>
         {hasVideo && (
           <span className="text-xs text-emerald-300/80">rendered — see the Video tab</span>

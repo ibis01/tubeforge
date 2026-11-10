@@ -5,18 +5,30 @@ import { parseScenes } from "@/lib/tubeforge/story";
 import { validateWhiteboardProject, WB_BUDGETS } from "@/lib/tubeforge/whiteboard/storyboard";
 import { scaffoldWhiteboardProject } from "@/lib/tubeforge/whiteboard/whiteboard-planner";
 import { parseWhiteboardDoc, serializeWhiteboardDoc } from "@/lib/tubeforge/whiteboard/whiteboard-planner";
+import {
+  buildPlannerCatalog,
+  scaffoldWhiteboardProjectLlm,
+  type WhiteboardLlmPlannerReport,
+} from "@/lib/tubeforge/whiteboard/llm-planner";
 import { invalidateRenderedArtifacts } from "@/lib/tubeforge/render";
 import { loadVideoLibrary } from "@/lib/tubeforge/whiteboard/asset-store";
 
 type Ctx = { params: Promise<{ id: string }> };
 
 /**
- * POST — the NATIVE scaffold planner (E9 Phase A / E5 phase 1, zero AI):
- * builds a starter whiteboard project from the video's story scenes —
- * narration copied per scene, placements from the keyword→library rule
- * table, default camera, EMPTY event lists (the engine's fill law schedules
- * the draws at render/playback). 409 when a project already exists
- * (`force: true` regenerates — the existing doc is discarded).
+ * POST — the scaffold planner (E9 Phase A / E5):
+ *   planner "native" (default) — the ZERO-AI rule-table planner (phase 1):
+ *     builds a starter whiteboard project from the video's story scenes —
+ *     narration copied per scene, placements from the keyword→library rule
+ *     table, default camera, EMPTY event lists (the engine's fill law
+ *     schedules the draws at render/playback). $0, deterministic.
+ *   planner "llm" — E5 phase 2 (S73): the LLM reads the same scenes and
+ *     proposes the concept assets + placements (metered through budget.ts's
+ *     choke point; structural cards/camera/fill law stay the engine's). A
+ *     gateway failure degrades to the native planner — honestly labeled in
+ *     `plannerReport`, never a 500, never an invented board.
+ * 409 when a project already exists (`force: true` regenerates — the
+ * existing doc is discarded).
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
@@ -48,6 +60,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const body = await req.json().catch(() => ({}));
   const b = (body ?? {}) as Record<string, unknown>;
   const force = b.force === true;
+  const planner = b.planner === "llm" ? "llm" : "native";
   const existing = parseWhiteboardDoc(video.whiteboardProject);
   if (existing && !force)
     return NextResponse.json(
@@ -55,22 +68,47 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: 409 }
     );
 
+  // The merged library loads ONCE, before either planner runs: the LLM
+  // planner reads its catalog from the same merge the validator will
+  // judge the output against (the S69 one-merge law — model, validator
+  // and renderer agree on the asset universe by construction).
+  const { lib } = await loadVideoLibrary(id);
+
   // S68 — optional board geometry (16:9 / 9:16 / 1:1 exports): absent or
   // out-of-band numbers fall back to the house 1920×1080@24 inside the
   // planner (the same clamp grammar the validator applies).
-  let project = scaffoldWhiteboardProject({
-    scenes: scenes.map((s) => ({ index: s.index, title: s.title, narration: s.narration })),
-    topic: video.topic,
-    width: typeof b.width === "number" ? b.width : undefined,
-    height: typeof b.height === "number" ? b.height : undefined,
-    fps: typeof b.fps === "number" ? b.fps : undefined,
-  });
+  const sceneInputs = scenes.map((s) => ({
+    index: s.index,
+    title: s.title,
+    narration: s.narration,
+  }));
+
+  let project: ReturnType<typeof scaffoldWhiteboardProject>;
+  let plannerReport: WhiteboardLlmPlannerReport | undefined = undefined;
+  if (planner === "llm") {
+    const llm = await scaffoldWhiteboardProjectLlm({
+      scenes: sceneInputs,
+      topic: video.topic,
+      width: typeof b.width === "number" ? b.width : undefined,
+      height: typeof b.height === "number" ? b.height : undefined,
+      fps: typeof b.fps === "number" ? b.fps : undefined,
+      catalog: buildPlannerCatalog(lib.assets.values()),
+    });
+    project = llm.project;
+    plannerReport = llm.report;
+  } else {
+    project = scaffoldWhiteboardProject({
+      scenes: sceneInputs,
+      topic: video.topic,
+      width: typeof b.width === "number" ? b.width : undefined,
+      height: typeof b.height === "number" ? b.height : undefined,
+      fps: typeof b.fps === "number" ? b.fps : undefined,
+    });
+  }
 
   // Defense in depth: the planner's output passes the same validator any
   // client PUT would — one gate for every doc that lands in the column
-  // (S69: against the merged library, uploads included, for the day the
-  // rule table learns to place them).
-  const { lib } = await loadVideoLibrary(id);
+  // (S69: against the merged library, uploads included).
   const validated = validateWhiteboardProject(project, lib.libraryIndex);
   if (!validated.project)
     return NextResponse.json(
@@ -90,5 +128,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     data: { hasVideo: false, videoDuration: null },
   });
 
-  return NextResponse.json({ rev: 1, project });
+  return NextResponse.json({
+    rev: 1,
+    project,
+    planner: plannerReport ? plannerReport.planner : "native",
+    ...(plannerReport ? { plannerReport } : {}),
+  });
 }

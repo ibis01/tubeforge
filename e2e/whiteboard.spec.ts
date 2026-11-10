@@ -413,3 +413,51 @@ test.describe("S68 — whiteboard studio end-to-end", () => {
 function eq_(actual: unknown, expected: unknown, msg: string): void {
   expect(actual, msg).toBe(expected);
 }
+
+// S73 — the LLM scaffold planner (E5 phase 2), the CI-lane contract. The
+// model half is gateway-dependent and stays sandbox-verified (the live
+// probe: scripts/s73-llm-planner-probe.mts); the pure halves (catalog,
+// normalization, composition, honest degradation) are unit-pinned. What CI
+// can prove here is the gate ORDER: the metered planner never fires on a
+// video that would refuse anyway — the no-scenes gate stands in front of
+// any planner choice, and an unknown planner value is the native default.
+test.describe("S73 — the LLM scaffold planner (CI-lane contracts)", () => {
+  test("the planner flag never bypasses the honest gates", async ({ request }) => {
+    const email = `s73-${RUN}@tubeforge.test`;
+    const { cookie, verificationUrl } = await register(request, email);
+    if (verificationUrl) {
+      const v = await request.get(verificationUrl);
+      expect(v.status()).toBeLessThan(300);
+    }
+
+    const createRes = await request.post("/api/videos", {
+      headers: { cookie },
+      data: {
+        topic: `S73 planner probe ${RUN}`,
+        niche: "Science",
+        format: "story",
+        renderMode: "whiteboard",
+      },
+    });
+    expect(createRes.status()).toBeLessThan(300);
+    const videoId = ((await createRes.json()) as { video: { id: string } }).video.id;
+
+    // The story script job cannot run in CI (no gateway) → no scenes → the
+    // scaffold's honest 400 must fire BEFORE any metered LLM work.
+    const llmRes = await request.post(`/api/videos/${videoId}/whiteboard/scaffold`, {
+      headers: { cookie, "Content-Type": "application/json" },
+      data: { planner: "llm" },
+    });
+    expect(llmRes.status()).toBe(400);
+    expect(((await llmRes.json()) as { error?: string }).error).toMatch(/no scenes/i);
+
+    // An unknown planner value is the native default — same honest gate,
+    // never a 500 on a string the route does not know.
+    const junkRes = await request.post(`/api/videos/${videoId}/whiteboard/scaffold`, {
+      headers: { cookie, "Content-Type": "application/json" },
+      data: { planner: "quantum" },
+    });
+    expect(junkRes.status()).toBe(400);
+    expect(((await junkRes.json()) as { error?: string }).error).toMatch(/no scenes/i);
+  });
+});

@@ -7956,6 +7956,245 @@ await test("S72 retention: a boundary cliff reads as an opener problem; caps + t
   ok(doc !== null && doc.youtubeId === "abc", "a well-formed report parses");
 });
 
+// ---------- suite: S73 — the LLM scaffold planner (E5 phase 2) ----------
+
+suiteStart("S73 whiteboard — the LLM scaffold planner (E5 phase 2)");
+
+const S73_SCENES = [
+  { index: 1, title: "Opening", narration: "Money moves markets faster than ever before." },
+  { index: 2, title: "The pump", narration: "The heart pumps five liters of blood through the body every single day." },
+  { index: 3, title: "Close", narration: "Check the numbers yourself before the next launch." },
+];
+
+await test("S73 catalog: reserved ids never reach the model; uploads lead, order deterministic", async () => {
+  const { buildPlannerCatalog, WB_PLANNER_RESERVED_IDS } = await import("../src/lib/tubeforge/whiteboard/llm-planner");
+  const catalog = buildPlannerCatalog([
+    { id: "hand-marker", tags: ["hand", "marker"], viewBox: { w: 140, h: 170 } },
+    { id: "title-hero", tags: ["generic", "title"], viewBox: { w: 800, h: 200 } },
+    { id: "close-card", tags: ["generic", "close"], viewBox: { w: 800, h: 220 } },
+    { id: "coin", tags: ["money", "coin"], viewBox: { w: 200, h: 200 } },
+    { id: "bar-chart", tags: ["business", "data"], viewBox: { w: 200, h: 200 } },
+    { id: "up-mine", tags: ["upload"], viewBox: { w: 120, h: 120 } },
+  ]);
+  eq(catalog.map((c) => c.id), ["up-mine", "bar-chart", "coin"], "uploads first, built-ins alphabetical, reserved excluded");
+  eq(catalog[0].uploaded, true, "the upload is flagged for the prompt");
+  eq(WB_PLANNER_RESERVED_IDS.has("title-hero"), true, "the grammar's cards stay reserved");
+  // Against the REAL library: every non-reserved built-in is offered.
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  const real = buildPlannerCatalog(lib.assets.values());
+  eq(real.length, lib.assets.size - 3, "real library: all but the three reserved ids");
+  ok(real.every((c) => !WB_PLANNER_RESERVED_IDS.has(c.id)), "no reserved id leaks into the catalog");
+});
+
+await test("S73 normalize: unknown/reserved/dupes dropped with reasons; coordinates clamped onto the board", async () => {
+  const { normalizeLlmScenePlans } = await import("../src/lib/tubeforge/whiteboard/llm-planner");
+  const catalogIds = new Set(["coin", "heart-main", "bar-chart", "lightbulb", "up-mine"]);
+  const out = normalizeLlmScenePlans(
+    [
+      {
+        scene: 1,
+        assets: [
+          { assetId: "coin", x: -300, y: 90000, scale: 99, rotateDeg: 720 },
+          { assetId: "title-hero", x: 100, y: 100, scale: 1 },
+          { assetId: "nope", x: 10, y: 10, scale: 1 },
+        ],
+      },
+      {
+        scene: 2,
+        assets: [
+          { assetId: "heart-main", x: 800, y: 400, scale: 2 },
+          { assetId: "heart-main", x: 900, y: 500, scale: 2 },
+        ],
+      },
+      { scene: 7, assets: [{ assetId: "coin", x: 1, y: 1, scale: 1 }] },
+      // scene 3 never mentioned → fallback
+    ],
+    { scenes: S73_SCENES, catalogIds, width: 1920, height: 1080 }
+  );
+  eq([...out.served.keys()].sort((a, b) => a - b), [1, 2], "scenes 1 + 2 served");
+  eq(out.fallback, [3], "the unmentioned scene falls back");
+  const s1 = out.served.get(1);
+  ok(s1 !== undefined, "scene 1 served");
+  eq(s1.picks.length, 1, "scene 1 keeps only the clamped coin");
+  eq(s1.picks[0].x, 0, "x clamped onto the board");
+  eq(s1.picks[0].y, 1080, "y clamped onto the board");
+  eq(s1.picks[0].scale, 4, "scale clamped to the band max");
+  eq(s1.picks[0].rotateDeg, 180, "rotation clamped to ±180");
+  const reasons = out.dropped.map((d) => d.reason).join(" | ");
+  ok(
+    /reserved/.test(reasons) && /not in the concept catalog/.test(reasons) && /twice/.test(reasons) && /outside the story/.test(reasons),
+    `every drop surfaces its reason: ${reasons}`
+  );
+  const s2 = out.served.get(2);
+  ok(s2 !== undefined, "scene 2 served");
+  eq(s2.picks.length, 1, "the duplicate placement died, the original stands");
+});
+
+await test("S73 normalize: the per-scene concept cap drops extras and names the cap", async () => {
+  const { normalizeLlmScenePlans, WB_PLANNER_CONCEPTS_PER_SCENE } = await import("../src/lib/tubeforge/whiteboard/llm-planner");
+  const catalogIds = new Set(["coin", "heart-main", "bar-chart", "lightbulb", "up-mine"]);
+  const capped = normalizeLlmScenePlans(
+    [
+      {
+        scene: 1,
+        assets: ["coin", "bar-chart", "lightbulb", "up-mine", "heart-main"].map((id) => ({
+          assetId: id,
+          x: 500,
+          y: 500,
+          scale: 1,
+        })),
+      },
+    ],
+    { scenes: S73_SCENES, catalogIds, width: 1920, height: 1080 }
+  );
+  const cappedS1 = capped.served.get(1);
+  ok(cappedS1 !== undefined, "the capped scene stayed served");
+  eq(cappedS1.picks.length, WB_PLANNER_CONCEPTS_PER_SCENE, `capped at ${WB_PLANNER_CONCEPTS_PER_SCENE} concepts`);
+  ok(capped.dropped.some((d) => /cap/.test(d.reason)), "the dropped extra names the cap");
+  // A scene whose picks all die falls back — never an empty board scene.
+  const dead = normalizeLlmScenePlans(
+    [{ scene: 1, assets: [{ assetId: "ghost", x: 1, y: 1, scale: 1 }] }],
+    { scenes: S73_SCENES, catalogIds, width: 1920, height: 1080 }
+  );
+  eq(dead.served.size, 0, "nothing survived");
+  eq(dead.fallback, [1, 2, 3], "the scene falls back to the native pick");
+});
+
+await test("S73 compose: structural cards survive, concepts swap, camera/fill law untouched, validator-clean", async () => {
+  const { composeLlmScaffold } = await import("../src/lib/tubeforge/whiteboard/llm-planner");
+  const { scaffoldWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/whiteboard-planner");
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const native = scaffoldWhiteboardProject({ scenes: S73_SCENES, topic: "T" });
+  const served = new Map([
+    [
+      1,
+      {
+        sceneIndex: 1,
+        picks: [
+          { assetId: "bar-chart", x: 900, y: 420, scale: 1.6, rotateDeg: 0 },
+          { assetId: "coin", x: 400, y: 700, scale: 1.2, rotateDeg: -10 },
+        ],
+      },
+    ],
+  ]);
+  const composed = composeLlmScaffold(native, S73_SCENES, served);
+  const c1 = composed.scenes[0];
+  eq(c1.placements[0].assetId, "title-hero", "the structural card survives");
+  eq(c1.placements.map((p) => p.assetId).slice(1), ["bar-chart", "coin"], "the LLM picks replace the native concept");
+  eq(c1.placements[1].order, 1, "orders follow the structural card");
+  eq(c1.placements[2].order, 2, "second pick orders after the first");
+  eq(c1.camera, native.scenes[0].camera, "camera untouched");
+  eq(c1.animations, [], "events stay empty — the fill law is the only scheduler");
+  eq(JSON.stringify(composed.scenes[1]), JSON.stringify(native.scenes[1]), "unserved scene 2 passes through untouched");
+  eq(JSON.stringify(composed.scenes[2]), JSON.stringify(native.scenes[2]), "unserved scene 3 passes through untouched");
+  const lib = loadLibrary();
+  const v = validateWhiteboardProject(composed, lib.libraryIndex);
+  ok(v.project !== null, `composed project validates clean: ${v.errors.join(" · ")}`);
+});
+
+await test("S73 wrapper: a good model reply composes an LLM scaffold that validates clean", async () => {
+  const { scaffoldWhiteboardProjectLlm, buildPlannerCatalog } = await import(
+    "../src/lib/tubeforge/whiteboard/llm-planner"
+  );
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  const passThrough: import("../src/lib/tubeforge/whiteboard/llm-planner").PlannerCall = (_service, _label, fn) => fn();
+  const goodAsk = async () =>
+    JSON.stringify({
+      scenes: [
+        { scene: 1, assets: [{ id: "bar-chart", x: 900, y: 420, scale: 1.6 }] },
+        { scene: 2, assets: [{ id: "heart-main", x: 800, y: 400, scale: 2 }] },
+        { scene: 3, assets: [{ id: "check-badge", x: 700, y: 380, scale: 1.5 }] },
+      ],
+    });
+  const { project, report } = await scaffoldWhiteboardProjectLlm(
+    { scenes: S73_SCENES, topic: "How Your Heart Works", catalog: buildPlannerCatalog(lib.assets.values()) },
+    { ask: goodAsk, call: passThrough }
+  );
+  eq(report.planner, "llm", "the honest planner label");
+  eq(report.servedScenes, 3, "every scene served");
+  eq(report.degraded, false, "not degraded");
+  eq(report.fallbackScenes, [], "no fallback");
+  const v = validateWhiteboardProject(project, lib.libraryIndex);
+  ok(v.project !== null, `the LLM scaffold validates clean: ${v.errors.join(" · ")}`);
+  eq(project.scenes[0].placements[0].assetId, "title-hero", "scene 1 keeps the title card");
+  eq(project.scenes[2].placements[0].assetId, "close-card", "the closer keeps the stat card");
+  eq(project.scenes[0].placements[1].assetId, "bar-chart", "the model's pick replaced the native concept");
+});
+
+await test("S73 wrapper: a scene the model skips falls back per-scene, honestly listed", async () => {
+  const { scaffoldWhiteboardProjectLlm, buildPlannerCatalog } = await import(
+    "../src/lib/tubeforge/whiteboard/llm-planner"
+  );
+  const { scaffoldWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/whiteboard-planner");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  const passThrough: import("../src/lib/tubeforge/whiteboard/llm-planner").PlannerCall = (_service, _label, fn) => fn();
+  const partialAsk = async () =>
+    JSON.stringify({
+      scenes: [
+        { scene: 1, assets: [{ id: "coin", x: 900, y: 420, scale: 1.6 }] },
+        { scene: 3, assets: [{ id: "rocket", x: 800, y: 400, scale: 1.4 }] },
+      ],
+    });
+  const native = scaffoldWhiteboardProject({ scenes: S73_SCENES, topic: "T" });
+  const { project, report } = await scaffoldWhiteboardProjectLlm(
+    { scenes: S73_SCENES, topic: "T", catalog: buildPlannerCatalog(lib.assets.values()) },
+    { ask: partialAsk, call: passThrough }
+  );
+  eq(report.planner, "llm", "still an LLM scaffold");
+  eq(report.fallbackScenes, [2], "scene 2 honestly listed as native-served");
+  eq(JSON.stringify(project.scenes[1]), JSON.stringify(native.scenes[1]), "scene 2 IS the native scene");
+  eq(project.scenes[0].placements[1].assetId, "coin", "scene 1 carries the model's pick");
+});
+
+await test("S73 wrapper: a failed round-trip degrades to the native scaffold, labeled with the reason", async () => {
+  const { scaffoldWhiteboardProjectLlm, buildPlannerCatalog } = await import(
+    "../src/lib/tubeforge/whiteboard/llm-planner"
+  );
+  const { scaffoldWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/whiteboard-planner");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  const catalog = buildPlannerCatalog(lib.assets.values());
+  const passThrough: import("../src/lib/tubeforge/whiteboard/llm-planner").PlannerCall = (_service, _label, fn) => fn();
+  const native = scaffoldWhiteboardProject({ scenes: S73_SCENES, topic: "T" });
+
+  // The gateway itself fails.
+  const dead = await scaffoldWhiteboardProjectLlm(
+    { scenes: S73_SCENES, topic: "T", catalog },
+    { ask: async () => { throw new Error("429 too many requests"); }, call: passThrough }
+  );
+  eq(dead.report.planner, "native", "degraded honestly");
+  eq(dead.report.degraded, true, "the degraded flag stands");
+  ok(/429/.test(dead.report.degradeReason ?? ""), "the reason carries the failure");
+  eq(JSON.stringify(dead.project), JSON.stringify(native), "the project IS the native scaffold, byte-identical");
+
+  // Prose instead of JSON.
+  const prose = await scaffoldWhiteboardProjectLlm(
+    { scenes: S73_SCENES, topic: "T", catalog },
+    { ask: async () => "I would rather not use JSON today, thanks.", call: passThrough }
+  );
+  eq(prose.report.degraded, true, "prose degrades");
+  eq(JSON.stringify(prose.project), JSON.stringify(native), "prose → native scaffold");
+
+  // Structured but useless.
+  const wrongShape = await scaffoldWhiteboardProjectLlm(
+    { scenes: S73_SCENES, topic: "T", catalog },
+    { ask: async () => JSON.stringify({ rows: [] }), call: passThrough }
+  );
+  eq(wrongShape.report.degraded, true, "a wrong-shape reply degrades after its retry");
+
+  // An empty catalog never even asks the model.
+  const emptyCat = await scaffoldWhiteboardProjectLlm(
+    { scenes: S73_SCENES, topic: "T", catalog: [] },
+    { ask: async () => { throw new Error("the model was called with an empty catalog — bug"); }, call: passThrough }
+  );
+  eq(emptyCat.report.degraded, true, "empty catalog degrades");
+  ok(/catalog is empty/.test(emptyCat.report.degradeReason ?? ""), "the reason names the empty catalog");
+});
 
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
