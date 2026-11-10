@@ -373,7 +373,10 @@ export async function renderWhiteboard(
         "-map", "[v]", "-map", "[a]",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
         "-c:a", "aac", "-b:a", "160k",
-        "-shortest",
+        // No -shortest here (the S75 E10 receipt: it dropped the final video
+        // frame at the assembly boundary — 1623 planned, 1622 delivered).
+        // Every stream is already bounded: the bed by -t above, the mix by
+        // amix duration=first, the video by the concat's own length.
         finalFile,
       ]);
     } else {

@@ -8413,6 +8413,10 @@ await test("S75: the scene encode PADS the VO (apad) — -shortest must never ea
   const sceneEncode = renderSrc.slice(renderSrc.indexOf('"-framerate"'), renderSrc.indexOf("runFfmpeg(args)"));
   ok(sceneEncode.includes('"-af", "apad"'), "the scene encode lost its apad (the VO must pad to the scene duration)");
   eq((sceneEncode.match(/"-shortest"/g) ?? []).length, 0, '"-shortest" returned to the scene encode as an argument (it eats the tail)');
+  // And the WHOLE file must stay free of it: at assembly it dropped the
+  // final video frame (1623 planned, 1622 delivered) even though every
+  // stream was already bounded by -t / amix duration=first.
+  eq((renderSrc.match(/"-shortest"/g) ?? []).length, 0, '"-shortest" as an argument anywhere in the whiteboard renderer');
 });
 await test("S75: the assembly MIXES the narration — the voice track must reach final.mp4", async () => {
   // The S75 E10 receipt, second kill: the mix filter mapped ONLY the ducked
