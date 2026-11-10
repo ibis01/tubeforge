@@ -3287,3 +3287,12 @@ The landing PAT has now transited chat in every session that pushed — it
 is compromised by definition and MUST be rotated/revoked
 (GitHub → Settings → Developer settings → Personal access tokens) before
 the next push cycle.
+
+**CI flake, hardened (same session):** the 4th ffmpeg-install stall (run
+42828406739 on the security-fix commit — the same silent apt-mirror hang
+as S68 run 42697192000 and S74 runs 42811386568 / 42816234222) moved this
+from "rerun and note" to "fix": all five apt-get sites in ci.yml +
+nightly.yml now carry `-o Acquire::http::Timeout=30 -o
+Acquire::https::Timeout=30 -o Acquire::Retries=3` — a bad mirror fails
+fast and retries within the 5-minute step budget instead of stalling into
+the step timeout. The S47 comment block records the full receipt.

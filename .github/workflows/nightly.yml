@@ -68,7 +68,7 @@ jobs:
 
       - name: Install ffmpeg (render pipeline — s11/s29 render for real)
         timeout-minutes: 5
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+        run: sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update -qq && sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y -qq ffmpeg
 
       - name: Install dependencies (postinstall bootstraps SQLite + Prisma)
         run: npm ci
@@ -90,7 +90,7 @@ jobs:
 
       - name: Install ffmpeg (render pipeline)
         timeout-minutes: 5
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+        run: sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update -qq && sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y -qq ffmpeg
 
       - name: Install dependencies
         run: npm ci

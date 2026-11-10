@@ -83,8 +83,14 @@ jobs:
         # S47/T-47.10: step-level timeout — run #81's apt step stalled for the
         # whole job budget and surfaced as a confusing "cancelled" job. A
         # 5-minute cap turns a stall into a fast, visible, re-runnable failure.
+        # 2026-11-10 hardening (4th stall observed: S68 run 42697192000, S74
+        # runs 42811386568 / 42816234222 / 42828406739 — all the same shape:
+        # apt-get update hangs silently for the full 5 minutes on a slow
+        # mirror): per-request 30s timeouts + 3 fetch retries make a bad
+        # mirror fail fast and recover within the step budget instead of
+        # stalling into the step timeout.
         timeout-minutes: 5
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+        run: sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update -qq && sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y -qq ffmpeg
 
       - name: Install dependencies (postinstall bootstraps SQLite + Prisma)
         run: npm ci
@@ -148,7 +154,7 @@ jobs:
 
       - name: Install ffmpeg (QC fixtures + render pipeline)
         timeout-minutes: 5
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+        run: sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update -qq && sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y -qq ffmpeg
 
       - name: Install dependencies (postinstall bootstraps SQLite + Prisma)
         run: npm ci
@@ -232,7 +238,7 @@ jobs:
 
       - name: Install ffmpeg (render pipeline)
         timeout-minutes: 5
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+        run: sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update -qq && sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 install -y -qq ffmpeg
 
       - name: Install dependencies
         run: npm ci
