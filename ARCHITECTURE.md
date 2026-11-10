@@ -1,18 +1,21 @@
 # TubeForge — Architecture
 
-**Status:** reconciled against the live source at S47 (2026-11-06 UTC).
-**Last updated:** 2026-11-06
+**Status:** reconciled against the live source at S75 (2026-11-10 UTC).
+**Last updated:** 2026-11-10 (S75 reconciliation; §2–§8 remain the S47-era target designs)
 **Source for current state:** `prisma/schema.prisma`, `prisma/migrations/`, `src/lib/tubeforge/`, `src/app/api/`
+**S75 assignment:** the reconciliation record lives in `docs/audits/s75-architecture-reconciliation-record.md`
 
 ---
 
-## 1. Current architecture (reconciled at S47, 2026-11-06 UTC)
+## 1. Current architecture (reconciled at S75, 2026-11-10 UTC — baseline §1.1–1.8 from the S47 reconciliation)
 
-**Source of truth:** `prisma/schema.prisma` (31 models), `prisma/migrations/`
-(19 migrations), `src/lib/tubeforge/` (98 modules), `src/app/api/` (103 route
-files). This section was rewritten from those sources during S47 — the
-Stage-1-era snapshot that lived here before described a single-user,
-11-model system that no longer exists anywhere in the repo.
+**Source of truth:** `prisma/schema.prisma` (32 models), `prisma/migrations/`
+(21 migrations), `src/lib/tubeforge/` (117 modules), `src/app/api/` (116 route
+files). §1.1–1.8 were rewritten from those sources during S47 and stay
+accurate for what they describe; §1.9 is the S48→S74 delta that the S47
+reconciliation could not know about. The Stage-1-era snapshot that lived
+here before S47 described a single-user, 11-model system that no longer
+exists anywhere in the repo.
 
 ### 1.1 High-level
 
@@ -141,6 +144,44 @@ Islamic visual protection (compose → direct → paint → verify → gate;
    plus the Director's stage orchestration; no single server-side DAG.
 3. BullMQ/Redis queue — replaced by the DB-backed queue on purpose; the
    §2.1 durability goal is met in substance, not in letter.
+
+### 1.9 The S48→S74 subsystem delta (reconciled at S75)
+
+What the S47 reconciliation could not know — each subsystem verified in
+the live tree at S75:
+
+- **The Whiteboard Engine** (`whiteboard/` lib: renderer, svg, timing,
+  storyboard, llm-planner, planner, asset-store, page/assets/upload;
+  the `whiteboard-studio.tsx` + `wb-canvas.tsx` editor components; the
+  `WhiteboardAssetUpload` table — the one post-S47 model). A SECOND
+  render mode with a strict peer-mode law: `RENDER_MODES` gains
+  `"whiteboard"`, the engine renders the standard `final.mp4` through
+  the UNCHANGED QC battery and ship gate, and `runRenderJob` refuses
+  the mode (the compositor never renders whiteboard). Storyboard
+  intelligence is native-first: the S67 keyword rule-table planner
+  (zero AI), upgraded by the S73 LLM planner (`aiCallJson` at the
+  single budget choke point, per-scene native fallback, honest
+  whole-project degradation). The upload path (S69) passes §7's seven
+  gates. Pixels cost $0 — local Chromium + ffmpeg, no generation API.
+  Design: `WHITEBOARD_ENGINE_DESIGN.md`; status: the E0–E12 matrix in
+  its §9.
+- **Creator Intelligence** (`hook-score.ts`, `packaging-lint.ts`,
+  `shorts.ts` upgraded behind the pure-function seam,
+  `retention.ts` + the `yt-analytics.readonly` scope + the
+  retentionReport doc column, S70–S72). Native services,
+  proposes-never-auto-edits, every score labeled a heuristic. Record:
+  `docs/audits/creator-intelligence-record.md`.
+- **The motion-vigor laws and their measurement lanes** — S63's
+  T-63.1 tempo law + T-63.2 doctrine-always-rides law
+  (`liveliness.ts#i2vMotionPrompt`), and the S74 paired re-measure
+  lane (`scripts/s74-paired-remeasure.mts` + `s74-blind-score.mts`):
+  OPEN, measurement gateway-gated, watcher-resumed
+  (`docs/audits/s74-motion-vigor-remeasure-record.md`).
+- **CI hardening** — six-job lane; the ffmpeg-install step waits out
+  the boot-time dpkg-lock race then retries with per-request timeouts
+  (five documented stalls receipts in the worklog); the credential-
+  safe push gates (askpass, plain URL, token never in args/disk —
+  `scripts/tf-push.sh`).
 
 ---
 

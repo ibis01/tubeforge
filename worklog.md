@@ -3350,3 +3350,56 @@ compromised and MUST be rotated before the next push cycle. Post-
 rotation, the gate is `TF_TOKEN=<new pat> bash scripts/tf-push.sh`
 (askpass, plain URL, token never in args or on disk). Recommended: a
 fine-grained PAT scoped to this one repo, contents:write only.
+
+## S75 opening (2026-11-10 UTC) — Universal Architecture Reconciliation and Whiteboard Production Readiness
+
+The externally directed assignment, opened per the review's recommended
+order. The product had outrun its front documents: README.md claimed
+"stage S46 (2026-11-06)" with ZERO mention of the Whiteboard Engine or
+Creator Intelligence; ARCHITECTURE.md was reconciled at S47 (counts
+stale: 31→32 models, 19→21 migrations, 98→117 lib modules, 103→116
+routes); ROADMAP.md's header said S46 — though its Post-Stage-7 section
+had honestly been kept current through S74 since the S70 session (the
+drift was confined, not uniform; recorded as such).
+
+**The three product decisions recorded as architecture constraints**
+(`docs/audits/s75-architecture-reconciliation-record.md` §0):
+(1) Universal platform — one shared contract stack, every engine
+consumes it, never a collection of disconnected video generators;
+(2) Quality-first — measurements + blind scores before close, shared
+quality systems BEFORE the next engine; (3) Native-first intelligence
+— deterministic native first, metered AI only where it earns its cost,
+always with a native fallback (S67 planner → S73 LLM planner → native
+fallback is the pattern, now law).
+
+**Reconciliations executed:**
+- README.md — status S46→S75 era; What's-inside gains the Whiteboard
+  Engine and Creator Intelligence; CI description corrected to the
+  six-job lane; TASKS.md index S1→S74; the Whiteboard design doc joins
+  the documentation table.
+- ARCHITECTURE.md — header reconciled at S75; §1 counts refreshed from
+  the live source (the one post-S47 model is `WhiteboardAssetUpload`,
+  S69); new §1.9 the S48→S74 subsystem delta (Whiteboard Engine with
+  its peer-mode law, Creator Intelligence, the motion-vigor laws +
+  measurement lanes, CI hardening + the credential-safe push gates).
+  §1.1–1.8 stay as the S47 baseline (accurate for what they describe);
+  §2–§8 stay the S47-era target designs.
+- ROADMAP.md — header corrected to the S1→S74 + 2.0-tracks era; the
+  S75 order of operations recorded as law (S75 → S74 close → shared
+  quality systems → engine expansion; the anti-goal stated).
+
+**S74 verification (the assignment's item 3):** 0/8 pairs confirmed via
+`--status`; lane healthy in the rebuilt sandbox; gateway probe 429 at
+14:24/14:31 UTC; resumption automated by the 3×/day phased watcher
+(job 521163 — 18:30/01:30/11:30 UTC, the last slot timed to the pilot
+burn's rolling-24h aging per the S54 forensics). Push remains gated on
+the compromised PAT's rotation.
+
+**E10 protocol defined** (record §4.1): three formats (16:9/9:16/1:1)
+through the SAME engine at the SAME storyboard, native scaffold (zero
+AI spend), metrics from ffprobe + the render process (frame integrity,
+duration accuracy, A/V offset, wall time, peak memory, QC lens pass
+rates), artifacts in validation/s75/, a claim without a measured
+artifact does not close E10. **E12 ledger recorded** (§4.2) with the
+readiness rule: no production-ready claim until E10 is measured and
+E12 is closed-or-deferred.

@@ -1,11 +1,15 @@
 # TubeForge — Roadmap
 
 **Status:** Stages 1–7 closed at the code level; the S-series hardening
-sprints (S1→S46) landed on top. Feature sprints are ON HOLD for S47 —
-Production Integrity and Acceptance (external audit, 2026-11-06: prove
-shared admission, acceptance benchmarks, CI evidence, docs truth).
-**Last updated:** 2026-11-06
-**Source:** `MASTER_PLAN.md` + `FOUNDATION_AUDIT.md` findings + the S47 external audit
+sprints landed on top (S1→S74, 2026-11-10 — the S-series index and the
+S47 integrity ledger live in [`TASKS.md`](TASKS.md)); the Post-Stage-7
+2.0 tracks below are the active era (Whiteboard Engine E0–E9 + Creator
+Intelligence CI-1..CI-4 landed; S74's motion re-measure OPEN,
+gateway-gated; S75 = architecture reconciliation + Whiteboard
+production readiness, in flight).
+**Last updated:** 2026-11-10 (S75 reconciliation — header corrected; the
+Post-Stage-7 section has been kept current since the S70 session)
+**Source:** `MASTER_PLAN.md` + `FOUNDATION_AUDIT.md` findings + the S47 external audit + the stage records
 
 ---
 
@@ -446,6 +450,25 @@ and the engine design docs):
 6. **Audio / motion graphics / character animation / documentary / 3D
    engines, asset marketplace** — pending, sequenced after the shared
    systems they consume.
+
+### The S75 order of operations (the approved sequencing, recorded as law)
+
+1. **S75** — reconcile the front documents (done: README/ARCHITECTURE/
+   ROADMAP corrected against the live source); record the three product
+   decisions (universal platform, quality-first, native-first) as
+   architecture constraints; execute the Whiteboard **E10** per-format
+   benchmarks (16:9 / 9:16 / 1:1, gateway-free — native rendering);
+   close or explicitly defer the **E12** production-integration ledger.
+   Protocol and ledger: `docs/audits/s75-architecture-reconciliation-record.md`.
+2. **S74 close** — real clips + blind scores only (watcher-automated;
+   independent of S75's work).
+3. **Shared quality systems** — Visual Consistency → Video Critic and
+   Repair → the Universal Timeline contract. BEFORE any new engine.
+4. **Engine expansion** — each consuming the shared contracts, none a
+   parallel pipeline.
+
+The anti-goal, recorded: not a collection of disconnected video
+generators. Quality infrastructure precedes engine expansion.
 
 Standing risks tracked in the worklog: Z.ai gateway outage (S63
 remeasurement and the LLM whiteboard planner gated on the one-probe

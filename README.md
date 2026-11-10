@@ -9,12 +9,18 @@ standard + the content-policy visual scan under a restricted policy), and
 publishes to a connected YouTube channel — all inside a multi-user web
 application with metered AI spending and Stripe billing underneath.
 
-**Status:** studio stage S46 (2026-11-06) — the production loop is
+**Status:** S-series stage S75 (2026-11-10) — the production loop is
 feature-complete and the foundation proofs are in: cross-tenant
-isolation, a durable DB-backed queue, DB-backed login lockout (S46) and
-shared multi-instance spend admission (S47). The remaining distance to a
-paid launch is operational, tracked in the S47 “Production Integrity and
-Acceptance” ledger in [`TASKS.md`](TASKS.md).
+isolation, a durable DB-backed queue, DB-backed login lockout (S46),
+shared multi-instance spend admission (S47), and a hardened 6-job CI
+lane whose receipts land by SHA. On top of the studio, the **Whiteboard
+Engine** (the native, $0-per-render creative mode — E0–E9 landed) and
+the **Creator Intelligence Engine** (hook scoring, packaging lint,
+transcript-based Shorts selection, retention ingestion — CI-1..CI-4
+landed) are in the tree. The remaining distance to a paid launch is
+operational, tracked in the S47 “Production Integrity and Acceptance”
+ledger in [`TASKS.md`](TASKS.md) and the Whiteboard readiness ledger in
+[`docs/audits/s75-architecture-reconciliation-record.md`](docs/audits/s75-architecture-reconciliation-record.md).
 
 ## What's inside
 
@@ -23,6 +29,19 @@ Acceptance” ledger in [`TASKS.md`](TASKS.md).
   rate, grade, caption style, camera motion, per-boundary transitions) → QC →
   export → YouTube publish, with a World library for recurring characters,
   locations, and props.
+- **The Whiteboard Engine** — a second, fully native render mode: an SVG
+  hand-drawing engine (drawing, hand, camera phases) whose storyboard comes
+  from a native keyword planner, or an LLM planner that degrades per-scene to
+  the native one through the same budget choke point, and whose pixels cost
+  $0 — local Chromium + ffmpeg, no generation API. It renders to the standard
+  `final.mp4`, through the unchanged QC battery and ship gate. See
+  [`WHITEBOARD_ENGINE_DESIGN.md`](WHITEBOARD_ENGINE_DESIGN.md).
+- **Creator Intelligence** — hook/script scoring, title+thumbnail pairing
+  lint, transcript-based Shorts moment selection (upgrading the deterministic
+  picker behind the same seam), and retention ingestion mapped to scenes —
+  every module native, typed, proposes-never-auto-edits, and every score
+  labeled a heuristic. See
+  [`docs/audits/creator-intelligence-record.md`](docs/audits/creator-intelligence-record.md).
 - **Multi-user SaaS foundation** — per-user accounts with encrypted provider
   credentials, cross-tenant isolation (pinned by Playwright and per-stage route
   probes), 90-day API tokens, email verification, password recovery, GDPR
@@ -30,7 +49,7 @@ Acceptance” ledger in [`TASKS.md`](TASKS.md).
 - **The money** — Stripe checkout + customer portal, signature-verified
   webhooks (fail-closed), a transactional microCredit ledger with
   crash-durable reservations, versioned pricing, and a hard spend ceiling.
-- **The evidence discipline** — every stage S1→S46 shipped with a unit probe
+- **The evidence discipline** — every stage S1→S74 shipped with a unit probe
   and/or route-e2e script under `scripts/` so its claims can be re-verified
   mechanically. See the S-series index in [`TASKS.md`](TASKS.md).
 
@@ -64,9 +83,12 @@ voice-server setup — see [`SETUP.md`](SETUP.md).
 | `npm run test:queue` | the queue contract + worker-restart recovery: interrupted jobs resume, unknown kinds never pollute video rows |
 | `npm run backup` | SQLite backup + restore roundtrip against the live DB |
 
-CI (`.github/workflows/ci.yml`): every push and PR runs a gitleaks secret
-scan, typecheck, lint, and the unit suite; pushes to main and PRs also run the
-full Playwright e2e job.
+CI (`.github/workflows/ci.yml`): every push and PR runs six jobs — secret
+scan (gitleaks), typecheck·lint·unit, production build, money-path coverage,
+PostgreSQL integration (migrations + wedge recovery), and the full Playwright
+e2e suite. The ffmpeg-install step carries the boot-time dpkg-lock wait +
+retry pattern (landed after five documented runner stalls — see the
+worklog's CI-flake receipts).
 
 ## Repository tour
 
@@ -89,8 +111,9 @@ full Playwright e2e job.
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | system architecture, current vs. target |
 | [`DEPLOYMENT.md`](DEPLOYMENT.md) | the one deployment topology (Fly + Neon + R2), staging spec, release checklist |
 | [`SECURITY.md`](SECURITY.md) | security requirements + audit findings |
-| [`ROADMAP.md`](ROADMAP.md) / [`MASTER_PLAN.md`](MASTER_PLAN.md) | the original development programme (Stages 1–7, all closed at the code level) |
-| [`TASKS.md`](TASKS.md) | task ledgers per stage **+ the S-series index (S1→S46) and the S47 integrity ledger** |
+| [`ROADMAP.md`](ROADMAP.md) / [`MASTER_PLAN.md`](MASTER_PLAN.md) | the original development programme (Stages 1–7, all closed at the code level) + the Post-Stage-7 2.0 tracks (Whiteboard, Creator Intelligence, the shared quality systems) |
+| [`WHITEBOARD_ENGINE_DESIGN.md`](WHITEBOARD_ENGINE_DESIGN.md) | the Whiteboard Engine's laws, budgets, and the E0–E12 milestone matrix |
+| [`TASKS.md`](TASKS.md) | task ledgers per stage **+ the S-series index (S1→S74) and the S47 integrity ledger** |
 | [`RISK_REGISTER.md`](RISK_REGISTER.md) | technical debt and risk register |
 | `worklog.md` | the audit-trail worklog — every stage's final gate, in order |
 
