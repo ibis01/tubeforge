@@ -18,6 +18,7 @@ import { promisify } from "util";
 
 import type { WhiteboardAsset } from "./assets";
 import { loadLibrary } from "./assets";
+import { LUFS_PASS_WINDOW, measureLoudness, normalizationFilter } from "../audiomix";
 // S67 — the compose/applier seam lives in wb-page.ts (PURE), shared with the
 // editor's playback canvas — the design §5 one-source law in both directions.
 import {
@@ -37,6 +38,52 @@ import {
 import type { WhiteboardProject } from "./storyboard";
 
 const execFileP = promisify(execFile);
+
+/**
+ * S76 — the VO-slot loudness contract, enforced at the engine boundary.
+ *
+ * The QC gate measures the final program at the house delivery target
+ * (−16 LUFS, pass window LUFS_PASS_WINDOW). E10's battery passed because
+ * its synthetic slots were normalized at CREATION, while the production
+ * voiceover path (generateSceneVoiceovers) ships RAW TTS WAVs — the S76
+ * real-TTS smoke measured a narration-only render outside the window and
+ * QC failed it correctly. This engine is its own finishing chain (no
+ * audiomix stage runs after renderWhiteboard), so the contract lands
+ * HERE: every VO slot is measured and, when it sits outside the delivery
+ * window, linear two-pass normalized to the house targets — the same
+ * chain every other render kind applies at its finishing stage. In-window
+ * slots pass through untouched (no double processing). Linear mode
+ * preserves duration, so the frame-budget pre-flight probes the
+ * normalized slot with unchanged timing. Exported for the unit pin.
+ */
+export async function normalizeVoSlot(
+  srcPath: string,
+  normDir: string,
+  sceneId: string,
+): Promise<string> {
+  const measurement = await measureLoudness(srcPath);
+  if (
+    measurement &&
+    measurement.integratedLUFS >= LUFS_PASS_WINDOW[0] &&
+    measurement.integratedLUFS <= LUFS_PASS_WINDOW[1]
+  ) {
+    return srcPath;
+  }
+  fs.mkdirSync(normDir, { recursive: true });
+  const outPath = path.join(normDir, `vo-${sceneId}-norm.wav`);
+  await execFileP(
+    "ffmpeg",
+    [
+      "-y", "-v", "error",
+      "-i", srcPath,
+      "-af", normalizationFilter(measurement),
+      "-c:a", "pcm_s16le",
+      outPath,
+    ],
+    { maxBuffer: 32 * 1024 * 1024 },
+  );
+  return outPath;
+}
 
 /**
  * The container-safe chromium launch args (the slides deployment contract,
@@ -175,11 +222,15 @@ export async function renderWhiteboard(
   // BEFORE chromium launches: a 4GB worker must never learn about an
   // unbounded render from the OOM killer.
   const voMsBySceneId = new Map<string, number>();
+  const voResolved = new Map<string, string>();
   let anyVoAudio = false;
+  const voNormDir = path.join(opts.outDir, "vo-norm");
   for (const scene of project.scenes) {
-    const voPath = opts.voFiles?.get(scene.id) ?? null;
-    if (!voPath) continue;
+    const voRaw = opts.voFiles?.get(scene.id) ?? null;
+    if (!voRaw) continue;
     anyVoAudio = true;
+    const voPath = await normalizeVoSlot(voRaw, voNormDir, scene.id);
+    voResolved.set(scene.id, voPath);
     const voDurSec = await probeDurationSec(voPath);
     if (voDurSec !== null) voMsBySceneId.set(scene.id, voDurSec * 1000);
   }
@@ -308,7 +359,8 @@ export async function renderWhiteboard(
       }
 
       // Encode the scene: frames (+ VO when present). Music joins at assembly.
-      const voPath = opts.voFiles?.get(scene.id) ?? null;
+      // voResolved carries the LOUDNESS-CONTRACT slots — see normalizeVoSlot.
+      const voPath = voResolved.get(scene.id) ?? null;
       const sceneFile = path.join(opts.outDir, `scene-${si + 1}.mp4`);
       const durSec = frames / project.fps;
       const args: string[] = [

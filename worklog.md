@@ -3675,3 +3675,42 @@ the shared contracts — no isolated production pipelines.
 **The preview was never touched:** all edits are docs/worklog-only
 (outside src/, no hot-reload, no restart); the dev server and preview
 link stayed up the entire turn and were re-verified 200 at close.
+
+## The real-TTS smoke closes the honesty caveat — and catches a real
+## production gap (2026-11-10 ~19:55 UTC)
+
+**The gate the readiness report honestly deferred is now closed with
+receipts.** `scripts/s76-tts-smoke.mts` drove REAL ttsSynthesize calls
+through the budget module (provider zai, voice jam — 14.2s + 18.8s of
+real narration, ~4.4s wall each) into the SAME voFiles seam E10 used
+with synthetic slots. Render: 33.7s, 809 frames, frame-sum exact, tail
+law Δ −7/−5 ms (sub-frame). The TTS pool is GREEN — distinct from the
+video pool that still owes S74 its slots.
+
+**The smoke's first pass FAILED QC — correctly — and that is the
+receipt's real payload.** Raw TTS WAVs entered the VO mux un-normalized
+(−23.9 dB mean; QC's loudness check failed at the −16 LUFS delivery
+target). The production voiceover path (generateSceneVoiceovers) ships
+raw WAVs and the whiteboard engine runs no finishing stage after its
+assembly — E10 masked the hole by normalizing its synthetic slots at
+creation. The exact isolated-pipeline anti-pattern §8 of the adoption
+decision prohibits, caught by the gate before a user ever heard it.
+
+**The fix lands at the engine boundary** — `normalizeVoSlot` in
+whiteboard/render.ts: every VO slot is measured; out-of-window slots
+are linear two-pass normalized to the house targets (the same chain
+every other render kind applies); in-window slots pass through
+untouched. Linear mode preserves duration, so the frame-budget
+pre-flight probes the normalized slot with unchanged timing. Second
+smoke pass: 48 kHz AAC, −18.1 dB mean, QC **0 fail** — the only
+non-pass check is cut-alignment, UNMEASURED BY MODALITY (the E10
+battery's documented stance: the scene-detect lens cannot see
+hand-drawn seams; integrity is the frame-sum check's job, and it is
+exact).
+
+**Pinned:** two unit tests in the S76 suite (out-of-window slot lands
+in-window; in-window slot passes through untouched — idempotent by
+measurement). **356/356 unit, typecheck 0, lint 0.** Readiness report
+§5/§6 updated: the caveat is struck through and closed with receipts;
+the remaining gates are the Docker build+render smoke (Docker-capable
+runner) and S74's own close (watcher-automated).

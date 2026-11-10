@@ -6912,6 +6912,44 @@ await test("S64 timing: the frame plan is a pure function — same inputs, same 
   eq(seq(), seq(), "the frame plan is deterministic");
 });
 
+suiteStart("S76 whiteboard — the VO-slot loudness contract (normalizeVoSlot)");
+
+const voTmp = fs.mkdtempSync(path.join(os.tmpdir(), "tf-vo-"));
+try {
+  // A far-below-target slot: sine at −40 dBFS (the QC suite's quiet fixture
+  // family) — decisively outside LUFS_PASS_WINDOW (−19.5..−13.0), which is
+  // exactly where the S76 real-TTS smoke found RAW production TTS audio.
+  const quietWav = path.join(voTmp, "quiet.wav");
+  await genFixture(quietWav, [
+    "-f", "lavfi", "-i", "sine=frequency=330:duration=3",
+    "-af", "volume=0.01",
+    "-c:a", "pcm_s16le",
+  ]);
+
+  await test("normalizeVoSlot: a far-below-target slot is linear-normalized into the window", async () => {
+    const { normalizeVoSlot } = await import("../src/lib/tubeforge/whiteboard/render");
+    const { measureLoudness, LUFS_PASS_WINDOW } = await import("../src/lib/tubeforge/audiomix");
+    const out = await normalizeVoSlot(quietWav, path.join(voTmp, "norm"), "scene-1");
+    ok(out !== quietWav, "an out-of-window slot must be re-encoded, not passed through");
+    ok(fs.existsSync(out), "the normalized slot exists on disk");
+    const m = await measureLoudness(out);
+    ok(m !== null, "the normalized slot is measurable");
+    ok(
+      m !== null && m.integratedLUFS >= LUFS_PASS_WINDOW[0] && m.integratedLUFS <= LUFS_PASS_WINDOW[1],
+      `normalized slot landed at ${m?.integratedLUFS} LUFS, outside the delivery window`,
+    );
+  });
+
+  await test("normalizeVoSlot: an in-window slot passes through untouched (no double processing)", async () => {
+    const { normalizeVoSlot } = await import("../src/lib/tubeforge/whiteboard/render");
+    const first = await normalizeVoSlot(quietWav, path.join(voTmp, "norm"), "scene-1");
+    const second = await normalizeVoSlot(first, path.join(voTmp, "norm"), "scene-2");
+    eq(second, first, "an in-window input returns the SAME path — normalization is idempotent by measurement");
+  });
+} finally {
+  fs.rmSync(voTmp, { recursive: true, force: true });
+}
+
 suiteStart("S64 whiteboard — the asset library");
 
 await test("S64 assets: every drawable is an id-carrying <path>/<text> — extraction is complete", async () => {

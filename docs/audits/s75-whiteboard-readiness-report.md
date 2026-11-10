@@ -138,16 +138,27 @@ credits (1k/10k/50k), max resolution (1080p/1440p/2160p), priority
 rendering, team seats. **No new entitlement surface is created;** these
 decisions record how the EXISTING surfaces bound the optional AI features.
 
-## 5. What was NOT validated (the honesty caveat)
+## 5. What was NOT validated (the honesty caveat) — CLOSED 2026-11-10
 
-The E10 benchmark drove narration with **synthetic narration-slot
+~~The E10 benchmark drove narration with **synthetic narration-slot
 audio** (silence-shaped WAVs in the VO slot) because the Z.ai gateway —
-the TTS provider — was under the hard 429 throughout. The mixing, timing
-and tail-law evidence is therefore real; the VOICE itself (real TTS
-output through the real provider) is not yet exercised end-to-end by the
-whiteboard lane. This is a gateway-recovery item, the same window S74
-waits on; it does not gate the engine's code-readiness (the VO slot is
-provider-agnostic by contract) but it IS listed in §6.
+the TTS provider — was under the hard 429 throughout.~~ **This caveat
+is now CLOSED by the S76 real-TTS smoke** (scripts/s76-tts-smoke.mts,
+2026-11-10 ~19:50 UTC): real `ttsSynthesize` calls through the budget
+module (provider zai, voice jam) drove the SAME voFiles seam — 2
+scenes, 14.2s + 18.8s of real narration audio — rendered end-to-end
+(33.7s, 809 frames, frame-sum exact, tail law Δ −7/−5 ms) and QC
+fail-free. The smoke also caught a REAL production gap and closed it:
+raw TTS WAVs entered the VO mux un-normalized (the first pass measured
+−23.9 dB mean and QC's loudness check failed it correctly — E10's
+synthetic slots had been normalized at creation, masking the hole),
+so the engine boundary now enforces the loudness contract
+(`normalizeVoSlot` in whiteboard/render.ts: measure → linear two-pass
+to the −16 LUFS delivery target; in-window slots pass through
+untouched). Second pass: 48 kHz AAC, −18.1 dB mean, QC 0 fail — the
+only non-pass check is cut-alignment, UNMEASURED **by modality**
+(the same documented stance as the E10 battery). Unit-pinned: 2 tests
+in the S76 suite; 356/356 unit, typecheck and lint green.
 
 ## 6. Remaining before the ENGINE is called ship-grade
 
@@ -156,12 +167,11 @@ provider-agnostic by contract) but it IS listed in §6.
    build` of the image and an in-container whiteboard render smoke on a
    Docker-capable runner (dependency, not engineering work — this
    sandbox has no Docker daemon).
-2. **Real TTS through the whiteboard VO slot** — one narrated render +
-   QC battery once the gateway clears; rides the S74 window, watcher-
-   automated, independent of all engine code.
-3. **S74's own close** — 0/8 paired measurements; watcher-automated
-   (next slot 18:30 UTC 2026-11-10); closes on real renders + 16 blind
-   scores, never on code.
+2. ~~**Real TTS through the whiteboard VO slot**~~ — **CLOSED** by the
+   S76 real-TTS smoke (see §5); the loudness contract it exposed is
+   implemented, unit-pinned and verified on the real narration path.
+3. **S74's own close** — 0/8 paired measurements; watcher-automated;
+   closes on real renders + 16 blind scores, never on code.
 
 With those three, the Whiteboard Engine's production story is complete —
 and the sequencing law holds: shared quality systems (Visual Consistency
