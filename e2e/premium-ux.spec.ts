@@ -74,15 +74,23 @@ test.describe("Stage 4a premium UX", () => {
     await page.waitForSelector("nav[aria-label='Main navigation']");
     await page.getByRole("navigation", { name: "Main navigation" }).getByText("Create").click();
 
-    // Step 1: Next is disabled until a topic exists.
-    const next = page.getByRole("button", { name: /Next: Format/ });
-    await expect(next).toBeDisabled();
-    await page.getByLabel("Video topic").fill("The secret economy of container ships");
+    // Step 1 (Video type): the FIRST decision — four presets, always valid,
+    // nothing generated. S76 moved the type choice ahead of everything else.
+    const next = page.getByRole("button", { name: /Next: Concept/ });
+    await expect(page.getByText("What are you making?")).toBeVisible();
     await expect(next).toBeEnabled();
+    await page.getByRole("button", { name: /Whiteboard explainer/ }).click();
     await next.click();
 
+    // Step 2 (Concept): Next is disabled until a topic exists.
+    const nextShape = page.getByRole("button", { name: /Next: Shape & tone/ });
+    await expect(nextShape).toBeDisabled();
+    await page.getByLabel("Video topic").fill("The secret economy of container ships");
+    await expect(nextShape).toBeEnabled();
+    await nextShape.click();
+
     // Step rail shows progress; the draft lands in localStorage.
-    await expect(page.getByText("step 2 of 4")).toBeVisible();
+    await expect(page.getByText("step 3 of 5")).toBeVisible();
     await page.waitForTimeout(1200); // debounce (700ms) + margin
     const draft = await page.evaluate(() => localStorage.getItem("tubeforge:create-draft"));
     expect(draft).toContain("container ships");

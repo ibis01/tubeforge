@@ -29,7 +29,6 @@ import {
   TONES,
   LENGTHS,
   THUMB_STYLES,
-  FORMATS,
   RENDER_MODES,
   SCENE_COUNTS,
   type VideoDTO,
@@ -58,6 +57,7 @@ import {
   LayoutGrid,
   Clapperboard,
   Film,
+  PenTool,
   Presentation,
   ListVideo,
   ChevronDown,
@@ -83,10 +83,54 @@ const EXAMPLE_TOPICS = [
 
 /** Stage 4a (T-4.3) — the guided brief's four steps. */
 const STEPS = [
+  { label: "Video type", hint: "What are you making?" },
   { label: "Concept", hint: "Topic & script source" },
-  { label: "Format", hint: "Shape, length & tone" },
+  { label: "Shape & tone", hint: "Length, tone & render style" },
   { label: "Voice & art", hint: "Narration & look" },
   { label: "Launch", hint: "Destination & run" },
+] as const;
+
+/** S76 — the FIRST thing a creator chooses: the type of video. Each preset
+ *  pins format + renderMode together so the whole downstream brief (script
+ *  source, storyboard, render pipeline, ETA copy) adapts from minute zero
+ *  instead of burying the choice mid-wizard. */
+const VIDEO_TYPES = [
+  {
+    id: "classic",
+    title: "Classic narration",
+    format: "script",
+    renderMode: "kenburns",
+    desc: "AI writes a flowing narration + metadata — classic render with a thumbnail package.",
+    icon: FileText,
+    accent: "text-primary",
+  },
+  {
+    id: "story",
+    title: "Scene story",
+    format: "story",
+    renderMode: "kenburns",
+    desc: "Scene-by-scene script and storyboard art — Smart Motion pans & zooms per scene.",
+    icon: Clapperboard,
+    accent: "text-amber-300",
+  },
+  {
+    id: "whiteboard",
+    title: "Whiteboard explainer",
+    format: "story",
+    renderMode: "whiteboard",
+    desc: "A hand draws every scene in real time — narrated whiteboard animation.",
+    icon: PenTool,
+    accent: "text-sky-300",
+  },
+  {
+    id: "slides",
+    title: "Keynote slides",
+    format: "story",
+    renderMode: "slides",
+    desc: "A kinetic-typography slide deck, one designed slide per beat — no image generation.",
+    icon: Presentation,
+    accent: "text-violet-300",
+  },
 ] as const;
 
 /** localStorage key for the persisted brief draft (T-4.3). */
@@ -277,9 +321,11 @@ export function CreateView() {
   const isStory = format === "story";
   const sceneCount = SCENE_COUNTS[length] ?? 6;
 
-  // Step 0 needs a topic (or a pasted script) before the brief can advance.
+  // The Concept step (1) needs a topic (or a pasted script) before the brief
+  // can advance. The type picker (0) is always valid — that IS the first
+  // decision, made before anything else is asked.
   const stepValid =
-    step === 0
+    step === 1
       ? Boolean(topic.trim() || (useOwnScript && customScript.trim()))
       : true;
 
@@ -1182,8 +1228,57 @@ export function CreateView() {
           </div>
         )}
 
-        <div className="space-y-4">
           {step === 0 && (
+            <>
+          <SectionLabel
+            title="What are you making?"
+            hint="Choose the type of video first — every later step adapts to it"
+          />
+          <div className="grid grid-cols-2 gap-2.5">
+            {VIDEO_TYPES.map((t) => {
+              const active =
+                t.id === "classic"
+                  ? format === "script"
+                  : format === "story" &&
+                    (t.renderMode === renderMode ||
+                      (t.id === "story" && (renderMode === "kenburns" || renderMode === "stock")));
+              const Icon = t.icon;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setFormat(t.format);
+                    setRenderMode(t.renderMode);
+                  }}
+                  className={clsx(
+                    "rounded-xl border p-4 text-left transition-all",
+                    active
+                      ? "border-primary/50 bg-primary/8 glow-red-soft"
+                      : "border-white/10 bg-white/3 hover:border-white/25",
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <Icon className={clsx("h-4 w-4", t.accent)} />
+                    <span className="text-sm font-medium">{t.title}</span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-1.5 leading-snug">
+                    {t.desc}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-muted-foreground leading-relaxed pt-1">
+            Nothing is generated yet — this only sets what the brief builds.
+            You can still fine-tune the render style on the next steps.
+          </p>
+            </>
+          )}
+
+        <div className="space-y-4">
+          {step === 1 && (
             <>
           <div className="space-y-1.5">
             <Label htmlFor="topic">Video topic</Label>
@@ -1343,49 +1438,16 @@ export function CreateView() {
           </>
           )}
 
-          {step === 1 && (
+          {step === 2 && (
             <>
           <SectionLabel
-            title="Format & rendering"
-            hint="Pick the shape of the video, then how it is rendered"
+            title="Shape, tone & rendering"
+            hint="Length and tone — the render style for scene stories"
           />
-
-          <div className="space-y-1.5">
-            <Label>Production format</Label>
-            <div className="grid grid-cols-2 gap-2">
-              {FORMATS.map((f) => (
-                <button
-                  key={f.id}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setFormat(f.id)}
-                  className={clsx(
-                    "rounded-xl border p-3 text-left transition-all",
-                    format === f.id
-                      ? "border-primary/50 bg-primary/8 glow-red-soft"
-                      : "border-white/10 bg-white/3 hover:border-white/25",
-                  )}
-                >
-                  <div className="flex items-center gap-1.5">
-                    {f.id === "story" ? (
-                      <Clapperboard className="h-3.5 w-3.5 text-primary" />
-                    ) : (
-                      <FileText className="h-3.5 w-3.5 text-primary" />
-                    )}
-                    <span className="text-sm font-medium">{f.label}</span>
-                  </div>
-                  <p className="text-[11px] text-muted-foreground mt-1 leading-snug">
-                    {f.desc}
-                  </p>
-                </button>
-              ))}
-            </div>
-          </div>
-
           {isStory && (
             <div className="space-y-1.5 rounded-xl border border-white/10 bg-white/3 p-3">
               <div className="flex items-center justify-between">
-                <Label>Render mode</Label>
+                <Label>Rendering style</Label>
                 <Badge
                   variant="outline"
                   className="border-white/15 bg-white/5 text-muted-foreground text-[10px]"
@@ -1451,7 +1513,7 @@ export function CreateView() {
           </>
           )}
 
-          {step === 2 && (
+          {step === 3 && (
             <>
           <SectionLabel
             title="Script & narration"
