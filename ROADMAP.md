@@ -7,8 +7,8 @@ S47 integrity ledger live in [`TASKS.md`](TASKS.md)); the Post-Stage-7
 Intelligence CI-1..CI-4 landed; S74's motion re-measure OPEN,
 gateway-gated; S75 = architecture reconciliation + Whiteboard
 production readiness, in flight).
-**Last updated:** 2026-11-10 (S75 reconciliation — header corrected; the
-Post-Stage-7 section has been kept current since the S70 session)
+**Last updated:** 2026-11-11 (the final implementation priority recorded
+below — the governing order for everything after S74/S76)
 **Source:** `MASTER_PLAN.md` + `FOUNDATION_AUDIT.md` findings + the S47 external audit + the stage records
 
 ---
@@ -469,6 +469,33 @@ and the engine design docs):
 
 The anti-goal, recorded: not a collection of disconnected video
 generators. Quality infrastructure precedes engine expansion.
+
+### The final implementation priority (the governing order, recorded 2026-11-11)
+
+The operator's final order for everything after the S75/S76 close-out.
+Critical = Phase-0 closers; the P0 shared quality systems precede every
+P1–P3 engine (the anti-goal above still governs: shared contracts
+first, no parallel pipelines).
+
+| # | Work | Priority | Status (2026-11-11) |
+| --- | --- | --- | --- |
+| 1 | S74 real motion measurement | Critical | OPEN — the auto-resume loop (cron 521163) drives the 8 paired renders + 16 blind scores; watcher-automated |
+| 2 | Docker production image smoke | Critical | PENDING — needs a Docker-capable runner (the sandbox has none) |
+| 3 | Real TTS Whiteboard smoke | Critical | CLOSED — S76 `d991015`: the synthetic-audio caveat struck; the loudness contract pinned at the engine boundary |
+| 4 | Visual Consistency Engine | P0 | pending — first of the shared quality systems |
+| 5 | Video Critic and Repair | P0 | pending |
+| 6 | Universal Timeline contract | P0 | pending |
+| 7 | Reference-video intelligence | P1 | pending |
+| 8 | Advanced stock retrieval | P1 | pending |
+| 9 | Provider selection intelligence | P1 | pending |
+| 10 | Living production board | P2 | pending |
+| 11 | Advanced audio intelligence | P2 | pending |
+| 12 | Character animation engine | P3 | pending |
+| 13 | Blender / 3D engine | P3 | pending |
+
+Items 1–3 close Phase 0; item 4 starts the shared-quality era the
+moment the Critical row is green. The S75 order of operations above
+remains the HOW; this table is the WHAT and the WHEN.
 
 Standing risks tracked in the worklog: Z.ai gateway outage (S63
 remeasurement and the LLM whiteboard planner gated on the one-probe

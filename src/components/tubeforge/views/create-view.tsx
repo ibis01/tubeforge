@@ -826,7 +826,13 @@ export function CreateView() {
     return api(`/api/videos/${id}/storyboard`, {
       method: "POST",
       body: JSON.stringify({}),
-    }).then(() => pollStoryboard(id, { timeoutMs: 20 * 60 * 1000 }));
+    })
+      // pollStoryboard watches the JOB flag (survives re-generation on an
+      // already-painted video — the old hasStoryboard watch resolved on its
+      // first tick and left the grid stale until a manual refresh); the
+      // final fetch hands runStage a fresh VideoDTO to setVideo.
+      .then(() => pollStoryboard(id, { timeoutMs: 20 * 60 * 1000 }))
+      .then(async () => (await api<{ video: VideoDTO }>(`/api/videos/${id}`)).video);
   }, []);
 
   const startStock = useCallback((id: string) => {

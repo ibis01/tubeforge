@@ -136,14 +136,52 @@ export interface VariantListResponse {
 
 // ---------- Character polling ----------
 
-/** Poll until the storyboard job finishes (watches the job flag so re-rolls work). */
-export function pollStoryboard(videoId: string, opts?: PollOpts) {
-  return pollVideo(
-    videoId,
-    (v) => v.hasStoryboard,
-    (v) => Boolean(v.error) && !v.hasStoryboard,
-    { ...opts, timeoutMs: opts?.timeoutMs ?? 15 * 60 * 1000 }
-  );
+export interface StoryboardPollResult {
+  scenes: import("./types").SceneDTO[];
+  complete: boolean;
+  error?: string | null;
+}
+
+/**
+ * Poll the storyboard job until it finishes; resolves with the final
+ * scene payload.
+ *
+ * Watches the JOB flag (`generating` on GET /api/videos/{id}/storyboard),
+ * NOT the one-way `hasStoryboard` artifact flag: `hasStoryboard` flips true
+ * at the end of the first successful paint and never flips back, so an
+ * artifact-flag poll resolved on its FIRST tick during a re-generation
+ * (re-script with new scenes, auto-pilot resume, full repaint) — the grid
+ * then showed the old art until a manual browser refresh. `startJob`
+ * registers the queued key before the 202 returns, so the job flag is true
+ * from the very first poll tick (no registration race); a false flag on
+ * tick 0 means the job already finished (or nothing was ever started, for
+ * callers that probe defensively).
+ */
+export async function pollStoryboard(
+  videoId: string,
+  opts: PollOpts = {}
+): Promise<StoryboardPollResult> {
+  const interval = opts.intervalMs ?? 3000;
+  const timeout = opts.timeoutMs ?? 15 * 60 * 1000;
+  const deadline = Date.now() + timeout;
+
+  for (;;) {
+    const res = await fetch(`/api/videos/${videoId}/storyboard`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as StoryboardPollResult & { generating?: boolean };
+
+    if (!data.generating) {
+      if (data.error) throw new Error(data.error);
+      return { scenes: data.scenes ?? [], complete: Boolean(data.complete) };
+    }
+
+    if (Date.now() > deadline)
+      throw new Error(
+        "Storyboard generation is taking unusually long — it may still be running in the background; check back in a few minutes."
+      );
+
+    await sleep(interval);
+  }
 }
 
 /**

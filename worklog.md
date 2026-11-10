@@ -3740,3 +3740,33 @@ concept → shape: the Whiteboard preset carries through and the render
 grid shows Whiteboard selected. Screenshot in download/. Unit 356/356,
 typecheck 0, lint 0 errors; premium-ux e2e spec re-pinned to the
 five-step contract (type-first, topic gate at Concept, "step 3 of 5").
+
+## The storyboard grid no longer waits for a manual refresh — the poll watches the JOB, not the artifact (2026-11-11)
+
+**Operator report, live on the preview:** "I have to refresh before
+getting generated storyboard images." Root cause: `pollStoryboard`
+watched `hasStoryboard` — a ONE-WAY artifact flag that flips true at the
+end of the first successful paint and never flips back. Any
+re-generation on an already-painted video (re-script with new scenes,
+auto-pilot resume, full repaint) resolved the poll on its FIRST tick
+while the job was still queued; the finally-block then cleared the
+spinner, `reloadScenes` fetched the pre-job scenes, and nothing ever
+updated the grid again — the manual browser refresh was the only way
+the new art arrived.
+
+**The fix — the same job-flag contract the other polls already use:**
+`pollStoryboard` now polls `GET /api/videos/{id}/storyboard` until the
+`generating` flag clears (exactly `pollScript`/`pollVariants`/`pollStock`
+semantics; `startJob` registers the queued key before the 202 returns,
+so there is no registration race), resolves with the final scene
+payload, and throws the job-recorded error on failure. Consumers:
+`startStoryboard` (create-view) fetches a fresh VideoDTO after the poll
+for `runStage`'s `setVideo` (the `startStock` pattern); the detail
+dialog's `generateStoryboard` keeps its `reloadScenes` sync. First-run
+AND re-generation now land the art without a refresh. Single-scene
+re-rolls were already correct (`pollScene` watches the scene flag).
+
+356/356 unit, typecheck 0, lint 0 errors on touched files (warnings
+identical to baseline). Also recorded: the operator's final
+implementation priority (13 rows, Critical → P3) into ROADMAP.md as
+the governing order after the S74/S76 close-out, with per-row status.
