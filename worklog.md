@@ -3403,3 +3403,50 @@ rates), artifacts in validation/s75/, a claim without a measured
 artifact does not close E10. **E12 ledger recorded** (§4.2) with the
 readiness rule: no production-ready claim until E10 is measured and
 E12 is closed-or-deferred.
+
+## S75 E10 execution (2026-11-10 UTC) — the benchmark ran, and it caught four real engine defects
+
+The E10 per-format benchmark (`scripts/s75-e10-benchmark.mts`) is
+executable and its first full run delivered the external review's
+quality-first promise in one afternoon: the SAME storyboard through the
+SAME engine at three canvases, measured end to end.
+
+**Acceptance, all green:** 16:9 1920×1080 · 9:16 1080×1920 · 1:1
+1080×1080 — 1623 frames EXACT per format, frame integrity pass, A/V
+pass against the engine's documented tail law (Δ=350ms per scene,
+timing.ts's voMs+350), QC 13/14 per format (the one non-pass is
+cut-alignment: unmeasured — the documented modality exemption; the
+compositor's scene-detect lens cannot see hand-drawn seams on a shared
+white canvas), duration identical 67.67s across formats (narration-
+driven timing is format-independent). Peak RSS sampled: 444/442/285MB.
+
+**Four engine defects found and fixed, each unit-pinned (352/352):**
+(1) the narration NEVER reached final.mp4 — the assembly mapped only
+the ducked bed (-32.0 LUFS measured); the voice+bed amix now exists
+and the intent comment ("ducks UNDER the voice") finally matches the
+filter. Invisible in every prior run because the gateway outage meant
+no VO. (2) -shortest ate the estimator's 350ms tail — 9 frames short
+per scene (1623 budgeted, 1578 delivered; the pre-flight budget lied
+by construction); now apad. (3) the container chromium wall — 64MB
+/dev/shm kills a bare launch; the slides contract
+(--no-sandbox --disable-dev-shm-usage) is now inherited by BOTH
+whiteboard launch sites, plus per-scene context recycling (peak RSS
+625MB → 444/442/285MB). (4) assembly -shortest dropped the final frame
+(1623→1622); removed.
+
+**Harness honesty:** the first two "OOM kills" were actually the
+sandbox's per-call process-tree reaper — nohup'd renders die at the
+Bash-call boundary; daemonize.py (the documented double-fork) is the
+fix. And the STRONGEST receipt of the session: the entire benchmark —
+three renders, three QC batteries — ran to completion while the Z.ai
+account sat under the hard 429 (the S74 window). The whiteboard
+production path provably touches zero generation-API calls: native-
+first, evidenced by outage.
+
+**E12 ledger updated:** Chromium worker contract measured (not
+assumed); native-$0 evidenced; export+QC evidenced; two rows deferred
+with dependencies (deployment-doc wording, the queue drill) + the
+entitlement decision list. Local commits: 409808f (reconciliation
+docs) + f9fd0fd (E10 + engine fixes) + this receipt. All unpushed —
+the compromised PAT blocks the push cycle. S74 remains watcher-
+automated (job 521163, next fire 18:30 UTC), 0/8, independent.

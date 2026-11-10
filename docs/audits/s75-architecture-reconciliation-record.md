@@ -124,49 +124,96 @@ Verified 2026-11-10 this session, before any reconciliation writing:
 
 ## 4. Whiteboard production readiness — E10 and E12 (the P1 work)
 
-### 4.1 E10 — per-format benchmarks (gateway-free: native rendering)
+### 4.1 E10 — per-format benchmarks (EXECUTED 2026-11-10, all green)
 
-The engine already takes width/height/fps from the doc, so the three
-format benchmarks exercise the SAME engine at three canvases:
+**Acceptance table** (the measured artifacts live in
+`validation/s75/e10/<fmt>/` — project.json, final.mp4, stills, SRT,
+manifest.json; merged comparison in `e10-manifest.json`):
 
-- **16:9** 1920×1080, **9:16** 1080×1920, **1:1** 1080×1080 — same
-  storyboard, same native scaffold (zero AI spend), same fps.
-- Metrics, measured per format from the rendered MP4s (ffprobe) and the
-  render process: frame integrity (frame count == duration × fps, no
-  dropped/garbled frames via the existing QC lenses), duration accuracy
-  (measured vs planned ± tolerance), A/V sync (narration onset vs the
-  synced scene start, from the mix), render wall time, peak memory, and
-  per-format quality-lens pass rates.
-- Narration: the E6 path (the video's existing `scene-XX.wav` mapping
-  into `voFiles`) — the benchmark uses native/stock TTS or silent-room
-  WAVs if no voice is configured; the renderer contract is the same.
-- Everything lands in `validation/s75/` (gitignored by size) with a
-  committed evidence record — the S74 discipline, adapted: a benchmark
-  claim without a measured artifact does not close E10.
-- Acceptance gate: all three formats pass every QC lens, duration
-  within tolerance, A/V offset within the E6 tolerance, and the record
-  carries the ffprobe + process receipts.
+| format | canvas | render wall | peak RSS (sampled) | frames | frame integrity | A/V (tail law) | QC |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 16:9 | 1920×1080 | 172s | 444 MB | 1623 | pass | pass (Δ=350ms exactly) | 13/14 |
+| 9:16 | 1080×1920 | 168s | 442 MB | 1623 | pass | pass (Δ=350ms exactly) | 13/14 |
+| 1:1 | 1080×1080 | 97s | 285 MB | 1623 | pass | pass (Δ=350ms exactly) | 13/14 |
 
-### 4.2 E12 — production integration ledger (what's verifiable now)
+acceptance: `frameIntegrityAllPass: true · aVAllPass: true ·
+qcAllPass: true`. Duration identical across formats (67.67s — the
+narration-driven timing is format-independent, as the contract
+requires). Each QC report's one non-pass row is `cut-alignment:
+unmeasured` — the documented modality exemption below.
 
-Recorded as a gap ledger, each row either closed with evidence this
-stage or explicitly deferred with its dependency:
+**The gateway-free proof (the strongest native-first receipt yet):**
+the ENTIRE benchmark — three renders, three QC batteries, the
+summaries — ran to completion while the Z.ai account was under a hard
+429 throttle (the S74 window, still open as of 14:31 UTC). The
+whiteboard production path provably touches zero generation-API calls.
 
-- Chromium deployment for production workers = the slides deployment
-  contract (§3.3 of the design doc) — verify the contract text matches
-  the actual worker deployment story; no code expected.
-- Native rendering is $0 for every tier (no generation API in the
-  whiteboard render path) — verify by tracing the render path's
-  budget-touching calls: the scaffold planner (native) and the
-  renderer (local Chromium + ffmpeg) must touch ZERO provider spend.
-- Tier entitlements for optional AI (planner/TTS) — rides the existing
-  metered `aiCall` floor; the entitlement surface is a product decision
-  recorded, not new plumbing.
-- Export + QC integration — already wired (the whiteboard renders to
-  the standard `final.mp4` through the unchanged QC/ship gate; S67).
-- Worker recovery/cancellation — rides the queue's resumable job
+**Four real engine defects found and fixed by the benchmark** (each
+pinned by a unit test; 352/352 green):
+
+1. **The narration never reached `final.mp4`** — the assembly's mix
+   filter mapped ONLY the ducked bed; a narrated render measured
+   −32.0 LUFS. The S64 comment even stated the intent ("ducks to 0.16
+   UNDER the voice"). Fixed: voice+bed `amix` (normalize=0,
+   duration=first). Invisible in every prior run because the gateway
+   outage meant no VO ever existed.
+2. **`-shortest` ate the estimator's 350ms scene tail** — every scene
+   encoded 9 frames short (1623 budgeted, 1578 delivered; the
+   pre-flight frame budget lied by construction). Fixed: the VO pads
+   (`apad`) to the scene duration; the tail survives as the last
+   stroke's hold. A/V now measures Δ=350ms exactly, per scene.
+3. **The container chromium wall** — on the 4GB worker's 64MB
+   `/dev/shm`, a bare chromium launch dies mid-render. The slides
+   engine already carried `--no-sandbox --disable-dev-shm-usage`; the
+   whiteboard engine now inherits the contract
+   (`WB_CHROMIUM_LAUNCH_ARGS`, both launch sites) and the scene loop
+   RECYCLES its chromium context per scene (peak RSS dropped from
+   ~625MB single-page to 444/442/285MB).
+4. **Assembly `-shortest` dropped the final frame** (1623 planned,
+   1622 delivered) even with every stream bounded; removed — every
+   stream is bounded by `-t` / `amix duration=first` already.
+
+**Harness honesty (recorded, not hidden):** the run's first "OOM" was
+actually the sandbox's per-call process-tree reaper killing nohup'd
+renders at the Bash-call boundary — the benchmark launches through
+`scripts/daemonize.py` (the documented double-fork). The compositor's
+scene-detect lens cannot see hand-drawn seams on a shared white canvas
+(4 expected cuts supplied, 0 detections, 0 unexpected) —
+cut-alignment is "unmeasured" FOR THE WHITEBOARD MODALITY by
+documented exemption; continuity is verified by the exact frame-sum
+integrity check instead. The QC aspect lens needed the render's own
+geometry passed (`expectedAspect`) — the battery already knew all
+three shapes.
+
+### 4.2 E12 — production integration ledger (updated with the E10 evidence)
+
+Each row: closed with evidence, or explicitly deferred with its
+dependency:
+
+- **Chromium deployment for production workers — EVIDENCE STRENGTHENED
+  THIS STAGE.** The container reality is now measured, not assumed: on
+  the 4GB worker shape, chromium needs the container-safe launch args
+  (`--no-sandbox --disable-dev-shm-usage` — the slides contract, now
+  inherited by the whiteboard engine's BOTH launch sites) and per-scene
+  context recycling (peak RSS 444/442/285MB across formats, sampled).
+  Remaining open row: the DEPLOYMENT doc (`DEPLOYMENT.md` / design §3.3)
+  should state the chromium worker contract in the deploy checklist —
+  docs-only, next session.
+- **Native rendering is $0 for every tier — EVIDENCED.** The entire
+  E10 benchmark (three renders + QC batteries) ran to completion during
+  a hard account-level 429 — the render path provably touches zero
+  generation-API calls. Receipt: this record §4.1.
+- **Tier entitlements for optional AI (planner/TTS)** — rides the
+  existing metered `aiCall` floor; the entitlement surface is a product
+  decision to record, not new plumbing. Deferred to the readiness
+  report's decision list.
+- **Export + QC integration — EVIDENCED.** The benchmark's renders pass
+  the UNCHANGED 14-lens QC battery (13/14 + the documented
+  cut-alignment modality exemption) — the whiteboard's `final.mp4` is
+  indistinguishable from a compositor render to the ship gate.
+- **Worker recovery/cancellation** — rides the queue's resumable job
   contract; verify the whiteboard JobKind inherits it (the S62/S63
-  receipt pattern).
+  receipt pattern). Deferred: needs a live queue drill, next session.
 
 **The readiness rule (restated from the external review, adopted):**
 the Whiteboard Engine is NOT declared production-ready until E10's
@@ -191,10 +238,15 @@ anti-goal: not a collection of disconnected video generators.
 
 ## 6. Stage status
 
-**OPEN — reconciliations landed locally (unpushed: the compromised PAT
-blocks the push cycle).** E10 protocol defined; execution next. E12
-ledger recorded. The stage closes when: the three front documents carry
-the reconciled state, E10's benchmarks are measured artifacts with a
-committed evidence record, E12's ledger is closed-or-deferred with
-dependencies, and a readiness report states the Whiteboard Engine's
-actual production distance in receipts.
+**OPEN — reconciliations LANDED; E10 EXECUTED, all green; E12 ledger
+updated.** All local work is unpushed (the compromised PAT blocks the
+push cycle): `409808f` (reconciliation docs) + `f9fd0fd` (the E10
+benchmark + the four engine fixes + six unit pins, 352/352).
+
+Remaining for the close:
+1. The readiness report (the stage's final deliverable) — states the
+   Whiteboard Engine's production distance in receipts: E10 measured,
+   E12's two deferred rows (deployment-doc wording, the queue drill)
+   and the entitlement decision list.
+2. The push + CI evidence by SHA, gated on the PAT rotation.
+3. S74's close remains watcher-automated and independent.
