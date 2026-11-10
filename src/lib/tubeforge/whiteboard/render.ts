@@ -38,6 +38,17 @@ import type { WhiteboardProject } from "./storyboard";
 
 const execFileP = promisify(execFile);
 
+/**
+ * The container-safe chromium launch args (the slides deployment contract,
+ * now inherited by the whiteboard engine — the S75 E10 receipt: on a 4GB
+ * container with the 64MB /dev/shm, a bare launch is SIGKILLed mid-scene
+ * by the OOM killer when chromium's shared memory outgrows /dev/shm;
+ * --disable-dev-shm-usage moves those segments to /tmp. --no-sandbox is
+ * the container user-namespace reality). BOTH whiteboard launch sites
+ * (the asset rasterize probe + the main render) MUST launch through these.
+ */
+export const WB_CHROMIUM_LAUNCH_ARGS = ["--no-sandbox", "--disable-dev-shm-usage"] as const;
+
 export interface RenderWhiteboardOptions {
   outDir: string;
   /** Real narration audio per scene id (absolute or cwd-relative path). */
@@ -113,7 +124,7 @@ export async function probeAssetRasterization(
   const timer = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), budgetMs));
   const work = (async (): Promise<AssetRasterProbeResult> => {
     const { chromium } = await import("playwright");
-    holder.browser = await chromium.launch({ headless: true });
+    holder.browser = await chromium.launch({ headless: true, args: [...WB_CHROMIUM_LAUNCH_ARGS] });
     const context = await holder.browser.newContext({
       viewport: { width: 512, height: 512 },
       deviceScaleFactor: 1,
@@ -190,17 +201,7 @@ export async function renderWhiteboard(
   if (!handAsset) throw new Error("hand-marker asset missing from the library");
 
   fs.mkdirSync(opts.outDir, { recursive: true });
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({
-    viewport: { width: project.width, height: project.height },
-    deviceScaleFactor: 1,
-  });
-  // Security line 2: the page has no network, period.
-  await context.route("**/*", (route) => route.abort());
-  const page = await context.newPage();
-  const apply = async (frame: FrameState): Promise<void> => {
-    await page.evaluate(`(${APPLY_FRAME_FN})(${JSON.stringify(framePayload(frame, project.width, project.height))})`);
-  };
+  const browser = await chromium.launch({ headless: true, args: [...WB_CHROMIUM_LAUNCH_ARGS] });
 
   const sceneFiles: SceneRenderResult[] = [];
   try {
@@ -213,7 +214,24 @@ export async function renderWhiteboard(
       const events = scheduleScene(scene, durationMs, geometry);
       const frames = frameCount(durationMs, project.fps);
 
-      opts.onProgress?.(`scene ${si + 1}/${project.scenes.length} ("${scene.id}"): composing`, si / project.scenes.length);
+      // Per-scene page recycling (the S75 E10 receipt): ONE page held across
+      // the whole project grew until the 4GB worker's OOM killer fired —
+      // two separate runs died mid-project (scene 2 frame 230/378, then
+      // scene 4 frame 1/332) with no JS trace. A fresh context per scene
+      // hands chromium's memory back at every scene boundary; the browser
+      // itself (the expensive launch) is reused.
+      const context = await browser.newContext({
+        viewport: { width: project.width, height: project.height },
+        deviceScaleFactor: 1,
+      });
+      // Security line 2: the page has no network, period.
+      await context.route("**/*", (route) => route.abort());
+      const page = await context.newPage();
+      const apply = async (frame: FrameState): Promise<void> => {
+        await page.evaluate(`(${APPLY_FRAME_FN})(${JSON.stringify(framePayload(frame, project.width, project.height))})`);
+      };
+      try {
+        opts.onProgress?.(`scene ${si + 1}/${project.scenes.length} ("${scene.id}"): composing`, si / project.scenes.length);
       const composed = composeScene(scene, project, lib.assets);
       await page.setContent(composed.html, { waitUntil: "load" });
       // Setup pass: defs root + the hand asset + dasharrays from OUR geometry
@@ -302,7 +320,12 @@ export async function renderWhiteboard(
       args.push(
         "-filter_complex", "[0:v]format=yuv420p[v]",
         "-map", "[v]",
-        ...(voPath ? ["-map", "1:a", "-c:a", "aac", "-b:a", "160k", "-shortest"] : []),
+        // apad (not -shortest): the VO must PAD to the scene duration so the
+        // estimator's 350ms tail survives as the last stroke's hold. -shortest
+        // truncated the video to the VO and ate the tail — the S75 E10
+        // receipt: 1623 budgeted frames, 1578 delivered (every scene 9
+        // frames short; the pre-flight frame budget lied by construction).
+        ...(voPath ? ["-map", "1:a", "-c:a", "aac", "-b:a", "160k", "-af", "apad"] : []),
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
         "-t", durSec.toFixed(3),
         sceneFile,
@@ -310,6 +333,11 @@ export async function renderWhiteboard(
       await runFfmpeg(args);
       fs.rmSync(framesDir, { recursive: true, force: true });
       sceneFiles.push({ sceneId: scene.id, durationMs, frames, file: sceneFile });
+      } finally {
+        // The scene's chromium memory goes back to the OS here — the
+        // recycling that keeps the 4GB worker alive across the project.
+        await context.close().catch(() => {});
+      }
     }
 
     // Final assembly: concat + the music bed (or stream copy when silent).
@@ -318,17 +346,30 @@ export async function renderWhiteboard(
     const listFile = path.join(opts.outDir, "concat.txt");
     fs.writeFileSync(listFile, sceneFiles.map((s) => `file '${path.resolve(s.file)}'`).join("\n") + "\n");
     if (opts.musicPath) {
-      // Bed gain: with narration the bed ducks to 0.16 under the voice; a
+      // Bed gain: with narration the bed ducks to 0.16 UNDER THE VOICE; a
       // SOLO bed (no VO this run — the gateway outage) carries the program
       // at full level — the house finishing chain already loudnorm'd it to
       // −16 LUFS, so gain 1.0 lands exactly on the broadcast target (the
       // S64 receipt: a ducked solo bed measured −32.1 LUFS and failed).
+      //
+      // S75 E10 receipt (the second kill): the mix filter mapped ONLY the
+      // bed — the concatenated VO ([0:a]) never reached final.mp4, and a
+      // narrated render measured −32.0 LUFS (the ducked bed alone). The
+      // amix arm exists only when narration exists; normalize=0 keeps the
+      // voice at its own level instead of amix's default ½ divider.
       const bedGain = anyVoAudio ? 0.16 : 1.0;
+      const bedChain =
+        "[1:a]volume=" + bedGain +
+        ",afade=t=in:st=0:d=1.5" +
+        ",afade=t=out:st=" + Math.max(0, totalSec - 2).toFixed(3) + ":d=2";
       await runFfmpeg([
         "-y",
         "-f", "concat", "-safe", "0", "-i", listFile,
         "-stream_loop", "-1", "-t", totalSec.toFixed(3), "-i", opts.musicPath,
-        "-filter_complex", "[0:v]format=yuv420p[v];[1:a]volume=" + bedGain + ",afade=t=in:st=0:d=1.5,afade=t=out:st=" + Math.max(0, totalSec - 2).toFixed(3) + ":d=2[a]",
+        "-filter_complex",
+          anyVoAudio
+            ? "[0:v]format=yuv420p[v];" + bedChain + "[bed];[0:a][bed]amix=inputs=2:duration=first:normalize=0[a]"
+            : "[0:v]format=yuv420p[v];" + bedChain + "[a]",
         "-map", "[v]", "-map", "[a]",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
         "-c:a", "aac", "-b:a", "160k",

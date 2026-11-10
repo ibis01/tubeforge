@@ -8366,6 +8366,76 @@ await test("S74: the blind scorer REJECTS malformed replies instead of clamping 
   eq(strNums.overall, 4, "string-encoded numbers parse");
 });
 
+suiteStart("S75 — E10 readiness: the container-safe chromium launch (the /dev/shm receipt)");
+await test("S75: the whiteboard chromium launch args are container-safe (--no-sandbox + --disable-dev-shm-usage)", async () => {
+  const { WB_CHROMIUM_LAUNCH_ARGS } = await import("../src/lib/tubeforge/whiteboard/render");
+  ok(
+    WB_CHROMIUM_LAUNCH_ARGS.includes("--disable-dev-shm-usage"),
+    "missing --disable-dev-shm-usage (64MB /dev/shm kills a bare launch mid-scene)"
+  );
+  ok(
+    WB_CHROMIUM_LAUNCH_ARGS.includes("--no-sandbox"),
+    "missing --no-sandbox (container user-namespace reality)"
+  );
+});
+await test("S75: BOTH whiteboard launch sites launch through WB_CHROMIUM_LAUNCH_ARGS — no bare launch can return", async () => {
+  // A source-level tripwire so a future chromium.launch({ headless: true })
+  // cannot silently reintroduce the /dev/shm OOM kill (the S75 E10 receipt:
+  // the 16:9 benchmark died at scene 2, frame 230/378, SIGKILL, no trace).
+  const renderSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/render.ts", "utf8");
+  const bareLaunches = renderSrc.match(/chromium\.launch\(\{ headless: true \}\)/g) ?? [];
+  eq(bareLaunches.length, 0, "a bare chromium.launch({ headless: true }) remains in the whiteboard renderer");
+  const argsLaunches = renderSrc.match(/chromium\.launch\(\{ headless: true, args: \[\.\.\.WB_CHROMIUM_LAUNCH_ARGS\] \}\)/g) ?? [];
+  ok(argsLaunches.length >= 2, `both launch sites must use WB_CHROMIUM_LAUNCH_ARGS (found ${argsLaunches.length})`);
+});
+await test("S75: the scene loop RECYCLES its chromium context per scene — no page outlives a scene boundary", async () => {
+  // The S75 E10 receipt, second kill: ONE page held across the project grew
+  // until the 4GB worker's OOM killer fired mid-scene (no JS trace). The
+  // context must be born inside the scene loop and closed in its finally.
+  const renderSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/render.ts", "utf8");
+  // Anchor on the MAIN render's launch (the last one) — the asset rasterize
+  // probe has its own short-lived launch+context and is not under test here.
+  const launchIdx = renderSrc.lastIndexOf("chromium.launch");
+  const loopIdx = renderSrc.indexOf("for (let si = 0");
+  ok(launchIdx !== -1 && loopIdx !== -1 && launchIdx < loopIdx, "the render structure changed — re-anchor this pin");
+  const between = renderSrc.slice(launchIdx, loopIdx);
+  eq((between.match(/newContext/g) ?? []).length, 0, "a chromium context is created OUTSIDE the per-scene loop (memory recycling lost)");
+  ok(
+    /finally \{[\s\S]*?await context\.close\(\)[\s\S]*?\}\n    \}/.test(renderSrc) || renderSrc.includes("await context.close().catch(() => {})"),
+    "the scene loop must close its context in a finally (per-scene recycling)"
+  );
+});
+await test("S75: the scene encode PADS the VO (apad) — -shortest must never eat the estimator's tail", async () => {
+  // The S75 E10 receipt: -shortest truncated every scene to the VO length
+  // (9 frames short each; 1623 budgeted frames, 1578 delivered) — the
+  // estimator's 350ms tail (timing.ts VO branch) never reached the file.
+  const renderSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/render.ts", "utf8");
+  const sceneEncode = renderSrc.slice(renderSrc.indexOf('"-framerate"'), renderSrc.indexOf("runFfmpeg(args)"));
+  ok(sceneEncode.includes('"-af", "apad"'), "the scene encode lost its apad (the VO must pad to the scene duration)");
+  eq((sceneEncode.match(/"-shortest"/g) ?? []).length, 0, '"-shortest" returned to the scene encode as an argument (it eats the tail)');
+});
+await test("S75: the assembly MIXES the narration — the voice track must reach final.mp4", async () => {
+  // The S75 E10 receipt, second kill: the mix filter mapped ONLY the ducked
+  // bed — final.mp4 measured -32.0 LUFS (narration absent). The S64 comment
+  // already said the intent ("ducks to 0.16 UNDER the voice").
+  const renderSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/render.ts", "utf8");
+  ok(
+    renderSrc.includes("[0:a][bed]amix=inputs=2:duration=first:normalize=0[a]"),
+    "the assembly lost the voice+bed amix (narration would be dropped from final.mp4)"
+  );
+  ok(
+    renderSrc.includes("normalize=0"),
+    "amix must not divide the voice by its input count (normalize=0)"
+  );
+});
+await test("S75: the slides engine keeps its container-safe launch args (the original deployment contract)", async () => {
+  const slidesSrc = fs.readFileSync("src/lib/tubeforge/slides.ts", "utf8");
+  ok(
+    slidesSrc.includes("--disable-dev-shm-usage") && slidesSrc.includes("--no-sandbox"),
+    "the slides engine lost its container-safe launch args"
+  );
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
