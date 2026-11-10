@@ -3808,3 +3808,59 @@ aiCall's metering + credit reservation. 370/370 unit, typecheck 0,
 lint 0 errors on touched files. Phase B tail recorded, not built: the
 dedicated appearance pass, targeted repaint re-checks, the user
 setting, shot-art lock coverage, org-wide scoring.
+
+## S78 — the Visual Consistency Engine, Phase B slice 1: the appearance dimension, keyed to the plan's logged looks (2026-11-11)
+
+**The slice** (the first item of the S77 contract's recorded Phase B
+tail): the dedicated APPEARANCE judge. Phase A's identity dimension
+judges WHO the cast is (face/hair/age/build vs references) and Phase
+A's style judges HOW the video looks (palette/medium/lighting across
+scenes) — but nothing judged the approved plan's per-scene COSTUME
+LOG, the CharacterAppearance rows the human can edit in Scene Studio
+and `getApprovedAppearanceClause` actually paints from. A plan that
+logs "wool coat, silver watch" for scene 4 had no judge when scene 4
+came back in a t-shirt.
+
+**The judge:** `runAppearancePass` — for every scene that is (a) under
+an APPROVED plan, (b) a cast scene, and (c) actually logged (whitespace
+is not a look), one `aiCall("llm", "consistency appearance VLM", …)`
+judges the painted art against `buildAppearanceLook`'s clause — which
+mirrors `getApprovedAppearanceClause` EXACTLY (outfit + accessory ",
+"-joined, trimmed), so the judge scores the look the pipeline really
+paints, never a fantasy of it. The prompt disclaims BOTH neighbours
+(identity is judged elsewhere; style is judged elsewhere) — three
+dimensions, no double-judging. Gates and parse are pure and pinned:
+`buildAppearanceTargets` (approved × host × logged-look, ascending,
+deduped) and `parseAppearanceVerdict` (clamped 0–100, issues filtered
+and capped at 6; a missing/garbage score is NULL → unavailable — the
+legacy continuity pass's silent 50 was a fabricated number, and §0.3
+forbids that here). Unpainted scenes get no dimension row (the identity
+pass's own convention); an approved plan with cast but zero logged
+looks reports "appearance: approved plan has no logged looks to judge"
+in engine.unavailable — a dark dimension says why.
+
+**The unification:** the third dimension rides the existing math and
+envelope — min-across/worst-of/honest-zero now iterate
+identity → appearance → style; `dims.appearance` joins the V2 envelope
+(V1 rows still parse with NONE — never fabricated); repair proposals
+gained the redress template ("Redress this scene to match the logged
+look: … Keep the pose, face and framing."); the director card grew the
+appearance chip beside identity/style. No new job kind, no route
+changes — the existing "consistency" job, its auto-chain and the
+manual/Check paths all run the deeper engine unchanged. Zero
+generation-prompt changes (the pass READS art + config only — S74's
+frozen-prompt discipline holds).
+
+Laws held: propose-never-auto-edit (§0.2), fail-open with honest
+unavailable (§0.3), all spend through aiCall's metering (§0.4).
+378/378 unit (8 new pins), typecheck 0, lint 0 errors on touched files
+(both non-null assertions the local lane flagged were rewritten before
+landing). Phase B tail now: targeted single-scene re-check after
+repaints; the consistencyCheck user setting (off|manual|auto);
+photoreal-suffix reconciliation (after S74); shot-art lock coverage;
+org-wide cross-video scoring; pose-level identity rows.
+
+(Recovery note: the sandbox recycle rolled /home/z/my-project's .git
+back to the S75 snapshot and the first S78 build was lost with it; the
+tree was restored from origin/main (9fad2a8, the GitHub truth) and the
+slice rebuilt identically from session context before landing.)

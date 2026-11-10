@@ -1,9 +1,11 @@
 # S77 — Visual Consistency Engine — Phase A design contract
 
 **Status:** Phase A designed and implemented (the deterministic core + the
-VLM style layer + the orchestration wiring); the Phase B tail is listed,
-not built. Unit-pinned in `scripts/test-unit.mts`; the VLM layers ride
-the budget choke point and fail open.
+VLM style layer + the orchestration wiring). Phase B slice 1 — the
+dedicated APPEARANCE dimension — implemented in S78. The remaining
+Phase B tail is listed, not built. Unit-pinned in
+`scripts/test-unit.mts`; the VLM layers ride the budget choke point and
+fail open.
 **Scope of this document:** the engine's contract only — what a
 "consistency score" IS in TubeForge, the data envelope it writes, the
 job it runs under, and the laws it must never break. Implementation:
@@ -56,21 +58,34 @@ engine consumes the shared contracts; no isolated pipeline).
 
 ## 2. The engine's dimensions and verdict math
 
-Per painted scene, up to two checked dimensions (Phase A):
+Per painted scene, up to three checked dimensions (Phase A: identity,
+style; S78 adds appearance):
 
 - **identity** — the EXISTING continuity pass, reused verbatim
   (`runContinuityCheck`): face/hair/age/build/clothing vs the
   character's references. Checked only for cast scenes
-  (`hostInScene` + identity present). Clothing IS judged here
-  already ("clothing vs the stated outfit") — a separate appearance
-  dimension without its own pass would be fake precision (Phase B
-  adds a dedicated pass keyed to the approved plan's
-  `CharacterAppearance` rows).
-- **style** — NEW cross-scene cohesion pass: palette, rendering
-  technique/medium, lighting language, line quality/realism level,
-  grain. Batched (≤6 images per `llmVision` call, chunked in scene
-  order), judged ACROSS the batch so drift is relative to the video's
-  own look, not an absolute aesthetic.
+  (`hostInScene` + identity present).
+- **appearance** (S78) — NEW dedicated pass keyed to the approved
+  plan's `CharacterAppearance` rows: the depicted clothing and
+  accessories versus the LOGGED outfit/accessory for that scene —
+  judged against `buildAppearanceLook`'s clause, which mirrors
+  `getApprovedAppearanceClause` exactly, so the judge scores the look
+  the pipeline actually paints. Gates: plan `approved` + scene carries
+  cast + a look actually logged (whitespace-only = not logged);
+  unpainted scenes get no dimension row (the identity pass's own
+  convention). One `aiCall("llm", "consistency appearance VLM", …)`
+  per target scene — the look is text, so no reference images ride
+  along. A missing/garbage score parses to NULL → the scene is
+  `unavailable`; it is NEVER defaulted (the legacy pass's silent 50
+  was a fabricated number — §0.3 forbids that here). An approved plan
+  with cast scenes but zero logged looks reports
+  `"appearance: approved plan has no logged looks to judge"` in
+  `engine.unavailable` — a dark dimension says why.
+- **style** — NEW cross-scene cohesion pass (Phase A): palette,
+  rendering technique/medium, lighting language, line
+  quality/realism level, grain. Batched (≤6 images per `llmVision`
+  call, chunked in scene order), judged ACROSS the batch so drift is
+  relative to the video's own look, not an absolute aesthetic.
 
 Verdict vocabulary per dimension: `"consistent" | "drift" | "off" |
 "unavailable"`, thresholds shared with the existing pass (≥80
@@ -103,7 +118,7 @@ fields are additive and optional:
 | `scenes[].verdict` | verdict | V1 | now the worst dimension verdict |
 | `scenes[].issues` | string[] | V1 | union of the dimensions' issues (identity first) |
 | `schema` | `2` | V2 | absent in V1 rows — the version probe |
-| `scenes[].dims` | `{ identity?, style? }` per-dimension `{ score, verdict, issues }` | V2 | the raw per-dimension truth; `score`/`verdict` above are derived |
+| `scenes[].dims` | `{ identity?, appearance?, style? }` per-dimension `{ score, verdict, issues }` | V2 | the raw per-dimension truth; `score`/`verdict` above are derived |
 | `styleContract` | `{ styles, majority, outliers, colorGrade }` | V2 | deterministic layer (§4) |
 | `proposals` | `{ sceneIndex, dimension, instruction }[]` | V2 | repair proposals (§6), capped at 8 |
 | `history` | `{ at, overall, triggered }[]` | V2 | bounded ledger, newest last, cap 12 |
@@ -157,6 +172,7 @@ unified verdict is `drift`/`off`, at most one proposal per dimension,
 whole report capped at 8:
 
 - **style** → `"Repaint this scene to match the video's dominant look (…majority…): <first style issue>. Keep the composition and subject."`
+- **appearance** (S78) → `"Redress this scene to match the logged look: <first appearance issue>. Keep the pose, face and framing."`
 - **identity** → the VLM's own first issue, passed through — the
   director card's Fix affordance already pre-fills the constraint
   box with it and the human edits before firing.
@@ -192,13 +208,18 @@ no new regeneration path exists in this engine.
 
 ## 8. Phase plan
 
-**Phase A (this record — implemented):** unified envelope + deterministic
+**Phase A (implemented):** unified envelope + deterministic
 style contract + batched VLM style pass + identity reuse + repair
 proposals + history ledger + storyboard auto-chain + manual route +
 director-card dimension chips.
 
-**Phase B (recorded, not built):** dedicated appearance pass keyed to
-approved `CharacterAppearance` rows; targeted single-scene re-check
+**Phase B slice 1 (S78 — implemented):** the dedicated appearance
+dimension keyed to the approved plan's `CharacterAppearance` rows —
+target gates, the mirrored look clause, the per-scene VLM pass, the
+third dimension in the verdict math/proposals/parser, the card's
+appearance chip, eight unit pins.
+
+**Phase B tail (recorded, not built):** targeted single-scene re-check
 after repaints; a `consistencyCheck` user setting (`off|manual|auto`);
 reconciling the photoreal-suffix contradiction in `artPromptRaw`
 (after S74 closes); shot-art lock coverage (`ensureShotImages` bypasses
@@ -232,3 +253,14 @@ worst-of, unavailable ignored, honest zero) · `buildRepairProposals`
 `parseConsistencyReport` (V1 rows still parse; V2 roundtrip) ·
 `STYLE_SYSTEM` + identity-law pins ("ignore identity" in the style
 prompt; "judge ONLY identity" stays in the continuity prompt).
+
+S78 additions: `buildAppearanceTargets` (approved/cast/logged-look
+gates, ascending, deduped) · `buildAppearanceLook` (mirrors
+`getApprovedAppearanceClause` — trimmed, ", "-joined) ·
+`parseAppearanceVerdict` (clamping, issues filter, missing score →
+null — NEVER a fabricated 50) · the three-dimension math (min-across
+identity/appearance/style, unavailable ignored, honest zero) · the
+appearance proposal branch (redress template, cap holds) · the V2
+appearance-dim roundtrip (V1 rows still map with none) ·
+`APPEARANCE_SYSTEM` law pins ("Judge ONLY appearance continuity";
+identity AND style both disclaimed; STRICT JSON).

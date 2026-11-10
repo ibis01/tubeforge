@@ -1,15 +1,20 @@
-// S77 — Visual Consistency Engine (Phase A).
+// S77 — Visual Consistency Engine (Phase A; S78 — Phase B slice 1, the
+// dedicated appearance dimension).
 //
 // docs/design/s77-visual-consistency.md is the contract; the laws below
 // cite its sections. The engine UNIFIES the judges that already existed —
 // the identity continuity pass (director.ts) and the per-image quality
 // gate — behind ONE report envelope on Video.consistency, and adds the
-// dimension nobody had: cross-scene STYLE cohesion. It proposes repairs;
+// dimensions nobody had: cross-scene STYLE cohesion, and (S78) the
+// APPEARANCE pass judging the cast's logged costume/accessory look from
+// the approved plan's CharacterAppearance rows. It proposes repairs;
 // it never regenerates anything (§0.2).
 //
 //   runConsistencyEngine   the job body: identity (reused verbatim) +
-//                          style batches (new) + the deterministic style
-//                          contract + repair proposals + history ledger.
+//                          appearance (S78, one call per logged-look
+//                          scene) + style batches + the deterministic
+//                          style contract + repair proposals + history
+//                          ledger.
 //
 // Everything with a fork in it that a test can pin lives in the pure
 // section: verdict math (min-across / worst-of / honest zero), the style
@@ -36,7 +41,7 @@ const vcLog = log.child({ mod: "visual-consistency" });
 // Types — the V2 envelope (§3). V1 ContinuityReport fields keep their names,
 // shapes and semantics; everything else is additive.
 
-export type ConsistencyDimension = "identity" | "style";
+export type ConsistencyDimension = "identity" | "appearance" | "style";
 export type DimVerdict = "consistent" | "drift" | "off" | "unavailable";
 
 export interface DimensionScore {
@@ -45,15 +50,22 @@ export interface DimensionScore {
   issues: string[];
 }
 
+/** The per-dimension truth of ONE scene, keyed by dimension id. Issue
+ *  joins and math iterate in this order: identity, appearance, style. */
+export type SceneDims = {
+  identity?: DimensionScore;
+  appearance?: DimensionScore;
+  style?: DimensionScore;
+};
+
+const DIMENSION_KEYS = ["identity", "appearance", "style"] as const;
+
 export interface SceneConsistencyV2 {
   sceneIndex: number;
   score: number | null; // min across checked dimensions — the binding constraint
   verdict: DimVerdict; // worst across checked dimensions
-  issues: string[]; // identity issues then style issues
-  dims: {
-    identity?: DimensionScore;
-    style?: DimensionScore;
-  };
+  issues: string[]; // identity issues, then appearance, then style
+  dims: SceneDims;
 }
 
 export interface StyleContract {
@@ -84,7 +96,7 @@ export interface ConsistencyReportV2 {
   styleContract: StyleContract;
   proposals: RepairProposal[];
   history: HistoryEntry[]; // bounded, newest last
-  engine: { identity: boolean; style: boolean; unavailable: string[] };
+  engine: { identity: boolean; appearance: boolean; style: boolean; unavailable: string[] };
 }
 
 // ---------------------------------------------------------------------------
@@ -113,10 +125,8 @@ export function worstVerdict(
 
 /** Scene score = MIN across checked, non-unavailable dimensions; null when
  *  nothing was checked. */
-export function sceneScoreOf(
-  dims: { identity?: DimensionScore; style?: DimensionScore }
-): number | null {
-  const checked = [dims.identity, dims.style].filter(
+export function sceneScoreOf(dims: SceneDims): number | null {
+  const checked = DIMENSION_KEYS.map((k) => dims[k]).filter(
     (d): d is DimensionScore => d !== undefined && d.score !== null && d.verdict !== "unavailable"
   );
   if (checked.length === 0) return null;
@@ -125,10 +135,8 @@ export function sceneScoreOf(
 
 /** Scene verdict = WORST checked dimension; "unavailable" only when every
  *  dimension is unchecked/unavailable. */
-export function sceneVerdictOf(
-  dims: { identity?: DimensionScore; style?: DimensionScore }
-): DimVerdict {
-  const checked = [dims.identity, dims.style].filter(
+export function sceneVerdictOf(dims: SceneDims): DimVerdict {
+  const checked = DIMENSION_KEYS.map((k) => dims[k]).filter(
     (d): d is DimensionScore => d !== undefined && d.score !== null && d.verdict !== "unavailable"
   );
   if (checked.length === 0) return "unavailable";
@@ -147,7 +155,8 @@ export function overallScoreOf(scenes: SceneConsistencyV2[]): {
 } {
   const scores: number[] = [];
   for (const scene of scenes) {
-    for (const dim of [scene.dims.identity, scene.dims.style]) {
+    for (const key of DIMENSION_KEYS) {
+      const dim = scene.dims[key];
       if (dim && dim.score !== null && dim.verdict !== "unavailable") scores.push(dim.score);
     }
   }
@@ -281,6 +290,78 @@ export function parseStyleVerdicts(
 }
 
 // ---------------------------------------------------------------------------
+// Appearance plumbing (S78, §5b) — the logged-look gates + the per-scene
+// reply parser, pinned.
+
+/** One approved plan's logged look for a scene — the CharacterAppearance
+ *  row's editable half. null/undefined/whitespace = not logged. */
+export interface AppearanceEntry {
+  sceneIndex: number;
+  outfit: string | null | undefined;
+  accessory: string | null | undefined;
+}
+
+/** The look clause the appearance pass judges against — MIRRORS
+ *  getApprovedAppearanceClause's composition exactly (outfit, accessory
+ *  ", "-joined, trimmed): the judge scores the look the pipeline
+ *  actually paints, never a fantasy of it. */
+export function buildAppearanceLook(
+  row: Pick<AppearanceEntry, "outfit" | "accessory">
+): string {
+  return [row.outfit, row.accessory]
+    .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+    .map((part) => part.trim())
+    .join(", ");
+}
+
+/**
+ * Which scenes get an appearance check: the plan APPROVED, the scene
+ * carries cast, and a look is actually logged. Zero AI, zero storage —
+ * the caller supplies host indexes and the DB rows.
+ */
+export function buildAppearanceTargets(
+  rows: AppearanceEntry[],
+  hostIndexes: number[],
+  planApproved: boolean
+): number[] {
+  if (!planApproved) return [];
+  const hosts = new Set(hostIndexes);
+  const byScene = new Map<number, AppearanceEntry>();
+  for (const row of rows) if (!byScene.has(row.sceneIndex)) byScene.set(row.sceneIndex, row);
+  const targets: number[] = [];
+  for (const [index, row] of byScene) {
+    if (hosts.has(index) && buildAppearanceLook(row) !== "") targets.push(index);
+  }
+  return targets.sort((a, b) => a - b);
+}
+
+export const APPEARANCE_SYSTEM = `You are an appearance-continuity judge for a video's storyboard. You see ONE generated scene image of a recurring character together with the look logged for that scene in the production plan. Judge ONLY appearance continuity: the depicted clothing and accessories versus the logged outfit and accessory (garment type, colour, layering, worn props). Ignore face, hair, age and build — identity is judged elsewhere. Ignore art style, lighting, framing and background — style is judged elsewhere.
+
+Respond with STRICT JSON only: {"score":<0-100>,"issues":["<short human-readable issue>"]} — score 100 means the depicted costume and props match the logged look; list concrete mismatches (empty array when none).`;
+
+/**
+ * Parse one appearance reply. Same strictness family as the style parser,
+ * but the continuity reply shape: a missing/garbage score is NULL — the
+ * caller records "unavailable". It is NEVER defaulted (the legacy pass's
+ * silent 50 was a fabricated number; §0.3 forbids that here).
+ */
+export function parseAppearanceVerdict(text: string): DimensionScore | null {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = parseJsonLoose(text);
+  } catch {
+    return null;
+  }
+  const scoreNum = Number(parsed.score);
+  if (!Number.isFinite(scoreNum)) return null;
+  const score = Math.round(Math.min(100, Math.max(0, scoreNum)));
+  const issues = Array.isArray(parsed.issues)
+    ? parsed.issues.filter((i): i is string => typeof i === "string").slice(0, 6)
+    : [];
+  return { score, verdict: verdictFromScore(score), issues };
+}
+
+// ---------------------------------------------------------------------------
 // Repair proposals (§6) — propose, never auto-edit (§0.2). Pinned.
 
 export function buildRepairProposals(
@@ -297,6 +378,14 @@ export function buildRepairProposals(
         sceneIndex: scene.sceneIndex,
         dimension: "identity",
         instruction: identity.issues[0],
+      });
+    }
+    const appearance = scene.dims.appearance;
+    if (appearance && appearance.score !== null && appearance.verdict !== "consistent" && appearance.issues[0]) {
+      proposals.push({
+        sceneIndex: scene.sceneIndex,
+        dimension: "appearance",
+        instruction: `Redress this scene to match the logged look: ${appearance.issues[0]}. Keep the pose, face and framing.`,
       });
     }
     const style = scene.dims.style;
@@ -347,7 +436,7 @@ export function parseConsistencyReport(json: string | null | undefined): Consist
     const checkedCount = Number(obj.checkedCount);
     const history = Array.isArray(obj.history) ? (obj.history as HistoryEntry[]) : [];
     const scenes = (obj.scenes as Record<string, unknown>[]).map((s) => {
-      const dims = (s.dims ?? {}) as { identity?: DimensionScore; style?: DimensionScore };
+      const dims = (s.dims ?? {}) as SceneDims;
       return {
         sceneIndex: Number(s.sceneIndex),
         score: s.score === null || s.score === undefined ? null : Number(s.score),
@@ -372,6 +461,7 @@ export function parseConsistencyReport(json: string | null | undefined): Consist
       history: history.filter((h) => h && typeof h === "object" && typeof h.at === "string"),
       engine: (obj.engine as ConsistencyReportV2["engine"]) ?? {
         identity: false,
+        appearance: false,
         style: false,
         unavailable: [],
       },
@@ -405,7 +495,7 @@ export function parseConsistencyReport(json: string | null | undefined): Consist
     styleContract: { styles: [], majority: "", outliers: [], colorGrade: null },
     proposals: [],
     history: [],
-    engine: { identity: true, style: false, unavailable: [] },
+    engine: { identity: true, appearance: false, style: false, unavailable: [] },
   };
 }
 
@@ -498,6 +588,71 @@ async function runStylePass(videoId: string, sceneIndexes: number[]): Promise<{
 }
 
 // ---------------------------------------------------------------------------
+// The VLM appearance pass (S78, §5b) — one call per logged-look scene,
+// fail-open (§0.3).
+
+async function runAppearancePass(
+  videoId: string,
+  targets: { sceneIndex: number; look: string }[]
+): Promise<{ byIndex: Map<number, DimensionScore>; unavailable: string[] }> {
+  const byIndex = new Map<number, DimensionScore>();
+  const unavailable: string[] = [];
+
+  for (const target of targets) {
+    // An unpainted scene has nothing to judge — no dimension row at all
+    // (the identity pass's own convention), never a fabricated fail.
+    const buf = await storage
+      .get(`${videoId}/${sceneImageFile(target.sceneIndex)}`)
+      .catch(() => null);
+    if (!buf) continue;
+
+    try {
+      const raw = await aiCall("llm", "consistency appearance VLM", () =>
+        llmVision({
+          messages: [
+            { role: "system", content: APPEARANCE_SYSTEM },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: `Logged look for this scene: ${target.look}` },
+                { type: "text", text: `Scene ${target.sceneIndex} generated image follows.` },
+                {
+                  type: "image_url",
+                  image_url: { url: `data:image/png;base64,${buf.toString("base64")}` },
+                },
+              ],
+            },
+          ],
+          temperature: 0.1,
+        })
+      );
+      const text = raw.choices?.[0]?.message?.content ?? "";
+      const parsed = parseAppearanceVerdict(text);
+      byIndex.set(
+        target.sceneIndex,
+        parsed ?? {
+          score: null,
+          verdict: "unavailable",
+          issues: ["appearance judge reply was malformed"],
+        }
+      );
+      if (!parsed) unavailable.push(`appearance scene ${target.sceneIndex}: unparseable reply`);
+    } catch (err) {
+      unavailable.push(
+        `appearance scene ${target.sceneIndex}: ${errorText(err, "vision error").slice(0, 120)}`
+      );
+      byIndex.set(target.sceneIndex, {
+        score: null,
+        verdict: "unavailable",
+        issues: [`appearance check failed: ${errorText(err, "vision error").slice(0, 120)}`],
+      });
+    }
+  }
+
+  return { byIndex, unavailable };
+}
+
+// ---------------------------------------------------------------------------
 // The engine — the "consistency" job body. Runs under ctx (assertCtx), like
 // every job body.
 
@@ -513,6 +668,7 @@ export async function runConsistencyEngine(
     select: {
       id: true,
       organizationId: true,
+      characterId: true,
       scenes: true,
       shotList: true,
       directorState: true,
@@ -579,7 +735,33 @@ export async function runConsistencyEngine(
       engineUnavailable.push("style: fewer than two painted scenes — nothing to compare");
   }
 
-  // 5. Config outliers join the style dimension as ISSUES (visibility
+  // 5. The appearance pass (S78) — the approved plan's logged looks, one
+  //    VLM call per target scene (approved + cast + a look actually logged).
+  const hostIndexes = scenes.filter((s) => s.hostInScene).map((s) => s.index);
+  const planApproved = video.directorState === "approved";
+  const appearanceRows: AppearanceEntry[] = video.characterId
+    ? await db.characterAppearance.findMany({
+        where: { videoId, characterId: video.characterId },
+        select: { sceneIndex: true, outfit: true, accessory: true },
+      })
+    : [];
+  const appearanceTargets = buildAppearanceTargets(appearanceRows, hostIndexes, planApproved);
+  let appearanceByIndex = new Map<number, DimensionScore>();
+  let appearanceRan = false;
+  if (appearanceTargets.length > 0) {
+    const targets = appearanceTargets.map((index) => {
+      const row = appearanceRows.find((r) => r.sceneIndex === index);
+      return { sceneIndex: index, look: row ? buildAppearanceLook(row) : "" };
+    });
+    const appearance = await runAppearancePass(videoId, targets);
+    appearanceByIndex = appearance.byIndex;
+    appearanceRan = true;
+    engineUnavailable.push(...appearance.unavailable);
+  } else if (planApproved && video.characterId && hostIndexes.length > 0) {
+    engineUnavailable.push("appearance: approved plan has no logged looks to judge");
+  }
+
+  // 6. Config outliers join the style dimension as ISSUES (visibility
   //    without a fake score — the operator chose that style card).
   for (const index of contract.outliers) {
     const dim = styleByIndex.get(index);
@@ -588,21 +770,30 @@ export async function runConsistencyEngine(
     else styleByIndex.set(index, { score: null, verdict: "unavailable", issues: [note] });
   }
 
-  // 6. Unify — one row per scene the engine actually looked at.
+  // 7. Unify — one row per scene the engine actually looked at.
   const v2Scenes: SceneConsistencyV2[] = scenes
-    .filter((s) => identityByIndex.has(s.index) || styleByIndex.has(s.index))
+    .filter(
+      (s) =>
+        identityByIndex.has(s.index) || appearanceByIndex.has(s.index) || styleByIndex.has(s.index)
+    )
     .map((s) => {
       const identity = identityByIndex.get(s.index);
+      const appearance = appearanceByIndex.get(s.index);
       const style = styleByIndex.get(s.index);
       const dims: SceneConsistencyV2["dims"] = {};
       if (identity)
         dims.identity = { score: identity.score, verdict: identity.verdict, issues: identity.issues };
+      if (appearance) dims.appearance = appearance;
       if (style) dims.style = style;
       return {
         sceneIndex: s.index,
         score: sceneScoreOf(dims),
         verdict: sceneVerdictOf(dims),
-        issues: [...(identity?.issues ?? []), ...(style?.issues ?? [])],
+        issues: [
+          ...(identity?.issues ?? []),
+          ...(appearance?.issues ?? []),
+          ...(style?.issues ?? []),
+        ],
         dims,
       };
     })
@@ -619,7 +810,12 @@ export async function runConsistencyEngine(
     styleContract: contract,
     proposals: buildRepairProposals(v2Scenes, contract),
     history: pushHistory(priorHistory, { at: new Date().toISOString(), overall, triggered }),
-    engine: { identity: identityRan, style: styleRan, unavailable: engineUnavailable },
+    engine: {
+      identity: identityRan,
+      appearance: appearanceRan,
+      style: styleRan,
+      unavailable: engineUnavailable,
+    },
   };
 
   await db.video.update({

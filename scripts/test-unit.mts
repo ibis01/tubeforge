@@ -8532,6 +8532,10 @@ const {
   pushHistory,
   parseConsistencyReport,
   STYLE_SYSTEM,
+  buildAppearanceTargets,
+  buildAppearanceLook,
+  parseAppearanceVerdict,
+  APPEARANCE_SYSTEM,
 } = await import("../src/lib/tubeforge/visual-consistency.ts");
 
 await test("S77: verdictFromScore keeps the family thresholds (80/55) — shared with the continuity pass", () => {
@@ -8805,6 +8809,176 @@ await test("S77: the style prompt's laws are pinned — style-only judgement, st
   ok(STYLE_SYSTEM.includes("identity is judged elsewhere"), "the dimension split is explicit — no double-judging identity");
   ok(STYLE_SYSTEM.includes("STRICT JSON"), "the reply contract is strict JSON");
   ok(STYLE_SYSTEM.includes("Every labelled scene index MUST appear"), "a skipped scene is unavailable — the prompt fights that at the source");
+});
+
+// ---------------------------------------------------------------------------
+// S78 — Visual Consistency Engine, Phase B slice 1: the dedicated APPEARANCE
+// dimension keyed to the approved plan's CharacterAppearance rows.
+// ---------------------------------------------------------------------------
+
+await test("S78: buildAppearanceTargets — approved + cast + logged-look gates, ascending, deduped", () => {
+  const rows = [
+    { sceneIndex: 3, outfit: "wool coat", accessory: null },
+    { sceneIndex: 1, outfit: null, accessory: "silver watch" },
+    { sceneIndex: 2, outfit: "   ", accessory: "  " }, // whitespace-only = not logged
+    { sceneIndex: 5, outfit: "t-shirt", accessory: null }, // not a host scene
+    { sceneIndex: 1, outfit: "duplicate row", accessory: null }, // deduped to the first
+  ];
+  eq(buildAppearanceTargets(rows, [1, 2, 3], true), [1, 3], "ascending, whitespace-only and non-host dropped");
+  eq(buildAppearanceTargets(rows, [1, 2, 3], false), [], "an unapproved plan checks nothing");
+  eq(buildAppearanceTargets([], [1], true), [], "no rows → no targets");
+  eq(buildAppearanceTargets(rows, [], true), [], "no cast → no targets");
+});
+
+await test("S78: buildAppearanceLook — mirrors getApprovedAppearanceClause (outfit, accessory, ', '-joined, trimmed)", () => {
+  eq(buildAppearanceLook({ outfit: "wool coat", accessory: "scarf" }), "wool coat, scarf");
+  eq(buildAppearanceLook({ outfit: "wool coat", accessory: null }), "wool coat");
+  eq(buildAppearanceLook({ outfit: null, accessory: "scarf" }), "scarf");
+  eq(buildAppearanceLook({ outfit: "  denim jacket  ", accessory: undefined }), "denim jacket", "parts are trimmed");
+  eq(buildAppearanceLook({ outfit: "  ", accessory: "" }), "", "nothing logged → empty clause");
+});
+
+await test("S78: parseAppearanceVerdict — clamped + issues filtered; missing score → null, NEVER the legacy fake 50", () => {
+  const good = parseAppearanceVerdict('{"score":92,"issues":["watch missing"]}');
+  ok(good, "a valid reply parses");
+  eq(good.score, 92);
+  eq(good.verdict, "consistent");
+  eq(good.issues.length, 1);
+  eq(parseAppearanceVerdict('{"score":150,"issues":[]}')?.score, 100, "clamped high");
+  eq(parseAppearanceVerdict('{"score":-3,"issues":[]}')?.score, 0, "clamped low");
+  eq(parseAppearanceVerdict('{"score":54.6,"issues":[]}')?.score, 55, "rounded to the nearest verdict boundary");
+  eq(parseAppearanceVerdict('{"issues":["no score here"]}'), null, "missing score → null (the caller records unavailable)");
+  eq(parseAppearanceVerdict('{"score":"high","issues":[]}'), null, "a non-numeric score is garbage, not 50");
+  eq(parseAppearanceVerdict("not json"), null, "malformed → null");
+  const capped = parseAppearanceVerdict(
+    JSON.stringify({ score: 70, issues: ["a", "b", "c", "d", "e", "f", "g", 42, null] })
+  );
+  ok(capped, "capped reply parses");
+  eq(capped.issues.length, 6, "issues capped at 6, non-strings dropped");
+});
+
+await test("S78: appearance joins the verdict math — min-across three dims, worst-of, honest zero", () => {
+  const identity = { score: 90, verdict: "consistent" as const, issues: [] };
+  const appearance = { score: 60, verdict: "drift" as const, issues: ["watch missing"] };
+  const style = { score: 85, verdict: "consistent" as const, issues: [] };
+  eq(sceneScoreOf({ identity, appearance, style }), 60, "min across ALL three dimensions");
+  eq(sceneVerdictOf({ identity, appearance, style }), "drift", "worst verdict wins");
+  eq(sceneScoreOf({ appearance }), 60, "an appearance-only scene passes through");
+  eq(sceneVerdictOf({ appearance }), "drift");
+  // An unavailable appearance never drags a judged scene down.
+  const unavailableAppearance = { score: null, verdict: "unavailable" as const, issues: ["appearance check failed: 429"] };
+  eq(sceneScoreOf({ identity, appearance: unavailableAppearance, style }), 85);
+  eq(sceneVerdictOf({ identity, appearance: unavailableAppearance, style }), "consistent");
+  eq(sceneScoreOf({ appearance: unavailableAppearance }), null, "honest zero — no dimension checked");
+  eq(sceneVerdictOf({ appearance: unavailableAppearance }), "unavailable");
+});
+
+await test("S78: overallScoreOf counts appearance scores in the mean and the honest count", () => {
+  const scenes = [
+    {
+      sceneIndex: 1,
+      score: 75,
+      verdict: "drift" as const,
+      issues: [],
+      dims: {
+        identity: { score: 90, verdict: "consistent" as const, issues: [] },
+        appearance: { score: 60, verdict: "drift" as const, issues: [] },
+        style: { score: 75, verdict: "drift" as const, issues: [] },
+      },
+    },
+    {
+      sceneIndex: 2,
+      score: 100,
+      verdict: "consistent" as const,
+      issues: [],
+      dims: { appearance: { score: 100, verdict: "consistent" as const, issues: [] } },
+    },
+  ];
+  eq(overallScoreOf(scenes).overall, 81, "mean of 90+60+75+100 = 81.25 → 81");
+  eq(overallScoreOf(scenes).checkedCount, 4, "appearance scores count");
+});
+
+await test("S78: buildRepairProposals — the appearance branch proposes a redress, capped as usual", () => {
+  const contract = deriveStyleContract([{ sceneIndex: 1, style: "default" }], null);
+  const mk = (
+    sceneIndex: number,
+    verdict: "consistent" | "drift" | "off" | "unavailable",
+    dims: { identity?: { score: number | null; verdict: "consistent" | "drift" | "off" | "unavailable"; issues: string[] }; appearance?: { score: number | null; verdict: "consistent" | "drift" | "off" | "unavailable"; issues: string[] }; style?: { score: number | null; verdict: "consistent" | "drift" | "off" | "unavailable"; issues: string[] } }
+  ) => ({ sceneIndex, score: null, verdict, issues: [], dims });
+
+  const proposals = buildRepairProposals(
+    [
+      mk(1, "drift", { appearance: { score: 50, verdict: "drift", issues: ["logged scarf missing"] } }),
+      mk(2, "off", {
+        identity: { score: 60, verdict: "drift", issues: ["face differs"] },
+        appearance: { score: 40, verdict: "off", issues: ["wrong garment colour"] },
+      }),
+    ],
+    contract
+  );
+  eq(proposals.length, 3, "one per flagged dimension");
+  eq(proposals[0].dimension, "appearance");
+  ok(proposals[0].instruction.includes("logged look"), "the appearance template names the log");
+  ok(proposals[0].instruction.includes("logged scarf missing"), "the first issue is the constraint core");
+  ok(proposals[0].instruction.includes("Keep the pose, face and framing"), "the identity-adjacent framing rides along");
+  eq(proposals[1].dimension, "identity", "identity first within a scene");
+  eq(proposals[2].dimension, "appearance");
+  const many = Array.from({ length: 9 }, (_, i) =>
+    mk(i + 1, "drift", { appearance: { score: 50, verdict: "drift", issues: [`issue ${i + 1}`] } })
+  );
+  eq(buildRepairProposals(many, contract).length, 8, "the report cap still holds");
+});
+
+await test("S78: parseConsistencyReport — an appearance dim roundtrips; V1 rows still map with none", () => {
+  const v2 = JSON.stringify({
+    schema: 2,
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    overall: 70,
+    checkedCount: 2,
+    scenes: [
+      {
+        sceneIndex: 1,
+        score: 60,
+        verdict: "drift",
+        issues: ["logged scarf missing"],
+        dims: {
+          identity: { score: 90, verdict: "consistent", issues: [] },
+          appearance: { score: 60, verdict: "drift", issues: ["logged scarf missing"] },
+        },
+      },
+    ],
+    styleContract: { styles: ["default"], majority: "default", outliers: [], colorGrade: null },
+    proposals: [{ sceneIndex: 1, dimension: "appearance", instruction: "Redress this scene" }],
+    history: [],
+    engine: { identity: true, appearance: true, style: true, unavailable: [] },
+  });
+  const parsed = parseConsistencyReport(v2);
+  ok(parsed, "V2 with appearance parses");
+  const appearance = parsed.scenes[0]?.dims.appearance;
+  ok(appearance, "the appearance dimension survives the roundtrip");
+  eq(appearance.score, 60);
+  eq(appearance.verdict, "drift");
+  eq(parsed.proposals[0]?.dimension, "appearance");
+  eq(parsed.engine.appearance, true);
+
+  const v1 = JSON.stringify({
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    overall: 75,
+    scenes: [{ sceneIndex: 1, score: 75, verdict: "drift", issues: ["hair differs"] }],
+  });
+  const legacy = parseConsistencyReport(v1);
+  ok(legacy, "V1 still parses");
+  eq(legacy.scenes[0]?.dims.appearance, undefined, "no fabricated appearance on V1 rows");
+  eq(legacy.engine.appearance, false);
+});
+
+await test("S78: the appearance prompt's laws are pinned — costume-only judgement, both neighbours disclaimed, strict JSON", () => {
+  ok(APPEARANCE_SYSTEM.includes("Judge ONLY appearance continuity"), "costume/props are the only thing this judge scores");
+  ok(APPEARANCE_SYSTEM.includes("Ignore face, hair, age and build"), "identity is out of scope");
+  ok(APPEARANCE_SYSTEM.includes("identity is judged elsewhere"), "the dimension split is explicit");
+  ok(APPEARANCE_SYSTEM.includes("Ignore art style"), "style is out of scope");
+  ok(APPEARANCE_SYSTEM.includes("style is judged elsewhere"), "no double-judging style");
+  ok(APPEARANCE_SYSTEM.includes("STRICT JSON"), "the reply contract is strict JSON");
 });
 
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);

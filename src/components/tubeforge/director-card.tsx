@@ -37,9 +37,10 @@ interface ContinuityScene {
   verdict: "consistent" | "drift" | "off" | "unavailable";
   issues: string[];
   /** S77 — the per-dimension truth behind the unified verdict (optional:
-   *  legacy V1 reports predate it). */
+   *  legacy V1 reports predate it; S78 adds the appearance dimension). */
   dims?: {
     identity?: { verdict?: string };
+    appearance?: { verdict?: string };
     style?: { verdict?: string };
   };
 }
@@ -546,6 +547,9 @@ export function DirectorCard({
                   {verdictBadge(c.verdict)}
                   {c.dims?.identity?.verdict && c.dims.identity.verdict !== "consistent" && c.dims.identity.verdict !== "unavailable" && (
                     <Badge className="border-white/15 bg-white/5 text-white/60" variant="outline">identity</Badge>
+                  )}
+                  {c.dims?.appearance?.verdict && c.dims.appearance.verdict !== "consistent" && c.dims.appearance.verdict !== "unavailable" && (
+                    <Badge className="border-white/15 bg-white/5 text-white/60" variant="outline">appearance</Badge>
                   )}
                   {c.dims?.style?.verdict && c.dims.style.verdict !== "consistent" && c.dims.style.verdict !== "unavailable" && (
                     <Badge className="border-white/15 bg-white/5 text-white/60" variant="outline">style</Badge>
