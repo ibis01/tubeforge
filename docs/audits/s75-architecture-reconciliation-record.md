@@ -190,30 +190,45 @@ three shapes.
 Each row: closed with evidence, or explicitly deferred with its
 dependency:
 
-- **Chromium deployment for production workers — EVIDENCE STRENGTHENED
-  THIS STAGE.** The container reality is now measured, not assumed: on
-  the 4GB worker shape, chromium needs the container-safe launch args
-  (`--no-sandbox --disable-dev-shm-usage` — the slides contract, now
-  inherited by the whiteboard engine's BOTH launch sites) and per-scene
-  context recycling (peak RSS 444/442/285MB across formats, sampled).
-  Remaining open row: the DEPLOYMENT doc (`DEPLOYMENT.md` / design §3.3)
-  should state the chromium worker contract in the deploy checklist —
-  docs-only, next session.
+- **Chromium deployment for production workers — CLOSED (docs), one
+  declared infra dependency.** `DEPLOYMENT.md` §5 now states the worker
+  contract: the browser install line (5.1), the mandatory
+  `--no-sandbox --disable-dev-shm-usage` args (5.2, measured why),
+  per-scene context recycling as the memory contract, 444/442/285MB
+  envelope + the 4GB sizing guidance (5.3), the tini/daemonize
+  clarification (5.4), and the verifying drill (5.5). The Dockerfile
+  line itself is deferred **pending a real `docker build` + render smoke
+  on the built image** — the dev sandbox cannot execute one, and an
+  unverifiable edit to the production image would be the dishonesty
+  this stage forbids.
 - **Native rendering is $0 for every tier — EVIDENCED.** The entire
   E10 benchmark (three renders + QC batteries) ran to completion during
   a hard account-level 429 — the render path provably touches zero
   generation-API calls. Receipt: this record §4.1.
-- **Tier entitlements for optional AI (planner/TTS)** — rides the
-  existing metered `aiCall` floor; the entitlement surface is a product
-  decision to record, not new plumbing. Deferred to the readiness
-  report's decision list.
+- **Tier entitlements for optional AI (planner/TTS) — DECIDED.** The
+  five-decision list (D1–D5) is recorded in the readiness report §4:
+  native render $0 and ungated forever; optional AI (planner/TTS/art)
+  every tier, metered through the existing `aiCall` fail-closed credit
+  floor, native planner the default; QC/queue/cancellation never gated.
+  Zero new plumbing, as the ledger required.
 - **Export + QC integration — EVIDENCED.** The benchmark's renders pass
   the UNCHANGED 14-lens QC battery (13/14 + the documented
   cut-alignment modality exemption) — the whiteboard's `final.mp4` is
   indistinguishable from a compositor render to the ship gate.
-- **Worker recovery/cancellation** — rides the queue's resumable job
-  contract; verify the whiteboard JobKind inherits it (the S62/S63
-  receipt pattern). Deferred: needs a live queue drill, next session.
+- **Worker recovery/cancellation — DRILLED (the stage's strongest
+  receipt).** `scripts/s75-e12-queue-drill.mts`, executed live
+  2026-11-10, PASS in 20s / 17 asserts: (A) the registry truth; (B) an
+  orphaned whiteboard row (dead-pid claim) recovered by a FRESH worker
+  and rendered for real — done, `claimedBy="worker:…"`, attempts 1→2,
+  final.mp4 landed, duration probed 5.4s; (C) cooperative cancel
+  mid-render through the route's exact path — the row lands
+  "cancelled", never failed, "completed scenes kept" verbatim. The
+  drill caught TWO production defects, both fixed and unit-pinned:
+  the cancel route's hand literal was missing "whiteboard" + six kinds
+  (an UNCANCELLABLE render — the route now derives from
+  `resumableKinds()`), and the render's duration probe ran AFTER
+  `putFromPath` renamed the output away (0.0s rows under the local
+  driver — the probe now runs before the put). 354/354 unit pins.
 
 **The readiness rule (restated from the external review, adopted):**
 the Whiteboard Engine is NOT declared production-ready until E10's
@@ -238,15 +253,25 @@ anti-goal: not a collection of disconnected video generators.
 
 ## 6. Stage status
 
-**OPEN — reconciliations LANDED; E10 EXECUTED, all green; E12 ledger
-updated.** All local work is unpushed (the compromised PAT blocks the
-push cycle): `409808f` (reconciliation docs) + `f9fd0fd` (the E10
-benchmark + the four engine fixes + six unit pins, 352/352).
+**E12 CLOSED; the readiness report is ISSUED — the stage is closed on
+its own rule, pending only push/CI evidence and S74's independence.**
+The readiness report lives at
+`docs/audits/s75-whiteboard-readiness-report.md`: E10 measured (§1),
+the E12 ledger closed row by row (§2), the drill's two production
+defects receipted (§3), the entitlement decisions recorded (§4), the
+honest open items listed (§5–6). Pushed work: the reconciliation + E10
+landed at `409808f`/`f9fd0fd`/`b320f04`/`3da04cf`/`0f323bb` (CI 6/6 on
+`0f323bb` and `de0b4ca`). This session's E12 close (DEPLOYMENT.md §5 +
+the drill + the two fixes + the report) is local, queued for the next
+landing.
 
-Remaining for the close:
-1. The readiness report (the stage's final deliverable) — states the
-   Whiteboard Engine's production distance in receipts: E10 measured,
-   E12's two deferred rows (deployment-doc wording, the queue drill)
-   and the entitlement decision list.
-2. The push + CI evidence by SHA, gated on the PAT rotation.
-3. S74's close remains watcher-automated and independent.
+Remaining:
+1. **The second PAT rotation, then the push** — the landing token
+   transited chat twice (recorded in the worklog's landing receipt);
+   the queued E12 commits land only through the credential-safe gate
+   (`tf-push.sh`) with a FRESH token, delivered outside chat.
+2. **The real-TTS smoke + S74's close** — both ride the gateway window,
+   watcher-automated, independent of engine code.
+3. **The Dockerfile browser line** — deferred with its dependency (a
+   real docker build + render smoke); `DEPLOYMENT.md` §5.1 carries the
+   exact lines.

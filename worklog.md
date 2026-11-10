@@ -3484,3 +3484,63 @@ the push gate is unchanged and ready for the next landing.
 **S74 unchanged:** 0/8, watcher-automated (job 521163, next fire
 18:30 UTC today), independent of all of the above. The E10
 benchmark's gateway-free proof stands.
+
+## E12 closed — the live queue drill earns its keep (2026-11-10 ~18:20 UTC)
+
+**The deferred E12 rows are closed, and the drill caught TWO real
+production defects doing it.** The readiness rule demanded receipts, not
+claims; the receipts:
+
+**DEPLOYMENT.md §5 — the Chromium worker contract.** The production
+image ships NO browser (the Dockerfile's "no browser here" note
+predates the whiteboard engine); §5 states the measured requirement:
+the exact browser-install lines (5.1, deferred pending a real docker
+build + render smoke — the sandbox cannot verify an image edit, so it
+doesn't make one), the mandatory container-safe launch args with the
+SIGKILL receipt (5.2), per-scene context recycling + the
+444/442/285MB envelope and 4GB sizing (5.3), the tini/daemonize
+clarification (5.4), and the verifying drill (5.5).
+
+**The live queue drill** (`scripts/s75-e12-queue-drill.mts`, PASS in
+20s, 17 asserts): (A) the registry truth — 21 kinds, the cancel route
+must derive from it; (B) an orphaned whiteboard row (dead-pid claim)
+recovered by a FRESH worker and rendered FOR REAL — done,
+claimedBy="worker:…", attempts 1→2, final.mp4 landed, duration probed;
+(C) Stop on a running render — the row lands "cancelled", never
+failed, "completed scenes kept" verbatim.
+
+**Defect #1 — the uncancellable render.** `/api/jobs/cancel`'s
+hand-maintained KINDS literal was missing "whiteboard" (and six other
+registered kinds): pressing Stop on a running whiteboard render
+400'd. The exact drift the resumableKinds() history note warns about.
+Fixed: the route derives KINDS from the live registry.
+
+**Defect #2 — every locally-stored whiteboard render recorded 0.0s.**
+runWhiteboardJob probed result.file AFTER putFromPath — whose
+local-driver same-dir fast path RENAMES the source into the storage
+key (the S68 receipt's exact trap). ENOENT → ?? 0 → a lying row.
+Production's S3 scratch copy masked it. Fixed: probe before put.
+
+Both pinned by unit tests AND by the drill; **354/354** (352 + 2),
+typecheck + lint clean.
+
+**The entitlement decision list (D1–D5) is recorded** in the readiness
+report §4: native render $0 and ungated forever; optional AI (planner/
+TTS/art) on every tier through the existing aiCall fail-closed credit
+floor, native planner the default; QC/queue/cancellation never gated.
+Zero new plumbing, as the ledger required.
+
+**The readiness report is ISSUED** —
+`docs/audits/s75-whiteboard-readiness-report.md`: production-ready on
+the measured evidence, with three declared remaining items (the
+Dockerfile browser line behind a real image smoke; real TTS through
+the VO slot behind the gateway window; S74's close, 0/8,
+watcher-automated). The stage's own rule is satisfied: E10 measured,
+E12 closed row by row, nothing closed on unit tests alone.
+
+**Landing posture:** all of this session's E12 work is LOCAL, queued
+behind the second PAT rotation (the landing token transited chat twice
+— the external check and the worklog both call it). The gate is
+unchanged: `TF_TOKEN=<fresh> bash scripts/tf-push.sh <expected-sha>`.
+S74: watcher job 521163 armed, next fire 18:30 UTC today; manifest
+still empty (0/8).

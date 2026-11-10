@@ -1611,6 +1611,14 @@ export async function runWhiteboardJob(
       uploadedAssets,
     });
 
+    // Probe the render BEFORE it lands: putFromPath's local-driver fast
+    // path RENAMES the source into the storage key (the S68 receipt's
+    // exact trap), so a probe AFTER the put stats a moved-away file and
+    // the row records 0.0s — the E12 queue drill caught this live (the
+    // recovery render landed, the duration probed 0). Under the S3 driver
+    // the scratch copy stays, which is why production never saw it.
+    const durationSec = (await probeDurationSec(result.file)) ?? 0;
+
     // The standard key — the existing player route, QC battery and ship gate
     // never learn whiteboard exists (the design's "peer MODE" law).
     await putFromPath(`${videoId}/final.mp4`, result.file);
@@ -1619,7 +1627,6 @@ export async function runWhiteboardJob(
     for (let i = 0; i < result.scenes.length; i++) {
       await putFromPath(`${videoId}/whiteboard/scene-${i + 1}.mp4`, result.scenes[i].file);
     }
-    const durationSec = (await probeDurationSec(result.file)) ?? 0;
 
     await db.video.update({
       where: { id: videoId },

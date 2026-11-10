@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { requestJobCancel, type JobKind } from "@/lib/tubeforge/jobs";
+import { resumableKinds } from "@/lib/tubeforge/queue-handlers";
 
 /**
  * POST — stop a running background job (user-facing Stop button).
@@ -13,22 +14,15 @@ import { requestJobCancel, type JobKind } from "@/lib/tubeforge/jobs";
  * the job body itself.
  */
 
-const KINDS: JobKind[] = [
-  "script",
-  "voiceover",
-  "thumbnail",
-  "variants",
-  "portrait",
-  "poses",
-  "storyboard",
-  "render",
-  "scene",
-  "verify",
-  "comments",
-  "upload",
-  "short",
-  "convert",
-];
+// The cancellable kinds ARE the resumable kinds — both mean "every kind a
+// route can start", so both must derive from the LIVE handler registry.
+// This used to be a hand-maintained literal and it drifted exactly the way
+// resumableKinds() itself had (see its own history note): "whiteboard"
+// (S67) and six other registered kinds (research, stock, director,
+// continuity, slide, qc) were never added, so pressing Stop on a running
+// whiteboard render 400'd with "Unknown job kind" — an uncancellable
+// render. The S75 E12 queue drill pinned the fix.
+const KINDS: JobKind[] = resumableKinds();
 
 export async function POST(req: NextRequest) {
   const auth = await requireUser(req);

@@ -118,3 +118,61 @@ and the beta cohort before production opens.
 Two modes, both tested: SQLite zero-config (`npm ci && npm run dev`, see
 [`SETUP.md`](SETUP.md)) and full-stack Postgres
 (`docker compose up` — Postgres + web + worker, migrations on boot).
+
+## 5. The Chromium worker contract (whiteboard + slides rendering)
+
+The worker role renders video. Every ffmpeg/ffprobe stage is covered by
+the image's `ffmpeg` package; the **Whiteboard Engine** (and the slides
+engine's browser path) rasterize in headless Chromium driven by
+Playwright — and **the production image does not ship a browser**
+(`Dockerfile` §3 states this for the old slides-only world: "no browser
+here"). A worker built from the current image runs every job kind EXCEPT
+whiteboard rendering, which dies at `chromium.launch()`. This section is
+the deployment requirement, measured not assumed (the S75 E10 benchmark
+and the E12 live queue drill, 2026-11-10).
+
+**5.1 — Install the browser (the image gap).** In the runner stage, as
+root, before `USER tubeforge`:
+
+```dockerfile
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN npx playwright install --with-deps chromium
+```
+
+`--with-deps` apt-installs Chromium's OS libraries; the env var keeps the
+browser out of the (wiped) home cache and readable by the `tubeforge`
+user at runtime. This line is NOT yet in the Dockerfile — it is the one
+open infra row of the S75 readiness report (deferred pending a real
+`docker build` + render smoke on the built image, which the dev sandbox
+cannot execute).
+
+**5.2 — The launch args are mandatory.** Chromium must launch with
+`--no-sandbox --disable-dev-shm-usage` — encoded as
+`WB_CHROMIUM_LAUNCH_ARGS` in `src/lib/tubeforge/whiteboard/render.ts`
+and used at BOTH launch sites; the slides engine carries the same args.
+Measured why: on a 4 GB worker with the default 64 MB `/dev/shm`, a bare
+`chromium.launch({ headless: true })` is SIGKILLed mid-scene by the OOM
+killer (the E10 receipt: the 16:9 benchmark died at scene 2, frame
+230/378, no JS trace). The unit suite fails if a bare launch returns.
+
+**5.3 — Per-scene context recycling is the memory contract.** The scene
+loop births and closes one Chromium context PER SCENE — never one page
+for the whole project (the one-page approach OOMs the 4 GB worker
+mid-render). Measured envelope at 1080p: peak RSS 444 / 442 / 285 MB
+across 16:9 / 9:16 / 1:1. Size the worker VM at 4 GB (the measured
+shape); 1 GB is untested and expected to OOM on 1080p projects.
+
+**5.4 — The worker is already a proper long-running process.**
+`scripts/worker.mts` runs the claim loop under `tini`
+(`TINI_SUBREAPER=1`); zombie reaping is handled. The double-fork
+daemonizer (`scripts/daemonize.py`) is a DEV-SANDBOX tool that escapes
+per-call process reapers — it is never needed under the container
+worker, whose renders are ordinary long-lived children.
+
+**5.5 — The drill that verifies this contract.**
+`scripts/s75-e12-queue-drill.mts` proves, against the real queue and a
+real chromium+ffmpeg render: a dead worker's whiteboard render is
+recovered by a fresh worker and actually lands (final.mp4 + a probed
+duration), and Stop cancels a running render mid-flight ("completed
+scenes kept"). Run it after any change to the queue, the whiteboard job
+path, or the storage driver.

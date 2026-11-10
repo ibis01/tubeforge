@@ -8440,6 +8440,39 @@ await test("S75: the slides engine keeps its container-safe launch args (the ori
   );
 });
 
+await test("S75: the per-job cancel route derives KINDS from the live registry — no hand literal can drift again", async () => {
+  // The E12 queue drill receipt: the route's hand-maintained literal was
+  // missing "whiteboard" (and six other registered kinds), so the Stop
+  // button 400'd on a running whiteboard render — an uncancellable render.
+  // The registry (resumableKinds()) is the single source of truth, exactly
+  // the lesson resumableKinds() itself records in its history note.
+  const routeSrc = fs.readFileSync("src/app/api/jobs/cancel/route.ts", "utf8");
+  ok(
+    routeSrc.includes("resumableKinds()"),
+    "the cancel route no longer derives KINDS from resumableKinds()"
+  );
+  ok(
+    !/const KINDS: JobKind\[\] = \[\s*"/.test(routeSrc),
+    "a hand-maintained kind literal returned to the cancel route"
+  );
+});
+
+await test("S75: the whiteboard render's duration probe runs BEFORE putFromPath renames the output away", async () => {
+  // The E12 queue drill receipt, second catch: the probe ran AFTER the
+  // put; the local driver's same-dir fast path RENAMES the source into
+  // the storage key (the S68 receipt's exact trap), so the probe stats a
+  // moved-away file and every locally-stored whiteboard render recorded
+  // videoDuration 0.0 (S3's scratch copy stays — production never saw it).
+  const jobsSrc = fs.readFileSync("src/lib/tubeforge/video-jobs.ts", "utf8");
+  const probeIdx = jobsSrc.indexOf("const durationSec = (await probeDurationSec(result.file)) ?? 0;");
+  const putIdx = jobsSrc.indexOf('await putFromPath(`${videoId}/final.mp4`, result.file);');
+  ok(probeIdx !== -1 && putIdx !== -1, "the probe/put anchors moved — re-anchor this pin");
+  ok(
+    probeIdx < putIdx,
+    "the duration probe moved AFTER the put again (0.0s rows under the local driver)"
+  );
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
