@@ -77,7 +77,7 @@ test.describe("Stage 4a premium UX", () => {
     // Step 1 (Video type): the FIRST decision — four presets, always valid,
     // nothing generated. S76 moved the type choice ahead of everything else.
     const next = page.getByRole("button", { name: /Next: Concept/ });
-    await expect(page.getByText("What are you making?")).toBeVisible();
+    await expect(page.getByText(/Choose the type of video first/)).toBeVisible();
     await expect(next).toBeEnabled();
     await page.getByRole("button", { name: /Whiteboard explainer/ }).click();
     await next.click();
