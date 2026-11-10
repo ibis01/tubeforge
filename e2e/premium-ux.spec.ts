@@ -95,11 +95,13 @@ test.describe("Stage 4a premium UX", () => {
     const draft = await page.evaluate(() => localStorage.getItem("tubeforge:create-draft"));
     expect(draft).toContain("container ships");
 
-    // Reload + return to Create → banner + topic restored.
+    // Reload + return to Create → banner + topic restored. The draft always
+    // reopens at step 0 (the type picker) — walk to Concept to see the topic.
     await page.reload();
     await page.waitForSelector("nav[aria-label='Main navigation']");
     await page.getByRole("navigation", { name: "Main navigation" }).getByText("Create").click();
     await expect(page.getByText("Brief draft restored from your last visit.")).toBeVisible();
+    await page.getByRole("button", { name: /Next: Concept/ }).click();
     await expect(page.getByLabel("Video topic")).toHaveValue(/container ships/);
   });
 
