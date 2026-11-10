@@ -3127,3 +3127,59 @@ shared-systems decision record (Visual Consistency platform service /
 Video Critic and Repair / Universal timeline contract — none verified
 complete, each awaiting the grounded-evaluation treatment the Creator
 Intelligence record modeled).
+
+## S74 open (2026-11-10 UTC) — S63's motion-vigor re-measure, paired on regenerated art
+
+The standing gateway-gated item from S63 is OPEN. S63's laws (T-63.1 the
+tempo law, T-63.2 the doctrine-always-rides law) landed and were
+CI-verified on `0c659b8`, but the re-measurement never ran — a hard
+account-wide 429 outage outlasted the stage. S74 executes that
+measurement.
+
+**The adaptation (documented deviation, `docs/audits/s74-motion-vigor-remeasure-record.md`):**
+S63's protocol required reusing the S62 art/plans verbatim. Between
+sessions the sandbox rebuilt and the gitignored `validation/s62/`
+binaries (art PNGs, plan JSONs, clips, frames) did not survive. What
+survived is committed: the S62 manifest (per-profile shot, artPrompt, the
+exact sanitized motionPrompt) and the S62 blind scores. S74 adapts with a
+STRONGER control — a paired same-art design: per profile, regenerate art
+ONCE from the committed `artPrompt`, render TWO clips on that one art
+(before = S62 prompt verbatim, after = S63-law prompt reconstructed from
+the committed shot). Within each pair the ONLY variable is the motion
+prompt; art sampling noise is held constant within the pair. The
+reconstruction law is unit-pinned (`i2vMotionPrompt` reads ONLY shot0's
+camera/moveSpeed/subjectAction) and all 8 after-prompts are pinned
+against the committed S62 manifest (the pose-kill, tempo collision, and
+run-on seam all present verbatim in the before prompts, all repaired in
+the after).
+
+What landed this commit:
+
+- **`scripts/s74-paired-remeasure.mts`** — the paired lane (resumable per
+  profile, `--pace-ms` for gateway pacing).
+- **`scripts/s74-blind-score.mts`** — the 16-slot blind scorer (S62
+  protocol verbatim, widened A–P; resumable per letter with checkpoint).
+- **`scripts/tf_s74_lane.sh`** + **`scripts/tf_s74_catchup.sh`** +
+  **`scripts/s74-resume.sh`** — the lane supervisor, the catch-up pass
+  (75-min silence + rotating canary, the S63 discipline), and the
+  probe-first resume entry point.
+- **Unit pins** (`scripts/test-unit.mts`): the reconstruction law + the
+  8-profile before/after prompt contracts against committed data.
+- **`docs/audits/s74-motion-vigor-remeasure-record.md`** — the stage
+  record (OPEN, measurement gateway-gated).
+
+The 2026-11-10 throttle: the social pilot's naturally-spaced pair went
+through clean, then the account entered a hard 429 window (identical
+shape to the S63 outage — account-wide, video AND llm, patient backoffs
+did not penetrate). The lane is resumable by design; the supervisor and
+catch-up pass carry the S63 silence discipline forward.
+
+**Local gate battery on this commit:** tsc 0 · eslint 0 (20 baseline
+warnings) · unit 345/345 (2 new S74 pins) · queue PASS · billing 40/40 ·
+build 0 · e2e 30/30.
+
+Stage status: **OPEN — code landed, measurement gateway-gated.** The
+close commit lands only on real clips + blind scores (8 paired i2v
+renders + 16 blind vision calls), per the stage law that took S62 from
+"assumed" to "measured." The landing PAT transited chat — rotate/revoke
+it after this session.

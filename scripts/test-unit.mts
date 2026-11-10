@@ -8196,6 +8196,129 @@ await test("S73 wrapper: a failed round-trip degrades to the native scaffold, la
   ok(/catalog is empty/.test(emptyCat.report.degradeReason ?? ""), "the reason names the empty catalog");
 });
 
+suiteStart("S74 — the paired motion re-measure (S63's open item, adapted post-rebuild)");
+
+await test("S74: i2vMotionPrompt reads ONLY shot0's camera/moveSpeed/subjectAction from the plan — the reconstruction law", async () => {
+  const { i2vMotionPrompt } = await import("../src/lib/tubeforge/liveliness.ts");
+  const scene = {
+    index: 1, title: "T", narration: "n", visual: "a red barn in a field",
+    camera: "static", mood: "warm light", caption: "c", hostInScene: false,
+    rehook: false, sfx: "none",
+  };
+  const full = {
+    sceneIndex: 1, mood: "x", transitionIn: "", motion: "smart", needsI2V: true,
+    useStock: false, pacing: "normal", ambience: "room", sfx: "none",
+    shots: [{
+      shotIndex: 0, framing: "wide", camera: "zoom-in", lens: "24mm",
+      composition: "rule of thirds", duration: 5, imagePrompt: "IGNORED",
+      subject: "the anchor", subjectAction: "walking to the door", moveSpeed: "fast",
+    }],
+  };
+  const minimal = { shots: [{
+    shotIndex: 0, framing: "", camera: "zoom-in", lens: "", composition: "",
+    duration: 5, imagePrompt: "", subjectAction: "walking to the door", moveSpeed: "fast",
+  }] };
+  eq(
+    i2vMotionPrompt(scene, full as never),
+    i2vMotionPrompt(scene, minimal as never),
+    "a minimal 3-field shot yields the byte-identical prompt"
+  );
+  const variant = {
+    ...full,
+    shots: [{
+      ...full.shots[0], framing: "close-up", lens: "85mm f/1.8",
+      imagePrompt: "DIFFERENT", composition: "centered", subject: "someone else",
+    }],
+  };
+  eq(
+    i2vMotionPrompt(scene, variant as never),
+    i2vMotionPrompt(scene, minimal as never),
+    "framing/lens/imagePrompt/composition/subject are invisible to the motion prompt"
+  );
+});
+
+await test("S74: the committed S62 manifest + BRIEFS reconstruct all eight after-prompts (pose-kill repaired, tempo law, sentence boundary)", async () => {
+  const { i2vMotionPrompt, I2V_SUBJECT_MOTION } = await import("../src/lib/tubeforge/liveliness.ts");
+  const { classifyScene } = await import("../src/lib/tubeforge/motion.ts");
+  const { resolveContentPolicy, sanitizePromptForPolicy } = await import("../src/lib/tubeforge/restricted-subjects.ts");
+  const { BRIEFS } = await import("./s-profile-briefs.mts");
+
+  const s62 = JSON.parse(
+    fs.readFileSync(path.join(process.cwd(), "validation", "s62", "manifest.json"), "utf8")
+  ) as {
+    profile: string; ok: boolean; policy: string;
+    motionPrompt: string;
+    shot: { framing: string; camera: string; moveSpeed: string; duration: number;
+            imagePrompt: string; subjectAction: string | null } | null;
+  }[];
+  const okEntries = s62.filter((e) => e.ok);
+  eq(okEntries.length, 8, "the committed S62 manifest carries 8 ok entries");
+
+  const recon = (shot: NonNullable<(typeof s62)[number]["shot"]>) => ({
+    shots: [{
+      shotIndex: 0, framing: shot.framing, camera: shot.camera, lens: "",
+      composition: "", duration: shot.duration, imagePrompt: shot.imagePrompt,
+      subjectAction: shot.subjectAction ?? undefined, moveSpeed: shot.moveSpeed ?? undefined,
+    }],
+  });
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+  for (const e of okEntries) {
+    const brief = BRIEFS.find((b) => b.id === e.profile);
+    ok(brief, `${e.profile}: the brief exists`);
+    if (!brief || !e.shot) continue;
+
+    const policy = resolveContentPolicy(brief.contentPolicy ?? null);
+    eq(policy, e.policy, `${e.profile}: the brief's policy matches the S62 manifest`);
+
+    const after = sanitizePromptForPolicy(
+      i2vMotionPrompt(brief.scenes[0], recon(e.shot) as never),
+      policy
+    ).prompt;
+
+    // The pair is a measurement of the laws — before ≠ after, byte-level.
+    ok(after !== e.motionPrompt, `${e.profile}: the S63-law prompt differs from the committed S62 prompt`);
+
+    // The pose-kill, repaired: the per-kind clause ALWAYS rides now…
+    const kindClause = I2V_SUBJECT_MOTION[classifyScene(brief.scenes[0])];
+    ok(after.includes(kindClause), `${e.profile}: the kind clause rides the after prompt`);
+    // …and never rode the S62 prompts (subjectAction replaced it, 8/8 real plans).
+    ok(!e.motionPrompt.includes(kindClause), `${e.profile}: the S62 prompt carried no kind clause (the pose-kill, verbatim)`);
+
+    // The run-on seam, repaired: the subject ask ends with a real sentence boundary.
+    if (e.shot.subjectAction) {
+      const ask = e.shot.subjectAction.trim().replace(/[.\s]+$/, "");
+      ok(after.includes(`${cap(ask)}. `), `${e.profile}: the after prompt gives the subject ask a sentence boundary`);
+    }
+  }
+
+  // The tempo collision, repaired — pinned against the committed defects.
+  const need = <T,>(v: T | undefined, label: string): T => {
+    if (v === undefined) throw new Error(`missing ${label}`);
+    return v;
+  };
+  const social = need(okEntries.find((e) => e.profile === "social"), "social entry");
+  const socialBrief = need(BRIEFS.find((b) => b.id === "social"), "social brief");
+  const socialAfter = sanitizePromptForPolicy(
+    i2vMotionPrompt(socialBrief.scenes[0], recon(need(social.shot, "social shot")) as never),
+    resolveContentPolicy(null)
+  ).prompt;
+  ok(socialAfter.startsWith("Quick, energetic cinematic zoom in."), "social after: fast + zoom-in no longer contradicts itself");
+  ok(social.motionPrompt.includes("Quick, energetic slow cinematic zoom in"), "social before: the committed S62 contradiction, verbatim");
+
+  const islamic = need(okEntries.find((e) => e.profile === "islamic-history"), "islamic-history entry");
+  const islamicBrief = need(BRIEFS.find((b) => b.id === "islamic-history"), "islamic-history brief");
+  const islamicAfter = sanitizePromptForPolicy(
+    i2vMotionPrompt(islamicBrief.scenes[0], recon(need(islamic.shot, "islamic-history shot")) as never),
+    resolveContentPolicy("islamic-history")
+  ).prompt;
+  ok(islamicAfter.startsWith("Slow, deliberate cinematic zoom in."), "islamic-history after: slow + zoom-in reads once, not doubled");
+  ok(islamic.motionPrompt.includes("Slow, deliberate slow cinematic zoom in"), "islamic-history before: the doubled tempo, verbatim");
+
+  const explainer = need(okEntries.find((e) => e.profile === "explainer"), "explainer entry");
+  ok(explainer.motionPrompt.includes("Stationary at top position Cutaway"), "explainer before: the committed run-on seam, verbatim");
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

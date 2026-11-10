@@ -425,6 +425,11 @@ and the engine design docs):
    The whiteboard loop has proven the shared contracts; what remains on
    the track is E10 per-format benchmarks and the E12
    production-integration entitlements.
+   **S74 OPEN** (`docs/audits/s74-motion-vigor-remeasure-record.md`):
+   S63's motion-vigor re-measure, paired on regenerated art. Code +
+   unit pins landed (local gate green); the measurement (8 paired i2v
+   renders + 16 blind vision calls) is gateway-gated, resumable via the
+   lane supervisor when the window clears.
 2. **Creator Intelligence Engine** (`docs/audits/creator-intelligence-record.md`)
    — **LANDED (S70–S72)**: hook/script scoring (CI-1), title+thumbnail
    pairing lint (CI-2), transcript-based Shorts selection feeding the
