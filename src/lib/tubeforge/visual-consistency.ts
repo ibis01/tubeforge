@@ -414,6 +414,38 @@ export function pushHistory(
   return [...history, entry].slice(-cap);
 }
 
+// ---------------------------------------------------------------------------
+// Targeted re-check (S79, §7b) — ONE scene after a repaint, merged into
+// the prior report. Pinned pure parts: the neighbour batch and the merge.
+
+/**
+ * The targeted STYLE batch: the repainted scene plus its nearest painted
+ * neighbours — scene order kept, capped at max. Cohesion needs ≥2 images
+ * (§5), so a lone scene is judged "unavailable" by the style pass, never
+ * a fabricated pass. Nearest-first with distance tie-break to the lower
+ * index: deterministic, no batch-composition roulette.
+ */
+export function buildTargetBatch(painted: number[], target: number, max = 6): number[] {
+  const size = Math.max(2, Math.floor(max));
+  const others = [...new Set(painted)].filter((i) => i !== target);
+  const picked = others
+    .sort((a, b) => Math.abs(a - target) - Math.abs(b - target) || a - b)
+    .slice(0, size - 1);
+  return [target, ...picked].sort((a, b) => a - b);
+}
+
+/** Replace-or-insert ONE scene row into the report's scene list, scene
+ *  order kept — the targeted re-check's ONLY write surface: every other
+ *  scene's last full-check verdict stands untouched. */
+export function mergeTargetedRow(
+  scenes: SceneConsistencyV2[],
+  row: SceneConsistencyV2
+): SceneConsistencyV2[] {
+  const next = scenes.filter((s) => s.sceneIndex !== row.sceneIndex);
+  next.push(row);
+  return next.sort((a, b) => a.sceneIndex - b.sceneIndex);
+}
+
 /** Parse the persisted report — V2 rows round-trip; legacy V1 rows
  *  (identity-only, no schema field) normalize with EMPTY additive fields
  *  (never fabricated ones). Returns null for null/corrupt/non-report JSON. */
@@ -832,5 +864,179 @@ export async function runConsistencyEngine(
     },
   });
   vcLog.info("consistency report written", { videoId, overall, checkedCount, triggered });
+  return report;
+}
+
+// ---------------------------------------------------------------------------
+// The targeted re-check (S79, §7b) — ONE scene after a repaint, merged
+// into the prior report. A repaint changes the art; every verdict that
+// judged the OLD art is obsolete for that scene. The full pass re-judges
+// every host scene (double VLM spend for repainters — §7 chose not to);
+// this re-judges ONLY the repainted scene: identity (dry), appearance
+// (if a look is logged), and style against its nearest painted
+// neighbours. Propose-never-auto-edit, fail-open, aiCall-metered — the
+// same laws as the full engine.
+
+export async function runTargetedRecheck(
+  videoId: string,
+  sceneIndex: number,
+  opts: { triggered?: string } = {}
+): Promise<ConsistencyReportV2> {
+  const ctx = assertCtx("runTargetedRecheck");
+  const triggered = opts.triggered ?? "repaint";
+
+  const video = await db.video.findUnique({
+    where: { id: videoId },
+    select: {
+      id: true,
+      organizationId: true,
+      characterId: true,
+      scenes: true,
+      shotList: true,
+      directorState: true,
+      consistency: true,
+    },
+  });
+  if (!video) throw new Error("Video not found");
+  const scenes = parseScenes(video.scenes);
+  const scene = scenes.find((s) => s.index === sceneIndex);
+  if (!scene) throw new Error(`Scene ${sceneIndex} does not exist`);
+
+  // No prior V2 report — there is nothing to merge into. The full engine
+  // is the honest path (it will also write the first report).
+  const prior = parseConsistencyReport(video.consistency);
+  if (!prior || prior.schema !== 2)
+    return runConsistencyEngine(videoId, { triggered });
+
+  const unavailable: string[] = [];
+
+  // Painted art — the style batch only judges scenes that exist on disk.
+  const painted: number[] = [];
+  for (const s of scenes) {
+    const stat = await storage
+      .stat(`${videoId}/${sceneImageFile(s.index)}`)
+      .catch(() => null);
+    if (stat) painted.push(s.index);
+  }
+
+  // 1. Identity — the existing pass scoped to ONE scene, DRY (no column
+  //    write, no Activity row of its own). A thrown check REPLACES the
+  //    stale verdict with "unavailable" — the old number judged art that
+  //    no longer exists; it must not stand as current truth.
+  let identityDim: DimensionScore | undefined;
+  let identityRan = false;
+  try {
+    const report = await runContinuityCheck(videoId, { onlyScene: sceneIndex });
+    const row = report.scenes.find((s) => s.sceneIndex === sceneIndex);
+    if (row) {
+      identityDim = { score: row.score, verdict: row.verdict, issues: row.issues };
+      identityRan = true;
+    }
+  } catch (err) {
+    const why = errorText(err, "continuity check failed").slice(0, 120);
+    unavailable.push(`identity scene ${sceneIndex}: ${why}`);
+    identityDim = { score: null, verdict: "unavailable", issues: [`identity check failed: ${why}`] };
+  }
+
+  // 2. Appearance — the same gates as the full pass, scoped to this scene.
+  let appearanceDim: DimensionScore | undefined;
+  let appearanceRan = false;
+  if (video.characterId) {
+    const rows: AppearanceEntry[] = await db.characterAppearance.findMany({
+      where: { videoId, characterId: video.characterId, sceneIndex },
+      select: { sceneIndex: true, outfit: true, accessory: true },
+    });
+    const hostIndexes = scene.hostInScene ? [sceneIndex] : [];
+    const targets = buildAppearanceTargets(rows, hostIndexes, video.directorState === "approved");
+    if (targets.length > 0) {
+      const look = buildAppearanceLook(rows[0] ?? { sceneIndex, outfit: null, accessory: null });
+      const pass = await runAppearancePass(videoId, [{ sceneIndex, look }]);
+      const dim = pass.byIndex.get(sceneIndex);
+      if (dim) {
+        appearanceDim = dim;
+        appearanceRan = true;
+      }
+      unavailable.push(...pass.unavailable);
+    }
+  }
+
+  // 3. Style — the repainted scene against its nearest painted neighbours.
+  //    Only the TARGET's row updates: style scores are batch-relative, and
+  //    re-scoring the neighbours under a different batch composition would
+  //    churn rows the repaint never touched.
+  let styleDim: DimensionScore | undefined;
+  let styleRan = false;
+  const batch = buildTargetBatch(painted, sceneIndex);
+  if (batch.length >= 2) {
+    const pass = await runStylePass(videoId, batch);
+    const dim = pass.byIndex.get(sceneIndex);
+    if (dim) {
+      styleDim = dim;
+      styleRan = true;
+    }
+    unavailable.push(...pass.unavailable);
+  } else if (painted.includes(sceneIndex)) {
+    styleDim = {
+      score: null,
+      verdict: "unavailable",
+      issues: ["style cohesion needs at least two painted scenes"],
+    };
+  }
+
+  // 4. Merge — one row rebuilt, every other scene's last full-check
+  //    verdict stands untouched.
+  const priorRow = prior.scenes.find((s) => s.sceneIndex === sceneIndex);
+  const dims: SceneDims = { ...(priorRow?.dims ?? {}) };
+  if (identityDim) dims.identity = identityDim;
+  if (appearanceDim) dims.appearance = appearanceDim;
+  if (styleDim) dims.style = styleDim;
+  const mergedRow: SceneConsistencyV2 = {
+    sceneIndex,
+    score: sceneScoreOf(dims),
+    verdict: sceneVerdictOf(dims),
+    issues: DIMENSION_KEYS.flatMap((k) => dims[k]?.issues ?? []),
+    dims,
+  };
+  const mergedScenes = mergeTargetedRow(prior.scenes, mergedRow);
+  const { overall, checkedCount } = overallScoreOf(mergedScenes);
+
+  // The style contract is config — a repaint changes no style card, but
+  // the plan may have been approved since the last full run. Zero AI.
+  const contract = deriveStyleContract(
+    scenes.map((s) => ({ sceneIndex: s.index, style: s.style })),
+    approvedColorGrade(video.directorState, video.shotList)
+  );
+
+  const report: ConsistencyReportV2 = {
+    schema: 2,
+    checkedAt: new Date().toISOString(),
+    overall,
+    checkedCount,
+    scenes: mergedScenes,
+    styleContract: contract,
+    proposals: buildRepairProposals(mergedScenes, contract),
+    history: pushHistory(prior.history, { at: new Date().toISOString(), overall, triggered }),
+    engine: {
+      identity: prior.engine.identity || identityRan,
+      appearance: prior.engine.appearance || appearanceRan,
+      style: prior.engine.style || styleRan,
+      unavailable: [...new Set([...prior.engine.unavailable, ...unavailable])].slice(-12),
+    },
+  };
+
+  await db.video.update({
+    where: { id: videoId },
+    data: { consistency: JSON.stringify(report), error: null },
+  });
+  await db.activity.create({
+    data: {
+      organizationId: video.organizationId,
+      userId: ctx.userId,
+      videoId,
+      stage: "consistency",
+      message: `Targeted re-check (${triggered}): scene ${sceneIndex} — ${overall}% overall, ${checkedCount} dimension score(s)`,
+    },
+  });
+  vcLog.info("targeted recheck written", { videoId, sceneIndex, overall, triggered });
   return report;
 }

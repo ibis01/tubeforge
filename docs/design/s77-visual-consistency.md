@@ -190,11 +190,23 @@ no new regeneration path exists in this engine.
 - **Auto-chain: full storyboard completion only.** After
   `runStoryboardJob` succeeds (≥2 painted scenes), the storyboard job
   enqueues the consistency check (`triggered: "storyboard"`).
-  A single-scene repaint does NOT auto-chain the full check — the
-  full pass re-judges every host scene, which would double VLM spend
-  for repainters; the card's Check button (and the repaint toast)
-  keep the manual re-check honest and cheap. Targeted single-scene
-  re-judgement is a Phase B item.
+- **Targeted re-check after repaints (S79).** A single-scene repaint
+  (`runSceneJob`, edit or re-roll) makes every verdict that judged the
+  OLD art obsolete for THAT scene — so it auto-enqueues the TARGETED
+  re-check (`triggered: "repaint"`, payload `{ sceneIndex }`, fail-open
+  enqueue; the manual full Check remains the fallback). The targeted
+  check (`runTargetedRecheck`) re-judges ONLY that scene — identity via
+  the continuity pass's dry single-scene mode (no column write, no
+  Activity row of its own), appearance if a look is logged, style
+  against `buildTargetBatch`'s window (target + nearest painted
+  neighbours, cap 6, deterministic nearest-first with lower-index tie
+  break) — and MERGES via `mergeTargetedRow`: every other scene's last
+  full-check verdict stands untouched. A thrown sub-check replaces the
+  stale verdict with "unavailable" (the old number judged art that no
+  longer exists); no prior V2 report → the full engine runs instead;
+  proposals and the ledger rebuild on the merged list; the style
+  contract recomputes from config (zero AI). The payload rides the job
+  row, so a RESUME re-lands targeted, not full.
 - **Manual run** — `POST /api/videos/[id]/consistency` (202, job
   start); `GET` returns `{ consistency, generating, error }`. The
   director route's existing `action: "check"` now starts the
@@ -219,12 +231,17 @@ target gates, the mirrored look clause, the per-scene VLM pass, the
 third dimension in the verdict math/proposals/parser, the card's
 appearance chip, eight unit pins.
 
-**Phase B tail (recorded, not built):** targeted single-scene re-check
-after repaints; a `consistencyCheck` user setting (`off|manual|auto`);
-reconciling the photoreal-suffix contradiction in `artPromptRaw`
-(after S74 closes); shot-art lock coverage (`ensureShotImages` bypasses
-every identity lock today); org-wide cross-video character scoring;
-pose-level identity rows.
+**Phase B slice 2 (S79 — implemented):** the targeted single-scene
+re-check after repaints — the continuity pass's dry `onlyScene` mode,
+the `buildTargetBatch` neighbour window, `mergeTargetedRow`, the
+repaint auto-chain with a scene payload (resume-safe), the full-engine
+fallback when no prior report exists.
+
+**Phase B tail (recorded, not built):** a `consistencyCheck` user
+setting (`off|manual|auto`); reconciling the photoreal-suffix
+contradiction in `artPromptRaw` (after S74 closes); shot-art lock
+coverage (`ensureShotImages` bypasses every identity lock today);
+org-wide cross-video character scoring; pose-level identity rows.
 
 ## 9. Acceptance mapping (S76 §4.A / §6)
 
@@ -264,3 +281,10 @@ appearance proposal branch (redress template, cap holds) · the V2
 appearance-dim roundtrip (V1 rows still map with none) ·
 `APPEARANCE_SYSTEM` law pins ("Judge ONLY appearance continuity";
 identity AND style both disclaimed; STRICT JSON).
+
+S79 additions: `buildTargetBatch` (nearest-first window, cap,
+dedupe, target always in — unpainted target joins and is reported
+unavailable, never fabricated) · `mergeTargetedRow` (replace-or-insert,
+order kept, other rows reference-untouched) · the dry `onlyScene`
+continuity mode's contract (scoped loop, no column write, no Activity
+row).

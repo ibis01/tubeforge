@@ -8536,6 +8536,8 @@ const {
   buildAppearanceLook,
   parseAppearanceVerdict,
   APPEARANCE_SYSTEM,
+  buildTargetBatch,
+  mergeTargetedRow,
 } = await import("../src/lib/tubeforge/visual-consistency.ts");
 
 await test("S77: verdictFromScore keeps the family thresholds (80/55) — shared with the continuity pass", () => {
@@ -8979,6 +8981,41 @@ await test("S78: the appearance prompt's laws are pinned — costume-only judgem
   ok(APPEARANCE_SYSTEM.includes("Ignore art style"), "style is out of scope");
   ok(APPEARANCE_SYSTEM.includes("style is judged elsewhere"), "no double-judging style");
   ok(APPEARANCE_SYSTEM.includes("STRICT JSON"), "the reply contract is strict JSON");
+});
+
+// ---------------------------------------------------------------------------
+// S79 — the targeted single-scene re-check: the neighbour batch and the
+// merge (the pure write surface a repaint is allowed to touch).
+// ---------------------------------------------------------------------------
+
+await test("S79: buildTargetBatch — the target plus nearest painted neighbours, nearest-first, capped, order kept", () => {
+  eq(buildTargetBatch([1, 2, 3, 4, 5, 6, 7, 8], 4), [1, 2, 3, 4, 5, 6], "cap 6: scenes 7-8 (farthest) dropped");
+  eq(buildTargetBatch([2, 5, 10], 5), [2, 5, 10], "distances 3 and 5 — both fit");
+  eq(buildTargetBatch([2, 6, 10, 14], 6), [2, 6, 10, 14], "all neighbours fit under the cap");
+  eq(buildTargetBatch([7], 3), [3, 7], "an unpainted target still joins — the style pass reports it unavailable, honestly");
+  eq(buildTargetBatch([], 3), [3], "lone scene → single-element batch → 'needs at least two', never a fabricated pass");
+  eq(buildTargetBatch([4, 4, 2, 2], 4), [2, 4], "deduped");
+  eq(buildTargetBatch([1, 9], 5, 3), [1, 5, 9], "equal distances → lower index wins the nearer slot");
+  eq(buildTargetBatch([1, 9], 5, 2), [1, 5], "max 2 → only the nearest neighbour rides along (tie → lower index)");
+});
+
+await test("S79: mergeTargetedRow — replace-or-insert ONE row, scene order kept, every other row's identity untouched", () => {
+  const mk = (index: number): { sceneIndex: number; score: number; verdict: "consistent"; issues: string[]; dims: {} } => ({
+    sceneIndex: index,
+    score: 90,
+    verdict: "consistent",
+    issues: [],
+    dims: {},
+  });
+  const rows = [mk(1), mk(2), mk(3)];
+  const repainted = { ...mk(2), score: 40, verdict: "off" as const };
+  const replaced = mergeTargetedRow(rows, repainted);
+  eq(replaced.length, 3, "replaced, not appended");
+  eq(replaced.map((s) => s.sceneIndex), [1, 2, 3], "order kept");
+  eq(replaced[1].score, 40);
+  ok(replaced[0] === rows[0] && replaced[2] === rows[2], "the other rows are the SAME objects — their full-check verdicts stand");
+  const inserted = mergeTargetedRow([mk(1), mk(3)], mk(2));
+  eq(inserted.map((s) => s.sceneIndex), [1, 2, 3], "a scene absent from the prior report is inserted in order");
 });
 
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);

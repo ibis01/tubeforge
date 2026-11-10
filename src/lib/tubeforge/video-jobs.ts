@@ -105,7 +105,7 @@ import {
   setJobProgress,
   startJob,
 } from "./jobs";
-import { runConsistencyEngine } from "./visual-consistency";
+import { runConsistencyEngine, runTargetedRecheck } from "./visual-consistency";
 
 /** Character inputs for scene art — derived from video.characterId. */
 async function castOptsFor(video: {
@@ -454,6 +454,19 @@ export async function runSceneJob(
             ? `Scene ${sceneIndex} "${scene.title}" AI-edited: ${instruction.slice(0, 80)}`
             : `Scene ${sceneIndex} "${scene.title}" re-rolled`,
       },
+    });
+    // S79 — the targeted re-check: the repaint made every verdict that
+    // judged the OLD art obsolete for THIS scene. Re-judge just it and
+    // merge into the prior report — never the full pass (§7: that would
+    // re-judge every host scene, double VLM spend for repainters).
+    // The payload carries the scene so a RESUME re-lands targeted too.
+    await startJob(
+      videoId,
+      "consistency",
+      () => runConsistencyJob(videoId, "repaint", sceneIndex),
+      { payload: { sceneIndex } }
+    ).catch(() => {
+      /* fail-open — the manual Check button is the fallback */
     });
   } catch (err) {
     const message = errorText(err, "Scene edit failed");
@@ -1187,16 +1200,23 @@ export async function runContinuityJob(videoId: string): Promise<void> {
  * batches + the deterministic style contract + repair proposals, one V2
  * report on Video.consistency. `triggered` records HOW the run started
  * (storyboard auto-chain / manual / queue resume) in the report's ledger.
+ * S79 — `sceneIndex` routes to the TARGETED re-check: after a single-scene
+ * repaint only that scene is re-judged and merged into the prior report.
  */
 export async function runConsistencyJob(
   videoId: string,
-  triggered: string = "manual"
+  triggered: string = "manual",
+  sceneIndex?: number
 ): Promise<void> {
   const ctx = assertCtx("runConsistencyJob");
   const video = await db.video.findUnique({ where: { id: videoId } });
   if (!video) return;
   try {
-    await runConsistencyEngine(videoId, { triggered });
+    if (Number.isInteger(sceneIndex) && (sceneIndex as number) >= 1) {
+      await runTargetedRecheck(videoId, sceneIndex as number, { triggered });
+    } else {
+      await runConsistencyEngine(videoId, { triggered });
+    }
   } catch (err) {
     const message = errorText(err, "Consistency check failed");
     await db.video.update({ where: { id: videoId }, data: { error: message } });

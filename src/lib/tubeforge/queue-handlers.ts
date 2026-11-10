@@ -372,7 +372,15 @@ export function registerDefaultHandlers(): void {
   // S77 — the unified engine (identity reused + style + contract). A resumed
   // row records "resume" in the report's ledger; fresh runs record their
   // own trigger (storyboard auto-chain / manual).
-  registerJobHandler("consistency", (videoId) => runConsistencyJob(videoId, "resume"));
+  registerJobHandler("consistency", (videoId, payload) => {
+    // S79 — a targeted re-check carries { sceneIndex }; a null payload is
+    // the full engine (manual runs, the storyboard auto-chain, resumes of
+    // both). The payload makes a RESUME re-land targeted, not full.
+    const sceneIndex = (payload as { sceneIndex?: unknown } | null | undefined)?.sceneIndex;
+    return Number.isInteger(sceneIndex) && (sceneIndex as number) >= 1
+      ? runConsistencyJob(videoId, "resume", sceneIndex as number)
+      : runConsistencyJob(videoId, "resume");
+  });
   registerJobHandler("thumbnail", (videoId) => runThumbnailJob(videoId));
   registerJobHandler("variants", (videoId) => runVariantsJob(videoId));
   registerJobHandler("slide", (entityId) => runSlideJob(entityId));

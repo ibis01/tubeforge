@@ -537,8 +537,15 @@ const CONTINUITY_SYSTEM = `You are a continuity checker for a faceless YouTube v
 
 Respond with STRICT JSON only: {"score":<0-100>,"issues":["<short human-readable issue>"]} — score 100 means the depicted character matches the identity; list concrete mismatches (empty array when none).`;
 
-/** Run the VLM continuity check for one video. Job body — runs under ctx. */
-export async function runContinuityCheck(videoId: string): Promise<ContinuityReport> {
+/** Run the VLM continuity check for one video. Job body — runs under ctx.
+ *  S79: `opts.onlyScene` scopes the pass to ONE scene and runs it DRY —
+ *  no column write, no Activity row (the targeted consistency re-check
+ *  owns reporting; a full overwrite would erase the V2 report's other
+ *  dimensions). */
+export async function runContinuityCheck(
+  videoId: string,
+  opts: { onlyScene?: number } = {}
+): Promise<ContinuityReport> {
   const ctx = assertCtx("runContinuityCheck");
   const video = await db.video.findUnique({
     where: { id: videoId },
@@ -569,6 +576,7 @@ export async function runContinuityCheck(videoId: string): Promise<ContinuityRep
   const identity = video.character?.identityAnchor || video.character?.name || null;
   const checked: SceneConsistency[] = [];
   for (const scene of scenes) {
+    if (opts.onlyScene !== undefined && scene.index !== opts.onlyScene) continue;
     if (!scene.hostInScene || !identity) continue; // only cast scenes are checkable
     const buf = await storage.get(`${videoId}/${sceneImageFile(scene.index)}`).catch(() => null);
     if (!buf) continue; // unpainted scene — nothing to check yet
@@ -621,6 +629,10 @@ export async function runContinuityCheck(videoId: string): Promise<ContinuityRep
       : 0,
     scenes: checked.sort((a, b) => a.sceneIndex - b.sceneIndex),
   };
+  // A scene-scoped (dry) run reports through its caller — the targeted
+  // re-check merges it into the V2 envelope; a full overwrite here would
+  // destroy the other dimensions' truth.
+  if (opts.onlyScene !== undefined) return report;
   await db.video.update({
     where: { id: videoId },
     data: { consistency: JSON.stringify(report), error: null },

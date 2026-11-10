@@ -3864,3 +3864,45 @@ org-wide cross-video scoring; pose-level identity rows.
 back to the S75 snapshot and the first S78 build was lost with it; the
 tree was restored from origin/main (9fad2a8, the GitHub truth) and the
 slice rebuilt identically from session context before landing.)
+
+## S79 — the targeted re-check: a repaint now re-judges ITS scene, not the whole video (2026-11-11)
+
+**The gap** (Phase B slice 2 of the S77 contract): a single-scene
+repaint changed the art, but every verdict that judged the OLD art —
+identity, appearance, style — kept standing in the report until the
+human paid for a FULL re-check. S77 chose that deliberately (the full
+pass re-judges every host scene; double VLM spend for repainters) and
+recorded targeted re-judgement as Phase B. This is it.
+
+**The mechanics:** `runSceneJob` (edit or re-roll) now auto-enqueues
+the "consistency" job with payload `{ sceneIndex }` (fail-open — the
+manual Check button is the fallback; the payload rides the job row, so
+a RESUME re-lands targeted, not full — the registry handler parses
+it). `runTargetedRecheck` re-judges ONLY that scene and merges:
+identity via the continuity pass's new DRY `onlyScene` mode (scoped
+loop, no column write, no Activity row of its own — a full overwrite
+would erase the V2 report's other dimensions), appearance under the
+same approved×cast×logged gates scoped to the scene, and style against
+`buildTargetBatch`'s window — the target plus its nearest painted
+neighbours, cap 6, deterministic nearest-first with lower-index tie
+break (no batch-composition roulette). `mergeTargetedRow` is the ONLY
+write surface: replace-or-insert one row, every other scene's last
+full-check verdict stands untouched (pinned by reference identity).
+Neighbours' style scores from the targeted batch are deliberately
+DISCARDED — scores are batch-relative; re-scoring rows the repaint
+never touched would churn them under a different composition.
+
+**The honest edges:** a thrown sub-check REPLACES the stale verdict
+with "unavailable" — the old number judged art that no longer exists;
+it must not stand as current truth. No prior V2 report → the full
+engine runs instead (nothing to merge into). Proposals and the ledger
+rebuild on the merged list; the style contract recomputes from config
+(a repaint changes no style card, but the plan may have been approved
+since — zero AI). The S77 auto-chain (full storyboard) is untouched;
+the manual Check stays full; the dedupe key means a repaint during an
+in-flight check skips the targeted enqueue — the in-flight work
+already covers it.
+
+Laws held: propose-never-auto-edit, fail-open, aiCall-metered spend,
+zero generation-prompt changes. 380/380 unit (+2 pins), typecheck 0,
+lint 0 on touched files.

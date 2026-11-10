@@ -482,7 +482,7 @@ first, no parallel pipelines).
 | 1 | S74 real motion measurement | Critical | OPEN — the auto-resume loop (cron 521163) drives the 8 paired renders + 16 blind scores; watcher-automated |
 | 2 | Docker production image smoke | Critical | PENDING — needs a Docker-capable runner (the sandbox has none) |
 | 3 | Real TTS Whiteboard smoke | Critical | CLOSED — S76 `d991015`: the synthetic-audio caveat struck; the loudness contract pinned at the engine boundary |
-| 4 | Visual Consistency Engine | P0 | IN PROGRESS — Phase A landed (S77: the unified engine + style dimension + auto-chain); Phase B slice 1 landed (S78: the dedicated appearance dimension keyed to the approved plan's logged looks); Phase B tail (targeted re-checks, the user setting, shot-art locks, org-wide scoring) + live-artifact validation recorded |
+| 4 | Visual Consistency Engine | P0 | IN PROGRESS — Phase A landed (S77: the unified engine + style dimension + auto-chain); Phase B slices 1-2 landed (S78: the dedicated appearance dimension keyed to the approved plan's logged looks; S79: the targeted single-scene re-check after repaints, resume-safe via the job payload); Phase B tail (the user setting, shot-art locks, org-wide scoring) + live-artifact validation recorded |
 | 5 | Video Critic and Repair | P0 | pending |
 | 6 | Universal Timeline contract | P0 | pending |
 | 7 | Reference-video intelligence | P1 | pending |
