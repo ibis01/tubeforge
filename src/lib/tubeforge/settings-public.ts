@@ -20,6 +20,11 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   defaultThumbStyle: "cinematic",
   autoVoiceover: "true",
   autoThumbnail: "true",
+  // S80 — the Visual Consistency Engine's run mode.
+  // auto: the storyboard auto-chain AND the repaint targeted re-check run
+  // on their own; manual: only the Check button starts the engine; off:
+  // the engine refuses to run at all.
+  consistencyCheck: "auto", // auto | manual | off
   // Phase 3 — VLM quality gate
   qualityGate: "all", // off | thumbnails | all (thumbnails + storyboard scenes)
   qualityThreshold: "6", // 1-9 — below this the image is re-rolled once

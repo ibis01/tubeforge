@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
-import { parseConsistencyReport } from "@/lib/tubeforge/visual-consistency";
+import { parseConsistencyReport, normalizeConsistencyCheckMode } from "@/lib/tubeforge/visual-consistency";
+import { getUserSetting } from "@/lib/tubeforge/settings";
 import { startJob, isJobRunning, lastJobError } from "@/lib/tubeforge/jobs";
 import { runConsistencyJob } from "@/lib/tubeforge/video-jobs";
 
@@ -63,6 +64,16 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
 
   // Clear any stale error before the job starts (the storyboard route's law).
+  // S80 — "off" refuses even the manual start: the user disabled the engine.
+  // "manual" and "auto" both allow it ("manual" only suppresses the chains).
+  const mode = normalizeConsistencyCheckMode(
+    await getUserSetting("consistencyCheck").catch(() => null)
+  );
+  if (mode === "off")
+    return NextResponse.json(
+      { error: "Consistency checks are disabled in Settings" },
+      { status: 403 }
+    );
   await db.video.update({ where: { id }, data: { error: null } });
   const accepted = await startJob(id, "consistency", () => runConsistencyJob(id, "manual"));
   return NextResponse.json(

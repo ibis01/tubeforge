@@ -105,7 +105,8 @@ import {
   setJobProgress,
   startJob,
 } from "./jobs";
-import { runConsistencyEngine, runTargetedRecheck } from "./visual-consistency";
+import { runConsistencyEngine, runTargetedRecheck, normalizeConsistencyCheckMode } from "./visual-consistency";
+import { getUserSetting } from "./settings";
 
 /** Character inputs for scene art — derived from video.characterId. */
 async function castOptsFor(video: {
@@ -335,13 +336,20 @@ export async function runStoryboardJob(videoId: string): Promise<void> {
     // honestly when it has less. `startJob` is idempotent (a check already
     // queued/running for this video returns false) and the chain FAILS OPEN:
     // an enqueue hiccup must never fail a storyboard that just succeeded —
-    // the manual check route remains (§0.3).
+    // the manual check route remains (§0.3). S80 — the user's
+    // consistencyCheck preference gates the AUTO path ("auto" only; a
+    // corrupt setting normalizes to "auto", never silently disables).
     if (scenes.length >= 2) {
-      await startJob(videoId, "consistency", () => runConsistencyJob(videoId, "storyboard")).catch(
-        () => {
-          /* fail-open — the manual consistency route is the fallback */
-        }
+      const mode = normalizeConsistencyCheckMode(
+        await getUserSetting("consistencyCheck").catch(() => null)
       );
+      if (mode === "auto") {
+        await startJob(videoId, "consistency", () => runConsistencyJob(videoId, "storyboard")).catch(
+          () => {
+            /* fail-open — the manual consistency route is the fallback */
+          }
+        );
+      }
     }
   } catch (err) {
     if (err instanceof Error && err.message === "__CANCELLED__") {
@@ -460,14 +468,20 @@ export async function runSceneJob(
     // merge into the prior report — never the full pass (§7: that would
     // re-judge every host scene, double VLM spend for repainters).
     // The payload carries the scene so a RESUME re-lands targeted too.
-    await startJob(
-      videoId,
-      "consistency",
-      () => runConsistencyJob(videoId, "repaint", sceneIndex),
-      { payload: { sceneIndex } }
-    ).catch(() => {
-      /* fail-open — the manual Check button is the fallback */
-    });
+    // S80 — gated by the user's consistencyCheck preference ("auto" only).
+    const checkMode = normalizeConsistencyCheckMode(
+      await getUserSetting("consistencyCheck").catch(() => null)
+    );
+    if (checkMode === "auto") {
+      await startJob(
+        videoId,
+        "consistency",
+        () => runConsistencyJob(videoId, "repaint", sceneIndex),
+        { payload: { sceneIndex } }
+      ).catch(() => {
+        /* fail-open — the manual Check button is the fallback */
+      });
+    }
   } catch (err) {
     const message = errorText(err, "Scene edit failed");
     await db.video.update({ where: { id: videoId }, data: { error: message } });

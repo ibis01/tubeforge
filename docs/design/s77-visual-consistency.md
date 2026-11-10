@@ -213,6 +213,16 @@ no new regeneration path exists in this engine.
   consistency job (the unified check) instead of the identity-only
   continuity job; the `"continuity"` kind and handler remain for
   in-flight rows' resume.
+- **The user setting (S80)** — `consistencyCheck` (`auto | manual | off`,
+  default `auto`, a `UserSetting` row behind the settings allow-list):
+  `auto` runs BOTH chains (storyboard full check, repaint targeted
+  re-check); `manual` suppresses both chains, the Check button still
+  works; `off` refuses even the manual POST (403 "Consistency checks
+  are disabled in Settings"). The normalizer (`normalizeConsistency
+  CheckMode`) falls junk/blank/legacy values to `auto` — a corrupt
+  setting must never silently disable the quality system. The
+  preference read is fail-open (a settings-store error also lands on
+  `auto`). Settings → Pipeline Robustness exposes the control.
 - Spend control: every call rides `aiCall` — pacing, concurrency
   caps, credit reservation (a `CreditBlockedError` surfaces as
   dimension `unavailable`, the pipeline never breaks), UsageRecord
@@ -237,8 +247,13 @@ the `buildTargetBatch` neighbour window, `mergeTargetedRow`, the
 repaint auto-chain with a scene payload (resume-safe), the full-engine
 fallback when no prior report exists.
 
-**Phase B tail (recorded, not built):** a `consistencyCheck` user
-setting (`off|manual|auto`); reconciling the photoreal-suffix
+**Phase B slice 3 (S80 — implemented):** the `consistencyCheck` user
+setting (`off|manual|auto`) — the settings allow-list entry, the pure
+normalizer (junk → auto, never silently disabled), both auto-chains
+gated to `auto`, the manual POST refused at `off`, the Settings →
+Pipeline Robustness control.
+
+**Phase B tail (recorded, not built):** reconciling the photoreal-suffix
 contradiction in `artPromptRaw` (after S74 closes); shot-art lock
 coverage (`ensureShotImages` bypasses every identity lock today);
 org-wide cross-video character scoring; pose-level identity rows.
@@ -288,3 +303,8 @@ unavailable, never fabricated) · `mergeTargetedRow` (replace-or-insert,
 order kept, other rows reference-untouched) · the dry `onlyScene`
 continuity mode's contract (scoped loop, no column write, no Activity
 row).
+
+S80 additions: `normalizeConsistencyCheckMode` (the two valid
+non-defaults pass; junk/blank/null → `auto` — never silently
+disabled) · the settings allow-list entry · both chains gated to
+`auto` · the POST refusal at `off`.

@@ -3906,3 +3906,38 @@ already covers it.
 Laws held: propose-never-auto-edit, fail-open, aiCall-metered spend,
 zero generation-prompt changes. 380/380 unit (+2 pins), typecheck 0,
 lint 0 on touched files.
+
+## S80 — the consistencyCheck setting: the user owns when the quality engine runs (2026-11-11)
+
+**The slice** (Phase B slice 3 of the S77 contract): the engine's
+auto-chains were unconditional — every storyboard paint and every
+repaint spent VLM calls whether the user wanted the judging or not.
+The contract recorded a `consistencyCheck` user setting
+(`off|manual|auto`); this lands it end to end.
+
+**The semantics:** `auto` (the shipped default) runs BOTH chains —
+the storyboard full check and the repaint targeted re-check. `manual`
+suppresses both chains; the director card's Check button (and the
+POST route) still work. `off` refuses even the manual start — the
+POST route answers 403 "Consistency checks are disabled in Settings".
+The normalizer is pure and pinned: junk, blank and legacy values fall
+to `auto` — a corrupt setting must never SILENTLY DISABLE the quality
+system (the inverse failure of §0.3: here silence would hide drift,
+not fake a score). The preference read is fail-open too — a
+settings-store error lands on `auto`.
+
+**The wiring:** the allow-list entry (`settings-public.ts`, dotted
+default pattern), both chain sites gated (`runStoryboardJob`'s S77
+chain and `runSceneJob`'s S79 chain read the preference at enqueue
+time — job bodies carry the tenant ctx, so `getUserSetting` works),
+the POST route's refusal, and the Settings → Pipeline Robustness
+select (Auto — judge after every paint / Manual — only when I press
+Check / Off — no consistency engine). No schema migration (UserSetting
+is the existing per-user key/value store), no new job kind, no new
+route.
+
+Laws held: propose-never-auto-edit, fail-open (in both directions —
+an error enables, never disables), aiCall-metered, zero
+generation-prompt changes. 381/381 unit (+1 pin), typecheck 0, lint 0
+on touched files (scripts/ included — the CI lane's whole-repo lint
+scope).

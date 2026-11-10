@@ -8538,6 +8538,7 @@ const {
   APPEARANCE_SYSTEM,
   buildTargetBatch,
   mergeTargetedRow,
+  normalizeConsistencyCheckMode,
 } = await import("../src/lib/tubeforge/visual-consistency.ts");
 
 await test("S77: verdictFromScore keeps the family thresholds (80/55) — shared with the continuity pass", () => {
@@ -9019,6 +9020,17 @@ await test("S79: mergeTargetedRow — replace-or-insert ONE row, scene order kep
   ok(replaced[0] === rows[0] && replaced[2] === rows[2], "the other rows are the SAME objects — their full-check verdicts stand");
   const inserted = mergeTargetedRow([mk(1), mk(3)], mk(2));
   eq(inserted.map((s) => s.sceneIndex), [1, 2, 3], "a scene absent from the prior report is inserted in order");
+});
+
+await test("S80: normalizeConsistencyCheckMode — the two valid non-defaults pass; junk falls to auto, never silently disables", () => {
+  eq(normalizeConsistencyCheckMode("auto"), "auto");
+  eq(normalizeConsistencyCheckMode("manual"), "manual");
+  eq(normalizeConsistencyCheckMode("off"), "off");
+  eq(normalizeConsistencyCheckMode(null), "auto", "no setting → the shipped default");
+  eq(normalizeConsistencyCheckMode(undefined), "auto");
+  eq(normalizeConsistencyCheckMode(""), "auto");
+  eq(normalizeConsistencyCheckMode("AUTO"), "auto", "case-sensitive store — junk normalizes, never crashes");
+  eq(normalizeConsistencyCheckMode("never"), "auto", "a corrupt setting must NOT disable the quality system");
 });
 
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);

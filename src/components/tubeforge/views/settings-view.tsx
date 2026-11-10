@@ -178,6 +178,7 @@ export function SettingsView() {
     defaultThumbStyle: "cinematic",
     autoVoiceover: true,
     autoThumbnail: true,
+    consistencyCheck: "auto",
     qualityGate: "all",
     qualityThreshold: 6,
     aiBudgetEnabled: true,
@@ -373,6 +374,7 @@ export function SettingsView() {
           defaultThumbStyle: s.defaultThumbStyle ?? f.defaultThumbStyle,
           autoVoiceover: s.autoVoiceover !== "false",
           autoThumbnail: s.autoThumbnail !== "false",
+          consistencyCheck: s.consistencyCheck ?? "auto",
           qualityGate: s.qualityGate ?? "all",
           qualityThreshold: Number(s.qualityThreshold ?? 6),
           aiBudgetEnabled: s.aiBudgetEnabled !== "false",
@@ -1544,6 +1546,30 @@ export function SettingsView() {
 
         <div className="space-y-5">
           <div className="grid sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label>Consistency checks</Label>
+              <Select
+                value={form.consistencyCheck}
+                onValueChange={(v) =>
+                  setForm((f) => ({ ...f, consistencyCheck: v }))
+                }
+              >
+                <SelectTrigger className="bg-white/5">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Auto — judge after every paint</SelectItem>
+                  <SelectItem value="manual">Manual — only when I press Check</SelectItem>
+                  <SelectItem value="off">Off — no consistency engine</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                The visual consistency engine (identity, appearance, style)
+                scores the storyboard art and proposes repairs. Auto runs it
+                after a full storyboard paint and after each scene repaint;
+                manual keeps it to the director card's Check button.
+              </p>
+            </div>
             <div className="space-y-1.5">
               <Label>VLM quality gate</Label>
               <Select

@@ -446,6 +446,16 @@ export function mergeTargetedRow(
   return next.sort((a, b) => a.sceneIndex - b.sceneIndex);
 }
 
+/** S80 — the user's consistencyCheck preference, normalized. Junk, blank
+ *  and legacy values fall to "auto" (the shipped default) — a corrupt
+ *  setting must never silently disable the quality system. */
+export function normalizeConsistencyCheckMode(
+  raw: string | null | undefined
+): "auto" | "manual" | "off" {
+  if (raw === "manual" || raw === "off") return raw;
+  return "auto";
+}
+
 /** Parse the persisted report — V2 rows round-trip; legacy V1 rows
  *  (identity-only, no schema field) normalize with EMPTY additive fields
  *  (never fabricated ones). Returns null for null/corrupt/non-report JSON. */
