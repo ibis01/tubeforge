@@ -3544,3 +3544,37 @@ behind the second PAT rotation (the landing token transited chat twice
 unchanged: `TF_TOKEN=<fresh> bash scripts/tf-push.sh <expected-sha>`.
 S74: watcher job 521163 armed, next fire 18:30 UTC today; manifest
 still empty (0/8).
+
+## Landing receipt — E12 closure is on origin, CI 6/6 first try (2026-11-10 ~18:25 UTC)
+
+**The second rotated PAT arrived; the queued E12 closure landed.**
+tf-push.sh (drift guard pinned at de0b4ca, askpass, plain-URL, no-
+token-in-args) pushed exactly one commit — 845552c — after the secret
+gate ran clean on the outgoing history. Remote verified: origin/main
+= 845552c.
+
+**CI on 845552c: 6/6 green on the FIRST run** — Production build,
+Typecheck·Lint·Unit, Money-path coverage, Secret scan (gitleaks),
+PostgreSQL integration, E2E (Playwright) all success. No re-land
+needed this cycle. The two production defects the E12 live queue drill
+caught (the uncancellable render — /api/jobs/cancel now derives KINDS
+from resumableKinds() live; the 0.0s duration row — probe-before-put,
+the S68 trap) plus the DEPLOYMENT.md §5 chromium worker contract, the
+D1–D5 entitlement decisions, and the readiness report are all on
+origin. Unit suite stands at 354/354, typecheck and lint green.
+
+**Credential hygiene:** TF_TOKEN env-only (per-command prefix), one-
+shot 0700 askpass removed by the exit trap; never in a URL, an
+argument, or disk; env + /tmp verified zero-residue after both the
+push and the CI watch. The token transited chat again — this is the
+second landing token to do so; rotate once more when convenient and
+deliver outside chat if possible.
+
+**Next in the queue, in order:** (1) S74 close via the watcher —
+real renders + 16 blind scores only, no synthetic substitutes;
+(2) the real-TTS whiteboard smoke (E10 used synthetic narration-slot
+audio; the readiness report's honesty caveat); (3) the Dockerfile
+image smoke + render test that DEPLOYMENT.md §5 honestly deferred.
+
+**S74 at this writing:** 0/8, watcher job 521163 fires at 18:30 UTC —
+eight minutes out. Independent of everything above.
