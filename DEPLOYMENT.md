@@ -141,10 +141,27 @@ RUN npx playwright install --with-deps chromium
 
 `--with-deps` apt-installs Chromium's OS libraries; the env var keeps the
 browser out of the (wiped) home cache and readable by the `tubeforge`
-user at runtime. This line is NOT yet in the Dockerfile — it is the one
-open infra row of the S75 readiness report (deferred pending a real
-`docker build` + render smoke on the built image, which the dev sandbox
-cannot execute).
+user at runtime.
+
+**Status (2026-11-11): the lines have landed in the `Dockerfile` runner
+stage** — the `ENV` sits in the base env block, and the install `RUN`
+sits after the `node_modules` `COPY` (so `npx` resolves the pinned
+playwright from the image's own `node_modules`: 1.57.0 → browser build
+chromium-1200) and before `USER tubeforge`, with
+`chown -R tubeforge:tubeforge /opt/ms-playwright` appended. Static
+verification on record: `npx playwright install-deps --dry-run
+chromium` enumerates the closure mechanism (X11/GBM/NSS/ALSA libraries
+plus CJK/emoji fallback fonts — `fonts-wqy-zenhei`, `fonts-ipafont-
+gothic`, `fonts-noto-color-emoji` — so the image renders CJK titles
+without a separate font layer; playwright emits the matching package
+names per distro at build time, bookworm here); `playwright` is pinned
+`1.57.0` in **dependencies**, so the browser version is locked to the
+lockfile. **What is still NOT verified: the image itself.** This dev
+sandbox has no Docker daemon (no `docker`/`podman` binary, checked
+2026-11-11) — a real `docker build` + an in-container whiteboard render
+smoke (render a project inside the built image, probe the mp4) remains
+a REQUIRED production gate on a Docker-capable runner. Static edits are
+not a build; do not call the container ready until that smoke passes.
 
 **5.2 — The launch args are mandatory.** Chromium must launch with
 `--no-sandbox --disable-dev-shm-usage` — encoded as

@@ -44,17 +44,19 @@ unchanged 14-lens QC battery):
 
 ## 2. E12 — the ledger, closed row by row
 
-1. **Chromium deployment for production workers — CLOSED (docs), one
-   declared infra dependency.** `DEPLOYMENT.md` §5 now states the
-   contract: the browser install line (5.1), the mandatory
+1. **Chromium deployment for production workers — CLOSED (docs + the
+   Dockerfile edit), one declared infra dependency.** `DEPLOYMENT.md` §5
+   now states the contract: the browser install line (5.1), the mandatory
    `--no-sandbox --disable-dev-shm-usage` args (5.2, measured why: the
    64 MB `/dev/shm` SIGKILL), per-scene context recycling as the memory
    contract with the 444/442/285 MB envelope (5.3), the tini/daemonize
    clarification (5.4), and the drill that verifies it (5.5). The
-   Dockerfile line itself is deferred **pending a real `docker build` +
-   render smoke on the built image** — the dev sandbox cannot execute
-   one, and an unverifiable edit to the production image would be
-   exactly the dishonesty this stage forbids.
+   Dockerfile lines have since **landed** (2026-11-11), statically
+   verified against the §5.1 contract (placement, pinned playwright,
+   per-distro apt closure, chown for the non-root worker) — see §5.1's
+   status block. The **real `docker build` + render smoke on the built
+   image remains the one open infra gate**: the dev sandbox has no
+   Docker daemon, so it must run on a Docker-capable runner.
 2. **Native rendering is $0 for every tier — EVIDENCED** (§1's
    gateway-free proof). No entitlement check exists on the render path,
    and none may be added.
@@ -148,9 +150,11 @@ provider-agnostic by contract) but it IS listed in §6.
 
 ## 6. Remaining before the ENGINE is called ship-grade
 
-1. **The Dockerfile browser install + a real-image render smoke** — the
-   exact lines are in `DEPLOYMENT.md` §5.1; deferred pending a `docker
-   build` environment (dependency, not engineering work).
+1. **The real-image render smoke** — the Dockerfile browser install has
+   landed (§2 row 1, statically verified); what remains is a `docker
+   build` of the image and an in-container whiteboard render smoke on a
+   Docker-capable runner (dependency, not engineering work — this
+   sandbox has no Docker daemon).
 2. **Real TTS through the whiteboard VO slot** — one narrated render +
    QC battery once the gateway clears; rides the S74 window, watcher-
    automated, independent of all engine code.

@@ -7,8 +7,10 @@
 # The image carries the full runtime (src + scripts + node_modules + prisma)
 # rather than a minimal standalone copy: the worker imports TypeScript
 # sources live (tsx) and the web role shares the same layer — one thing to
-# build, scan and roll back. ffmpeg + ffprobe are runtime requirements
-# (render pipeline, audio conditioning, QC probing) and ship in the image.
+# build, scan and roll back. ffmpeg + ffprobe (render pipeline, audio
+# conditioning, QC probing) and headless Chromium (the Whiteboard and
+# slides engines' rasterizer, DEPLOYMENT.md §5) are runtime requirements
+# and ship in the image.
 #
 # Build:  docker build -t tubeforge .
 # Run:    see docker-compose.yml
@@ -37,12 +39,17 @@ WORKDIR /app
 
 # ffmpeg/ffprobe (render + QC), ca-certificates (TLS to providers/S3),
 # tini (zombie reaping under container init quirkiness — belt to proc.ts's
-# suspenders), fonts (Playwright slides fallback — no browser here, the
-# container host mounts one when slide rendering is enabled).
+# suspenders), fonts-liberation (base web fonts). Chromium's OS library
+# closure is installed by `playwright install --with-deps` further down
+# (its own apt layer, so this layer stays cached across browser bumps).
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ffmpeg ca-certificates tini fonts-liberation \
   && rm -rf /var/lib/apt/lists/*
+
+# Browser home for the Whiteboard/slides engines (DEPLOYMENT.md §5.1) —
+# outside the (wiped) home cache, world-readable at /opt/ms-playwright.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
@@ -58,6 +65,16 @@ COPY --from=build --chown=tubeforge:tubeforge /app/node_modules ./node_modules
 # Prune dev-only weight that survives npm ci in the deps stage.
 COPY --from=build --chown=tubeforge:tubeforge /app/package.json ./package.json
 COPY --from=build --chown=tubeforge:tubeforge /app/package-lock.json ./package-lock.json
+
+# Whiteboard/slides Chromium (DEPLOYMENT.md §5.1 — as root, before
+# USER tubeforge). Runs AFTER the node_modules COPY so npx resolves the
+# pinned playwright from the image's own node_modules (1.57.0 → browser
+# build chromium-1200); `--with-deps` apt-installs the OS library
+# closure for THIS base (bookworm — playwright emits the matching
+# package names per distro at build time) including CJK/emoji fallback
+# fonts; the tree is chowned so the non-root worker can execute it.
+RUN npx playwright install --with-deps chromium \
+  && chown -R tubeforge:tubeforge /opt/ms-playwright
 
 # Application code: standalone server (web role)…
 COPY --from=build --chown=tubeforge:tubeforge /app/.next/standalone ./.next/standalone

@@ -3578,3 +3578,52 @@ image smoke + render test that DEPLOYMENT.md §5 honestly deferred.
 
 **S74 at this writing:** 0/8, watcher job 521163 fires at 18:30 UTC —
 eight minutes out. Independent of everything above.
+
+## Docker readiness — the Chromium contract enters the image (2026-11-10 ~18:50 UTC)
+
+**The external check arrived and its deployment finding is correct:**
+the Dockerfile shipped ffmpeg but no browser while DEPLOYMENT.md §5
+documented the requirement — local render success is not container
+readiness. The report's sequence (S74 → Docker → TTS → shared quality
+systems → new engines) is adopted as the working order.
+
+**What this sandbox can and cannot do — measured, not assumed:** there
+is no `docker` and no `podman` binary here (`which` empty; checked
+2026-11-11). The image build + in-container render smoke therefore
+CANNOT run in the dev sandbox and is declared as the one open infra
+gate for a Docker-capable runner. Everything short of the build was
+done instead:
+
+- **Dockerfile (runner stage):** `ENV PLAYWRIGHT_BROWSERS_PATH=
+  /opt/ms-playwright` in the base env block; `RUN npx playwright
+  install --with-deps chromium && chown -R tubeforge:tubeforge
+  /opt/ms-playwright` placed AFTER the node_modules COPY (npx resolves
+  the pinned playwright from the image's own node_modules) and BEFORE
+  `USER tubeforge`, exactly per §5.1's "as root" contract. The stale
+  "no browser here" comment (the old slides-only world) is rewritten;
+  the browser install got its own apt layer so the ffmpeg layer stays
+  cached across browser bumps.
+- **Static receipts:** `npx playwright install-deps --dry-run
+  chromium` enumerates the closure (X11/GBM/NSS/ALSA libs + CJK/emoji
+  fallback fonts — fonts-wqy-zenhei, fonts-ipafont-gothic, fonts-noto-
+  color-emoji — so CJK titles render without a separate font layer);
+  playwright emits per-distro package names at build time (the sandbox
+  is Debian 13 and shows t64 names; the bookworm image gets the
+  bookworm set — that translation is --with-deps' own job). `playwright`
+  is pinned 1.57.0 in DEPENDENCIES (survives any prune) → browser
+  build chromium-1200, matching the version every local measurement
+  used. §5.2 re-verified in code: WB_CHROMIUM_LAUNCH_ARGS at
+  render.ts:50, used at both launch sites (:127, :204).
+- **Docs updated honestly:** DEPLOYMENT.md §5.1 gained a status block
+  ("the lines have landed… what is still NOT verified: the image
+  itself"); the readiness report's row 1 and §6 item 1 now say the
+  install has landed and the build+smoke is the remaining gate.
+
+**S74:** the watcher (job 521163) FIRED at 18:30 UTC — run_count 1,
+stage "started", executing as this was written. One probe per cycle is
+the watcher's; this lane stayed off the gateway. Manifest still empty
+at fire time (0/8).
+
+**Real TTS:** sequenced behind gateway recovery (readiness report §6
+item 2), rides the S74 window, independent of engine code. Nothing to
+do until the gateway clears — and no second probe to check.
