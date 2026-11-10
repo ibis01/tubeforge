@@ -3235,3 +3235,55 @@ LANDED on green CI. The measurement (8 paired i2v renders + 16 blind
 vision calls) stays OPEN — gateway-gated, still 429 as of 2026-11-10
 ~13:30 UTC. The cron watcher (job 520831, every 8h) probes first and
 auto-resumes the lane the moment the window clears.
+
+### S74 push-script security fix (2026-11-10 UTC) — execution-time credential handling
+
+The second external review flagged `tf_s73_push.sh` (P0): the PAT was
+embedded in the HTTPS remote URL and passed to git as a process argument —
+visible in `/proc/<pid>/cmdline` to anything on the machine, in shell
+history, and in tool logs. `unset TF_TOKEN` at exit does nothing about
+that exposure window. Gitleaks passing is a REPO-content result, not an
+execution-time one. Confirmed, and the whole family had the same defect:
+
+- **`scripts/tf-push.sh` (NEW, the reusable gate)** — the credential-safe
+  pattern, documented in its header: the PAT lives ONLY in the TF_TOKEN
+  environment variable; git auth rides a one-shot GIT_ASKPASS helper
+  (mktemp, chmod 700, body contains NO secret — it reads the inherited
+  environment when git asks); every git command uses the plain
+  `https://github.com/ibis01/tubeforge.git` URL; GIT_TERMINAL_PROMPT=0
+  (fail, never hang); trap removes the helper and unsets TF_TOKEN. The
+  optional arg keeps the one-shot family's drift guard; without it, git's
+  own non-fast-forward rejection is the guard. If the machine has a real
+  credential helper configured (gh auth), git consults it first — the PAT
+  is then not needed at all, the preferred production posture.
+- **`tf_s66_push.sh` / `tf_s67_push.sh` / `tf_s73_push.sh`** — the same
+  fix applied in place (portable `SCRIPT_DIR/..` root + askpass + plain
+  URL). Their pinned EXPECTED_REMOTE values stay historical — the
+  one-shot gates have all fired; they exist as records of how their
+  stages landed.
+- **`s54-autowatch.sh`** — the self-heal clone had the same URL-embedded
+  PAT (`https://${S54_GIT_PAT}@github.com/...`); now the same askpass
+  pattern, helper removed immediately after the clone.
+- **`tf_s66_ci_watch.sh`** — credential handling was already correct
+  (env → node → Authorization header, never an argument); gained only the
+  portable root.
+
+The askpass helper was unit-tested before use: correct username/password
+emission with the token exported, and a LOUD refusal (`${TF_TOKEN:?}`)
+when the env var is missing — never a silent empty password. One real
+defect caught by that test: `chmod 600` on the mktemp helper made it
+non-executable (git could not run it) — fixed to 700 (the file contains
+no secret, so owner-executable is the right permission).
+
+A repo-wide sweep confirms no credential-bearing URL construction remains
+in any script (`rg 'https://.*@\$\{|https://\$\{.*(TOKEN|PAT)'` → clean).
+
+CI association, established directly (the review's open P1): run
+42825672477's `head_sha` is exactly `01e892512a8f60f7486097af7afd5596503fb11d`
+(the then-HEAD), completed/success — the docs commit's 6/6 green is on
+the exact SHA, not an adjacent one.
+
+The landing PAT has now transited chat in every session that pushed — it
+is compromised by definition and MUST be rotated/revoked
+(GitHub → Settings → Developer settings → Personal access tokens) before
+the next push cycle.

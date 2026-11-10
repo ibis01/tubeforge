@@ -5,7 +5,11 @@
 #
 # Usage:  TF_TOKEN=<same pat> bash scripts/tf_s66_ci_watch.sh [sha]
 set -uo pipefail
-cd /home/z/my-project
+
+# Portable repo root — resolved from THIS script's location, never hardcoded.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
 
 REPO="ibis01/tubeforge"
 SHA="${1:-$(git rev-parse main)}"

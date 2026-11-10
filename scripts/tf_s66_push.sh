@@ -1,24 +1,43 @@
 #!/usr/bin/env bash
 # tf_s66_push.sh — one-shot S66 landing gate: push the reconciled main to
-# origin and verify. The token is used inline only — never written to disk,
-# never echoed, and dropped from the environment when the script exits.
+# origin and verify. CREDENTIAL-SAFE (the 2026-11-10 review fix, the pattern
+# scripts/tf-push.sh documents in full): the PAT lives only in the TF_TOKEN
+# environment variable; git auth rides a one-shot GIT_ASKPASS helper whose
+# body contains no secret (it reads the inherited environment); every git
+# command uses the plain https URL — the token never appears in a process
+# argument, a URL, or on disk, and is unset when the script exits.
 #
 # Usage:  TF_TOKEN=<workflow-scoped-PAT> bash scripts/tf_s66_push.sh
 set -uo pipefail
-cd /home/z/my-project
+
+# Portable repo root — resolved from THIS script's location, never hardcoded.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
 
 REPO="ibis01/tubeforge"
+PLAIN_URL="https://github.com/${REPO}.git"
 EXPECTED_REMOTE="c17ffcda713ddeb7ec2a32cdf73f9b514f983676"   # s65 docs close
 TIP="$(git rev-parse main)"
 
 [ -n "${TF_TOKEN:-}" ] || { echo "!! TF_TOKEN not set — nothing to do"; exit 1; }
-AUTH="https://${TF_TOKEN}@github.com/${REPO}.git"
-trap 'unset TF_TOKEN' EXIT
+ASKPASS="$(mktemp)"
+cat > "$ASKPASS" <<'HELPER'
+#!/bin/sh
+case "$1" in
+  Username*) printf '%s\n' "${TF_PUSH_USER:-x-access-token}" ;;
+  *)         printf '%s\n' "${TF_TOKEN:?askpass invoked without TF_TOKEN}" ;;
+esac
+HELPER
+chmod 700 "$ASKPASS"
+trap 'rm -f "$ASKPASS"; unset TF_TOKEN' EXIT
+export GIT_ASKPASS="$ASKPASS"
+export GIT_TERMINAL_PROMPT=0
 
 echo "[1/4] preflight"
 echo "      local tip  = $TIP"
 echo "      outgoing   = $(git rev-list --count origin/main..main) commits (origin/main..main)"
-REMOTE_SHA="$(git ls-remote "$AUTH" refs/heads/main | awk '{print $1}')"
+REMOTE_SHA="$(git ls-remote "$PLAIN_URL" refs/heads/main 2>/dev/null | awk '{print $1}')"
 echo "      remote main = ${REMOTE_SHA:-UNREACHABLE}"
 [ "$REMOTE_SHA" = "$EXPECTED_REMOTE" ] || { echo "!! remote moved (expected ${EXPECTED_REMOTE:0:7}) — re-fetch and re-merge first"; exit 1; }
 
@@ -32,11 +51,11 @@ if git log origin/main..main -p --no-color -- .env .z-ai-config .env.local | gre
 fi
 echo "      clean (0 token patterns, no .env blobs in any outgoing tree)"
 
-echo "[3/4] push main:main"
-git push "$AUTH" main:main || { echo "!! push rejected"; exit 1; }
+echo "[3/4] push main:main (credential-safe askpass — plain URL)"
+git push "$PLAIN_URL" main:main || { echo "!! push rejected"; exit 1; }
 
 echo "[4/4] verify"
-FINAL="$(git ls-remote "$AUTH" refs/heads/main | awk '{print $1}')"
+FINAL="$(git ls-remote "$PLAIN_URL" refs/heads/main 2>/dev/null | awk '{print $1}')"
 [ "$FINAL" = "$TIP" ] || { echo "!! remote main = $FINAL (expected $TIP)"; exit 1; }
 echo "OK — origin/main = $FINAL"
 echo "next: TF_TOKEN=<same pat> bash scripts/tf_s66_ci_watch.sh   (CI on $FINAL)"

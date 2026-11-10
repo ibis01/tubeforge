@@ -27,9 +27,20 @@ if [ ! -d "$REPO/.git" ]; then
   if [ -z "${S54_GIT_PAT:-}" ]; then
     echo "HEAL FAILED: repo missing and S54_GIT_PAT unset"; exit 2
   fi
-  echo "== healing: re-cloning the repo =="
+  echo "== healing: re-cloning the repo (credential-safe askpass — the PAT never appears in a URL or process argument) =="
   mkdir -p /home/z/my-project/work
-  git clone "https://${S54_GIT_PAT}@github.com/ibis01/tubeforge.git" "$REPO" 2>&1 | tail -1
+  ASKPASS="$(mktemp)"
+  cat > "$ASKPASS" <<'HELPER'
+#!/bin/sh
+case "$1" in
+  Username*) printf '%s\n' "${S54_GIT_USER:-x-access-token}" ;;
+  *)         printf '%s\n' "${S54_GIT_PAT:?askpass invoked without S54_GIT_PAT}" ;;
+esac
+HELPER
+  chmod 700 "$ASKPASS"
+  GIT_ASKPASS="$ASKPASS" GIT_TERMINAL_PROMPT=0 \
+    git clone "https://github.com/ibis01/tubeforge.git" "$REPO" 2>&1 | tail -1
+  rm -f "$ASKPASS"
 fi
 cd "$REPO" || exit 2
 
