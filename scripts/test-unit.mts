@@ -9000,15 +9000,18 @@ await test("S79: buildTargetBatch — the target plus nearest painted neighbours
 });
 
 await test("S79: mergeTargetedRow — replace-or-insert ONE row, scene order kept, every other row's identity untouched", () => {
-  const mk = (index: number): { sceneIndex: number; score: number; verdict: "consistent"; issues: string[]; dims: {} } => ({
+  const mk = (
+    index: number,
+    overrides: { score?: number; verdict?: "consistent" | "off" } = {}
+  ) => ({
     sceneIndex: index,
-    score: 90,
-    verdict: "consistent",
-    issues: [],
+    score: overrides.score ?? 90,
+    verdict: overrides.verdict ?? ("consistent" as const),
+    issues: [] as string[],
     dims: {},
   });
   const rows = [mk(1), mk(2), mk(3)];
-  const repainted = { ...mk(2), score: 40, verdict: "off" as const };
+  const repainted = mk(2, { score: 40, verdict: "off" });
   const replaced = mergeTargetedRow(rows, repainted);
   eq(replaced.length, 3, "replaced, not appended");
   eq(replaced.map((s) => s.sceneIndex), [1, 2, 3], "order kept");
