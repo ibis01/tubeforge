@@ -3589,7 +3589,7 @@ systems → new engines) is adopted as the working order.
 
 **What this sandbox can and cannot do — measured, not assumed:** there
 is no `docker` and no `podman` binary here (`which` empty; checked
-2026-11-11). The image build + in-container render smoke therefore
+2026-11-10 UTC). The image build + in-container render smoke therefore
 CANNOT run in the dev sandbox and is declared as the one open infra
 gate for a Docker-capable runner. Everything short of the build was
 done instead:
@@ -3627,3 +3627,51 @@ at fire time (0/8).
 **Real TTS:** sequenced behind gateway recovery (readiness report §6
 item 2), rides the S74 window, independent of engine code. Nothing to
 do until the gateway clears — and no second probe to check.
+
+## S76 opened — the adoption decision recorded, the cron dump quarantined (2026-11-10 ~19:05 UTC)
+
+**The external audit arrived with a "continue" directive, and its
+verified-state framing is adopted.** Before recording anything, the
+audit's remote-state claims were re-checked against the live tree —
+and the check caught something the audit itself had missed:
+
+**The cron dump.** A commit with a UUID for a message (d5e49e2,
+"…-cron") sat queued locally on top of f7bfe47 — 1520 files, ~326k
+insertions: `work/yamama/webchunks/*.mp4` binaries (~28 MB single
+file), nested repo copies (`tubeforge/src`, `work/tubeforge`,
+`work/tf-verify`), and a 1165-line contrib/whiteboard-e2 PLAN. It was
+NEVER pushed (origin was still f7bfe47), and it was never part of the
+product. Quarantined intact to branch `quarantine/cron-d5e49e2`
+(every byte preserved, nothing lost), main reset hard to f7bfe47 =
+origin. The queue is clean again.
+
+**The audit's CI doubt is closed.** The external report worried that
+f7bfe47's combined status showed only "Vercel success". Measured:
+GitHub Actions reran ALL SIX jobs on f7bfe47 — Production build,
+Typecheck·Lint·Unit, Money-path coverage, Secret scan, PostgreSQL
+integration, E2E — all success. HEAD is green on the exact SHA the
+audit cites.
+
+**Reconciliations (the audit's documentation findings, verified then
+fixed):** ARCHITECTURE.md inventory counts re-measured and updated —
+22 migrations (was 21 in the opening, 19 in §1.2), 116 route files
+(was 103), 117 modules (was 97), 32 models (was 31); provider files
+11. Two date slips corrected to true UTC: the readiness report's
+"(2026-11-11)" Dockerfile landing → 2026-11-10 18:37 UTC
+(commit f7bfe47, CI 6/6 noted inline), and the docker-readiness
+entry's "checked 2026-11-11" → checked 2026-11-10 UTC.
+
+**The decision is recorded:** docs/audits/s76-openmontage-adoption-
+decision.md — adopt selected OpenMontage concepts through independent
+implementation; the S74 → Docker → TTS gates stay critical and first;
+then Visual Consistency → Video Critic & Repair → Universal Timeline
+as shared infrastructure; reference-video intelligence, stock and
+provider intelligence after; 3D/character deferred until the timeline
+contract is stable. AGPL-3.0 reuse policy: study, never copy, until
+licensing is reviewed; TubeForge needs its own LICENSE before
+commercial distribution. The governing rule is §8: no engine without
+the shared contracts — no isolated production pipelines.
+
+**The preview was never touched:** all edits are docs/worklog-only
+(outside src/, no hot-reload, no restart); the dev server and preview
+link stayed up the entire turn and were re-verified 200 at close.

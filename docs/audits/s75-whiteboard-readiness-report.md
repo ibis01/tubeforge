@@ -51,7 +51,8 @@ unchanged 14-lens QC battery):
    64 MB `/dev/shm` SIGKILL), per-scene context recycling as the memory
    contract with the 444/442/285 MB envelope (5.3), the tini/daemonize
    clarification (5.4), and the drill that verifies it (5.5). The
-   Dockerfile lines have since **landed** (2026-11-11), statically
+   Dockerfile lines have since **landed** (2026-11-10 18:37 UTC, commit
+   f7bfe47; CI 6/6 on that SHA), statically
    verified against the §5.1 contract (placement, pinned playwright,
    per-distro apt closure, chown for the non-root worker) — see §5.1's
    status block. The **real `docker build` + render smoke on the built

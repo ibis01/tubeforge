@@ -10,7 +10,7 @@
 ## 1. Current architecture (reconciled at S75, 2026-11-10 UTC — baseline §1.1–1.8 from the S47 reconciliation)
 
 **Source of truth:** `prisma/schema.prisma` (32 models), `prisma/migrations/`
-(21 migrations), `src/lib/tubeforge/` (117 modules), `src/app/api/` (116 route
+(22 migrations), `src/lib/tubeforge/` (117 modules), `src/app/api/` (116 route
 files). §1.1–1.8 were rewritten from those sources during S47 and stay
 accurate for what they describe; §1.9 is the S48→S74 delta that the S47
 reconciliation could not know about. The Stage-1-era snapshot that lived
@@ -30,8 +30,8 @@ exists anywhere in the repo.
 │ Next.js 16 standalone server (Node 20) + independent workers       │
 │   ├─ src/middleware.ts — DEFAULT-DENY gatekeeper                   │
 │   │     (6 public auth endpoints + YouTube OAuth callback)         │
-│   ├─ src/app/api/* — 103 route files, tenant-scoped via ALS        │
-│   ├─ src/lib/tubeforge/* — 97 modules, 10 provider adapters        │
+│   ├─ src/app/api/* — 116 route files, tenant-scoped via ALS        │
+│   ├─ src/lib/tubeforge/* — 117 modules, 11 provider files          │
 │   └─ scripts/worker.mts — DB-backed queue consumer                 │
 │         (Compose/Fly run web and worker from one image)            │
 └────────────────────────────────────────────────────────────────────┘
@@ -47,9 +47,9 @@ exists anywhere in the repo.
 ### 1.2 Database
 
 - **Engine:** PostgreSQL in production, SQLite for local dev. ONE source
-  schema (`schema.prisma`, 31 models); the SQLite mirror is GENERATED from
+  schema (`schema.prisma`, 32 models); the SQLite mirror is GENERATED from
   it (`scripts/sync-sqlite-schema.mjs`) — it cannot drift. Schema changes
-  ship as versioned `prisma/migrations/` (19 today; SQLite provisions via
+  ship as versioned `prisma/migrations/` (22 today; SQLite provisions via
   `db push` in the setup path).
 - **Tenancy:** `User` / `Organization` / `Membership` (owner, admin,
   editor, viewer); every content model carries `organizationId` with
