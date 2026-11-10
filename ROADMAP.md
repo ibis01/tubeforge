@@ -419,9 +419,12 @@ and the engine design docs):
 1. **Whiteboard Engine E-series** (`WHITEBOARD_ENGINE_DESIGN.md`) — E9
    Phases A/B/C landed (S67/S68/S69: the editor, the editable storyboard,
    and the upload palette behind §7's seven gates — E11's upload path
-   executed). The whiteboard loop has proven the shared contracts; the
-   E5 phase-2 LLM planner's verification window is OPEN (gateway probe
-   green 2026-11-10) and rides its own stage.
+   executed) and E5 phase 2 LANDED (S73: the LLM scaffold planner —
+   `aiCallJson` through budget.ts's choke point, per-scene native
+   fallback, honest whole-project degradation; live probe green 2026-11-10).
+   The whiteboard loop has proven the shared contracts; what remains on
+   the track is E10 per-format benchmarks and the E12
+   production-integration entitlements.
 2. **Creator Intelligence Engine** (`docs/audits/creator-intelligence-record.md`)
    — **LANDED (S70–S72)**: hook/script scoring (CI-1), title+thumbnail
    pairing lint (CI-2), transcript-based Shorts selection feeding the

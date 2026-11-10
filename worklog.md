@@ -3068,3 +3068,62 @@ labeled a heuristic; missing data asked for, never invented). The record's
 "later, unscheduled" list (chapters, query targeting, channel audit,
 competitor benchmarking, performance learning) stays recorded for a future
 stage.
+
+## S73 implementation + close (2026-11-10 UTC) — E5 phase 2: the LLM scaffold planner
+
+The stage opened under the one-probe discipline: **PROBE-GREEN** (433 ms,
+`scripts/gateway-quota-probe.mts`) — the second green window in a row, so
+the LLM half is LIVE-VERIFIED this stage, not just unit-pinned.
+
+What landed (`f5fe442`, one commit):
+
+- **`llm-planner.ts`** (the whiteboard leaf — shared infra only, §1 law 1):
+  the E5 phase-2 planner rides `aiCallJson` → budget.ts's single choke
+  point (metered; §1 law 5 — native scaffolding stays $0). The model sees
+  the MERGED library catalog (S69's one-merge law: uploads lead the list,
+  marked "your upload"; hand-marker/title-hero/close-card are reserved and
+  never even reach the prompt) plus the story scenes, and proposes
+  per-scene concept placements. The pure halves, unit-pinned:
+  `normalizeLlmScenePlans` (catalog membership, per-scene dedupe — the
+  validator's no-double-placement law, on-board clamps, the
+  3-concepts/scene cap, EVERY drop surfaced with its reason) and
+  `composeLlmScaffold` (structural cards, camera keys and the EMPTY-event
+  fill-law contract survive untouched; only concept picks swap; unserved
+  scenes pass through byte-identical). The wrapper: per-scene fallback to
+  the native rule table (E5 phase 1), whole-project honest degradation on
+  any LLM failure — `planner: "native"` + the reason in the report, never
+  a 500, never an invented board.
+- **The scaffold route**: `planner: "llm"` opt-in (native stays the free
+  default); the merged library loads ONCE before either planner — the
+  catalog the model sees is the universe the validator judges against, by
+  construction; the response carries `planner` + `plannerReport`; unknown
+  planner values are the native default; the honest gates (format, no
+  scenes, the count wall, the 409) fire before any metered work.
+- **The studio**: an opt-in "AI planner picks the concepts (metered)"
+  toggle with honest notices — served-scene counts, per-scene fallbacks
+  named, degradation with its reason.
+- **The rule table's blind spot, closed**: the native planner has no
+  heart/lungs/ecg rules (a heart story fell to the fallback cycle); the
+  LLM planner reads meaning — the live probe placed heart-main + lungs on
+  the pump scene, ecg-pulse + spark on the signal scene.
+
+Live probe (`scripts/s73-llm-planner-probe.mts`): planner=llm, served
+4/4 scenes in 3.1 s, validates clean, structural cards intact.
+
+**CI evidence: run 42728369983 on `f5fe442` — all six jobs green**
+(Typecheck·Lint·Unit · Secret scan (gitleaks) · PostgreSQL integration ·
+Money-path coverage · Production build · E2E (Playwright), 30 tests):
+https://github.com/ibis01/tubeforge/actions/runs/42728369983
+Battery: tsc 0 · eslint 0 (20 baseline warnings) · unit 343/343 · queue
+PASS · billing 40/40 · build 0 · e2e 30/30.
+
+Landing-gate state: origin/main = `f5fe442`; the E5 milestone is fully
+LANDED (phase 1 + phase 2). The landing PAT transited chat again —
+rotate/revoke it after this session.
+
+Next up (S74 candidates): the other gateway-gated standing item — S63's
+motion-vigor remeasurement, now unblocked (probe green twice) — or a 2.0
+shared-systems decision record (Visual Consistency platform service /
+Video Critic and Repair / Universal timeline contract — none verified
+complete, each awaiting the grounded-evaluation treatment the Creator
+Intelligence record modeled).
