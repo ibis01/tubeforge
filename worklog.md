@@ -3183,3 +3183,41 @@ close commit lands only on real clips + blind scores (8 paired i2v
 renders + 16 blind vision calls), per the stage law that took S62 from
 "assumed" to "measured." The landing PAT transited chat — rotate/revoke
 it after this session.
+
+### S74 review fixes (2026-11-10 UTC) — the automation hardened before the measurement relies on it
+
+An external review of the S74-open state found three things worth fixing
+before the lane runs unattended, all confirmed and fixed:
+
+1. **The blind scorer fabricated 1s.** The numeric parser
+   (`Math.max(1, Math.min(5, Number(x ?? 0) || 0))`) turned a missing or
+   invalid dimension into 1 — which made the downstream `!score.overall`
+   guard dead code and could silently poison a blind pool. Now
+   `scoreFromReply` validates EVERY dimension as a finite number in [1,5]
+   in the reply itself and throws `ScorerRejectError` otherwise
+   (parseJsonLoose's throw on prose is caught as the same class — it
+   throws, it does not return `{}`). Retry discipline: malformed replies
+   retry with backoff (3 attempts); gateway/429 errors propagate
+   immediately — a throttled window is waited out, never hammered. Unit-
+   pinned (missing, 9, 0, null, prose, string-encoded numbers).
+2. **Hardcoded machine paths.** All three S74 shell scripts now resolve
+   the repo root from their own location (`SCRIPT_DIR/..`) — portable
+   across machines.
+3. **One gateway-resumption policy, all entry points.** The catch-up pass
+   now probes BEFORE the 75-minute silence (a green window runs the paced
+   lane immediately instead of waiting out nothing) and probes before
+   EVERY canary submission (never spend an expensive i2v call into a
+   closed window); the lane supervisor gained the same probe gate (exit 3
+   when throttled); `s74-resume.sh` delegates to the paced lane instead
+   of an unpaced `--all`. Also corrected: the lane/catchup profile lists
+   include all eight profiles (the prior session's lists assumed social
+   was done — its artifacts were lost to the sandbox rebuild, so the
+   measurement runs from zero, social leading).
+
+Honesty correction in the record: §3 now attributes the "social pair
+landed clean" observation to the prior session's receipt (its gitignored
+artifacts did not survive the rebuild) and states the current
+measurement state as 0/8. CI evidence for `90b5c68` is recorded:
+run 42811386568, all six jobs green (one ffmpeg-flake rerun).
+
+Battery on this commit: tsc 0 · eslint 0 (20 baseline) · unit 346/346.

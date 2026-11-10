@@ -80,13 +80,24 @@ in") are gone from the after prompts and present verbatim in the before.
   discipline — silence is the only thing that moves the window), then a
   rotating canary; max 3 cycles.
 - **`scripts/s74-resume.sh`** — self-contained resume: probes first
-  (cheap, no gateway cost if 429), runs the lane only when green.
+  (cheap, no gateway cost if 429), then delegates to the paced lane and
+  runs the blind scorer when all eight pairs have landed.
+
+All three shell scripts resolve the repo root from their own location
+(`SCRIPT_DIR/..`) — no hardcoded machine paths. Every gateway-touching
+entry point follows ONE resumption policy: the cheap llm probe gates all
+expensive work; a 429 window is waited out or left to the next resume,
+never hammered.
 
 ## 3. The 2026-11-10 throttle (the S63 outage shape, recurring)
 
-The pilot (social profile, naturally-spaced pair) went through clean —
-the art landed, the before clip landed, the after clip landed. Then the
-account entered a hard throttle window: every probe 429, account-wide
+The PRIOR session's receipt (recorded in `tf_s74_lane.sh`'s header)
+observed the social pilot's naturally-spaced pair landing clean before
+back-to-back submissions tripped a hard account-wide throttle. Those
+artifacts were gitignored and did NOT survive the sandbox rebuild — the
+current measurement state is **0/8 pairs** (the manifest is empty; the
+experiment runs from zero, with social leading the lane order). The
+throttle itself is verified first-hand: every probe 429, account-wide
 (video AND llm), identical shape to the S63 outage documented in
 `docs/audits/s63-motion-vigor-record.md §5`. Patient backoffs (4 min, 5
 min, 7 min) did not penetrate — consistent with S63's finding that
@@ -107,12 +118,27 @@ art noise).
 
 **OPEN — code landed, measurement gateway-gated.** The scripts, unit
 pins, and this record are committed. The local gate battery on the
-commit: tsc 0 · eslint 0 (20 baseline warnings) · unit 345/345 · queue
-PASS · billing 40/40 · build 0 · e2e 30/30. The measurement (8 paired
-i2v renders + 16 blind vision calls) runs when the gateway window
-clears, via the lane supervisor. The close commit lands only on real
-clips + blind scores, per the stage law that took S62 from "assumed" to
-"measured" — a laws-only close would repeat the sin S62's audit named.
+commit: tsc 0 · eslint 0 (20 baseline warnings) · unit 346/346 ·
+queue PASS · billing 40/40 · build 0 · e2e 30/30.
+
+**CI evidence (the open-code commit): run 42811386568 on `90b5c68` —
+all six jobs green** (Typecheck·Lint·Unit · Production build · Secret
+scan (gitleaks) · PostgreSQL integration · Money-path coverage · E2E
+(Playwright)): https://github.com/ibis01/tubeforge/actions/runs/42811386568
+(the Typecheck·Lint·Unit job needed one rerun — the known Install-ffmpeg
+apt-mirror flake last seen in S68; the rerun was green).
+
+The review fixes (the follow-up commit) tighten the automation before
+the measurement relies on it: the blind scorer now REJECTS malformed
+replies instead of clamping them to fabricated 1s (strict per-dimension
+validation, retry on malformed only — a 429 is never retried, per the
+resumption discipline), the shell scripts resolve the repo root from
+their own location, and every entry point follows the probe-first
+policy. The measurement (8 paired i2v renders + 16 blind vision calls)
+runs when the gateway window clears, via the lane supervisor. The close
+commit lands only on real clips + blind scores, per the stage law that
+took S62 from "assumed" to "measured" — a laws-only close would repeat
+the sin S62's audit named.
 
 Stage discipline: full local gate battery before any push; CI evidence by
 SHA for the close; doctrine wording untouched (S63's T-63.1 / T-63.2

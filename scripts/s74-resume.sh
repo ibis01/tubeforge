@@ -6,7 +6,11 @@
 #
 #   bash scripts/s74-resume.sh
 set -u
-cd /home/z/my-project
+
+# Portable repo root — resolved from THIS script's location, never hardcoded.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
 
 echo "=== s74-resume $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
@@ -30,13 +34,15 @@ else
   exit 3
 fi
 
-# 2. resume the paired re-measure (resumable per profile; skips completed ones)
+# 2. resume the paired re-measure through the PACED supervisor (the one
+#    gateway-resumption policy: probe-gated, --pace-ms between submissions;
+#    the supervisor re-probes — harmless — and skips healthy profiles)
 echo "$$" > "$LOCK"
 trap 'rm -f "$LOCK"' EXIT
-node --import tsx scripts/s74-paired-remeasure.mts --all >> /tmp/s74-lane.log 2>&1
+bash "$SCRIPT_DIR/tf_s74_lane.sh" >> /tmp/s74-lane.log 2>&1
 RC=$?
 if [ $RC -ne 0 ]; then
-  echo "re-measure exited $RC — see /tmp/s74-lane.log"
+  echo "lane exited $RC — see /tmp/s74-lane.log"
   tail -5 /tmp/s74-lane.log
   exit $RC
 fi

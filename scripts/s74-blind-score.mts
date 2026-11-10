@@ -23,6 +23,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { llmVision } from "../src/lib/tubeforge/llm";
 import { parseJsonLoose } from "../src/lib/tubeforge/ai";
@@ -92,19 +93,77 @@ async function scoreLetter(letter: string, frames: string[]): Promise<BlindScore
     thinking: { type: "disabled" },
   });
   const raw = res.choices?.[0]?.message?.content ?? "";
-  const parsed = parseJsonLoose(raw);
-  const num = (k: string) => Math.max(1, Math.min(5, Number(parsed[k] ?? 0) || 0));
-  const score: BlindScore = {
+  return scoreFromReply(raw, letter);
+}
+
+/** A malformed scorer reply — retryable (a gateway 429 is NOT retryable;
+ *  the resumption discipline says a throttled window is waited out, never
+ *  hammered). */
+class ScorerRejectError extends Error {}
+
+/**
+ * Strict score validation (the review fix): every dimension must be a
+ * finite number in [1,5] in the REPLY ITSELF — no clamping. The old parser
+ * (Math.max(1, Math.min(5, Number(x ?? 0) || 0))) turned a missing or
+ * invalid score into 1, which made the downstream !score.overall guard
+ * dead code and could silently poison a blind pool with fabricated 1s.
+ */
+export function scoreFromReply(raw: string, letter: string): BlindScore {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = parseJsonLoose(raw) as Record<string, unknown>;
+  } catch (e) {
+    // parseJsonLoose THROWS on prose/no-JSON — that is a malformed reply
+    // (retryable), not a gateway failure.
+    throw new ScorerRejectError(
+      `scorer returned no valid JSON for ${letter} — raw: ${raw.slice(0, 160)} (${e instanceof Error ? e.message : String(e)})`
+    );
+  }
+  const val = (k: string): number => {
+    const v = parsed[k];
+    const n = typeof v === "string" ? Number(v.trim()) : v;
+    if (typeof n !== "number" || !Number.isFinite(n) || n < 1 || n > 5) {
+      throw new ScorerRejectError(
+        `scorer returned invalid ${k} for ${letter}: ${JSON.stringify(v ?? null)} — raw: ${raw.slice(0, 160)}`
+      );
+    }
+    return n;
+  };
+  return {
     letter,
-    motion_realism: num("motion_realism"),
-    artifact_load: num("artifact_load"),
-    temporal_coherence: num("temporal_coherence"),
-    composition: num("composition"),
-    overall: num("overall"),
+    motion_realism: val("motion_realism"),
+    artifact_load: val("artifact_load"),
+    temporal_coherence: val("temporal_coherence"),
+    composition: val("composition"),
+    overall: val("overall"),
     notes: String(parsed.notes ?? "").slice(0, 600),
   };
-  if (!score.overall) throw new Error(`scorer returned no overall for ${letter}: ${raw.slice(0, 120)}`);
-  return score;
+}
+
+/**
+ * One vision call per letter with malformed-reply retry: a ScorerRejectError
+ * (prose instead of JSON, a missing/invalid dimension) is retried with
+ * backoff; gateway/network errors propagate immediately — a 429 window is
+ * waited out by the resumption discipline, never hammered.
+ */
+async function scoreLetterResilient(
+  letter: string,
+  frames: string[],
+  attempts = 3
+): Promise<BlindScore> {
+  let last: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await scoreLetter(letter, frames);
+    } catch (e) {
+      if (!(e instanceof ScorerRejectError)) throw e;
+      last = e;
+      const msg = e instanceof Error ? e.message : String(e);
+      console.log(`  (malformed reply, attempt ${i + 1}/${attempts} — ${msg.slice(0, 110)})`);
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+    }
+  }
+  throw last;
 }
 
 async function main(): Promise<void> {
@@ -150,7 +209,7 @@ async function main(): Promise<void> {
     const frames = ["1", "2.5", "4"].map((t) => frameFor(profile, variant, t));
     for (const f of frames) if (!fs.existsSync(f)) throw new Error(`missing frame ${f}`);
     process.stdout.write(`[pool ${letter}] scoring 3 frames … `);
-    const s = await scoreLetter(letter, frames);
+    const s = await scoreLetterResilient(letter, frames);
     scores.push(s);
     console.log(`overall ${s.overall}/5 — ${s.notes.slice(0, 90)}`);
     // checkpoint after every letter — a mid-run 429 loses nothing
@@ -242,4 +301,8 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+// Run only when executed directly — the exported pure halves (scoreFromReply)
+// are unit-pinned by scripts/test-unit.mts and must stay import-safe.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await main();
+}

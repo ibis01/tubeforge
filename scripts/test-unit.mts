@@ -8319,6 +8319,53 @@ await test("S74: the committed S62 manifest + BRIEFS reconstruct all eight after
   ok(explainer.motionPrompt.includes("Stationary at top position Cutaway"), "explainer before: the committed run-on seam, verbatim");
 });
 
+await test("S74: the blind scorer REJECTS malformed replies instead of clamping them to 1 (the review fix)", async () => {
+  const { scoreFromReply } = await import("./s74-blind-score.mts");
+  const good = scoreFromReply(
+    '{"motion_realism":4,"artifact_load":3,"temporal_coherence":5,"composition":4,"overall":4,"notes":"ok"}',
+    "A"
+  );
+  eq(good.overall, 4, "a valid reply parses to its real values");
+  eq(good.motion_realism, 4, "…and every dimension rides along");
+
+  const rejects = (reply: string, fragment: string) => {
+    try {
+      scoreFromReply(reply, "A");
+      return false;
+    } catch (e) {
+      return e instanceof Error && e.message.includes(fragment);
+    }
+  };
+  // A MISSING dimension must reject — the old parser turned it into a fabricated
+  // 1 and the downstream !score.overall guard could never see the damage.
+  ok(
+    rejects('{"motion_realism":4,"temporal_coherence":5,"composition":4,"overall":4}', "invalid artifact_load"),
+    "a missing artifact_load rejects (no fabricated 1s)"
+  );
+  ok(
+    rejects('{"motion_realism":4,"artifact_load":3,"temporal_coherence":5,"composition":4,"overall":9}', "invalid overall"),
+    "an out-of-range overall (9) rejects"
+  );
+  ok(
+    rejects('{"motion_realism":0,"artifact_load":3,"temporal_coherence":5,"composition":4,"overall":4}', "invalid motion_realism"),
+    "an out-of-range motion_realism (0) rejects"
+  );
+  ok(
+    rejects('{"motion_realism":null,"artifact_load":3,"temporal_coherence":5,"composition":4,"overall":4}', "invalid motion_realism"),
+    "a null dimension rejects"
+  );
+  ok(
+    rejects("I would rather not use JSON today, thanks.", "no valid JSON"),
+    "prose instead of JSON rejects (parseJsonLoose throws — caught as a malformed reply)"
+  );
+  // Models do emit string-encoded numbers — the strict parser still accepts those.
+  const strNums = scoreFromReply(
+    '{"motion_realism":"4","artifact_load":"3","temporal_coherence":"5","composition":"4","overall":"4"}',
+    "A"
+  );
+  eq(strNums.overall, 4, "string-encoded numbers parse");
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
