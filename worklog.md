@@ -3301,3 +3301,11 @@ twice with 30s per-request timeouts + 3 fetch retries and a 45s gap;
 step budget raised to 8 minutes to fit the lock wait. Distro ffmpeg
 stays the source of truth. Receipts: runs 42697192000, 42811386568,
 42816234222, 42828406739, 42829548961.
+
+**CI evidence: run 42831139570 on `e0b8fa6` — all six jobs green, first
+attempt, no reruns.** Landing-gate state: origin/main = `e0b8fa6`. The
+security fix (`8b1d8f4`), the first hardening attempt (`a96ea14`, whose
+own run 42829548961 supplied the lock-race evidence), and the lock-wait
+fix (`e0b8fa6`) are all landed; the S74 measurement remains OPEN,
+gateway-gated, cron watcher armed. The chat-transited PAT is still
+compromised — rotate/revoke before the next push cycle.
