@@ -4487,3 +4487,13 @@ treatment — without ever seeing its words.
 Verification: 428/428 unit (+4 S88 pins), typecheck 0, lint on touched
 files, smoke green. Design doc, ROADMAP #7, this log. Next: ROADMAP #8
 — Advanced stock retrieval (P1).
+
+CI follow-up (same day): the first push went red on BOTH suite-bearing
+jobs — `✗ no stray handler kinds (got 23)`. scripts/test-queue.mts
+keeps its own Phase A ledger, and its header still claimed "not in CI"
+(stale since 2026-11-05, when the external-audit response moved
+`npm run test:queue` into the check job), so the S88 kind sweep missed
+it. The ledger learned `reference` (the 23rd kind), the rotted header
+now states the suite IS in CI (check + coverage) and marks the ledger
+as a same-slice pin for every new JobKind. Queue suite re-run green
+locally (restart-recovery PASS, 23/23), lint/tsc 0.

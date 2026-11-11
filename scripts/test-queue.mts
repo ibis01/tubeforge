@@ -38,7 +38,14 @@
 //         silently rotted: the suite is not in CI, so the Stage 6
 //         registration never updated it.)
 //
-// Run: npm run test:queue     (needs the local SQLite DB; not in CI)
+// Run: npm run test:queue     (needs the local SQLite DB)
+//
+// NOTE (S88 follow-up, 2026-11-11): this suite IS in CI — the check job
+// (since the 2026-11-05 external-audit response) and the money-path coverage
+// job both run it. The stale "not in CI" claim here is what let the S88
+// "reference" kind land without updating the Phase A ledger — CI caught it
+// (twice), this local run did not. The ledger below is a PIN: a new JobKind
+// that registers a handler must be added here in the same slice.
 
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -89,9 +96,9 @@ async function phaseA(): Promise<void> {
 
   // Registry completeness — every kind the routes start must be resumable.
   // resumableKinds() is registry-derived (S33 contract fix), so the loop is
-  // a tautology by construction; the real pin is exhaustiveness — all 22
+  // a tautology by construction; the real pin is exhaustiveness — all 23
   // JobKind values registered, no strays (whiteboard joined in S67,
-  // consistency in S77).
+  // consistency in S77, reference in S88).
   const kinds = handlerKinds();
   for (const kind of resumableKinds()) {
     ok(kinds.includes(kind), `handler registered for "${kind}"`);
@@ -100,11 +107,11 @@ async function phaseA(): Promise<void> {
     "script", "research", "stock", "voiceover", "storyboard", "scene",
     "render", "short", "convert", "verify", "comments", "director",
     "continuity", "thumbnail", "variants", "slide", "qc", "upload",
-    "portrait", "poses", "whiteboard", "consistency",
+    "portrait", "poses", "whiteboard", "consistency", "reference",
   ];
   ok(
     allKinds.every((k) => kinds.includes(k)),
-    "all 22 JobKind values are handler-registered (upload since Stage 6, whiteboard since S67, consistency since S77)"
+    "all 23 JobKind values are handler-registered (upload since Stage 6, whiteboard since S67, consistency since S77, reference since S88)"
   );
   ok(kinds.length === allKinds.length, `no stray handler kinds (got ${kinds.length})`);
 
