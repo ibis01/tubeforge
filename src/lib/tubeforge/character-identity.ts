@@ -31,7 +31,8 @@ import { aiCall } from "./budget";
 import { llmVision } from "./llm";
 import { parseJsonLoose } from "./ai";
 import { parseScenes, sceneImageFile } from "./story";
-import { readPortrait } from "./characters";
+import { readPortrait, readPose, listPoses, portraitExists } from "./characters";
+import { POSES } from "./types";
 import { verdictFromScore, type DimVerdict } from "./visual-consistency";
 import { errorText } from "./redact";
 import * as storage from "./storage";
@@ -71,8 +72,23 @@ export interface CrossVideoIdentityReport {
    *  as consistent as its worst video — the VCE math, inherited). */
   overall: number;
   videos: CrossVideoRow[];
+  /** S83 — the pose-sheet rows: the character's OWN reference library
+   *  judged against the portrait (the foundation every downstream
+   *  identity judgement inherits). Empty when no sheet exists (a
+   *  pre-S83 report also parses with none). */
+  poses: PoseIdentityRow[];
   skipped: { videoId: string; title: string; reason: string }[];
   engine: { ran: boolean; unavailable: string[] };
+}
+
+/** One pose-sheet row — "does this pose image still depict the person
+ *  in the portrait?" (S83). */
+export interface PoseIdentityRow {
+  pose: string; // PoseId
+  label: string;
+  score: number | null; // null = unavailable, the reason rides `issues`
+  verdict: DimVerdict;
+  issues: string[];
 }
 
 /** The batch cap — one VLM call judges at most this many videos' frames
@@ -129,7 +145,8 @@ Respond with STRICT JSON only: {"frames":[{"score":<0-100>,"issues":["<short hum
 /** Parse the judge's reply — index-aligned with the frames sent. A frame
  *  with a missing/non-numeric score stays NULL (never a fabricated 50);
  *  scores clamp to 0–100 and round; issues filter to strings, cap 6.
- *  PURE. */
+ *  PURE. (S83: the pose pass reuses this parser — its replies share the
+ *  exact same index-aligned STRICT-JSON shape.) */
 export function parseCrossVideoVerdict(
   text: string,
   count: number
@@ -171,6 +188,25 @@ export function crossVideoOverall(
   return Math.min(...scored);
 }
 
+/** The pose-sheet judge's charter (S83). The sheet is the character's
+ *  REFERENCE LIBRARY — generated from the portrait by identity-locked
+ *  edits; drift here propagates into every scene painted from it, so
+ *  the signature outfit rides the identity judgement (a pose image in
+ *  a different outfit is a compromised reference, not a wardrobe
+ *  change). The pose itself — gesture, expression, framing — is
+ *  exactly what is SUPPOSED to vary. */
+export const POSE_IDENTITY_SYSTEM = `You are an identity-continuity judge for a content channel's cast character. You see the character's PORTRAIT first, followed by each of the character's pose-sheet images (the same person re-rendered in different poses). Judge ONLY identity: does each pose image depict the SAME person as the portrait — face, hairstyle, apparent age, build, signature outfit? The pose sheet is the character's reference library; drift here propagates into every scene painted from it. Ignore the pose itself, the gesture, the expression, the framing and the background — those are supposed to vary.
+
+Respond with STRICT JSON only: {"frames":[{"score":<0-100>,"issues":["<short human-readable issue>"]}]} — exactly one entry per pose image, in order; score 100 means that pose image depicts the same person as the portrait; list concrete mismatches (empty arrays when none).`;
+
+/** The poses to judge, in POSES declaration order, capped (cost law).
+ *  PURE. */
+export function buildPoseTargets(poseIds: string[], max = 3): string[] {
+  return POSES.filter((p) => poseIds.includes(p.id))
+    .slice(0, max)
+    .map((p) => p.id);
+}
+
 /** Parse the STORED report (the GET surface). Null for null/corrupt
  *  JSON — never a half-invented envelope. PURE. */
 export function parseCrossVideoReport(
@@ -202,6 +238,16 @@ export function parseCrossVideoReport(
       verdict: (v.verdict ?? "unavailable") as DimVerdict,
       issues: Array.isArray(v.issues) ? (v.issues as string[]) : [],
     })),
+    // S83 additive — a pre-S83 report parses with NO pose rows.
+    poses: Array.isArray(obj.poses)
+      ? (obj.poses as Record<string, unknown>[]).map((p) => ({
+          pose: String(p.pose),
+          label: String(p.label ?? ""),
+          score: p.score === null || p.score === undefined ? null : Number(p.score),
+          verdict: (p.verdict ?? "unavailable") as DimVerdict,
+          issues: Array.isArray(p.issues) ? (p.issues as string[]) : [],
+        }))
+      : [],
     skipped: Array.isArray(obj.skipped)
       ? (obj.skipped as Record<string, unknown>[]).map((s) => ({
           videoId: String(s.videoId),
@@ -383,6 +429,90 @@ export async function runCrossVideoIdentityCheck(
     }
   }
 
+  // S83 — the pose-sheet rows: the character's OWN reference library
+  // judged against the portrait. The sheet is the foundation every
+  // downstream identity judgement inherits — a drifted pose image is a
+  // compromised reference, and this section names it. One extra VLM
+  // call, fail-open per pose; absent sheet or portrait = honest note,
+  // never a fabricated row.
+  const poseIds = await listPoses(characterId).catch(() => [] as string[]);
+  let poseRows: PoseIdentityRow[] = [];
+  if (poseIds.length === 0) {
+    unavailable.push("poses: no pose sheet generated yet");
+  } else if (!(await portraitExists(characterId).catch(() => false))) {
+    unavailable.push("poses: no portrait to judge the sheet against");
+  } else {
+    const targets = buildPoseTargets(poseIds);
+    const labels = new Map<string, string>(
+      POSES.map((p) => [p.id as string, p.label as string])
+    );
+    const portraitBuf = await readPortrait(characterId).catch(() => null);
+    const poseBufs: (Buffer | null)[] = [];
+    for (const pid of targets) {
+      poseBufs.push(await readPose(characterId, pid).catch(() => null));
+    }
+    const poseRow = (pid: string, score: number | null, verdict: DimVerdict, issues: string[]): PoseIdentityRow => ({
+      pose: pid,
+      label: labels.get(pid) ?? pid,
+      score,
+      verdict,
+      issues,
+    });
+    if (!portraitBuf) {
+      unavailable.push("poses: portrait unreadable at check time");
+      poseRows = targets.map((pid) =>
+        poseRow(pid, null, "unavailable", ["portrait unreadable at check time"])
+      );
+    } else {
+      const userParts: unknown[] = [
+        { type: "text", text: "The character's PORTRAIT (the identity anchor):" },
+        {
+          type: "image_url",
+          image_url: { url: `data:image/png;base64,${portraitBuf.toString("base64")}` },
+        },
+        { type: "text", text: `The character's pose sheet — ${targets.length} pose image(s), in order:` },
+      ];
+      for (let i = 0; i < targets.length; i++) {
+        userParts.push({ type: "text", text: `Pose image ${i + 1} of ${targets.length}:` });
+        userParts.push({
+          type: "image_url",
+          image_url: { url: `data:image/png;base64,${poseBufs[i]?.toString("base64") ?? ""}` },
+        });
+      }
+      try {
+        const raw = await aiCall("llm", "pose identity VLM", () =>
+          llmVision({
+            messages: [
+              { role: "system", content: POSE_IDENTITY_SYSTEM },
+              { role: "user", content: userParts },
+            ],
+            temperature: 0.1,
+          })
+        );
+        const parsed = parseCrossVideoVerdict(
+          raw.choices?.[0]?.message?.content ?? "",
+          targets.length
+        );
+        poseRows = targets.map((pid, i) => {
+          const v = parsed[i];
+          if (!poseBufs[i])
+            return poseRow(pid, null, "unavailable", ["pose image unreadable at check time"]);
+          if (!v)
+            return poseRow(pid, null, "unavailable", ["judge returned no verdict for this pose"]);
+          return poseRow(pid, v.score, v.verdict, v.issues);
+        });
+      } catch (err) {
+        const why = `poses: VLM call failed: ${errorText(err, "vision error").slice(0, 120)}`;
+        unavailable.push(why);
+        ciLog.warn("pose identity call failed — reporting unavailable", {
+          characterId,
+          err: errorText(err, "vision error"),
+        });
+        poseRows = targets.map((pid) => poseRow(pid, null, "unavailable", [why]));
+      }
+    }
+  }
+
   const report: CrossVideoIdentityReport = {
     schema: 1,
     characterId,
@@ -390,6 +520,7 @@ export async function runCrossVideoIdentityCheck(
     checkedAt: new Date().toISOString(),
     overall: crossVideoOverall(rows),
     videos: rows,
+    poses: poseRows,
     skipped,
     engine: { ran, unavailable },
   };
@@ -398,6 +529,7 @@ export async function runCrossVideoIdentityCheck(
     Buffer.from(JSON.stringify(report))
   );
   const scoredCount = rows.filter((r) => r.score !== null).length;
+  const poseConsistent = poseRows.filter((r) => r.verdict === "consistent").length;
   await db.activity.create({
     data: {
       organizationId: character.organizationId,
@@ -405,7 +537,7 @@ export async function runCrossVideoIdentityCheck(
       stage: "continuity",
       message: `Cross-video identity for ${character.name}: ${report.overall}% across ${scoredCount} scored video(s)${
         skipped.length > 0 ? `, ${skipped.length} skipped` : ""
-      }`,
+      }${poseRows.length > 0 ? `; pose sheet ${poseConsistent}/${poseRows.length} consistent` : ""}`,
     },
   });
   return report;

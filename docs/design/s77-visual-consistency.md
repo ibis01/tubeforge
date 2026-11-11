@@ -295,9 +295,22 @@ it; the consistencyCheck setting's "off" refuses it, S80's law
 inherited). Propose-never-auto-edit: the report names drifting videos;
 fixing them is each video's existing storyboard affordance.
 
-**Phase B tail (recorded, not built):** reconciling the photoreal-suffix
-contradiction in `artPromptRaw` (after S74 closes); pose-level identity
-rows.
+**Phase B slice 6 (S83 — implemented):** pose-level identity rows —
+the character's OWN reference library judged against itself. One extra
+VLM call inside the same run/surface/report (no new route, no new kind
+— the S77 grow-inside law): the portrait leads as the identity anchor,
+then every existing pose-sheet image (`buildPoseTargets`: POSES
+declaration order, capped 3) is judged — same person? same signature
+outfit? (`POSE_IDENTITY_SYSTEM`: the sheet IS the reference library,
+drift propagates into every scene painted from it; the pose itself,
+gesture, expression, framing are disclaimed — they are supposed to
+vary). Rows ride the report's additive `poses[]` (a pre-S83 report
+parses with none — never invented); the reply shares the
+index-aligned STRICT-JSON parser with the cross-video pass. Fail-open
+throughout: no sheet / no portrait / unreadable bytes / a failed call
+are honest `engine.unavailable` notes or per-row unavailable entries,
+never fabricated scores. The Activity row gains "pose sheet N/M
+consistent".
 
 ## 9. Acceptance mapping (S76 §4.A / §6)
 
@@ -369,3 +382,10 @@ law pins ("Judge ONLY identity"; clothing AND art style disclaimed;
 STRICT JSON, one entry per frame in order) · `crossVideoReportKey` +
 `parseCrossVideoReport` (the namespace key; roundtrip; corrupt /
 wrong-schema JSON → null).
+
+S83 additions: `buildPoseTargets` (POSES declaration order, unknown
+ids dropped, capped) · `POSE_IDENTITY_SYSTEM` law pins (portrait is
+the anchor; "Judge ONLY identity"; signature outfit rides the
+judgement; the pose itself disclaimed; STRICT JSON, index-aligned) ·
+the additive `poses[]` parse (a pre-S83 report parses with NO pose
+rows; unavailable rows stay unavailable through the roundtrip).

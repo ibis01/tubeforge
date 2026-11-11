@@ -9115,6 +9115,8 @@ await test("S80: normalizeConsistencyCheckMode — the two valid non-defaults pa
     crossVideoReportKey,
     CROSS_VIDEO_SYSTEM,
     CROSS_VIDEO_MAX,
+    buildPoseTargets,
+    POSE_IDENTITY_SYSTEM,
   } = await import("../src/lib/tubeforge/character-identity.ts");
 
   await test("S82: buildCrossVideoBatch — newest-first, capped at 6, frame-less and beyond-cap entries reported skipped with honest reasons", () => {
@@ -9213,6 +9215,53 @@ await test("S80: normalizeConsistencyCheckMode — the two valid non-defaults pa
     eq(parseCrossVideoReport(""), null);
     eq(parseCrossVideoReport("not json {"), null, "corrupt storage never renders a half-invented report");
     eq(parseCrossVideoReport(JSON.stringify({ schema: 2, videos: [] })), null, "a foreign schema is not this report");
+  });
+
+  await test("S83: buildPoseTargets — POSES declaration order, only existing, capped", () => {
+    eq(buildPoseTargets(["thinking", "explaining"]), ["explaining", "thinking"], "declaration order wins — the caller's order is not trusted");
+    eq(buildPoseTargets(["welcoming", "explaining", "thinking"]), ["explaining", "thinking", "welcoming"], "all three, in order");
+    eq(buildPoseTargets(["thinking"]), ["thinking"]);
+    eq(buildPoseTargets([]), [], "no sheet, no targets");
+    eq(buildPoseTargets(["explaining", "thinking", "welcoming", "bogus"]), ["explaining", "thinking", "welcoming"], "unknown ids are dropped, never fabricated");
+  });
+
+  await test("S83: POSE_IDENTITY_SYSTEM — the sheet is judged AGAINST the portrait; the pose itself is disclaimed", () => {
+    ok(POSE_IDENTITY_SYSTEM.includes("PORTRAIT first"), "the portrait is the anchor the sheet is judged against");
+    ok(POSE_IDENTITY_SYSTEM.includes("Judge ONLY identity"), "identity is the only thing on trial");
+    ok(POSE_IDENTITY_SYSTEM.includes("signature outfit"), "the outfit rides the judgement — the sheet is the reference library, drift propagates");
+    ok(POSE_IDENTITY_SYSTEM.includes("Ignore the pose itself"), "gesture/expression/framing are SUPPOSED to vary");
+    ok(POSE_IDENTITY_SYSTEM.includes("STRICT JSON"), "the reply contract is strict JSON");
+    ok(POSE_IDENTITY_SYSTEM.includes("one entry per pose image, in order"), "index-aligned replies — the shared parser depends on it");
+  });
+
+  await test("S83: parseCrossVideoReport — a pre-S83 report (no poses field) parses with NO pose rows; pose rows roundtrip", () => {
+    const preS83 = {
+      schema: 1,
+      characterId: "c1",
+      characterName: "Ada",
+      checkedAt: "2026-11-11T08:00:00.000Z",
+      overall: 90,
+      videos: [
+        { videoId: "v1", title: "Ep 1", frameKey: "v1/scene-02.png", score: 90, verdict: "consistent", issues: [] },
+      ],
+      skipped: [],
+      engine: { ran: true, unavailable: [] },
+    };
+    const old = parseCrossVideoReport(JSON.stringify(preS83));
+    ok(old !== null);
+    eq(old?.poses.length, 0, "additive parse — a report stored before S83 carries no pose rows, never invented ones");
+    const withPoses = {
+      ...preS83,
+      poses: [
+        { pose: "explaining", label: "Explaining", score: 93, verdict: "consistent", issues: [] },
+        { pose: "thinking", label: "Thinking", score: null, verdict: "unavailable", issues: ["pose image unreadable at check time"] },
+      ],
+    };
+    const back = parseCrossVideoReport(JSON.stringify(withPoses));
+    eq(back?.poses.length, 2);
+    eq(back?.poses[0].score, 93);
+    eq(back?.poses[1].score, null, "an unavailable pose row stays unavailable through the roundtrip");
+    eq(back?.poses[1].label, "Thinking");
   });
 }
 

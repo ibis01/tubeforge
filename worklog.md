@@ -4023,3 +4023,35 @@ its header):
 Verification: 392/392 unit (+5 S82 pins), typecheck 0, lint 0 on touched
 files. Contract updated (s77 §8 slice 5 + §10 pins), ROADMAP #4, this
 log.
+
+## S83 — pose-level identity rows (VCE Phase B slice 6)
+
+The character's pose sheet (portrait-derived, identity-locked edits) is
+the REFERENCE LIBRARY every downstream identity judgement inherits —
+but nothing ever judged the sheet against its own anchor. A drifted
+pose image silently poisons every scene painted from it.
+
+Folded into the S82 character-identity run (same job kind, same route,
+same report — the S77 grow-inside law; no new surface):
+
+- One extra VLM call (aiCall, "pose identity VLM"): the portrait leads
+  as the identity anchor, then every existing pose image in POSES
+  declaration order (`buildPoseTargets`, capped 3).
+- `POSE_IDENTITY_SYSTEM`: Judge ONLY identity (face/hair/age/build +
+  the SIGNATURE outfit — the sheet is the reference library, drift
+  propagates); the pose itself, gesture, expression, framing are
+  disclaimed (they are supposed to vary); STRICT JSON, one entry per
+  pose image in order.
+- Rows ride the report's additive `poses[]` — a pre-S83 stored report
+  parses with NO pose rows (never invented); unavailable rows stay
+  unavailable through the roundtrip.
+- The reply reuses `parseCrossVideoVerdict` (the shared index-aligned
+  parser): missing/non-numeric score → null, NEVER a fabricated 50.
+- Fail-open throughout: no sheet, no portrait, unreadable bytes, a
+  failed call → honest engine.unavailable notes / per-row unavailable
+  entries. The Activity row gains "pose sheet N/M consistent".
+
+Verification: 395/395 unit (+3 S83 pins), typecheck 0, lint 0 on
+touched files. Contract updated (s77 §8 slice 6 + §10 pins), ROADMAP
+#4, this log. Phase B tail is now down to ONE item — the
+photoreal-suffix reconciliation, explicitly gated on S74 closing.
