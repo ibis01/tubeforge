@@ -4784,3 +4784,20 @@ Azure mirror first.
 
 Verification: both workflows parse (yaml.safe_load), the failover
 present 3+2 times. This commit lands the failover AND its receipt.
+
+**Follow-up, same hour — the appended-second-mirror fix FAILED and is
+superseded.** Attempt 4 (fc95d1a's CI, run 43060056294) still died in
+the ffmpeg step: apt's mirror method did NOT rotate to the appended
+canonical mirror — it kept reporting azure for every index and burned
+SIX of the eight step minutes on DNS timeouts, so attempt 2 was killed
+mid-flight by the step budget. Depending on apt's rotation semantics
+was wrong. The standing fix is now PROBE-AND-SWAP: before apt runs,
+health-probe the four indexes apt update actually fetches (noble,
+noble-updates, noble-backports, noble-security — the per-index flap
+made a single-index probe insufficient); ANY failure swaps
+/etc/apt/apt-mirrors.txt wholesale to the canonical archive (tee, not
+append) — same Ubuntu packages, a different host, no dependence on
+apt's rotation. Healthy days never touch the swap (probe ≈ 3s, the
+fast azure mirror stays primary); outage days pay a ≈ 60s worst-case
+probe and apt never touches the dead mirror. Attempt 2's azure→canonical
+sed swap remains as belt-and-suspenders against a mid-run flap.
