@@ -3984,3 +3984,42 @@ locks, full-stack order, clause filtering, both edit sentences, cast
 priority), typecheck 0, lint 0 on touched files. Contract updated
 (docs/design/s77-visual-consistency.md §8 Phase B slice 4 + §10 pins),
 ROADMAP #4, this log.
+
+## S82 — cross-video character identity (VCE Phase B slice 5)
+
+The question the per-video engine could not answer: a channel's cast
+character is a BRAND — is the host of video 1 still the host of video 30?
+Identity was judged within one video's scenes only.
+
+New module src/lib/tubeforge/character-identity.ts (the S77 laws cited in
+its header):
+
+- ONE batched VLM call per run (aiCall, "cross-video identity VLM"):
+  the character's reference set (portrait + up to 3 library refs — the
+  same refs the per-video continuity pass judges against) + the
+  character's LATEST painted host-scene frame from each casting video.
+- `buildCrossVideoBatch` (PURE): newest-first (caller order not
+  trusted), capped at CROSS_VIDEO_MAX=6; frame-less and beyond-cap
+  videos are reported skipped with honest reasons.
+- `CROSS_VIDEO_SYSTEM`: Judge ONLY identity (face/hair/age/build);
+  clothing DISCLAIMED (outfits legitimately change between videos — the
+  per-video appearance dimension owns them); art style disclaimed;
+  STRICT JSON, one entry per frame in order.
+- `parseCrossVideoVerdict` (PURE): index-aligned; missing/non-numeric
+  score → null (NEVER a fabricated 50); clamp 0–100 round; issues cap 6;
+  malformed reply → every frame unavailable (fail-open, honest).
+- `crossVideoOverall` (PURE): min-across the scored rows — the library
+  is as consistent as its worst video; honest zero when nothing scored.
+- The report persists in the character's storage namespace
+  (characters/<id>/cross-video-identity.json; `parseCrossVideoReport`
+  serves the GET) and an org-visible Activity row lands.
+- Surface: /api/characters/[id]/cross-video-identity — GET the stored
+  report + job flags, POST runs it under the job registry (new kind
+  "identity", entity = the character, the poses/portrait precedent).
+  Manual-only by design — no auto-chain ever fires it; S80's "off"
+  refuses it. Propose-never-auto-edit: the report names drifting
+  videos; fixing them is each video's existing storyboard affordance.
+
+Verification: 392/392 unit (+5 S82 pins), typecheck 0, lint 0 on touched
+files. Contract updated (s77 §8 slice 5 + §10 pins), ROADMAP #4, this
+log.

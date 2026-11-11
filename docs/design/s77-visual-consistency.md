@@ -272,9 +272,32 @@ metered via aiCall; no scene-art prompt touched (S74's frozen
 measurement is insulated — it renders committed scene-art prompts
 only). Six unit pins.
 
+**Phase B slice 5 (S82 — implemented):** org-wide cross-video
+character identity — `src/lib/tubeforge/character-identity.ts`. ONE
+batched VLM call per run: the character's reference set (portrait + up
+to 3 library refs, the same refs the per-video pass judges against)
+plus the character's LATEST painted host-scene frame from each video
+that casts them (`buildCrossVideoBatch`: newest-first, capped at
+`CROSS_VIDEO_MAX = 6`, frame-less and beyond-cap videos reported
+skipped with honest reasons). Clothing is DISCLAIMED (outfits
+legitimately change between videos — the appearance dimension owns
+them) and art style is disclaimed; only the PERSON is on trial
+(`CROSS_VIDEO_SYSTEM`). `parseCrossVideoVerdict`: index-aligned, a
+missing/non-numeric score stays null (never a fabricated 50), clamped,
+issues capped. `crossVideoOverall`: min-across — the library is as
+consistent as its worst video; honest zero. The report persists in the
+character's storage namespace
+(`characters/<id>/cross-video-identity.json`, `parseCrossVideoReport`
+for the GET surface) and an Activity row lands. Surface:
+`/api/characters/[id]/cross-video-identity` (GET stored report, POST
+runs it as job kind "identity" — manual-only, no auto-chain ever fires
+it; the consistencyCheck setting's "off" refuses it, S80's law
+inherited). Propose-never-auto-edit: the report names drifting videos;
+fixing them is each video's existing storyboard affordance.
+
 **Phase B tail (recorded, not built):** reconciling the photoreal-suffix
-contradiction in `artPromptRaw` (after S74 closes); org-wide
-cross-video character scoring; pose-level identity rows.
+contradiction in `artPromptRaw` (after S74 closes); pose-level identity
+rows.
 
 ## 9. Acceptance mapping (S76 §4.A / §6)
 
@@ -335,3 +358,14 @@ falsy clauses filtered) · `shotLikenessEditPrompt` /
 the shot, "Shot:" marks the framing prompt) · `pickShotEditSeed`
 (cast likeness outranks the set piece; neither → fresh generation,
 exactly as before S81).
+
+S82 additions: `buildCrossVideoBatch` (newest-first sort the caller
+cannot subvert, cap 6, frame-less + beyond-cap skips carry honest
+reasons) · `parseCrossVideoVerdict` (index-aligned; missing /
+non-numeric score → null, NEVER a fabricated 50; clamping; issues
+cap; malformed reply → every frame unavailable) · `crossVideoOverall`
+(min-across not mean, nulls ignored, honest zero) · `CROSS_VIDEO_SYSTEM`
+law pins ("Judge ONLY identity"; clothing AND art style disclaimed;
+STRICT JSON, one entry per frame in order) · `crossVideoReportKey` +
+`parseCrossVideoReport` (the namespace key; roundtrip; corrupt /
+wrong-schema JSON → null).

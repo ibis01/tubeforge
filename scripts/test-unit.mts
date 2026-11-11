@@ -9104,6 +9104,118 @@ await test("S80: normalizeConsistencyCheckMode — the two valid non-defaults pa
   });
 }
 
+// S82 — cross-video character identity: the same person in every video
+// that casts the character (org-level, honest, fail-open).
+{
+  const {
+    buildCrossVideoBatch,
+    parseCrossVideoVerdict,
+    crossVideoOverall,
+    parseCrossVideoReport,
+    crossVideoReportKey,
+    CROSS_VIDEO_SYSTEM,
+    CROSS_VIDEO_MAX,
+  } = await import("../src/lib/tubeforge/character-identity.ts");
+
+  await test("S82: buildCrossVideoBatch — newest-first, capped at 6, frame-less and beyond-cap entries reported skipped with honest reasons", () => {
+    const e = (videoId: string, updatedAt: string, frameKey: string | null) => ({
+      videoId, title: `Video ${videoId}`, updatedAt, frameKey,
+    });
+    // 8 framed videos + 1 frame-less, deliberately fed OUT of order.
+    const entries = [
+      e("v3", "2026-11-03T00:00:00Z", "v3/scene-02.png"),
+      e("v1", "2026-11-01T00:00:00Z", null),
+      e("v8", "2026-11-08T00:00:00Z", "v8/scene-01.png"),
+      e("v2", "2026-11-02T00:00:00Z", "v2/scene-04.png"),
+      e("v7", "2026-11-07T00:00:00Z", "v7/scene-03.png"),
+      e("v6", "2026-11-06T00:00:00Z", "v6/scene-02.png"),
+      e("v5", "2026-11-05T00:00:00Z", "v5/scene-05.png"),
+      e("v4", "2026-11-04T00:00:00Z", "v4/scene-01.png"),
+      e("v0", "2026-10-31T00:00:00Z", "v0/scene-01.png"),
+    ];
+    const { batch, skipped } = buildCrossVideoBatch(entries, CROSS_VIDEO_MAX);
+    eq(batch.length, CROSS_VIDEO_MAX, "the batch cap holds");
+    eq(batch.map((b) => b.videoId), ["v8", "v7", "v6", "v5", "v4", "v3"], "newest video first — the caller's order is not trusted");
+    eq(skipped.length, 3);
+    ok(skipped.some((s) => s.videoId === "v1" && s.reason.includes("no painted host scene")), "frame-less video skipped with the honest reason");
+    ok(skipped.some((s) => s.videoId === "v2" && s.reason.includes("cap")), "the 7th-newest framed video skipped: beyond the cap");
+    ok(skipped.every((s) => typeof s.videoId === "string" && typeof s.title === "string" && s.reason.length > 0), "every skip carries a reason");
+    const empty = buildCrossVideoBatch([]);
+    eq(empty.batch.length, 0);
+    eq(empty.skipped.length, 0);
+  });
+
+  await test("S82: parseCrossVideoVerdict — index-aligned; missing/non-numeric score stays NULL, never a fabricated 50; clamping and issue caps hold", () => {
+    const ok3 = parseCrossVideoVerdict(
+      '{"frames":[{"score":92,"issues":["same person"]},{"score":104,"issues":[]},{"score":-5,"issues":["face drifted","hair changed","build changed","age off","glasses added","extra A","extra B"]}]}',
+      3
+    );
+    eq(ok3[0]?.score, 92);
+    eq(ok3[0]?.verdict, "consistent");
+    eq(ok3[1]?.score, 100, "over-scores clamp to 100");
+    eq(ok3[2]?.score, 0, "under-scores clamp to 0");
+    eq(ok3[2]?.verdict, "off");
+    eq(ok3[2]?.issues.length, 6, "issues cap at 6");
+    const holes = parseCrossVideoVerdict(
+      '{"frames":[{"score":88},{"issues":[]},{"score":"not-a-number"}]}',
+      3
+    );
+    eq(holes[0]?.score, 88);
+    eq(holes[1], null, "a frame object without a score is unavailable, never 50");
+    eq(holes[2], null, "a non-numeric score is unavailable, never 50");
+    const junk = parseCrossVideoVerdict("the judge rambled — no JSON at all", 2);
+    eq(junk.length, 2);
+    ok(junk.every((j) => j === null), "a malformed reply marks every frame unavailable — fail-open, honest");
+    const short = parseCrossVideoVerdict('{"frames":[{"score":70}]}', 3);
+    eq(short[0]?.score, 70);
+    eq(short[1], null);
+    eq(short[2], null, "a reply shorter than the frame list leaves the tail unavailable");
+  });
+
+  await test("S82: crossVideoOverall — min-across the scored rows (the library is as consistent as its worst video); nulls ignored; honest zero", () => {
+    eq(crossVideoOverall([{ score: 95 }, { score: 60 }, { score: 88 }]), 60, "MIN, not mean — one drifting video is the finding");
+    eq(crossVideoOverall([{ score: 95 }, { score: null }, { score: 88 }]), 88, "unavailable rows are ignored, never punished");
+    eq(crossVideoOverall([{ score: null }, { score: null }]), 0, "nothing scored = honest zero, never a fabricated pass");
+    eq(crossVideoOverall([]), 0);
+  });
+
+  await test("S82: CROSS_VIDEO_SYSTEM — the charter disclaims clothing and style; identity only; STRICT JSON", () => {
+    ok(CROSS_VIDEO_SYSTEM.includes("Judge ONLY identity"), "identity is the only thing on trial");
+    ok(CROSS_VIDEO_SYSTEM.includes("Ignore clothing"), "outfits legitimately change between videos — the appearance dimension owns them");
+    ok(CROSS_VIDEO_SYSTEM.includes("Ignore art style"), "the style dimension owns rendering");
+    ok(CROSS_VIDEO_SYSTEM.includes("STRICT JSON"), "the reply contract is strict JSON");
+    ok(CROSS_VIDEO_SYSTEM.includes("one entry per frame, in order"), "index-aligned replies — the parser depends on it");
+  });
+
+  await test("S82: crossVideoReportKey + parseCrossVideoReport — the storage key format; roundtrip; corrupt or wrong-schema JSON → null", () => {
+    eq(crossVideoReportKey("abc123"), "characters/abc123/cross-video-identity.json", "the report lives beside the portrait in the character's namespace");
+    const report = {
+      schema: 1 as const,
+      characterId: "c1",
+      characterName: "Ada",
+      checkedAt: "2026-11-11T09:00:00.000Z",
+      overall: 72,
+      videos: [
+        { videoId: "v1", title: "Ep 1", frameKey: "v1/scene-02.png", score: 72, verdict: "drift" as const, issues: ["face wider"] },
+        { videoId: "v2", title: "Ep 2", frameKey: "v2/scene-01.png", score: null, verdict: "unavailable" as const, issues: ["frame unreadable at check time"] },
+      ],
+      skipped: [{ videoId: "v3", title: "Ep 3", reason: "no painted host scene — the character never appears in painted art here" }],
+      engine: { ran: true, unavailable: [] },
+    };
+    const back = parseCrossVideoReport(JSON.stringify(report));
+    ok(back !== null, "a stored report roundtrips");
+    eq(back?.overall, 72);
+    eq(back?.videos.length, 2);
+    eq(back?.videos[1].score, null, "unavailable rows stay unavailable through the roundtrip");
+    eq(back?.skipped[0].reason.includes("no painted host scene"), true);
+    eq(back?.engine.ran, true);
+    eq(parseCrossVideoReport(null), null);
+    eq(parseCrossVideoReport(""), null);
+    eq(parseCrossVideoReport("not json {"), null, "corrupt storage never renders a half-invented report");
+    eq(parseCrossVideoReport(JSON.stringify({ schema: 2, videos: [] })), null, "a foreign schema is not this report");
+  });
+}
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
