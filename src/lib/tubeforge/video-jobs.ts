@@ -71,6 +71,7 @@ import type { ExpectedCuts } from "./render-qc";
 import { applyQcPolicy, qcEnforcementMode } from "./qc-policy";
 import { parsePlan, getApprovedAudioMap } from "./director-plan";
 import { parseTimeline, docSceneSettings, type DocSceneSettings } from "./timeline";
+import { compositionPlan, type CompositionPlan } from "./composition-plan";
 import type { ExportQuality, MusicPick, PosterPick, ShortPick } from "./studio-doc";
 import { docMusicPick, docPosterPick, docShortPick } from "./studio-doc";
 import { resolveTransition, transitionSummary, sanitizeTransitionStyle, TRANSITION_IDS } from "./transitions";
@@ -618,17 +619,30 @@ export async function runRenderJob(
   // Same aligned-doc condition; "off" mutes the bed outright (true silence —
   // not the drone fallback a null resolver result would produce).
   let docMusic: MusicPick | null = null;
+  // S87 slice 2 — the composition plan rides the render whenever the doc
+  // is aligned: schema-2 docs read the TRACKS projection (origin "tracks"
+  // — the compositor's contract read), v1 docs and misaligned-tracks docs
+  // read the scenes list (fail-open, never a half-read plan). The plan
+  // owns the composition clock (windows, boundary transitions, per-scene
+  // visual kind + asset source); the settings projection (docScenes) keeps
+  // owning levels/captions/creative in both paths.
+  let timelinePlan: CompositionPlan | null = null;
   if (Array.isArray(opts.sceneDurationsSec)) {
     sceneDurationsSec = opts.sceneDurationsSec;
   } else {
     const timeline = parseTimeline(video.timeline);
     if (timeline && timeline.scenes.length === scenes.length) {
-      const ds = timeline.scenes.map((s) => s.durationSec);
-      // Only honor when every entry is a positive finite number — a single
-      // bad value falls back to the WAV-derived durations for ALL scenes
-      // (a half-overridden timeline would produce a broken render).
-      if (ds.every((d) => typeof d === "number" && Number.isFinite(d) && d > 0)) {
-        sceneDurationsSec = ds;
+      timelinePlan = compositionPlan(timeline, scenes.length);
+      if (timelinePlan) {
+        const ds = timelinePlan.scenes.map((s) => s.durationSec);
+        // Only honor when every entry is a positive finite number — a single
+        // bad value falls back to the WAV-derived durations for ALL scenes
+        // (a half-overridden timeline would produce a broken render). The
+        // plan's derivations already validate this; the guard stays as the
+        // one law at the feed boundary.
+        if (ds.every((d) => typeof d === "number" && Number.isFinite(d) && d > 0)) {
+          sceneDurationsSec = ds;
+        }
       }
       docScenes = docSceneSettings(timeline, scenes.length);
       docQuality = timeline.renderPrefs?.quality ?? undefined;
@@ -698,6 +712,7 @@ export async function runRenderJob(
       captionStyleId: docCaptionStyle,
       sceneDurationsSec,
       docScenes,
+      timelinePlan,
       motion: sanitizeMotion({
         mode: video.motionMode,
         intensity: video.motionIntensity,

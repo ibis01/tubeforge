@@ -1,7 +1,8 @@
 # S87 — the Universal Timeline contract (design + slices 0–1)
 
-**Status:** design recorded; slice 0 (the version stamp) and slice 1 (the
-v2 dual-write + the overwrite guard) implemented. Design target: the S76
+**Status:** design recorded; slices 0–2 implemented (the version stamp;
+the v2 dual-write + the overwrite guard; the compositor reads tracks[] —
+the composition plan + parity). Design target: the S76
 adoption decision §4.C
 (`docs/audits/s76-openmontage-adoption-decision.md`), the third shared
 quality system after the Visual Consistency Engine (S77–S83) and the Video
@@ -228,3 +229,69 @@ parse re-derives the projection (junk stored tracks dropped, tolerant
 read) · `guardTimelineOverwrite` truth table (absent/empty/legacy/own-v2/
 corrupt/non-object → writable; stamp 3 / garbage stamp → refused, the
 refusal echoes the stored stamp) · the 409 names DELETE /assemble.
+
+## 9. What slice 2 changed (code)
+
+- New `src/lib/tubeforge/composition-plan.ts` — the compositor's plan from
+  the contract, pure and deterministic: `CompositionPlanScene` (position,
+  sceneIndex, visual kind, asset source, window, boundary transitionIn) and
+  `CompositionPlan { origin: "tracks" | "scenes", scenes, totalSec }`.
+  - `planFromTracks` — the v2 read: the VISUAL track's clips, aligned BY
+    POSITION to the row's scene count (the sceneOrder contract), the same
+    all-or-nothing law docSceneSettings applies. ANY misalignment (wrong
+    clip count, non-finite or non-positive window) refuses the whole read
+    → the caller falls back (fail-open — a junk tracks copy never blocks
+    a render, it just demotes the read).
+  - `planFromScenes` — the v1 read kept verbatim: durations from the
+    scenes' own durationSec field, kinds mapped from source ("slides" →
+    image), the pre-S87 feed shape.
+  - `compositionPlan` — the dispatcher: schema 2 → tracks ?? scenes;
+    schema 1 → scenes; null doc → null (the render's own WAV defaults).
+- `video-jobs.ts`: the timeline consumption block derives the plan
+  (`compositionPlan(parseTimeline(...), scenes.length)`) and feeds
+  `sceneDurationsSec` from it (origin "tracks" for schema-2 docs) while
+  `docSceneSettings` keeps owning levels/captions/creative in both paths;
+  the plan rides `RenderJobOptions.timelinePlan` into the render.
+- `render.ts` — the dispatch cutover, behind the discriminator:
+  - `RenderOptions.timelinePlan` (null/absent = the legacy mode-keyed path
+    verbatim — v1 docs, no-doc renders, "render without timeline", and the
+    two script callers).
+  - `buildSegment` dispatches on the per-scene contract facts:
+    `visualKind === "image"` takes the slide-deck path (the designed PNG IS
+    the frame, chroma/pip off), `assetSource === "stock"` the footage path
+    (the on-disk guard stays belt-and-braces); the mode remains the
+    fallback inside each branch.
+  - `renderVideo` derives `sceneKindOf` / `assetSourceOf` / `allImage`
+    from the plan (mode fallback built in) and reads them at the geometry
+    seam (9:16 for all-image renders), the motion-plans overlay (image
+    scenes take the slide plan; video scenes keep the movement planning —
+    no paid camera pass is computed for all-image docs), the deck-design
+    gate, the caption-style variant, and the boundary loop (the plan's
+    transitionIn with the docScenes fallback, sanitized identically).
+  - NOT moved (recorded): the liveliness channel selection (kenburns/i2v/
+    stock are PRODUCTION channels, not composition kinds — slice 3
+    revisits with a real engine at the table) and the `mode === "kenburns"`
+    doc-camera-keys gate.
+- Parity is the gate, exactly as the ladder demanded: same row → the v1
+  path and the v2 path produce identical durations, cumulative starts,
+  boundary styles, expected cut points, blend windows and black-dip
+  windows — deterministic, ffmpeg-free. The honest-geometry divergence is
+  pinned as the ONE intentional difference: a client-sent doc whose
+  durationSec field disagrees with its own windows gets the WINDOW (the
+  geometry), never the lying field.
+
+## 10. Pinned-by-tests contract (slice 2)
+
+planFromTracks ≡ planFromScenes on every doc the engines write (kenburns /
+stock / slides, mixed assetSource included) — every plan scene field and
+the clock total · the render-clock parity: identical cut points, blend
+windows, black-dip windows from both reads' durations + renderVideo-style
+boundary settings · the plan's transitionIn ≡ docSceneSettings' (either
+boundary feed is the same after the catalog check) · the origin ledger:
+schema-2 → "tracks", v1 → "scenes", junk tracks of every flavor (wrong
+clip count, NaN window, zero window, missing visual track) → the scenes
+fallback, never a crash; scene-count mismatch → null (all-or-nothing);
+no doc → null · the honest-geometry pin: a lying durationSec field loses
+to the window. (Fixture discipline recorded in the pin: parseTimeline
+re-derives tracks, so junk-tracks fixtures are built on the in-memory doc
+— the slice-3+ shape where engines own their tracks.)

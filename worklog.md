@@ -4266,3 +4266,52 @@ truth table), typecheck 0, lint 0 on touched files. Design doc §7/§8,
 ROADMAP #6, this log. Next: slice 2 — the compositor reads tracks[]
 (parity pins first: same row → v1 path and v2 path produce identical
 cut points, durations, blend boundaries).
+
+## S87 slice 2 — the compositor reads tracks[]: the composition plan + parity (ROADMAP #6, P0)
+
+The ladder's third brick — the contract's first real CONSUMER. The
+composition clock (per-scene windows, boundary transitions, per-scene
+visual kind + asset source) is now read from the tracks projection when
+the doc carries schema 2, with parity pins holding the switch
+behavior-neutral on every doc today's engines write.
+
+- New `composition-plan.ts` (pure, deterministic, ffmpeg-free):
+  `planFromTracks` (the visual track's clips, BY-POSITION alignment, the
+  all-or-nothing law — any junk refuses the WHOLE read), `planFromScenes`
+  (the v1 derivation kept verbatim), `compositionPlan` (the dispatcher:
+  schema 2 → tracks ?? scenes; schema 1 → scenes; no doc → null). The
+  origin ledger ("tracks" | "scenes") records which derivation won.
+- `video-jobs.ts` feeds `sceneDurationsSec` from the plan and rides it
+  into the render as `timelinePlan`; `docSceneSettings` keeps owning
+  levels/captions/creative in both paths (the settings projection, not
+  the composition clock).
+- `render.ts` dispatch cutover, behind the discriminator:
+  `buildSegment` branches on the per-scene contract facts (`visualKind
+  === "image"` → the slide path, chroma/pip off; `assetSource ===
+  "stock"` → the footage path, fs guard intact) with the mode as the
+  in-branch fallback; `renderVideo` reads the plan at the geometry seam
+  (all-image → 9:16), the motion-plans overlay (image scenes take the
+  slide plan — no paid camera pass computed for all-image docs), the
+  deck gate, the caption variant, and the boundary loop (plan
+  transitionIn with the docScenes fallback, sanitized identically). NOT
+  moved (recorded): liveliness channel selection and the kenburns
+  doc-camera gate — production channels, not composition kinds; slice 3
+  revisits with a real engine at the table.
+- PARITY is the gate: the pins prove the two reads agree exactly — every
+  plan scene field, the clock total, the cut points, blend windows and
+  black-dip windows (built renderVideo-style with the catalog check) —
+  across kenburns / stock (mixed assetSource) / slides. The ONE
+  intentional divergence is pinned as the honest-geometry law: a
+  client-sent durationSec that disagrees with its own windows loses to
+  the window.
+- Fixture discipline discovered by a failing pin (and recorded in it):
+  parseTimeline re-derives tracks from scenes (the slice-1 law), so
+  junk-tracks fixtures must be built on the in-memory doc — the
+  slice-3+ world where engines own their tracks. Today's parse heals
+  stored junk before the seam ever sees it.
+
+Verification: 417/417 unit (+4 slice-2 pins), typecheck 0, lint 0 on
+touched files. Design doc §9/§10, ROADMAP #6, this log. Next: slice 3 —
+Whiteboard emits tracks[] (the planner maps its frame plan onto
+whiteboard-kind clips; S67's "peer MODE" law evolves to peer at the
+ENGINE level, unified at the CONTRACT level).

@@ -49,6 +49,7 @@ import {
   slideSegmentGraph,
   type SlideBrand,
 } from "./slides";
+import type { CompositionPlan, PlanVisualKind } from "./composition-plan";
 import {
   planSceneMovements,
   sceneFilterGraph,
@@ -199,6 +200,14 @@ export interface RenderOptions {
    *  sanitized by the doc parse). null/absent = the classic look. Slides
    *  mode burns the pick's vertical variant. */
   captionStyleId?: string | null;
+  /** S87 slice 2 — the composition plan from the timeline contract: when
+   *  the doc is schema 2, the per-scene visual KIND + asset source + the
+   *  boundary transitions are read from the tracks projection (the job
+   *  derives it via compositionPlan; v1 docs get the scenes derivation,
+   * origin "scenes"). Null/absent = the legacy mode-keyed path verbatim
+   *  (no-doc renders, "render without timeline"). Parity-pinned: the two
+   *  derivations agree exactly on every doc today's engines write. */
+  timelinePlan?: CompositionPlan | null;
   onProgress?: (current: number, total: number, label: string) => void;
 }
 
@@ -513,6 +522,14 @@ async function buildSegment(opts: {
   scene: Scene;
   dur: number;
   mode: "kenburns" | "animated" | "stock" | "slides";
+  /** S87 slice 2 — the scene's visual kind from the composition plan
+   *  ("image" = the designed PNG IS the frame). Absent → the mode key
+   *  (the pre-S87 path verbatim). */
+  visualKind?: PlanVisualKind;
+  /** S87 slice 2 — the scene's asset source from the plan's clip ("stock"
+   *  routes the footage path; the on-disk guard below stays
+   *  belt-and-braces). Absent → the mode key. */
+  assetSource?: "ai" | "stock" | "slides" | null;
   motion: MotionSettings;
   plan?: MotionScenePlan;
   sfx: boolean;
@@ -575,10 +592,15 @@ async function buildSegment(opts: {
   // classic look is the default), the title overlay chain (null = none) and
   // the footage playback rate (1 = no setpts).
   const grade = gradeForScene(opts.docGrade);
+  // S87 slice 2 — the kind dispatch reads the composition plan when the
+  // caller carries one (schema-2 docs); the mode stays the fallback for
+  // v1 docs and no-doc renders (the pre-S87 branch, verbatim).
+  const isImage =
+    opts.visualKind === "image" || (opts.visualKind == null && mode === "slides");
   // S3 — keying + corner overlay. Slides keep their designed-deck grammar
   // (no grade, no keying, no overlay — the brand kit owns the logo there).
-  const chroma = mode !== "slides" ? opts.docChroma ?? null : null;
-  const pip = mode !== "slides" ? opts.docPip ?? null : null;
+  const chroma = !isImage ? (opts.docChroma ?? null) : null;
+  const pip = !isImage ? (opts.docPip ?? null) : null;
   // The logo is a storage object — materialize to a local path for ffmpeg.
   // SVGs can't be read by this build; the overlay is skipped with a note.
   let pipLogoPath: string | null = null;
@@ -671,7 +693,7 @@ async function buildSegment(opts: {
   // pipeline's finishing grade would only muddy its tuned palette. The still
   // enters ONCE and zoompan emits the shot (no looped-image demuxer — large
   // looped PNGs deadlock this ffmpeg build's teardown).
-  if (mode === "slides") {
+  if (isImage) {
     const slidePath = slidePngPath(opts.videoId, scene.index);
     if (!fs.existsSync(slidePath))
       throw new Error(`Scene ${scene.index} has no slide image — the slide deck step was skipped`);
@@ -697,7 +719,7 @@ async function buildSegment(opts: {
     ]);
     return;
   }
-  if (mode === "stock") {
+  if ((opts.assetSource ?? (mode === "stock" ? "stock" : null)) === "stock") {
     // Hybrid: matched stock footage when the scene has a clip on disk,
     // otherwise fall through to the art path below. (S35: the selector only
     // names "stock" when the clip exists — this fs guard is belt-and-braces.)
@@ -1343,6 +1365,23 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         : null;
   const isPreview = Boolean(opts.sceneLimit && opts.sceneLimit < opts.scenes.length);
   const outName = isPreview ? "preview.mp4" : "final.mp4";
+
+  // S87 slice 2 — the per-scene visual kind from the composition plan
+  // (schema-2 docs read the tracks projection; the job derives the plan).
+  // Null plan / absent scene → the mode key verbatim (v1 docs, no-doc
+  // renders). Homogeneous docs make the two reads identical — the parity
+  // pins hold them to it.
+  const planScenes = opts.timelinePlan?.scenes ?? null;
+  const sceneKindOf = (i: number): PlanVisualKind =>
+    planScenes?.[i]?.kind ?? (opts.mode === "slides" ? "image" : "video");
+  const assetSourceOf = (i: number): "ai" | "stock" | "slides" | null =>
+    planScenes?.[i]?.assetSource ?? null;
+  // Geometry truth for image-kind renders (the deck is 9:16): ALL scenes
+  // image → the deck geometry; mixed docs (no engine writes them yet —
+  // slice 4 defines mixed geometry) keep the video default.
+  const allImage = planScenes
+    ? planScenes.every((ps) => ps.kind === "image")
+    : opts.mode === "slides";
   const outPath = path.join(dir, outName);
 
   if (scenes.length === 0) throw new Error("No scenes to render");
@@ -1414,7 +1453,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     // (16:9 / 9:16 / 1:1) so it can size the camera plan to match. Slides
     // mode is always 9:16; otherwise honor opts.aspectRatio (default 16:9).
     const motionAspect: "16:9" | "9:16" | "1:1" =
-      opts.mode === "slides" ? "9:16" : (opts.aspectRatio ?? "16:9");
+      allImage ? "9:16" : (opts.aspectRatio ?? "16:9");
     const motionFps = opts.frameRate ?? FPS;
 
     // S35 — Universal Scene Liveliness: derive ONE execution channel per
@@ -1491,6 +1530,15 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
                 durationsSec: durations,
               })
             : [];
+    // S87 slice 2 — the plan's per-scene kind overlays the mode-keyed list:
+    // image scenes take the slide plan (the designed PNG IS the frame),
+    // video scenes keep the movement planning above. Homogeneous docs →
+    // identical lists (the parity pins); mixed docs get per-scene truth.
+    if (planScenes) {
+      for (let i = 0; i < scenes.length; i++) {
+        if (sceneKindOf(i) === "image") plans[i] = slideMotionPlan(scenes[i], motion);
+      }
+    }
 
     // M2 — the approved Director shot list becomes the authoritative shot
     // plan of every Ken Burns scene (docs/director-m1-m2-spec.md §1.3). ONE
@@ -1594,7 +1642,9 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     // 1.5) Keynote slides — design the deck (LLM, cached) and screenshot it.
     // (Cancellation rides the same onProgress checkpoints as every stage —
     // the deck render itself is ~1 s per slide, no mid-pass checkpoint.)
-    if (opts.mode === "slides") {
+    // S87 slice 2 — the gate reads the composition plan's kinds (allImage
+    // carries the mode fallback for plan-less renders).
+    if (allImage) {
       report(scenes.length, "Designing slide deck");
       const deck = await planSlides(opts.videoId, scenes, {
         topic: opts.topic ?? null,
@@ -1657,6 +1707,10 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         scene,
         dur: durations[i],
         mode: opts.mode,
+        // S87 slice 2 — the per-scene contract dispatch (kind + asset
+        // source from the plan; mode fallback lives inside buildSegment).
+        visualKind: sceneKindOf(i),
+        assetSource: assetSourceOf(i),
         // S35 — the selector's verdict for this scene (undefined → the
         // mode's own default; can't happen here, the list is always built).
         channel: chan,
@@ -1714,7 +1768,11 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     const trans = sanitizeTransition(opts.transition);
     const boundary: TransitionSettings[] = [];
     for (let b = 0; b + 1 < scenes.length; b++) {
-      const docStyle = docScenes?.[b + 1]?.transitionIn ?? null;
+      // S87 slice 2 — the plan's boundary transition (the tracks read)
+      // with the v1 docScenes fallback; the catalog check below sanitizes
+      // either source identically.
+      const docStyle =
+        planScenes?.[b + 1]?.transitionIn ?? docScenes?.[b + 1]?.transitionIn ?? null;
       boundary.push({
         style:
           docStyle != null && TRANSITION_IDS.has(docStyle as never)
@@ -1813,7 +1871,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       // S6 — the doc's caption-style pick, mapped to ASS for this
       // orientation (slides mode forces the vertical variant of the SAME
       // pick; no pick = the classic look, byte-identical to pre-S6).
-      subtitleStyle: captionAssStyle(opts.captionStyleId, opts.mode === "slides"),
+      subtitleStyle: captionAssStyle(opts.captionStyleId, allImage),
       musicAutomation,
       quality: QUALITY_ENCODING[opts.quality ?? "standard"],
     });

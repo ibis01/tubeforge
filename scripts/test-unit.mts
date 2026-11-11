@@ -9605,6 +9605,206 @@ await test("S80: normalizeConsistencyCheckMode — the two valid non-defaults pa
   });
 }
 
+// ---------- S87 slice 2 — the compositor reads tracks[]: the composition plan + parity ----------
+{
+  const { assembleTimeline, serializeTimeline, parseTimeline, docSceneSettings } = await import(
+    "../src/lib/tubeforge/timeline.ts"
+  );
+  const { planFromTracks, planFromScenes, compositionPlan } = await import(
+    "../src/lib/tubeforge/composition-plan.ts"
+  );
+  const { sanitizeTransition, sanitizeTransitionStyle, TRANSITION_IDS, fadeblackWindowsMulti } =
+    await import("../src/lib/tubeforge/transitions.ts");
+  const { expectedCutsForTimeline } = await import("../src/lib/tubeforge/render-qc.ts");
+
+  const mkScenes = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      index: i + 1,
+      title: `S${i + 1}`,
+      narration: "one two three four five",
+      visual: "v",
+      camera: "c",
+      mood: "m",
+      caption: "",
+      hostInScene: false,
+      rehook: false,
+      sfx: "none",
+    })) as never[];
+
+  await test("S87 slice 2: PARITY — the tracks read and the scenes read agree exactly (kenburns / stock / slides)", async () => {
+    for (const renderMode of ["kenburns", "stock", "slides"] as const) {
+      const scenes = mkScenes(2);
+      if (renderMode === "stock") {
+        // scene 1 has matched footage, scene 2 falls back to art — a mixed
+        // assetSource doc, the honest stock shape.
+        (scenes[0] as { stock?: unknown }).stock = { source: "pexels", query: "waves" };
+      }
+      const doc = parseTimeline(
+        serializeTimeline(assembleTimeline(scenes, { ttsSpeed: 1, renderMode }))
+      );
+      ok(doc, `the ${renderMode} doc roundtrips`);
+      const fromTracks = planFromTracks(doc, 2);
+      const fromScenes = planFromScenes(doc, 2);
+      ok(fromTracks, `the visual track parses (${renderMode})`);
+      ok(fromScenes, `the scenes list parses (${renderMode})`);
+      eq(fromTracks.scenes, fromScenes.scenes, `${renderMode}: every plan scene identical — position, index, kind, assetSource, window, transitionIn`);
+      eq(fromTracks.totalSec, fromScenes.totalSec, `${renderMode}: the composition clock totals agree`);
+    }
+    // The kind/assetSource truth per mode (the dispatch the render keys on).
+    const aiDoc = parseTimeline(serializeTimeline(assembleTimeline(mkScenes(2), { ttsSpeed: 1, renderMode: "kenburns" })));
+    ok(aiDoc, "the kenburns doc parses");
+    const ai = planFromTracks(aiDoc, 2);
+    ok(ai, "the kenburns plan parses");
+    eq(ai.scenes.map((s) => s.kind).join(","), "video,video", "kenburns → video clips");
+    eq(ai.scenes.map((s) => s.assetSource).join(","), "ai,ai", "kenburns → ai assets");
+    const stockScenes = mkScenes(2);
+    (stockScenes[0] as { stock?: unknown }).stock = { source: "pexels", query: "waves" };
+    const stockDoc = parseTimeline(serializeTimeline(assembleTimeline(stockScenes, { ttsSpeed: 1, renderMode: "stock" })));
+    ok(stockDoc, "the stock doc parses");
+    const stock = planFromTracks(stockDoc, 2);
+    ok(stock, "the stock plan parses");
+    eq(stock.scenes.map((s) => s.assetSource).join(","), "stock,ai", "stock mode → per-scene footage vs art fallback");
+    const slidesDoc = parseTimeline(serializeTimeline(assembleTimeline(mkScenes(2), { ttsSpeed: 1, renderMode: "slides" })));
+    ok(slidesDoc, "the slides doc parses");
+    const slides = planFromTracks(slidesDoc, 2);
+    ok(slides, "the slides plan parses");
+    eq(slides.scenes.map((s) => s.kind).join(","), "image,image", "slides → image clips (the designed PNG IS the frame)");
+    eq(slides.scenes.map((s) => s.assetSource).join(","), "slides,slides", "slides assets name the deck");
+  });
+
+  await test("S87 slice 2: the render CLOCK parity — identical cut points, blend windows, black-dip windows from both reads", async () => {
+    // 3 scenes with per-scene edited transitions (a Studio doc shape): a
+    // cut, a fadeblack, and the default crossfade — the mixed-boundary
+    // case the stitcher partitions on.
+    const doc = parseTimeline(
+      serializeTimeline(assembleTimeline(mkScenes(3), { ttsSpeed: 1, renderMode: "kenburns" }))
+    );
+    ok(doc, "the base doc parses");
+    doc.scenes[0].transitionIn = "cut";
+    doc.scenes[2].transitionIn = "fadeblack";
+    const stored = parseTimeline(serializeTimeline(doc)); // the edit roundtrips
+    ok(stored, "the edited doc roundtrips");
+
+    const fromTracks = planFromTracks(stored, 3);
+    const fromScenes = planFromScenes(stored, 3);
+    ok(fromTracks, "the tracks plan parses");
+    ok(fromScenes, "the scenes plan parses");
+
+    // Boundary settings built EXACTLY the way renderVideo's boundary loop
+    // builds them (the catalog check + the video-level default seam).
+    const trans = sanitizeTransition(null);
+    const boundaryOf = (plan: typeof fromTracks) => {
+      const b: { style: string; durationSec: number }[] = [];
+      for (let i = 0; i + 1 < plan.scenes.length; i++) {
+        const docStyle = plan.scenes[i + 1].transitionIn;
+        b.push({
+          style:
+            docStyle != null && TRANSITION_IDS.has(docStyle as never)
+              ? sanitizeTransitionStyle(docStyle)
+              : trans.style,
+          durationSec: trans.durationSec,
+        });
+      }
+      return b;
+    };
+
+    const dursT = fromTracks.scenes.map((s) => s.durationSec);
+    const dursS = fromScenes.scenes.map((s) => s.durationSec);
+    eq(dursT, dursS, "the per-scene durations agree (the override feed)");
+    eq(boundaryOf(fromTracks), boundaryOf(fromScenes), "the per-boundary styles agree");
+
+    const cutsT = expectedCutsForTimeline(dursT, boundaryOf(fromTracks) as never);
+    const cutsS = expectedCutsForTimeline(dursS, boundaryOf(fromScenes) as never);
+    eq(cutsT.cuts, cutsS.cuts, "hard-cut positions identical on the blended clock");
+    eq(cutsT.windows, cutsS.windows, "blend windows identical");
+    eq(
+      fadeblackWindowsMulti(dursT, boundaryOf(fromTracks) as never),
+      fadeblackWindowsMulti(dursS, boundaryOf(fromScenes) as never),
+      "black-dip windows identical (the QC exemption feed)"
+    );
+    // And the boundary feed parity against the v1 docSceneSettings path
+    // (renderVideo reads either source identically after the catalog check).
+    const docScenes = docSceneSettings(stored, 3);
+    ok(docScenes, "the settings projection parses");
+    eq(
+      fromTracks.scenes.map((s) => s.transitionIn),
+      docScenes.map((s) => s.transitionIn),
+      "the plan's transitionIn ≡ docSceneSettings' (the v1 boundary feed)"
+    );
+  });
+
+  await test("S87 slice 2: compositionPlan — the origin ledger + fail-open (junk tracks NEVER block the render)", async () => {
+    const doc = parseTimeline(
+      serializeTimeline(assembleTimeline(mkScenes(2), { ttsSpeed: 1, renderMode: "kenburns" }))
+    );
+    ok(doc, "the doc parses");
+    const tracked = compositionPlan(doc, 2);
+    ok(tracked, "the aligned plan parses");
+    eq(tracked.origin, "tracks", "a schema-2 doc reads the tracks");
+    eq(compositionPlan(null, 2), null, "no doc → no plan (the render's own WAV defaults)");
+
+    // Junk tracks of every flavor → the scenes fallback, never a crash.
+    // NOTE the fixture discipline: parseTimeline RE-DERIVES tracks from the
+    // scenes (the slice-1 law), so mangled tracks are built ON THE IN-MEMORY
+    // doc — the shape a stored junk-tracks column produces once engines own
+    // their tracks (slice 3+); today's parse path heals stored junk before
+    // this seam ever sees it.
+    const withTracks = (tracks: typeof doc.tracks) =>
+      ({ ...doc, tracks }) as typeof doc;
+    const wrongCount = compositionPlan(withTracks(doc.tracks.map((t) => ({ ...t, clips: t.clips.slice(0, 1) }))), 2);
+    ok(wrongCount, "the wrong-count fallback parses");
+    eq(wrongCount.origin, "scenes", "a misaligned clip count demotes to the scenes read");
+    const nanWindow = compositionPlan(withTracks([
+      { kind: "video", name: "visual", clips: [{ id: "s1", kind: "video", sceneIndex: 1, startSec: "NaN", endSec: 5, transitionIn: null, transitionOut: null, asset: null }, ...doc.tracks[0].clips.slice(1)] },
+      ...doc.tracks.slice(1),
+    ]), 2);
+    ok(nanWindow, "the nan-window fallback parses");
+    eq(nanWindow.origin, "scenes", "a non-finite window demotes to the scenes read");
+    const zeroWindow = compositionPlan(withTracks([
+      { kind: "video", name: "visual", clips: [{ id: "s1", kind: "video", sceneIndex: 1, startSec: 4, endSec: 4, transitionIn: null, transitionOut: null, asset: null }, ...doc.tracks[0].clips.slice(1)] },
+      ...doc.tracks.slice(1),
+    ]), 2);
+    ok(zeroWindow, "the zero-window fallback parses");
+    eq(zeroWindow.origin, "scenes", "a zero-length window demotes to the scenes read");
+    const noVisual = compositionPlan(withTracks(doc.tracks.slice(1)), 2);
+    ok(noVisual, "the no-visual fallback parses");
+    eq(noVisual.origin, "scenes", "a missing visual track demotes to the scenes read");
+
+    // v1 docs (and legacy no-stamp docs) keep the scenes read verbatim.
+    const legacy = JSON.parse(serializeTimeline(doc)) as Record<string, unknown>;
+    delete legacy.schema;
+    const v1 = parseTimeline(JSON.stringify(legacy));
+    ok(v1, "the doctored doc parses");
+    eq(v1.schema, 1, "the doctored doc is v1");
+    const v1Plan = compositionPlan(v1, 2);
+    ok(v1Plan, "the v1 plan parses");
+    eq(v1Plan.origin, "scenes", "a v1 doc reads the scenes (the legacy path, verbatim)");
+    eq(compositionPlan(doc, 3), null, "a scene-count mismatch refuses the whole plan (all-or-nothing)");
+  });
+
+  await test("S87 slice 2: the honest-geometry pin — when the durationSec field LIES, the tracks read uses the window", async () => {
+    const doc = parseTimeline(
+      serializeTimeline(assembleTimeline(mkScenes(2), { ttsSpeed: 1, renderMode: "kenburns" }))
+    );
+    ok(doc, "the base doc parses");
+    // A client-sent doc whose durationSec disagrees with its own windows:
+    // the field is a client echo; the windows are the geometry. The v2
+    // read trusts the WINDOW; the v1 read (planFromScenes) trusts the
+    // field — compositionPlan prefers the honest geometry for schema-2.
+    const lying = JSON.parse(serializeTimeline(doc)) as Record<string, unknown>;
+    (lying.scenes as Record<string, unknown>[])[1].durationSec = 999;
+    const stored = parseTimeline(JSON.stringify(lying));
+    ok(stored, "the lying doc roundtrips");
+    const fromTracks = planFromTracks(stored, 2);
+    ok(fromTracks, "the tracks plan parses");
+    eq(fromTracks.scenes[1].durationSec, doc.scenes[1].endSec - doc.scenes[1].startSec, "the tracks read derives the duration from the window");
+    const plan = compositionPlan(stored, 2);
+    ok(plan, "the plan parses");
+    eq(plan.origin, "tracks", "the schema-2 dispatcher prefers the tracks read");
+    eq(plan.scenes[1].durationSec, fromTracks.scenes[1].durationSec, "the render feed gets the honest geometry, never the lying field");
+  });
+}
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
