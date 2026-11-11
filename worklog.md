@@ -4413,3 +4413,40 @@ ROADMAP #6, this log. Next: slice 5 — the §4.C acceptance close (the
 battery: cross-engine rendering, sync, transition timing, round-trip
 identity — deterministic pins + real artifacts + human review, the S76
 standard).
+
+## S87 slice 5 — the §4.C acceptance close: the battery (ROADMAP #6, P0 — CLOSED)
+
+The ladder's last brick. The S76 §4.C close condition — "every engine
+describes its cut one way, and the delivered pixels honor it" — now has
+ BOTH halves of the S76 standard: the deterministic pins (unit suite,
+slices 1-4) and the real-artifact battery, wired into CI.
+
+- `scripts/s87-acceptance-battery.mts`: real renders through BOTH engine
+  lanes on tiny $0 fixtures — Part A the Whiteboard lane (the real
+  planner scaffolds a 3-scene project mixing every duration precedence
+  AND partial voice coverage; a real chromium render + synthesized VO
+  slot + bed), Part B the compositor lane (a real kenburns render over a
+  schema-2 doc, the plan feed driving durations + kinds, a studio-style
+  "cut" boundary edit proving per-scene seniority). 18/18 mechanical
+  checks: per-scene encodes ≡ the contract windows (±0.06s), the hard
+  cut EXACTLY on the boundary, the concat/delivered totals ≡ the plan
+  totals, mixed audio present, byte-identical round-trips, row linkages
+  through the one shared reader. ~19s; wired into the CI E2E job
+  (chromium + ffmpeg live there).
+- THE FIND (the battery earned its keep on run one): the mixed-VO shape
+  CRASHED the whiteboard assembly — the concat demuxer is
+  stream-homogeneous, and a silent scene ahead of a voiced one left
+  [0:a] matching no streams at the amix seam. Fixed in the same slice:
+  when any scene carries VO, every scene file carries an audio stream
+  (anullsrc fill under the same apad/-t bounds; fully silent projects
+  keep the video-only shape). A real production shape — a user voicing
+  SOME scenes — previously crashed the render.
+- Receipt: docs/audits/s87-acceptance-battery-record.md (the condition
+  mapping, the find, the artifacts for human review).
+
+With this, ROADMAP #6 (the Universal Timeline contract) is CLOSED at
+the code level — the third shared quality system complete. The one
+recorded tail: the slice-4 soak gate (≥14 days with zero v1-doc renders
+before the scenes[] slimming + v1 fallback retirement; design doc §13).
+Design doc §15/§16, ROADMAP #6, this log. Next: ROADMAP #7 —
+Reference-video intelligence (P1).

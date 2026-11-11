@@ -301,3 +301,12 @@ jobs:
         run: npm run test:e2e
         env:
           CI: true
+
+      # S87 slice 5 — the §4.C acceptance battery (the Universal Timeline
+      # close): real renders through BOTH engine lanes (the Whiteboard
+      # engine's chromium rasterizer + the compositor's kenburns path, zero
+      # AI spend) held to the timeline contract — windows, cuts, sync,
+      # round-trip identity. ~20s on tiny fixtures; the artifacts stay in
+      # /tmp (human review copies live in the audit record).
+      - name: S87 acceptance battery (the Universal Timeline §4.C close)
+        run: node --import tsx scripts/s87-acceptance-battery.mts --out /tmp/s87-battery

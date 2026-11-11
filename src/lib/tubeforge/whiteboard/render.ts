@@ -407,6 +407,15 @@ export async function renderWhiteboard(
       // Encode the scene: frames (+ VO when present). Music joins at assembly.
       // voResolved carries the LOUDNESS-CONTRACT slots — see normalizeVoSlot.
       const voPath = voResolved.get(scene.id) ?? null;
+      // S87 slice 5 (the acceptance battery's find): when ANY scene carries
+      // VO, EVERY scene file must carry an audio stream — the concat
+      // demuxer is stream-homogeneous, and a silent scene ahead of a
+      // voiced one left [0:a] matching no streams at the amix seam (a
+      // mixed-VO project — a user voicing scenes 2..n of n — crashed the
+      // assembly). VO-less scenes fill with anullsrc under the same
+      // apad/-t bounds; a FULLY silent project keeps today's video-only
+      // shape (the silent-draft law unchanged).
+      const silentFill = !voPath && anyVoAudio;
       const sceneFile = path.join(opts.outDir, `scene-${si + 1}.mp4`);
       const durSec = clock.scenes[si].deliveredSec;
       const args: string[] = [
@@ -415,6 +424,7 @@ export async function renderWhiteboard(
         "-i", path.join(framesDir, "f%05d.jpg"),
       ];
       if (voPath) args.push("-i", voPath);
+      else if (silentFill) args.push("-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo");
       args.push(
         "-filter_complex", "[0:v]format=yuv420p[v]",
         "-map", "[v]",
@@ -423,7 +433,7 @@ export async function renderWhiteboard(
         // truncated the video to the VO and ate the tail — the S75 E10
         // receipt: 1623 budgeted frames, 1578 delivered (every scene 9
         // frames short; the pre-flight frame budget lied by construction).
-        ...(voPath ? ["-map", "1:a", "-c:a", "aac", "-b:a", "160k", "-af", "apad"] : []),
+        ...((voPath || silentFill) ? ["-map", "1:a", "-c:a", "aac", "-b:a", "160k", "-af", "apad"] : []),
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
         "-t", durSec.toFixed(3),
         sceneFile,

@@ -1,11 +1,14 @@
-# S87 — the Universal Timeline contract (design + slices 0–4)
+# S87 — the Universal Timeline contract (design + slices 0–5, CLOSED)
 
-**Status:** design recorded; slices 0–4 implemented (the version stamp;
-the v2 dual-write + the overwrite guard; the compositor reads tracks[] —
-the composition plan + parity; Whiteboard emits tracks[] — the engine
-joins the contract; the legacy branches collapse — the pre-soak bricks +
-the recorded soak gate). Design target: the S76
-adoption decision §4.C
+**Status:** design recorded; slices 0–5 implemented — the contract is
+CLOSED at the code level (the version stamp; the v2 dual-write + the
+overwrite guard; the compositor reads tracks[] — the composition plan +
+parity; Whiteboard emits tracks[] — the engine joins the contract; the
+legacy branches collapse — the pre-soak bricks + the recorded soak gate;
+the §4.C acceptance battery — the close, `docs/audits/
+s87-acceptance-battery-record.md`, 18/18 real-render checks, wired into
+CI). The one recorded tail: the slice-4 soak gate (§13). Design target:
+the S76 adoption decision §4.C
 (`docs/audits/s76-openmontage-adoption-decision.md`), the third shared
 quality system after the Visual Consistency Engine (S77–S83) and the Video
 Critic (S84–S86).
@@ -151,6 +154,12 @@ CI: cross-engine rendering (whiteboard + stock + generated clips
 through the contract), sync (narration/music/SFX/subtitles), transition
 timing preservation, and the round-trip identity (a saved timeline
 reopens and renders identically).
+
+*Landed (recorded in §15 + docs/audits/s87-acceptance-battery-record.md):*
+`scripts/s87-acceptance-battery.mts` — real renders through BOTH engine
+lanes on tiny $0 fixtures, 18/18 mechanical checks, wired into the CI
+E2E job; the first run CAUGHT a real engine bug (the mixed-VO assembly
+crash), fixed in the same slice.
 
 ## 4. Acceptance tests (S76 §4.C, the close condition)
 
@@ -464,3 +473,48 @@ the row's aspect (pinned before any engine writes a mixed doc) · the
 channel boundary — clips never carry cameraKeys (creative settings stay
 in the scenes list, the S2 doctrine; the channel gate reads them there,
 mode-keyed on purpose).
+
+## 15. What slice 5 changed (code) — the acceptance close
+
+- New `scripts/s87-acceptance-battery.mts` — the §4.C battery, the S76
+  standard's artifacts half (the deterministic pins live in the unit
+  suite, slices 1–4): REAL renders through BOTH engine lanes on tiny
+  $0 fixtures, mechanically held to the contract — the full condition
+  mapping is `docs/audits/s87-acceptance-battery-record.md`.
+  - Part A (the engine lane): the real planner scaffolds a 3-scene
+    640×360@24 project mixing every duration precedence (explicit /
+    VO-measured / narration-estimated) and PARTIAL voice coverage; a
+    real chromium render + synthesized VO slot + bed; the checks hold
+    the per-scene encodes and the concat total to the frame-quantized
+    plan windows, the mixed audio presence, the byte-identical
+    re-derivation, and the row linkages through the shared reader.
+  - Part B (the compositor lane): a real kenburns render over a
+    schema-2 doc (measured WAV windows + a studio-style "cut" boundary
+    edit — the per-scene pick's seniority is itself checked); the plan
+    feed drives durations + kinds; the checks hold the hard cut EXACTLY
+    on the contract boundary, the delivered total to the plan total,
+    the byte-identical save/reopen round-trip, and the narration audio.
+  - Wired into CI as a step of the E2E job (chromium + ffmpeg live
+    there; ~20 s on the fixtures; zero AI spend).
+- **The find, fixed in the same slice** (`whiteboard/render.ts`): the
+  battery's first run crashed at final assembly on the mixed-VO shape —
+  the concat demuxer is stream-homogeneous, and a silent scene file
+  ahead of a voiced one left `[0:a]` matching no streams at the amix
+  seam. Fix: when ANY scene carries VO, every scene file carries an
+  audio stream (VO-less scenes fill with `anullsrc` under the same
+  apad/-t bounds; a fully silent project keeps the video-only shape).
+  A real production shape — a user voicing some scenes — previously
+  crashed the whiteboard render.
+
+## 16. Pinned-by-the-battery contract (slice 5)
+
+18/18 real-render checks (the receipt in the audit record): the engine's
+returned plan IS the tracks read and the tracks re-derive byte-identically
+· every per-scene encode within ±0.06 s of its contract window · the
+concat total within ±0.25 s of the contract total · the mixed audio (VO
+slot + bed) present in the final · the VO scene keeps its narration ·
+the row linkages survive the shared reader · the saved doc re-serializes
+byte-identically (1883 bytes) · the compositor reads origin "tracks" ·
+the studio's boundary edit rides the tracks · the hard cut EXACTLY on
+the boundary · the delivered total ≡ the plan total · the render's own
+clock ≡ the file · the narration audio present · the row geometry held.
