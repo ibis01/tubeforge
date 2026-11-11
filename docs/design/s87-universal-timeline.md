@@ -1,9 +1,10 @@
-# S87 — the Universal Timeline contract (design + slices 0–3)
+# S87 — the Universal Timeline contract (design + slices 0–4)
 
-**Status:** design recorded; slices 0–3 implemented (the version stamp;
+**Status:** design recorded; slices 0–4 implemented (the version stamp;
 the v2 dual-write + the overwrite guard; the compositor reads tracks[] —
 the composition plan + parity; Whiteboard emits tracks[] — the engine
-joins the contract). Design target: the S76
+joins the contract; the legacy branches collapse — the pre-soak bricks +
+the recorded soak gate). Design target: the S76
 adoption decision §4.C
 (`docs/audits/s76-openmontage-adoption-decision.md`), the third shared
 quality system after the Visual Consistency Engine (S77–S83) and the Video
@@ -135,6 +136,15 @@ stays OPEN for the slice that needs a stored cross-engine doc — slice
 **Slice 4 — the legacy branches collapse.** Slides/stock/ai sources map
 onto track kinds; the `scenes[]` compat emission and the v1 render path
 retire after a soak (the v1 docs in the wild age out with re-renders).
+
+*Landed shape (recorded in §13):* the sources→kinds mapping itself
+landed with slices 1–2 (deriveTracks + the plan's per-scene
+kind/assetSource); slice 4 collapses the first render branch onto it
+(the storyboard-art gate reads the per-scene KIND, mode as the no-plan
+fallback) and pins the mixed-kind/geometry laws. The RETIREMENTS (the
+scenes[] compat emission slimming to a settings-only schema 3; the v1
+planFromScenes read + the mode fallbacks) are SOAK-GATED by the slice's
+own text — the gate is recorded in §13 with its precondition.
 
 **Slice 5 — the acceptance close.** The §4.C acceptance battery runs as
 CI: cross-engine rendering (whiteboard + stock + generated clips
@@ -395,3 +405,62 @@ fallback) · THE two-clock pin: estimateProjectFrames → tracks → plan —
 every window within a centisecond of frameCount(ms)/fps, the plan total
 within a centisecond of the assembly total, deterministic byte-identical
 re-derivation.
+
+## 13. What slice 4 changed (code) — the pre-soak bricks + the soak gate
+
+- **The first legacy branch collapses**: renderVideo's storyboard-art
+  gate reads the composition plan's per-scene KIND (`sceneKindOf(i) !==
+  "image"` → art required) instead of the video-level mode proxy, with
+  the mode as the no-plan fallback (v1 docs, "render without timeline",
+  no-doc renders). Behavior-neutral for every doc the engines write (the
+  slice-2 parity pins: slides → image everywhere, kenburns/animated/
+  stock → video everywhere — and sliced preview renders stay position-
+  aligned, the plan's prefix maps to the sliced list); a mixed doc (no
+  engine writes one yet) gets the per-scene truth instead of the
+  video-level guess. The ROUTE-level `!video.hasStoryboard` pre-check
+  stays mode-keyed — it is a UX pre-flight without the doc; the job's
+  gate is the enforcement and now carries the contract truth.
+- **NOT collapsed (recorded, with reasons)**:
+  - The liveliness channel selection + the `mode === "kenburns"`
+    cameraKeys gate — PRODUCTION-channel questions (which scenes play
+    the Ken Burns camera, which play footage or i2v), not composition
+    facts. Slice 3 settled the engine-level boundary (kind decides WHO
+    executes); the channel choice inside the compositor stays
+    mode/selector-keyed by design. The open sub-question (stock-mode
+    scenes falling back to Ken Burns do not honor the doc's cameraKeys
+    today) is recorded for the soak window, not changed here.
+  - The motion-plans base list's mode-keyed branches — the slice-2
+    per-scene kind overlay already carries the contract truth for
+    plan-carrying renders; the base list serves the no-plan fallback.
+- **THE SOAK GATE (the slice's own retirement precondition, recorded)**:
+  what retires once the soak passes —
+  1. the `scenes[]` compat EMISSION slims to a settings-only schema 3
+     (tracks own the composition facts; scenes keep levels/captions/
+     creative per the S2 doctrine; the handover carries a re-derive +
+     compare consistency check so a stale settings list cannot survive
+     the migration), and
+  2. the v1 render path's remaining mode fallbacks (planFromScenes stays
+     forever — a build reads N and N−1; what retires is the FALLBACK
+     only no-plan renders legitimately use, shrinking to exactly those).
+  The precondition: slices 0–3 landed 2026-11-11; retirement is safe
+  after one production soak window (≥14 days) with ZERO origin-"scenes"
+  renders on v1 docs in the wild (operator-verified — the renders that
+  still hit the fallback are the no-doc/ignore-timeline ones, which the
+  retirement does not touch). The unknown-stamp refusal + the overwrite
+  guard (slice 1) make the migration itself forward-safe: a newer build
+  never destroys an older doc and vice versa.
+
+## 14. Pinned-by-tests contract (slice 4)
+
+KIND COMPLETENESS — every engine-written doc (kenburns/animated/stock/
+slides, mixed assetSource included) carries kind + assetSource on EVERY
+plan scene: the mode fallback is provably unreachable for aligned docs
+(the retirement precondition) · the MIXED-kind law — a doc mixing
+slides-source and ai scenes reads per-scene kinds [image, video] with
+per-scene assetSources, and the collapsed art gate's predicate demands
+art only where kind ≠ image (the mode proxy demanded it everywhere) ·
+the geometry law — all-image → the deck geometry, ANY video in the mix →
+the row's aspect (pinned before any engine writes a mixed doc) · the
+channel boundary — clips never carry cameraKeys (creative settings stay
+in the scenes list, the S2 doctrine; the channel gate reads them there,
+mode-keyed on purpose).

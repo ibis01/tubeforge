@@ -1395,11 +1395,18 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
 
   if (scenes.length === 0) throw new Error("No scenes to render");
 
-  // Validate inputs up-front with actionable messages. Slides mode does not
-  // need storyboard art (the deck is designed from the script) — narration
-  // timing is still mandatory in every mode.
-  for (const scene of scenes) {
-    if (opts.mode !== "slides" && !fs.existsSync(path.join(dir, sceneImageFile(scene.index))))
+  // Validate inputs up-front with actionable messages. S87 slice 4 — the
+  // first legacy branch COLLAPSES onto the contract: the storyboard-art
+  // gate reads the composition plan's per-scene KIND (an image-kind
+  // scene's frame IS the designed deck PNG — no storyboard art needed),
+  // with the mode as the no-plan fallback (v1 docs, "render without
+  // timeline"). Parity-pinned identical for every doc the engines write
+  // (slides → image everywhere, kenburns/animated/stock → video
+  // everywhere); a mixed doc (no engine writes one yet) gets the
+  // per-scene truth instead of the video-level proxy. Narration timing
+  // is still mandatory in every mode.
+  for (const [i, scene] of scenes.entries()) {
+    if (sceneKindOf(i) !== "image" && !fs.existsSync(path.join(dir, sceneImageFile(scene.index))))
       throw new Error(`Scene ${scene.index} has no storyboard image — generate the storyboard first`);
     if (!fs.existsSync(path.join(dir, sceneWavFile(scene.index))))
       throw new Error(`Scene ${scene.index} has no voiceover — generate the voiceover first`);

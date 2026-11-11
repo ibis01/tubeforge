@@ -9986,6 +9986,117 @@ await test("S80: normalizeConsistencyCheckMode — the two valid non-defaults pa
   });
 }
 
+// ---------- S87 slice 4 — the legacy branches collapse (the pre-soak bricks) ----------
+{
+  const { assembleTimeline, serializeTimeline, parseTimeline } = await import(
+    "../src/lib/tubeforge/timeline.ts"
+  );
+  const { planFromTracks } = await import("../src/lib/tubeforge/composition-plan.ts");
+  type TimelineScene = import("../src/lib/tubeforge/timeline.ts").TimelineScene;
+
+  const mkScenes = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      index: i + 1,
+      title: `S${i + 1}`,
+      narration: "one two three four five",
+      visual: "v",
+      camera: "c",
+      mood: "m",
+      caption: "",
+      hostInScene: false,
+      rehook: false,
+      sfx: "none",
+    })) as never[];
+
+  await test("S87 slice 4: KIND COMPLETENESS — every engine-written doc carries kind + assetSource on every scene (the mode fallback is provably unreachable for aligned docs)", async () => {
+    // The retirement precondition for the v1 path's mode fallbacks: for
+    // every doc today's engines write, the plan's per-scene facts are
+    // ALWAYS present — the fallback only serves no-plan renders (v1 docs
+    // read through planFromScenes, "render without timeline", no doc).
+    for (const renderMode of ["kenburns", "animated", "stock", "slides"] as const) {
+      const scenes = mkScenes(3);
+      if (renderMode === "stock") {
+        (scenes[0] as { stock?: unknown }).stock = { source: "pexels", query: "waves" };
+      }
+      const doc = parseTimeline(
+        serializeTimeline(assembleTimeline(scenes, { ttsSpeed: 1, renderMode }))
+      );
+      ok(doc, `the ${renderMode} doc roundtrips`);
+      const plan = planFromTracks(doc, 3);
+      ok(plan, `the ${renderMode} plan parses`);
+      eq(
+        plan.scenes.every((s) => s.kind === "video" || s.kind === "image"),
+        true,
+        `${renderMode}: every scene carries a compositor kind (never the fallback)`
+      );
+      eq(
+        plan.scenes.every((s) => s.assetSource === "ai" || s.assetSource === "stock" || s.assetSource === "slides"),
+        true,
+        `${renderMode}: every scene carries an asset source`
+      );
+    }
+  });
+
+  await test("S87 slice 4: the MIXED-kind law — per-scene truth where the mode proxy was a video-level guess", async () => {
+    // A mixed doc (image-kind scene 1 + video-kind scene 2 — no engine
+    // writes one today; the fixture is built on the in-memory doc, the
+    // slice-3 discipline). The collapsed storyboard-art gate consumes
+    // exactly this predicate: art is required WHERE the kind is video,
+    // never where it is image — the mode proxy demanded it everywhere.
+    const doc = parseTimeline(
+      serializeTimeline(assembleTimeline(mkScenes(2), { ttsSpeed: 1, renderMode: "kenburns" }))
+    );
+    ok(doc, "the base doc parses");
+    doc.scenes[0].source = "slides"; // the designed-PNG frame kind
+    const mixed = parseTimeline(serializeTimeline(doc)); // the edit roundtrips
+    ok(mixed, "the mixed doc roundtrips");
+    const plan = planFromTracks(mixed, 2);
+    ok(plan, "the mixed plan parses");
+    eq(plan.scenes.map((s) => s.kind), ["image", "video"], "the kinds are per-scene truth (the gate's input)");
+    eq(plan.scenes.map((s) => s.assetSource), ["slides", "ai"], "the asset sources are per-scene truth");
+    eq(
+      plan.scenes.map((s) => s.kind !== "image"),
+      [false, true],
+      "the collapsed gate: art required only where kind ≠ image"
+    );
+    // The geometry law (renderVideo's allImage seam): ALL image → the deck
+    // geometry; ANY video in the mix → the row's aspect (mixed geometry —
+    // no engine writes mixed docs; the law is pinned before one does).
+    eq(plan.scenes.every((s) => s.kind === "image"), false, "a mixed doc is NOT allImage");
+    const deck = parseTimeline(
+      serializeTimeline(assembleTimeline(mkScenes(2), { ttsSpeed: 1, renderMode: "slides" }))
+    );
+    ok(deck, "the slides doc parses");
+    const deckPlan = planFromTracks(deck, 2);
+    ok(deckPlan, "the slides plan parses");
+    eq(deckPlan.scenes.every((s) => s.kind === "image"), true, "a slides doc IS allImage (the 9:16 deck geometry)");
+  });
+
+  await test("S87 slice 4: the doc-camera gate stays CHANNEL-scoped (recorded, not collapsed)", async () => {
+    // The mode === "kenburns" cameraKeys gate is a PRODUCTION-channel
+    // question (which scenes play the Ken Burns camera), not a composition
+    // fact — slice 3 settled the channel question at the engine level and
+    // left this gate mode-keyed ON PURPOSE. This pin records the boundary:
+    // the doc's cameraKeys live in the SETTINGS projection (docSceneSettings
+    // — the scenes list, the S2 doctrine), never in the tracks.
+    const doc = parseTimeline(
+      serializeTimeline(assembleTimeline(mkScenes(2), { ttsSpeed: 1, renderMode: "kenburns" }))
+    );
+    ok(doc, "the doc parses");
+    const tracks = doc.tracks;
+    eq(
+      tracks.every((t) => t.clips.every((c) => !("cameraKeys" in c))),
+      true,
+      "clips never carry cameraKeys — creative settings stay in the scenes list (the S2 doctrine)"
+    );
+    eq(
+      doc.scenes.every((s: TimelineScene) => s.cameraKeys === null || s.cameraKeys === undefined || typeof s.cameraKeys === "object"),
+      true,
+      "the settings projection owns cameraKeys (the channel gate reads it there)"
+    );
+  });
+}
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

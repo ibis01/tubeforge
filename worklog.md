@@ -4374,3 +4374,42 @@ assembly total, deterministic), typecheck 0, lint 0 on touched files.
 Design doc §11/§12, ROADMAP #6, this log. Next: slice 4 — the legacy
 branches collapse (slides/stock/ai sources map onto track kinds; the
 scenes[] compat emission and the v1 render path retire after a soak).
+
+## S87 slice 4 — the legacy branches collapse: the pre-soak bricks + the recorded soak gate (ROADMAP #6, P0)
+
+The ladder's fourth brick, landed in its honest implementable form: the
+sources→kinds mapping (slices 1–2) now carries its first RENDER branch,
+and the retirements the slice's own text gates on a soak are recorded
+with a concrete precondition instead of being forced early.
+
+- THE FIRST LEGACY BRANCH COLLAPSES: renderVideo's storyboard-art gate
+  reads the composition plan's per-scene KIND (image-kind scenes need no
+  storyboard art — the designed PNG IS the frame), with the mode as the
+  no-plan fallback. Behavior-neutral for every engine-written doc (the
+  slice-2 parity pins; sliced preview renders stay position-aligned);
+  mixed docs (none written yet) get per-scene truth. The route-level
+  pre-check stays mode-keyed (a UX pre-flight without the doc — the
+  job's gate is the enforcement).
+- NOT collapsed, recorded with reasons: the liveliness channel selection
+  and the mode==="kenburns" cameraKeys gate (PRODUCTION-channel
+  questions — slice 3 settled the engine boundary; the stock-fallback
+  cameraKeys sub-question is recorded for the soak window), and the
+  motion-plans base list (the slice-2 overlay already carries the
+  contract truth for plan-carrying renders).
+- THE SOAK GATE: the scenes[] compat emission slims to a settings-only
+  schema 3 (tracks own composition; scenes keep settings per the S2
+  doctrine; the handover carries a re-derive + compare check) and the
+  v1 mode fallbacks retire, once one production soak window (≥14 days)
+  passes with ZERO origin-"scenes" renders on v1 docs — slices 0–3
+  landed 2026-11-11; the slice-1 stamp/guard laws make the migration
+  forward-safe by construction.
+
+Verification: 424/424 unit (+3 slice-4 pins: kind completeness across
+every engine mode — the fallback provably unreachable for aligned docs;
+the mixed-kind law — per-scene kinds/assetSources + the collapsed gate
+predicate + the geometry law; the channel boundary — clips never carry
+cameraKeys), typecheck 0, lint 0 on touched files. Design doc §13/§14,
+ROADMAP #6, this log. Next: slice 5 — the §4.C acceptance close (the
+battery: cross-engine rendering, sync, transition timing, round-trip
+identity — deterministic pins + real artifacts + human review, the S76
+standard).
