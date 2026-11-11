@@ -88,6 +88,23 @@ exposes — GET-null → Studio recompute → PUT would DESTROY a newer-doc;
 the guard refuses the recompute-and-save when the stored doc carries an
 unknown schema).
 
+*Refinement (recorded 2026-11-11, from the slice-1 write-site survey):*
+the timeline column has SIX write paths — assemble POST + PUT, the
+scenes route's caption sync, and the studio clip/voice/pace routes —
+all parse-modify-serialize cycles. A `tracks[]` field merely CARRIED
+through those cycles goes STALE the moment a clip op edits scenes
+(tracks were derived from the pre-edit scenes). Slice 1 therefore
+derives tracks AT SERIALIZATION: `serializeTimeline` derives
+`tracks = deriveTracks(scenes)` from the scenes it is handed, so no
+write path can persist stale tracks (the projection law, enforced
+structurally). The stamp becomes 2 at that point; slice 2's compositor
+consumes the derived tracks, and later slices let ENGINES own their
+tracks (whiteboard's planner, 3D) — at which point derivation-at-
+serialize gives way to engine-authored tracks and a consistency check
+(re-derive + compare) pins the handover. The overwrite guard needs a
+shared seam (a `guardTimelineOverwrite` helper reading the RAW stored
+stamp) called by every write path — six small call sites, one law.
+
 **Slice 2 — the compositor reads tracks[].** `render.ts` dispatches on
 track kind instead of the internal mode branch, behind the schema
 discriminator (v1 docs keep the legacy path verbatim). Parity pins

@@ -4197,3 +4197,17 @@ Verification: 408/408 unit (+5 S87 pins: stamp, roundtrip stability,
 legacy tolerance, unknown-stamp refusal, junk-key tolerance/strict
 write), typecheck 0, lint 0 on touched files. New contract doc,
 ROADMAP #6, this log.
+
+## S87 addendum — the slice-1 write-site survey (design refinement)
+
+Scouted slice 1 (the v2 dual-write) against the tree before executing:
+the timeline column has SIX write paths (assemble POST + PUT, the
+scenes route's caption sync, studio clip/voice/pace), all
+parse-modify-serialize cycles. A carried tracks[] would go STALE the
+moment a clip op edits scenes — so slice 1 derives tracks AT
+SERIALIZATION (serializeTimeline derives from the scenes it is
+handed; no write path can persist stale tracks; the projection law
+enforced structurally). The overwrite guard needs a shared
+guardTimelineOverwrite seam across all six sites. Recorded in the
+design doc's slice-1 refinement; executing slice 1 is the next
+session's clean start (docs-only change here — no code risk).
