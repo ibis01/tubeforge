@@ -4497,3 +4497,59 @@ it. The ledger learned `reference` (the 23rd kind), the rotted header
 now states the suite IS in CI (check + coverage) and marks the ledger
 as a same-slice pin for every new JobKind. Queue suite re-run green
 locally (restart-recovery PASS, 23/23), lint/tsc 0.
+
+## S89 — Advanced stock retrieval v1 (ROADMAP #8, P1)
+
+The S76 §5 P2 spec, landed: the b-roll lane now sees the whole
+candidate field, weighs what matters, and never trusts a thumbnail.
+
+- THE ADAPTER CONTRACT (stock-index.ts): Pexels + Pixabay become the
+  first two `StockSourceAdapter`s (pure `pexelsParse`/`pixabayParse`
+  normalizers — pinned on fixture JSON), and `buildSceneIndex` gathers
+  EVERY scene query × every configured source into ONE pool, deduped
+  by `source:id` with the matchedQueries union. The license law: a
+  candidate without a license label never enters the index — and the
+  ranker floors it again (defense in depth). "No unverified footage
+  silently accepted" starts at the door.
+- THE RANKER (stock-ranker.ts, pure): floors (license/≥720p landscape/
+  ≥2s) + factors (duration fit 40, resolution 20, aspect 10, semantic
+  tag-overlap 30 — neutral for tag-less Pexels) + the visible
+  DUPLICATE_PENALTY (−1000) for clips already placed on another scene
+  of the video — deprioritized and visible in the factor breakdown,
+  never banned (banning starves thin markets). Deterministic walk
+  order, pinned input-order-independent.
+- THE MULTI-FRAME VERIFIER (stock-verify.ts): the S76 upgrade over the
+  one-frame gate — ffprobe duration → interior frame sampling (k/(n+1)
+  points) → SEQUENTIAL relevance judging with early exit at 2 verdicts
+  (the evidence without 3× the VLM spend; the smoke proves each exit
+  at exactly 2 gate calls) → deterministic motion measurement (blend=
+  difference + signalstats YAVG; MOTION_STATIC_MAX 1.0, calibrated on
+  real artifacts: animated 3.82 vs frozen 0.000 — a frozen frame in an
+  mp4 is the art lane's job, rejected even when the gate loves it).
+  The reducer: static → reject · ≥2 fails → reject (a single odd frame
+  — title card, cutaway — no longer rejects) · ≥2 passes → accept ·
+  else fail-open-but-RECORDED.
+- THE NEVER-SILENT LAW, pinned: the ref's verdict "pass" is
+  constructible ONLY with ≥2 passing frames (every 3-frame combination
+  enumerated in the pin); a fail-open accept is stamped "unverified"
+  with its evidence counts, and GET /stock exposes license + verified
+  + the counts per scene. StockRef grows five additive fields;
+  parseStockRef round-trips them tolerantly (legacy refs valid, a bad
+  verification record drops the record only).
+- Seams kept: searchAll compat for the Settings key tester, the
+  byte-identical no-provider error (the queue suite asserts it), the
+  incremental crash-resumable orchestration. Seams FIXED: the verifier
+  now reads through storage.withLocalFile and the has-clip probe
+  through storage.exists — the pre-S89 direct local-FS access was a
+  latent break under the s3 driver.
+- The public archives evaluated INDIVIDUALLY per the spec (design doc
+  §6): NASA is the recorded first candidate (public domain, keyless;
+  needs a response-shape audit — many items are embeds, not mp4s);
+  Wikimedia Commons + Internet Archive carry PER-ITEM licensing (the
+  source-level license law cannot stamp them); NOAA has no unified
+  video API.
+
+Verification: 444/444 unit (+16 S89 pins), typecheck 0, lint 0, smoke
+17/17 on real ffmpeg artifacts (scripts/s89-stock-smoke.mts). Design
+doc, ROADMAP #8, this log. Next: ROADMAP #9 — Provider selection
+intelligence (P1).

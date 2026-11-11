@@ -12,7 +12,7 @@ import { aiCall } from "./budget";
 import { runQualityGate } from "./quality";
 import { closestPriorDistance, imageHash, sceneImageHashes } from "./arthash";
 import { mergeWavs, wavDurationSec } from "./wav";
-import { CAMERAS, SCENE_COUNTS, SFX_KINDS, sanitizeSceneStyle, sceneStylePrompt, type Scene, type StockRef } from "./types";
+import { CAMERAS, SCENE_COUNTS, SFX_KINDS, sanitizeSceneStyle, sceneStylePrompt, type Scene, type StockRef, type StockVerification } from "./types";
 import { normalizeFocalToken } from "./motion";
 import { characterSceneFragment, readPortrait } from "./characters";
 import { isJobRunning } from "./jobs";
@@ -57,7 +57,34 @@ export function sceneWavFile(index: number): string {
   return `scene-${String(index).padStart(2, "0")}.wav`;
 }
 
-/** Validate a persisted StockRef (legacy/unknown shapes are dropped). */
+/** S89 — the verification record, tolerated: an invalid shape drops the
+ *  RECORD (the ref stays valid as a legacy ref), clamps keep the numbers
+ *  honest (passed ≤ sampled), and only the two legal verdicts survive. */
+function parseStockVerification(raw: unknown): StockVerification | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const v = raw as Record<string, unknown>;
+  if (v.verdict !== "pass" && v.verdict !== "unverified") return undefined;
+  const sampled = Number(v.framesSampled ?? 0);
+  if (!Number.isInteger(sampled) || sampled < 0) return undefined;
+  const passed = Number(v.framesPassed ?? 0);
+  const motion = v.motionDelta == null ? null : Number(v.motionDelta);
+  return {
+    framesSampled: sampled,
+    framesPassed: Number.isInteger(passed) ? Math.max(0, Math.min(passed, sampled)) : 0,
+    motionDelta: motion != null && Number.isFinite(motion) ? motion : null,
+    verdict: v.verdict,
+    summary: v.summary == null ? null : String(v.summary),
+  };
+}
+
+function positiveIntOrUndefined(raw: unknown): number | undefined {
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+/** Validate a persisted StockRef (legacy/unknown shapes are dropped; the
+ *  S89 provenance + verification fields are additive and individually
+ *  tolerated — a legacy ref parses with them undefined). */
 function parseStockRef(raw: unknown): StockRef | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const s = raw as Record<string, unknown>;
@@ -74,6 +101,11 @@ function parseStockRef(raw: unknown): StockRef | undefined {
     credit: String(s.credit ?? ""),
     pageUrl: String(s.pageUrl ?? ""),
     durationSec: Number(s.durationSec ?? 0),
+    license: typeof s.license === "string" && s.license ? s.license : undefined,
+    providerId: typeof s.providerId === "string" && s.providerId ? s.providerId : undefined,
+    width: positiveIntOrUndefined(s.width),
+    height: positiveIntOrUndefined(s.height),
+    verification: parseStockVerification(s.verification),
   };
 }
 

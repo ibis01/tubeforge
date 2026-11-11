@@ -144,6 +144,21 @@ export const RENDER_MODES = [
 
 export type RenderMode = (typeof RENDER_MODES)[number]["id"];
 
+/**
+ * S89 — the verification record stamped on every accepted stock ref. The
+ * ref NEVER claims more than the evidence: verdict "pass" is constructible
+ * only when ≥2 sampled frames passed the relevance gate (combineFrameVerdicts
+ * guarantees it); a fail-open accept (VLM unavailable, ffmpeg error) is
+ * recorded as "unverified" — visible, never silent.
+ */
+export interface StockVerification {
+  framesSampled: number; // frames actually extracted + judged
+  framesPassed: number; // frames the relevance gate passed
+  motionDelta: number | null; // mean luma delta (0-255) between first/last sampled frame — null when unmeasurable
+  verdict: "pass" | "unverified";
+  summary: string | null; // the combination reason (human-readable)
+}
+
 /** A downloaded stock clip attached to one scene (stock.ts). */
 export interface StockRef {
   source: "pexels" | "pixabay";
@@ -152,6 +167,14 @@ export interface StockRef {
   credit: string; // "Footage by NAME (Pexels)"
   pageUrl: string; // source page for attribution
   durationSec: number;
+  // S89 — provenance + verification (additive: legacy refs lack all five).
+  // Widen `source` the day a third adapter is evaluated in (S76 §5 P2: one
+  // source at a time, never a batch).
+  license?: string; // "Pexels License" / "Pixabay Content License"
+  providerId?: string; // the clip's id at its source — the duplicate-dedupe key half
+  width?: number;
+  height?: number;
+  verification?: StockVerification;
 }
 
 export const CAMERAS = [

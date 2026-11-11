@@ -71,6 +71,23 @@ import {
   sceneImageHashes,
 } from "../src/lib/tubeforge/arthash";
 import { sceneQueries } from "../src/lib/tubeforge/stock-query";
+import {
+  clipKey,
+  configuredSources,
+  mergeIntoIndex,
+  pexelsParse,
+  pixabayParse,
+  type SceneIndexEntry,
+  type StockCandidate,
+} from "../src/lib/tubeforge/stock-index";
+import {
+  candidateFloors,
+  combineFrameVerdicts,
+  DUPLICATE_PENALTY,
+  rankCandidates,
+  semanticFactor,
+  stockFrameTimes,
+} from "../src/lib/tubeforge/stock-ranker";
 import { selfhostEndpoint, sharedVoiceServer } from "../src/lib/tubeforge/shared-voice";
 import {
   LOGIN_MAX_FAILURES,
@@ -786,6 +803,353 @@ await test("sceneQueries: no duplicates, hard cap of 4", () => {
   const queries = sceneQueries(scene);
   ok(queries.length <= 4, "capped at 4");
   ok(new Set(queries).size === queries.length, "no duplicate queries");
+});
+
+suiteStart("S89 stock index — adapter normalization + dedupe");
+
+await test("pexelsParse: landscape ≥1280 mp4 picked, license stamped, id carried", () => {
+  const data = {
+    videos: [
+      {
+        id: 101,
+        duration: 12,
+        width: 1920,
+        height: 1080,
+        url: "https://pexels.com/v/101",
+        user: { name: "Ada" },
+        video_files: [
+          { link: "https://cdn/101-portrait.mp4", width: 720, height: 1280, file_type: "video/mp4" },
+          { link: "https://cdn/101-small.mp4", width: 640, height: 360, file_type: "video/mp4" },
+          { link: "https://cdn/101-1080.mp4", width: 1920, height: 1080, file_type: "video/mp4" },
+          { link: "https://cdn/101-4k.mp4", width: 3840, height: 2160, file_type: "video/mp4" },
+        ],
+      },
+      {
+        id: 102,
+        duration: 8,
+        width: 720,
+        height: 1280,
+        video_files: [{ link: "x", width: 720, height: 1280, file_type: "video/mp4" }],
+      },
+    ],
+  };
+  const out = pexelsParse(data);
+  eq(out.length, 1, "only the landscape candidate survives");
+  eq(out[0].id, "101", "provider id carried (the dedupe key half)");
+  eq(out[0].url, "https://cdn/101-4k.mp4", "largest landscape mp4 picked");
+  eq(out[0].license, "Pexels License", "license stamped by the adapter");
+  ok(out[0].tags === undefined, "pexels video search carries no tags (semantic factor neutral)");
+});
+
+await test("pixabayParse: tags carried, license stamped, largest rendition picked", () => {
+  const data = {
+    hits: [
+      {
+        id: 55,
+        pageURL: "https://pixabay.com/v/55",
+        tags: "ocean, waves, aerial, coast",
+        duration: 15,
+        user: "Bo",
+        videos: {
+          large: { url: "https://cdn/55-large.mp4", width: 1920, height: 1080 },
+          medium: { url: "https://cdn/55-med.mp4", width: 1280, height: 720 },
+        },
+      },
+    ],
+  };
+  const out = pixabayParse(data);
+  eq(out.length, 1, "one candidate");
+  eq(out[0].id, "55", "id");
+  eq(out[0].url, "https://cdn/55-large.mp4", "largest rendition picked");
+  eq(out[0].license, "Pixabay Content License", "license");
+  ok(out[0].tags != null && out[0].tags.includes("aerial"), "tags split + carried");
+});
+
+await test("mergeIntoIndex: source:id dedupe, matchedQueries union, namespaces distinct", () => {
+  const mk = (source: "pexels" | "pixabay", id: string): StockCandidate => ({
+    source,
+    id,
+    url: `https://cdn/${source}-${id}.mp4`,
+    width: 1920,
+    height: 1080,
+    durationSec: 10,
+    author: "A",
+    pageUrl: "p",
+    license: "L",
+  });
+  const index = new Map<string, SceneIndexEntry>();
+  mergeIntoIndex(index, "ocean waves", [mk("pexels", "12"), mk("pixabay", "12")]);
+  mergeIntoIndex(index, "aerial coast", [mk("pexels", "12"), mk("pexels", "13")]);
+  eq(index.size, 3, "pexels:12 + pixabay:12 + pexels:13 — namespaces distinct, no dupes");
+  eq(
+    index.get("pexels:12")?.matchedQueries.join("|") ?? "",
+    "ocean waves|aerial coast",
+    "matchedQueries union across queries"
+  );
+  const lawless = { ...mk("pexels", "99"), license: "" };
+  mergeIntoIndex(index, "q", [lawless]);
+  ok(!index.has("pexels:99"), "THE LICENSE LAW: a candidate without a license never enters the index");
+  eq(clipKey(mk("pixabay", "12")), "pixabay:12", "clipKey is the namespaced dedupe key");
+});
+
+await test("configuredSources: zero keys throws the pinned operator error", () => {
+  let msg = "";
+  try {
+    configuredSources({ pexels: "", pixabay: "" });
+  } catch (e) {
+    msg = e instanceof Error ? e.message : "";
+  }
+  eq(
+    msg,
+    "No stock provider is configured — add a free Pexels or Pixabay key in Settings → Stock footage",
+    "byte-identical to the pre-S89 message (the queue suite + POST gate assert it)"
+  );
+  const only = configuredSources({ pexels: "k", pixabay: "" });
+  eq(only.length, 1, "one key → one adapter");
+  eq(only[0].id, "pexels", "the configured one");
+});
+
+suiteStart("S89 stock ranker — floors + factors");
+
+await test("candidateFloors: the unusable shapes are named", () => {
+  const base: StockCandidate = {
+    source: "pexels",
+    id: "1",
+    url: "u",
+    width: 1920,
+    height: 1080,
+    durationSec: 10,
+    author: "a",
+    pageUrl: "p",
+    license: "Pexels License",
+  };
+  eq(candidateFloors(base), null, "usable");
+  eq(candidateFloors({ ...base, license: "" }), "no license label", "license floor (defense in depth)");
+  eq(candidateFloors({ ...base, width: 640, height: 360 }), "below 720p", "resolution floor");
+  eq(candidateFloors({ ...base, width: 1440, height: 2560 }), "portrait", "orientation floor");
+  eq(candidateFloors({ ...base, durationSec: 1 }), "under 2s", "duration floor");
+});
+
+await test("rankCandidates: duration coverage dominates the walk order", () => {
+  const entry = (id: string, durationSec: number): SceneIndexEntry => ({
+    candidate: {
+      source: "pexels",
+      id,
+      url: "u",
+      width: 1920,
+      height: 1080,
+      durationSec,
+      author: "a",
+      pageUrl: "p",
+      license: "Pexels License",
+    },
+    matchedQueries: ["q"],
+  });
+  const ranked = rankCandidates([entry("short", 4), entry("long", 30)], {
+    sceneDurationSec: 12,
+    usedClipKeys: new Set(),
+    sceneTerms: [],
+  });
+  eq(ranked[0].entry.candidate.id, "long", "the covering clip outranks the looping one");
+  eq(ranked[0].factors.durationFit, 1, "full-cover fit = 1");
+  approx(ranked[1].factors.durationFit, 4 / 12, 1e-9, "partial fit is the ratio");
+});
+
+await test("rankCandidates: aspect closeness to 16:9 breaks the tie", () => {
+  const entry = (id: string, w: number, h: number): SceneIndexEntry => ({
+    candidate: {
+      source: "pexels",
+      id,
+      url: "u",
+      width: w,
+      height: h,
+      durationSec: 12,
+      author: "a",
+      pageUrl: "p",
+      license: "Pexels License",
+    },
+    matchedQueries: ["q"],
+  });
+  const ranked = rankCandidates([entry("16x10", 1920, 1200), entry("16x9", 1920, 1080)], {
+    sceneDurationSec: 10,
+    usedClipKeys: new Set(),
+    sceneTerms: [],
+  });
+  eq(ranked[0].entry.candidate.id, "16x9", "the 16:9 clip wins the aspect factor");
+});
+
+await test("rankCandidates: tag semantics lift (neutral, never penalizing)", () => {
+  const mk = (id: string, tags?: string[]): SceneIndexEntry => ({
+    candidate: {
+      source: "pixabay",
+      id,
+      url: "u",
+      width: 1920,
+      height: 1080,
+      durationSec: 12,
+      author: "a",
+      pageUrl: "p",
+      license: "Pixabay Content License",
+      tags,
+    },
+    matchedQueries: ["q"],
+  });
+  const ranked = rankCandidates([mk("notags"), mk("tagged", ["ocean", "waves", "storm"])], {
+    sceneDurationSec: 10,
+    usedClipKeys: new Set(),
+    sceneTerms: ["ocean", "waves", "storm", "night"],
+  });
+  eq(ranked[0].entry.candidate.id, "tagged", "3 shared terms = full semantic marks");
+  eq(semanticFactor(mk("notags").candidate, ["ocean"]), 0, "no tags → factor 0 (neutral)");
+});
+
+await test("rankCandidates: duplicates rank last, visibly", () => {
+  const mk = (id: string): SceneIndexEntry => ({
+    candidate: {
+      source: "pexels",
+      id,
+      url: "u",
+      width: 1920,
+      height: 1080,
+      durationSec: 12,
+      author: "a",
+      pageUrl: "p",
+      license: "Pexels License",
+    },
+    matchedQueries: ["q"],
+  });
+  const ranked = rankCandidates([mk("used"), mk("fresh")], {
+    sceneDurationSec: 10,
+    usedClipKeys: new Set(["pexels:used"]),
+    sceneTerms: [],
+  });
+  eq(ranked[1].entry.candidate.id, "used", "the already-placed clip sorts behind every fresh candidate");
+  eq(ranked[1].factors.duplicatePenalty, DUPLICATE_PENALTY, "the penalty is visible in the factor breakdown");
+  ok(ranked[1].score < 0, "score goes negative — the last resort is unmistakable");
+});
+
+await test("rankCandidates: deterministic tiebreak (score desc, key asc)", () => {
+  const mk = (id: string): SceneIndexEntry => ({
+    candidate: {
+      source: "pexels",
+      id,
+      url: "u",
+      width: 1920,
+      height: 1080,
+      durationSec: 12,
+      author: "a",
+      pageUrl: "p",
+      license: "Pexels License",
+    },
+    matchedQueries: ["q"],
+  });
+  const ctx = { sceneDurationSec: 10, usedClipKeys: new Set<string>(), sceneTerms: [] };
+  const a = rankCandidates([mk("b"), mk("a")], ctx).map((r) => r.entry.candidate.id);
+  const b = rankCandidates([mk("a"), mk("b")], ctx).map((r) => r.entry.candidate.id);
+  eq(a.join(","), "a,b", "key-ascending on ties");
+  eq(b.join(","), "a,b", "input order cannot influence the walk order");
+});
+
+suiteStart("S89 verdict math — multi-frame relevance + motion");
+
+await test("combineFrameVerdicts: the evidence table", () => {
+  eq(combineFrameVerdicts([true, true], null).pass, true, "2 passes → accept");
+  eq(combineFrameVerdicts([true, false, true], null).pass, true, "2 of 3 passes → accept");
+  eq(combineFrameVerdicts([false, false], null).pass, false, "2 fails → reject");
+  eq(combineFrameVerdicts([false, false, true], null).pass, false, "2 of 3 fails → reject");
+  eq(combineFrameVerdicts([true, false], null).pass, null, "1-1 split → unverified (a single odd frame never rejects)");
+  eq(combineFrameVerdicts([null, null], null).pass, null, "VLM outage → fail-open");
+  eq(combineFrameVerdicts([true, null, false, null], null).pass, null, "sparse evidence → unverified");
+});
+
+await test("combineFrameVerdicts: static motion rejects even relevant clips", () => {
+  const v = combineFrameVerdicts([true, true], 0.2);
+  eq(v.pass, false, "a frozen frame in an mp4 is the art lane's job");
+  ok(/static/.test(v.reason), "the reason says so");
+  eq(combineFrameVerdicts([true, true], null).pass, true, "motion null (unmeasurable) never rejects");
+  eq(combineFrameVerdicts([true, true], 12.5).pass, true, "real motion passes through");
+});
+
+await test("stockFrameTimes: interior samples, degenerate clips", () => {
+  eq(JSON.stringify(stockFrameTimes(6)), JSON.stringify([1.5, 3, 4.5]), "interior thirds of a 6s clip");
+  eq(JSON.stringify(stockFrameTimes(1)), JSON.stringify([0.5]), "sub-1.5s clip → one mid-frame");
+  eq(JSON.stringify(stockFrameTimes(0)), "[]", "no duration → no samples");
+});
+
+await test("THE NEVER-SILENT PIN: verdict pass implies ≥2 passing frames", () => {
+  const combos: (boolean | null)[][] = [];
+  for (const a of [true, false, null])
+    for (const b of [true, false, null])
+      for (const c of [true, false, null]) combos.push([a, b, c]);
+  for (const verdicts of combos) {
+    const out = combineFrameVerdicts(verdicts, null);
+    const passes = verdicts.filter((v) => v === true).length;
+    const fails = verdicts.filter((v) => v === false).length;
+    if (out.pass === true) ok(passes >= 2, `[${verdicts}] pass requires ≥2 passing frames`);
+    if (out.pass === false) ok(fails >= 2, `[${verdicts}] reject requires ≥2 failing frames (no single-frame rejects)`);
+  }
+});
+
+suiteStart("S89 stock ref round-trip — verification survives the doc");
+
+await test("parseScenes: new ref fields survive (license, providerId, verification)", async () => {
+  const { parseScenes } = await import("../src/lib/tubeforge/story.ts");
+  const scene = {
+    index: 1,
+    title: "T",
+    narration: "n",
+    visual: "v",
+    stock: {
+      source: "pexels",
+      file: "stock-01.mp4",
+      query: "q",
+      credit: "c",
+      pageUrl: "u",
+      durationSec: 9,
+      license: "Pexels License",
+      providerId: "1234",
+      width: 1920,
+      height: 1080,
+      verification: {
+        framesSampled: 3,
+        framesPassed: 2,
+        motionDelta: 4.25,
+        verdict: "pass",
+        summary: "relevant content in multiple sampled frames",
+      },
+    },
+  };
+  const parsed = parseScenes(JSON.stringify([scene]));
+  const ref = parsed[0].stock;
+  ok(ref != null, "ref parses");
+  eq(ref?.license, "Pexels License", "license survives");
+  eq(ref?.providerId, "1234", "providerId survives (the dedupe key)");
+  eq(ref?.width, 1920, "width survives");
+  eq(ref?.verification?.verdict, "pass", "verification verdict survives");
+  eq(ref?.verification?.framesPassed, 2, "frame evidence survives");
+  approx(ref?.verification?.motionDelta ?? 0, 4.25, 1e-9, "motion delta survives");
+});
+
+await test("parseScenes: legacy ref still valid; bad verification drops the record only", async () => {
+  const { parseScenes } = await import("../src/lib/tubeforge/story.ts");
+  const legacy = {
+    index: 1,
+    title: "T",
+    narration: "n",
+    visual: "v",
+    stock: { source: "pixabay", file: "stock-01.mp4", query: "q", credit: "c", pageUrl: "u", durationSec: 9 },
+  };
+  const parsed = parseScenes(JSON.stringify([legacy]));
+  ok(parsed[0].stock != null, "the legacy ref parses");
+  ok(parsed[0].stock?.license === undefined && parsed[0].stock?.verification === undefined, "new fields absent, not faked");
+
+  const badVerdict = {
+    ...legacy,
+    stock: { ...legacy.stock, verification: { verdict: "definitely", framesSampled: -3 } },
+  };
+  const parsed2 = parseScenes(JSON.stringify([badVerdict]));
+  ok(parsed2[0].stock != null, "the REF survives a bad verification record");
+  ok(parsed2[0].stock?.verification === undefined, "the bad RECORD is dropped");
 });
 
 suiteStart("art dedupe — dHash perceptual hashing");

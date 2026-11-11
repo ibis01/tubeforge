@@ -1,24 +1,38 @@
-// Stock b-roll — real footage from Pexels + Pixabay, matched per scene.
-// MoneyPrinterTurbo's hallmark footage source, done TubeForge-style:
-//   • queries are derived deterministically from each scene's visual prompt
-//     AND its narration (zero LLM cost), tried against both providers
-//   • clips are scored (HD, landscape, duration fit) and the best is kept
-//   • every downloaded clip is RELEVANCE-CHECKED: one frame goes to the VLM
-//     and clips showing an unrelated subject are rejected (next candidate is
-//     tried instead) — the classic "market crash → grocery market" failure
+// Stock b-roll — real footage matched per scene, S89 shape (ROADMAP #8):
+//   • SOURCES — the adapter contract (stock-index.ts): Pexels + Pixabay are
+//     the first two adapters; a future source is a one-file addition
+//   • INDEX — all of a scene's queries gather into ONE deduped candidate
+//     pool (source:id keyed), instead of per-query fragments
+//   • RANK — stock-ranker.ts scores the pool: license floor, duration fit,
+//     resolution, aspect, tag semantics, and the cross-scene duplicate
+//     penalty (a clip used on another scene ranks last, never silently
+//     repeated as a first choice)
+//   • VERIFY — stock-verify.ts samples MULTIPLE interior frames per
+//     downloaded clip (sequential, early-exit), measures motion
+//     deterministically, and combines the verdict fail-open-but-RECORDED:
+//     the ref carries a verification record; verdict "pass" requires ≥2
+//     passing frames, anything less is stamped "unverified", never silent
 //   • the clip downloads into the video dir as stock-XX.mp4 and the Scene
 //     gains a `stock` ref — the render compositor picks it up automatically
 //     and falls back to Smart Motion art for scenes without a match.
+//
+// This module keeps: the per-user encrypted keys, the query override, the
+// incremental crash-resumable orchestration, and the compat `searchAll`
+// (the Settings key tester).
 
-import { execFile } from "child_process";
-import fs from "fs";
-import path from "path";
-import { promisify } from "util";
 import { db } from "./tenant-db";
-import { videoDir } from "./ai";
 import * as storage from "./storage";
-import { relevanceCheck } from "./quality";
-import { sceneQueries } from "./stock-query";
+import { sceneQueries, contentWords } from "./stock-query";
+import {
+  buildSceneIndex,
+  clipKey,
+  configuredSources,
+  STOCK_SOURCES,
+  type SceneIndexEntry,
+  type StockCandidate,
+} from "./stock-index";
+import { rankCandidates } from "./stock-ranker";
+import { verifyClip } from "./stock-verify";
 import type { Scene, StockRef } from "./types";
 import { currentCtx } from "./tenant";
 import { log } from "./log";
@@ -31,14 +45,14 @@ import {
 // S57/T-57.2 — the module's logger (the old [stock] prefix became a binding).
 const stockLog = log.child({ mod: "stock" });
 
-const execFileAsync = promisify(execFile);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Where users get a free key. */
-export const KEY_URLS = {
-  pexels: "https://www.pexels.com/api/",
-  pixabay: "https://pixabay.com/api/docs/#api_key",
-};
+export type { StockCandidate } from "./stock-index";
+
+/** Where users get a free key (derived from the adapter registry). */
+export const KEY_URLS: Record<"pexels" | "pixabay", string> = Object.fromEntries(
+  STOCK_SOURCES.map((s) => [s.id, s.keyUrl])
+) as Record<"pexels" | "pixabay", string>;
 
 // ---------- Keys ----------
 // Stage 2 — per-user, encrypted at rest (ProviderCredential, capability "stock").
@@ -83,125 +97,32 @@ export function maskStockKey(key: string): string {
   return `${key.slice(0, 4)}…${key.slice(-4)}`;
 }
 
-// ---------- Search (raw provider calls) ----------
-
-export interface StockCandidate {
-  source: "pexels" | "pixabay";
-  /** Direct downloadable video file URL (mp4). */
-  url: string;
-  width: number;
-  height: number;
-  durationSec: number;
-  author: string;
-  pageUrl: string;
-}
-
-async function fetchJson(url: string, headers: Record<string, string>, timeoutMs = 20000): Promise<unknown> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, { headers, signal: controller.signal });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      if (res.status === 401 || res.status === 403)
-        throw new Error("invalid API key (check it in Settings → Stock footage)");
-      if (res.status === 429) throw new Error("rate limited — try again in a minute");
-      throw new Error(`HTTP ${res.status}${body ? `: ${body.slice(0, 160)}` : ""}`);
-    }
-    return await res.json();
-  } catch (err) {
-    if (err instanceof Error && err.name === "AbortError")
-      throw new Error("provider timed out");
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** Pexels Video API — https://www.pexels.com/api/documentation/#videos */
-async function pexelsSearch(query: string, key: string): Promise<StockCandidate[]> {
-  const url =
-    `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}` +
-    `&orientation=landscape&size=medium&per_page=15`;
-  const data = (await fetchJson(url, { Authorization: key })) as {
-    videos?: {
-      id: number;
-      duration: number;
-      width: number;
-      height: number;
-      url?: string;
-      user?: { name?: string; url?: string };
-      video_files?: { link?: string; width?: number; height?: number; file_type?: string; quality?: string }[];
-    }[];
-  };
-
-  const out: StockCandidate[] = [];
-  for (const v of data.videos ?? []) {
-    // Prefer the largest landscape mp4 file for this video.
-    const files = (v.video_files ?? [])
-      .filter((f) => f.file_type === "video/mp4" && (f.width ?? 0) >= 1280 && (f.width ?? 0) > (f.height ?? 1))
-      .sort((a, b) => (b.width ?? 0) - (a.width ?? 0));
-    const best = files[0];
-    if (!best?.link) continue;
-    out.push({
-      source: "pexels",
-      url: best.link,
-      width: best.width ?? v.width ?? 0,
-      height: best.height ?? v.height ?? 0,
-      durationSec: v.duration ?? 0,
-      author: v.user?.name?.trim() || "Pexels creator",
-      pageUrl: v.url || "https://www.pexels.com/videos/",
-    });
-  }
-  return out;
-}
-
-/** Pixabay Video API — film = live-action footage (not animations). */
-async function pixabaySearch(query: string, key: string): Promise<StockCandidate[]> {
-  const url =
-    `https://pixabay.com/api/videos/?key=${encodeURIComponent(key)}` +
-    `&q=${encodeURIComponent(query)}&video_type=film&safesearch=true&per_page=24`;
-  const data = (await fetchJson(url, {})) as {
-    hits?: {
-      pageURL?: string;
-      duration: number;
-      videos?: Record<string, { url?: string; width?: number; height?: number } | undefined>;
-      user?: string;
-    }[];
-  };
-
-  const out: StockCandidate[] = [];
-  for (const hit of data.hits ?? []) {
-    const entries = Object.values(hit.videos ?? {}).filter(
-      (f): f is { url: string; width: number; height: number } =>
-        Boolean(f?.url) && (f?.width ?? 0) >= 1280 && (f?.width ?? 0) > (f?.height ?? 1)
-    );
-    const best = entries.sort((a, b) => b.width - a.width)[0];
-    if (!best) continue;
-    out.push({
-      source: "pixabay",
-      url: best.url,
-      width: best.width,
-      height: best.height,
-      durationSec: hit.duration ?? 0,
-      author: hit.user?.trim() || "Pixabay creator",
-      pageUrl: hit.pageURL || "https://pixabay.com/videos/",
-    });
-  }
-  return out;
-}
+// ---------- Search (compat surface over the adapter registry) ----------
 
 /**
- * One search round across the configured providers. Providers that fail
- * (bad key, rate limit, network) are skipped with a console note so a single
- * misconfigured source never blocks the other.
+ * One search round across the configured providers (S89: the adapter
+ * registry). Providers that fail (bad key, rate limit, network) are skipped
+ * with a log note so a single misconfigured source never blocks the other.
+ * Kept for the Settings key tester; the scene lane goes through
+ * buildSceneIndex instead.
  */
-export async function searchAll(query: string, keys: { pexels: string; pixabay: string }): Promise<StockCandidate[]> {
-  const tasks: Promise<StockCandidate[]>[] = [];
-  if (keys.pexels) tasks.push(pexelsSearch(query, keys.pexels).catch((e) => (stockLog.warn("pexels search failed", { query, err: e instanceof Error ? e.message : e }), [])));
-  if (keys.pixabay) tasks.push(pixabaySearch(query, keys.pixabay).catch((e) => (stockLog.warn("pixabay search failed", { query, err: e instanceof Error ? e.message : e }), [])));
-  if (tasks.length === 0) throw new Error("No stock provider is configured — add a free Pexels or Pixabay key in Settings → Stock footage");
-  const results = await Promise.all(tasks);
+export async function searchAll(
+  query: string,
+  keys: { pexels: string; pixabay: string }
+): Promise<StockCandidate[]> {
+  const sources = configuredSources(keys); // throws the pinned no-provider error
+  const results = await Promise.all(
+    sources.map((s) =>
+      s.search(query, keys[s.id]).catch((e) => {
+        stockLog.warn("stock search failed", {
+          source: s.id,
+          query,
+          err: e instanceof Error ? e.message : e,
+        });
+        return [] as StockCandidate[];
+      })
+    )
+  );
   return results.flat();
 }
 
@@ -231,109 +152,82 @@ function estimatedSceneDuration(scene: Scene): number {
   return Math.max(4, words / 2.6);
 }
 
-/** Score a clip: HD landscape that covers the scene length wins. */
-function scoreClip(c: StockCandidate, minDur: number): number {
-  let score = 0;
-  score += Math.min(c.width, 3840) / 100; // resolution up to 4K
-  if (c.durationSec >= minDur) score += 60; // no looping needed
-  else score += (c.durationSec / Math.max(minDur, 1)) * 30; // partial cover
-  if (c.width >= 1920) score += 15;
-  return score;
-}
-
 /**
- * VLM relevance check for a DOWNLOADED clip: extract one representative frame
- * and ask the vision model whether it shows the scene's required content.
- * pass === false → the caller rejects the clip and tries the next candidate.
- * Any failure (ffmpeg, VLM) resolves to pass: null — the clip is kept.
- */
-async function clipFrameVerdict(
-  videoId: string,
-  scene: Scene
-): Promise<{ pass: boolean | null; score: number | null; summary: string | null }> {
-  const clipPath = path.join(videoDir(videoId), stockFile(scene.index));
-  const framePath = path.join(videoDir(videoId), `stock-${String(scene.index).padStart(2, "0")}.frame.jpg`);
-  try {
-    await execFileAsync(
-      "ffmpeg",
-      [
-        "-hide_banner", "-loglevel", "error",
-        "-ss", "1", // settle past the opening fade-in most clips have
-        "-i", clipPath,
-        "-frames:v", "1",
-        "-vf", "scale=640:-2",
-        "-y", framePath,
-      ],
-      { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 }
-    );
-    if (!fs.existsSync(framePath) || fs.statSync(framePath).size < 1000)
-      return { pass: null, score: null, summary: null };
-    return await relevanceCheck(
-      framePath,
-      `stock b-roll for scene ${scene.index} "${scene.title}" of a story video — the clip must show: ${scene.visual} (mood: ${scene.mood}; narration at this moment: "${scene.narration.slice(0, 140)}")`
-    );
-  } catch {
-    return { pass: null, score: null, summary: null };
-  } finally {
-    fs.rmSync(framePath, { force: true });
-  }
-}
-
-/**
- * Find + download the best stock clip for one scene. Tries each query in
- * order until a usable candidate is found; downloaded clips must survive the
- * VLM relevance check. Returns null when nothing fits (the scene simply
- * keeps its Smart Motion art — never an error).
+ * Find + download the best stock clip for one scene: index every query's
+ * candidates, rank the pool, then walk the top 3 — downloaded clips must
+ * survive the multi-frame verification gate. Returns null when nothing fits
+ * (the scene simply keeps its Smart Motion art — never an error).
  */
 async function fetchForScene(
   videoId: string,
   scene: Scene,
   keys: { pexels: string; pixabay: string },
-  queries: string[]
+  queries: string[],
+  usedClipKeys: ReadonlySet<string>
 ): Promise<StockRef | null> {
   const minDur = estimatedSceneDuration(scene);
+  const sceneTerms = contentWords(`${scene.visual} ${scene.narration}`, 8);
 
-  for (const query of queries) {
-    let candidates: StockCandidate[] = [];
+  let entries: SceneIndexEntry[] = [];
+  try {
+    entries = await buildSceneIndex({ queries, keys });
+  } catch (err) {
+    // Config errors surface on the first scene; per-scene they just
+    // mean "no match this round" (the pre-S89 semantics, kept).
+    if (err instanceof Error && /No stock provider/.test(err.message)) throw err;
+    return null;
+  }
+
+  const ranked = rankCandidates(entries, {
+    sceneDurationSec: minDur,
+    usedClipKeys,
+    sceneTerms,
+  });
+
+  for (const { entry } of ranked.slice(0, 3)) {
+    const clip = entry.candidate;
     try {
-      candidates = await searchAll(query, keys);
-    } catch (err) {
-      // Config/network errors surface on the first scene; per-scene they just
-      // mean "no match this round".
-      if (err instanceof Error && /No stock provider/.test(err.message)) throw err;
-      continue;
-    }
-
-    const usable = candidates
-      .filter((c) => c.width >= 1280 && c.height >= 720)
-      .sort((a, b) => scoreClip(b, minDur) - scoreClip(a, minDur));
-
-    for (const clip of usable.slice(0, 3)) {
-      try {
-        const ok = await downloadClip(videoId, scene.index, clip.url);
-        if (!ok) continue;
-        // Relevance gate — reject clips showing an unrelated subject and
-        // fall through to the next candidate (fail-open on verdict: null).
-        const verdict = await clipFrameVerdict(videoId, scene);
-        if (verdict.pass === false) {
-          await storage.remove(`${videoId}/${stockFile(scene.index)}`);
-          stockLog.warn(
-            "clip rejected — relevance below threshold",
-            { scene: scene.index, score: verdict.score, summary: verdict.summary ?? "unrelated content" }
-          );
-          continue;
-        }
-        return {
-          source: clip.source,
-          file: stockFile(scene.index),
-          query,
-          credit: `Footage by ${clip.author} (${clip.source === "pexels" ? "Pexels" : "Pixabay"})`,
-          pageUrl: clip.pageUrl,
-          durationSec: clip.durationSec,
-        };
-      } catch (err) {
-        stockLog.warn("download failed for scene", { scene: scene.index, err: err instanceof Error ? err.message : err });
+      const ok = await downloadClip(videoId, scene.index, clip.url);
+      if (!ok) continue;
+      // Multi-frame verification. The storage seam provides the LOCAL path —
+      // s3-safe (the pre-S89 gate read the local dir directly, a latent
+      // break under the s3 driver).
+      const verdict = await storage.withLocalFile(
+        `${videoId}/${stockFile(scene.index)}`,
+        (p) => verifyClip({ clipPath: p, durationSec: clip.durationSec, scene })
+      );
+      if (verdict.pass === false) {
+        await storage.remove(`${videoId}/${stockFile(scene.index)}`);
+        stockLog.warn("clip rejected", {
+          scene: scene.index,
+          reason: verdict.reason,
+          scores: verdict.scores,
+        });
+        continue;
       }
+      return {
+        source: clip.source,
+        file: stockFile(scene.index),
+        query: entry.matchedQueries[0] ?? queries[0] ?? "",
+        credit: `Footage by ${clip.author} (${clip.source === "pexels" ? "Pexels" : "Pixabay"})`,
+        pageUrl: clip.pageUrl,
+        durationSec: clip.durationSec,
+        license: clip.license,
+        providerId: clip.id,
+        width: clip.width,
+        height: clip.height,
+        verification: {
+          framesSampled: verdict.framesSampled,
+          framesPassed: verdict.framesPassed,
+          motionDelta: verdict.motionDelta,
+          // The never-silent law: only multi-frame evidence makes "pass";
+          // a fail-open accept is stamped unverified, visibly.
+          verdict: verdict.pass === true ? "pass" : "unverified",
+          summary: verdict.reason,
+        },
+      };
+    } catch (err) {
+      stockLog.warn("download failed for scene", { scene: scene.index, err: err instanceof Error ? err.message : err });
     }
   }
   return null;
@@ -379,7 +273,8 @@ export interface StockRunResult {
 /**
  * Fetch stock b-roll for every scene that still needs one (or all scenes
  * when `force`). Progress persists scene-by-scene, so an interrupted run
- * resumes where it stopped.
+ * resumes where it stopped. S89: the run carries the cross-scene duplicate
+ * set — clips placed on earlier scenes rank last for later ones.
  */
 export async function fetchStockForScenes(opts: {
   videoId: string;
@@ -395,16 +290,22 @@ export async function fetchStockForScenes(opts: {
   queryOverride?: string;
 }): Promise<StockRunResult> {
   const keys = await readStockKeys();
-  const dir = videoDir(opts.videoId);
   let matched = 0;
   let fetched = 0;
   const missing: Scene[] = [];
 
+  // S89 — the duplicate ledger: every placed ref's clip key (legacy refs
+  // without providerId contribute nothing — recorded, not guessed), joined
+  // by every ref this run accepts.
+  const usedClipKeys = new Set<string>();
+  for (const s of opts.scenes)
+    if (s.stock?.providerId) usedClipKeys.add(clipKey({ source: s.stock.source, id: s.stock.providerId }));
+
   for (const scene of opts.scenes) {
+    // Storage seam (T-3.7): the probe goes through the driver (s3-safe).
+    // The old local existsSync + size check only worked on the local disk.
     const hasFile =
-      scene.stock != null &&
-      fs.existsSync(path.join(dir, scene.stock.file)) &&
-      fs.statSync(path.join(dir, scene.stock.file)).size > 200_000;
+      scene.stock != null && (await storage.exists(`${opts.videoId}/${scene.stock.file}`));
     if (hasFile) {
       matched++;
       if (!opts.force && opts.onlyScene == null) continue;
@@ -421,12 +322,14 @@ export async function fetchStockForScenes(opts: {
       opts.videoId,
       scene,
       keys,
-      opts.queryOverride ? [opts.queryOverride] : sceneQueries(scene)
+      opts.queryOverride ? [opts.queryOverride] : sceneQueries(scene),
+      usedClipKeys
     );
     opts.onProgress?.(i + 1, missing.length, ref ? `Scene ${scene.index} matched` : `Scene ${scene.index} — no match found`);
 
     if (ref) {
       scene.stock = ref;
+      if (ref.providerId) usedClipKeys.add(clipKey({ source: ref.source, id: ref.providerId }));
       matched++;
       fetched++;
     } else if (opts.force || opts.onlyScene != null) {

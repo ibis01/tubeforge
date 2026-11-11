@@ -59,6 +59,18 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       query: s.stock?.query ?? null,
       credit: s.stock?.credit ?? null,
       pageUrl: s.stock?.pageUrl ?? null,
+      // S89 — provenance + the verification state: "pass" only exists with
+      // multi-frame evidence; "unverified" is explicit, never silent.
+      license: s.stock?.license ?? null,
+      verified: s.stock?.verification?.verdict ?? null,
+      verification: s.stock?.verification
+        ? {
+            framesSampled: s.stock.verification.framesSampled,
+            framesPassed: s.stock.verification.framesPassed,
+            motionDelta: s.stock.verification.motionDelta,
+            summary: s.stock.verification.summary,
+          }
+        : null,
     })),
     // S4 — per-scene job flags (composite entityIds) so a studio inspector
     // can watch ONE scene's re-pick without polling the binary GET.
