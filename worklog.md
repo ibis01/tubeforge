@@ -4055,3 +4055,40 @@ Verification: 395/395 unit (+3 S83 pins), typecheck 0, lint 0 on
 touched files. Contract updated (s77 §8 slice 6 + §10 pins), ROADMAP
 #4, this log. Phase B tail is now down to ONE item — the
 photoreal-suffix reconciliation, explicitly gated on S74 closing.
+
+## S84 — the Video Critic foundation (ROADMAP #5, P0)
+
+The S76 design target §4.B: the critic inspects the RENDERED video, not
+just scene stills. Today the QC battery judged the file's technical
+health and the VCE judged scene stills — nobody judged the final cut as
+a STORY.
+
+New module src/lib/tubeforge/video-critic.ts + route
+/api/videos/[id]/critic + job kind "critic" (contract:
+docs/design/s84-video-critic.md):
+
+- Deterministic rows FIRST (S76's critical rule — AI never replaces
+  them): technical / motion / audio from the stored QC battery report
+  (DIMENSION_CHECKS classifies every battery check id; worst-of
+  mapping), consistency from the stored VCE report (worst checked
+  scene verdict decides).
+- ONE fail-open VLM call (aiCall, "critic VLM") for the new judgements:
+  narrative (frames vs the scene narrations — does the cut communicate
+  the script?) and visual (professional, on-topic, no artifacts), over
+  frames sampled evenly from final.mp4 (visual-qc's sampler). Missing
+  scores → null per dimension, never 50; 80/55 bands inherited from
+  verdictFromScore.
+- Verdict: ship | hold | insufficient-evidence — a REPORT for the
+  human, not a new gate (the ship gate stays qc-policy's). Any hold →
+  hold; nothing measured → insufficient-evidence; unavailable AI
+  layers never block and never pass.
+- Repair proposals map every hold to the EXISTING affordance (scene
+  re-roll / Director card / re-render / voiceover) — propose-never-
+  auto-edit; unmeasured dimensions ask for evidence.
+- Report persists at ${videoId}/critic-report.json (storage seam);
+  parseCriticReport serves the GET (corrupt → null; corrupt verdict →
+  insufficient-evidence, never a pass). Manual-only POST; S80's "off"
+  refuses it.
+
+Verification: 403/403 unit (+8 S84 pins), typecheck 0, lint 0 on
+touched files. New contract doc, ROADMAP #5, this log.

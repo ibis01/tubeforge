@@ -56,6 +56,7 @@ export type JobKind =
   | "continuity" // Stage 5 — VLM per-scene character-continuity check
   | "consistency" // S77 — Visual Consistency Engine (identity + style + contract)
   | "identity" // S82 — cross-video character identity check (entity = character)
+  | "critic" // S84 — Video Critic: the rendered-cut quality report (entity = video)
   | "qc" // Stage 6 — re-run the QC battery against the existing final.mp4
   | "whiteboard"; // S67 — Whiteboard Engine full render / scene preview (E9 Phase A)
 

@@ -9265,6 +9265,178 @@ await test("S80: normalizeConsistencyCheckMode — the two valid non-defaults pa
   });
 }
 
+// S84 — the Video Critic: the rendered cut judged across dimensions,
+// deterministic layers first, AI fail-open, propose-never-auto-edit.
+{
+  const {
+    DIMENSION_CHECKS,
+    dimensionFromChecks,
+    consistencyDimensionFromReport,
+    parseCriticVerdict,
+    buildCriticVerdict,
+    buildCriticProposals,
+    parseCriticReport,
+    criticReportKey,
+    CRITIC_SYSTEM,
+  } = await import("../src/lib/tubeforge/video-critic.ts");
+  const { parseConsistencyReport } = await import("../src/lib/tubeforge/visual-consistency.ts");
+
+  const qcCheck = (id: string, status: "pass" | "fail" | "unmeasured") => ({
+    id, label: `Check ${id}`, status, pass: status === "pass", value: status === "pass" ? "ok" : status,
+  });
+
+  await test("S84: DIMENSION_CHECKS — every battery check id is classified exactly once; subject-continuity is deliberately excluded", () => {
+    const all = Object.values(DIMENSION_CHECKS).flat();
+    eq(new Set(all).size, all.length, "no check id appears in two dimensions");
+    // The full inventory the battery emits today (qc.ts) — a new check id
+    // must be classified here the moment it lands.
+    const known = [
+      "aspect", "black-frames", "captions", "cut-alignment", "dead-air", "duration",
+      "flicker", "frozen-frames", "loudness", "loudness-range", "playable",
+      "restricted-visual", "static-shots", "stutter", "subject-continuity",
+      "tail-fade", "text-artifacts", "true-peak",
+    ];
+    for (const id of known) {
+      if (id === "subject-continuity") continue; // the consistency row reads the richer VCE report
+      ok(all.includes(id), `${id} must belong to a critic dimension`);
+    }
+    ok(!all.includes("subject-continuity"), "subject-continuity rides the VCE report row, not the battery table");
+  });
+
+  await test("S84: dimensionFromChecks — worst-of mapping: fail → hold, unmeasured → unmeasured, all-pass → pass, empty → unmeasured", () => {
+    const hold = dimensionFromChecks("audio", [
+      qcCheck("loudness", "pass"),
+      qcCheck("dead-air", "fail"),
+    ]);
+    eq(hold.status, "hold", "one failed check holds the dimension");
+    eq(hold.issues.length, 1);
+    ok(hold.issues[0].includes("dead air") || hold.issues[0].includes("Check dead-air"), "the failing check's label surfaces");
+    eq(dimensionFromChecks("motion", [qcCheck("stutter", "unmeasured")]).status, "unmeasured", "an unmeasurable check is honest, never a pass");
+    eq(dimensionFromChecks("technical", [qcCheck("playable", "pass"), qcCheck("aspect", "pass")]).status, "pass");
+    const empty = dimensionFromChecks("technical", []);
+    eq(empty.status, "unmeasured", "no checks emitted = not measured, never a silent pass");
+    ok(empty.issues[0].includes("no checks"), "the empty dimension says why");
+    // unrelated checks never leak into a dimension
+    const isolated = dimensionFromChecks("audio", [qcCheck("flicker", "fail")]);
+    eq(isolated.status, "unmeasured", "a motion check cannot hold the audio dimension");
+  });
+
+  await test("S84: consistencyDimensionFromReport — no report → unmeasured; worst scene verdict decides; all-unavailable → unmeasured", () => {
+    const parse = parseConsistencyReport;
+    eq(consistencyDimensionFromReport(null).status, "unmeasured", "no consistency report — run the check first, never guess");
+    const allUnavail = parse(JSON.stringify({
+      schema: 2, checkedAt: "x", overall: 0, checkedCount: 0,
+      scenes: [{ sceneIndex: 1, score: null, verdict: "unavailable", issues: [], dims: {} }],
+      styleContract: { styles: [], majority: "", outliers: [], colorGrade: null },
+      proposals: [], history: [],
+      engine: { identity: false, appearance: false, style: false, unavailable: ["x"] },
+    }));
+    eq(consistencyDimensionFromReport(allUnavail).status, "unmeasured", "every dimension unavailable = not measured");
+    const withOff = parse(JSON.stringify({
+      schema: 2, checkedAt: "x", overall: 60, checkedCount: 3,
+      scenes: [
+        { sceneIndex: 1, score: 92, verdict: "consistent", issues: [], dims: {} },
+        { sceneIndex: 2, score: 30, verdict: "off", issues: ["face drifted"], dims: {} },
+        { sceneIndex: 3, score: 65, verdict: "drift", issues: ["outfit changed"], dims: {} },
+      ],
+      styleContract: { styles: [], majority: "", outliers: [], colorGrade: null },
+      proposals: [], history: [],
+      engine: { identity: true, appearance: false, style: false, unavailable: [] },
+    }));
+    const holdRow = consistencyDimensionFromReport(withOff);
+    eq(holdRow.status, "hold", "one off scene holds the dimension — worst-of");
+    ok(holdRow.issues.some((i) => i.startsWith("scene 2")), "the worst scene is named");
+    const allGood = parse(JSON.stringify({
+      schema: 2, checkedAt: "x", overall: 95, checkedCount: 2,
+      scenes: [
+        { sceneIndex: 1, score: 95, verdict: "consistent", issues: [], dims: {} },
+        { sceneIndex: 2, score: 91, verdict: "consistent", issues: [], dims: {} },
+      ],
+      styleContract: { styles: [], majority: "", outliers: [], colorGrade: null },
+      proposals: [], history: [],
+      engine: { identity: true, appearance: false, style: false, unavailable: [] },
+    }));
+    eq(consistencyDimensionFromReport(allGood).status, "pass");
+  });
+
+  await test("S84: parseCriticVerdict — per-dimension null on missing scores (never 50); clamping; 80 passes, 79 holds", () => {
+    const good = parseCriticVerdict('{"narrative":{"score":88,"issues":[]},"visual":{"score":79,"issues":["muddy grade"]}}');
+    eq(good.narrative?.status, "pass");
+    eq(good.visual?.status, "hold", "79 is below the 80 pass bar");
+    eq(good.visual?.issues[0], "muddy grade");
+    const holes = parseCriticVerdict('{"narrative":{"issues":[]},"visual":{"score":200}}');
+    eq(holes.narrative, null, "a missing score is unavailable for that dimension alone");
+    eq(holes.visual?.score, 100, "clamped");
+    const junk = parseCriticVerdict("the critic rambled");
+    eq(junk.narrative, null);
+    eq(junk.visual, null);
+  });
+
+  await test("S84: buildCriticVerdict — any hold → hold; nothing measured → insufficient-evidence (never a pass); else ship", () => {
+    const dim = (id: string, status: string) => ({
+      id, status, source: "qc-battery", evidence: [], issues: [],
+    });
+    eq(buildCriticVerdict([dim("technical", "pass"), dim("audio", "hold")]), "hold");
+    eq(
+      buildCriticVerdict([dim("narrative", "unmeasured"), dim("visual", "unavailable")]),
+      "insufficient-evidence",
+      "nothing measured = honest insufficient evidence, never a pass"
+    );
+    eq(buildCriticVerdict([dim("technical", "pass"), dim("narrative", "unavailable")]), "ship", "an unavailable AI layer never blocks — it rides engine.unavailable");
+    eq(buildCriticVerdict([dim("technical", "pass"), dim("audio", "unmeasured")]), "ship", "unmeasured alone is not a hold");
+  });
+
+  await test("S84: buildCriticProposals — every hold maps to ONE concrete action; unmeasured asks for evidence; passes and unavailables propose nothing", () => {
+    const proposals = buildCriticProposals([
+      { id: "technical", status: "hold", source: "qc-battery", evidence: [], issues: ["final.mp4 missing"] },
+      { id: "consistency", status: "hold", source: "consistency-report", evidence: [], issues: ["scene 2: face drifted"] },
+      { id: "audio", status: "unmeasured", source: "qc-battery", evidence: [], issues: [] },
+      { id: "visual", status: "pass", source: "critic-vlm", evidence: [], issues: [] },
+      { id: "narrative", status: "unavailable", source: "critic-vlm", evidence: [], issues: [] },
+    ]);
+    eq(proposals.length, 3, "hold + hold + unmeasured — pass and unavailable propose nothing");
+    ok(proposals.some((p) => p.dimension === "technical" && p.action.includes("final.mp4 missing")));
+    ok(proposals.some((p) => p.dimension === "consistency" && p.action.includes("Director card")));
+    ok(proposals.some((p) => p.dimension === "audio" && p.action.includes("Not measured")));
+    ok(proposals.every((p) => p.action.length > 0));
+  });
+
+  await test("S84: criticReportKey + parseCriticReport — namespace key; roundtrip; corrupt/wrong-schema → null", () => {
+    eq(criticReportKey("v9"), "v9/critic-report.json");
+    const report = {
+      schema: 1,
+      videoId: "v9",
+      checkedAt: "2026-11-11T10:00:00.000Z",
+      verdict: "hold" as const,
+      dimensions: [
+        { id: "technical", status: "pass" as const, source: "qc-battery" as const, evidence: ["playable"], issues: [] },
+        { id: "narrative", status: "unavailable" as const, source: "critic-vlm" as const, evidence: [], issues: ["the narrative judgement is unavailable — the VLM reply had no verdict"] },
+      ],
+      proposals: [{ dimension: "consistency" as const, action: "Open the Director card" }],
+      engine: { ran: true, unavailable: ["critic: VLM call failed"] },
+    };
+    const back = parseCriticReport(JSON.stringify(report));
+    ok(back !== null);
+    eq(back?.verdict, "hold");
+    eq(back?.dimensions[1].status, "unavailable");
+    eq(back?.proposals[0].dimension, "consistency");
+    eq(parseCriticReport(null), null);
+    eq(parseCriticReport("broken {"), null);
+    eq(parseCriticReport(JSON.stringify({ schema: 2 })), null);
+    // a corrupt verdict falls back to insufficient-evidence — never a pass
+    const corrupt = parseCriticReport(JSON.stringify({ ...report, verdict: "great!" }));
+    eq(corrupt?.verdict, "insufficient-evidence");
+  });
+
+  await test("S84: CRITIC_SYSTEM — two dimensions, each on its own; audio/technical/identity disclaimed; STRICT JSON", () => {
+    ok(CRITIC_SYSTEM.includes("narrative"), "the narrative dimension is named");
+    ok(CRITIC_SYSTEM.includes("visual"), "the visual dimension is named");
+    ok(CRITIC_SYSTEM.includes("Ignore audio"), "audio is judged elsewhere");
+    ok(CRITIC_SYSTEM.includes("character-identity continuity"), "identity is the VCE's business");
+    ok(CRITIC_SYSTEM.includes("STRICT JSON"), "strict reply contract");
+  });
+}
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
