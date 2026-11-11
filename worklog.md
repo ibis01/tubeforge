@@ -4553,3 +4553,35 @@ Verification: 444/444 unit (+16 S89 pins), typecheck 0, lint 0, smoke
 17/17 on real ffmpeg artifacts (scripts/s89-stock-smoke.mts). Design
 doc, ROADMAP #8, this log. Next: ROADMAP #9 — Provider selection
 intelligence (P1).
+
+## S90 — Provider selection intelligence v1 (ROADMAP #9, P1)
+
+The S76 §5 P3 spec, landed: "which provider should this task point at"
+now has a measured, explained answer instead of static registry notes.
+
+- provider-score.ts (pure, 11 pins): the weighted sum — quality 30 /
+  reliability 25 / cost 20 / latency 10 / fit 15, production-calibrated
+  defaults, user-overridable (ai.scoreWeights UserSetting, tolerant
+  parse, clamped, all-zero falls back to defaults). Priors per
+  capability×provider, each derived from the registry's own notes;
+  priorsComplete() pins the registry sync (the second hard-coded ledger
+  the queue-suite lesson warned about). The org's UsageRecords blend in
+  with 5 calls of prior weight: (ok + 5·0.9)/(calls+5) reliability,
+  2s→1.0/30s→0.0 latency, observed mean cost.
+- THE UNKNOWN-PRICING LAW, pinned: an unpriced paid model prices at the
+  conservative fallback — ABOVE the cheapest known model, NEVER free
+  (chat, via spend.ts's registry); outside chat, a keyed external with
+  no observations scores cost 0.4 "unknown, never assumed free", and
+  FREE must be established by design (the gateway, selfhost, no-key
+  providers). spend.ts gains modelPriced() (the real-row resolver) —
+  the GATE's behavior is untouched; admitDispatch, the $5 stop line,
+  the pricing-verified block and credit holds stand unchanged.
+- The surface: GET /api/settings/ai/score (all four capabilities, the
+  org's own 90-day aggregation, the current pick marked configured) +
+  PUT for the weights + the Settings comparison line under every
+  provider Select — top pick vs yours, with the quality/reliability/
+  cost explanation. ADVISORY ONLY: it never switches anything.
+
+Verification: 455/455 unit (+11 S90 pins), typecheck 0, lint 0. Design
+doc, ROADMAP #9, this log. Next: ROADMAP #10 — Living production board
+(P2).

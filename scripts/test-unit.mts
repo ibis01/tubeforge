@@ -88,6 +88,19 @@ import {
   semanticFactor,
   stockFrameTimes,
 } from "../src/lib/tubeforge/stock-ranker";
+import {
+  costEfficiencyFromMicroUsd,
+  DEFAULT_WEIGHTS,
+  latencyBlend,
+  nominalChatCostMicroUsd,
+  parseScoreWeights,
+  priorsComplete,
+  priorsFor,
+  reliabilityBlend,
+  RELIABILITY_PRIOR,
+  scoreProviders,
+  UNKNOWN_COST_FACTOR,
+} from "../src/lib/tubeforge/provider-score";
 import { selfhostEndpoint, sharedVoiceServer } from "../src/lib/tubeforge/shared-voice";
 import {
   LOGIN_MAX_FAILURES,
@@ -1150,6 +1163,128 @@ await test("parseScenes: legacy ref still valid; bad verification drops the reco
   const parsed2 = parseScenes(JSON.stringify([badVerdict]));
   ok(parsed2[0].stock != null, "the REF survives a bad verification record");
   ok(parsed2[0].stock?.verification === undefined, "the bad RECORD is dropped");
+});
+
+suiteStart("S90 provider selection — priors, weights, the unknown-pricing law");
+
+/** The suite's finder: a missing provider row is a test bug, fail loudly. */
+function must<T>(arr: T[], pred: (x: T) => boolean, id: string): T {
+  const hit = arr.find(pred);
+  if (!hit) throw new Error(`no scored row for "${id}"`);
+  return hit;
+}
+
+await test("priorsComplete: every registry provider has a priors row (the sync law)", () => {
+  ok(priorsComplete(), "PROVIDERS_BY_CAPABILITY and the priors table are in lockstep");
+  eq(priorsFor("chat", "zai").quality, 0.82, "a known row reads back");
+});
+
+await test("THE UNKNOWN-PRICING LAW: an unpriced paid model is NEVER free", () => {
+  const cheap = nominalChatCostMicroUsd("gpt-6-luna");
+  const unknown = nominalChatCostMicroUsd("mystery-model-xyz");
+  ok(cheap > 0, "a priced cheap model has a real cost");
+  ok(unknown > cheap, `the unknown model prices ABOVE the cheapest known (${unknown} > ${cheap})`);
+  const scored = scoreProviders("chat", {
+    models: { openai: "mystery-model-xyz" },
+    observations: {},
+    weights: { ...DEFAULT_WEIGHTS },
+  });
+  const openai = must(scored, (s) => s.provider === "openai", "openai");
+  eq(openai.costBasis, "priced", "chat cost basis is the priced registry");
+  ok(openai.estimatedCostMicroUsd != null && openai.estimatedCostMicroUsd > 0, "the estimate is non-zero");
+  ok(openai.factors.cost < 1, "the cost factor is below free");
+  ok(/NEVER free/.test(openai.reasons[0]), `the reason states the law (${openai.reasons[0]})`);
+});
+
+await test("free-by-design: the gateway, locals and keyless providers cost 1.0", () => {
+  const chat = scoreProviders("chat", { models: {}, observations: {}, weights: { ...DEFAULT_WEIGHTS } });
+  eq(must(chat, (s) => s.provider === "zai", "zai").costBasis, "free", "zai chat: the bundled gateway");
+  const image = scoreProviders("image", { models: {}, observations: {}, weights: { ...DEFAULT_WEIGHTS } });
+  eq(must(image, (s) => s.provider === "pollinations", "pollinations").costBasis, "free", "pollinations: no key, free tier");
+  const tts = scoreProviders("tts", { models: {}, observations: {}, weights: { ...DEFAULT_WEIGHTS } });
+  eq(must(tts, (s) => s.provider === "selfhost", "selfhost").costBasis, "free", "selfhost: your own machine");
+});
+
+await test("non-chat paid without observations: cost unknown, cautious, never free", () => {
+  const tts = scoreProviders("tts", { models: {}, observations: {}, weights: { ...DEFAULT_WEIGHTS } });
+  const el = must(tts, (s) => s.provider === "elevenlabs", "elevenlabs");
+  eq(el.costBasis, "unknown", "no pricing registry, no observed spend");
+  eq(el.factors.cost, UNKNOWN_COST_FACTOR, "the cautious factor (below the middle)");
+  ok(/never assumed free/.test(el.reasons[0]), "the reason says it");
+});
+
+await test("non-chat paid WITH observations: the org's own spend is the truth", () => {
+  const tts = scoreProviders("tts", {
+    models: {},
+    observations: { elevenlabs: { calls: 10, okCount: 10, meanLatencyMs: 4000, meanCostMicroUsd: 3000 } },
+    weights: { ...DEFAULT_WEIGHTS },
+  });
+  const el = must(tts, (s) => s.provider === "elevenlabs", "elevenlabs");
+  eq(el.costBasis, "observed", "observed beats unknown");
+  eq(el.estimatedCostMicroUsd, 3000, "the observed mean cost");
+  ok(Math.abs(el.factors.cost - costEfficiencyFromMicroUsd(3000)) < 1e-9, "the factor follows the curve");
+  ok(/10 calls · 100% ok/.test(el.reasons[1] ?? ""), `the evidence line renders (${el.reasons[1]})`);
+});
+
+await test("reliabilityBlend: prior when silent, data-dominated when loud", () => {
+  eq(reliabilityBlend(undefined), RELIABILITY_PRIOR, "no data → the neutral prior");
+  const half = reliabilityBlend({ calls: 100, okCount: 50, meanLatencyMs: null, meanCostMicroUsd: null });
+  ok(Math.abs(half - 0.519) < 0.01, `100 calls at 50% ok → ~0.52 (data dominates, got ${half.toFixed(3)})`);
+  const rough = reliabilityBlend({ calls: 5, okCount: 0, meanLatencyMs: null, meanCostMicroUsd: null });
+  ok(Math.abs(rough - 0.45) < 0.01, "5 failing calls cannot sink below the prior floor");
+});
+
+await test("latencyBlend: 2s ≈ perfect, 30s ≈ floor, no data → prior", () => {
+  const fast = latencyBlend({ calls: 20, okCount: 20, meanLatencyMs: 2000, meanCostMicroUsd: null }, 0.5);
+  ok(fast > 0.85, `2s mean → near-perfect (got ${fast.toFixed(2)})`);
+  const slow = latencyBlend({ calls: 20, okCount: 20, meanLatencyMs: 30000, meanCostMicroUsd: null }, 0.5);
+  ok(slow < 0.2, `30s mean → near-floor (got ${slow.toFixed(2)})`);
+  eq(latencyBlend(undefined, 0.7), 0.7, "no data → the prior latency");
+});
+
+await test("the weighted sum: exact arithmetic on the default weights (zai chat)", () => {
+  const scored = scoreProviders("chat", {
+    models: {},
+    observations: {},
+    weights: { ...DEFAULT_WEIGHTS },
+  });
+  const zai = must(scored, (s) => s.provider === "zai", "zai");
+  // 30×.82 + 25×.90 + 20×1 + 10×.80 + 15×.85 = 87.85 → 88
+  eq(zai.score, 88, "quality 30/100, reliability prior 25, free cost 20, latency prior 10, fit 15");
+});
+
+await test("configurable weights flip the recommendation", () => {
+  const costOnly = { quality: 0, reliability: 0, cost: 100, latency: 0, fit: 0 };
+  const byCost = scoreProviders("chat", { models: {}, observations: {}, weights: costOnly });
+  eq(byCost[0].score, 100, "cost-only: every free provider ties at 100");
+  eq(byCost[0].provider, "lmstudio", "the tie breaks by provider id asc (lmstudio < ollama < zai)");
+  ok(["lmstudio", "ollama", "zai"].includes(byCost[2].provider), "the three free-by-design providers lead");
+  const qualityOnly = { quality: 100, reliability: 0, cost: 0, latency: 0, fit: 0 };
+  const byQuality = scoreProviders("chat", { models: {}, observations: {}, weights: qualityOnly });
+  eq(byQuality[0].provider, "anthropic", "quality-only: the highest quality prior leads");
+  eq(byQuality[0].score, 92, "score mirrors the prior × 100");
+});
+
+await test("parseScoreWeights: tolerant, clamped, all-zero-safe", () => {
+  eq(parseScoreWeights(null), DEFAULT_WEIGHTS, "null → defaults");
+  eq(parseScoreWeights("junk"), DEFAULT_WEIGHTS, "junk → defaults");
+  eq(parseScoreWeights({ quality: 500 }), { ...DEFAULT_WEIGHTS, quality: 100 }, "clamped to 100");
+  eq(parseScoreWeights({ quality: 0, reliability: 0, cost: 0, latency: 0, fit: 0 }), DEFAULT_WEIGHTS, "all-zero (a comparison killer) → defaults");
+  eq(
+    parseScoreWeights({ quality: 60, bad: 5 }),
+    { ...DEFAULT_WEIGHTS, quality: 60 },
+    "valid keys merge over the defaults; junk keys ignored"
+  );
+});
+
+await test("deterministic order + the configured flag", () => {
+  const ctx = { models: { openai: "gpt-6-luna" }, observations: {}, weights: { ...DEFAULT_WEIGHTS } };
+  const a = scoreProviders("chat", ctx).map((s) => s.provider);
+  const b = scoreProviders("chat", ctx).map((s) => s.provider);
+  eq(a.join(","), b.join(","), "the same context always produces the same order");
+  const scored = scoreProviders("chat", ctx);
+  ok(must(scored, (s) => s.provider === "openai", "openai").configured, "the user's pick is marked configured");
+  ok(!must(scored, (s) => s.provider === "zai", "zai").configured, "others are not");
 });
 
 suiteStart("art dedupe — dHash perceptual hashing");

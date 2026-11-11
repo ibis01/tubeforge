@@ -65,6 +65,7 @@ import {
   Smartphone,
   Presentation,
   Ban,
+  Sparkles,
 } from "lucide-react";
 import {
   useVoices,
@@ -268,6 +269,20 @@ export function SettingsView() {
       { ok: boolean; text: string; needsConfirm?: boolean } | undefined
     >
   >({});
+  // S90 — the provider scores (advisory): top pick + the user's pick,
+  // per capability, with the factor explanation.
+  const [provScores, setProvScores] = useState<
+    Record<
+      string,
+      {
+        provider: string;
+        label: string;
+        score: number;
+        factors: { quality: number; reliability: number; cost: number; latency: number; fit: number };
+        reasons: string[];
+      }[]
+    >
+  >({});
 
   const loadYouTube = useCallback(async () => {
     try {
@@ -298,6 +313,20 @@ export function SettingsView() {
         image: { ...f.image, ...(d.capabilities?.image ?? {}), apiKey: "" },
         video: { ...f.video, ...(d.capabilities?.video ?? {}), apiKey: "" },
       }));
+    } catch {
+      /* non-critical */
+    }
+  }, []);
+
+  // S90 — the advisory score panel: cost / quality / reliability per
+  // capability, from the org's own usage blended with documented priors.
+  const loadScores = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings/ai/score", { cache: "no-store" });
+      if (!res.ok) return;
+      const d = await res.json();
+      if (d.capabilities && typeof d.capabilities === "object")
+        setProvScores(d.capabilities);
     } catch {
       /* non-critical */
     }
@@ -392,10 +421,11 @@ export function SettingsView() {
       void loadJobs();
       void loadYouTube();
       void loadAi();
+      void loadScores();
     }, 0);
 
     return () => clearTimeout(timer);
-  }, [loadJobs, loadYouTube, loadAi]);
+  }, [loadJobs, loadYouTube, loadAi, loadScores]);
 
   const handleSave = async () => {
     if (saving) return;
@@ -951,6 +981,36 @@ export function SettingsView() {
                     </Select>
                   </div>
                 </div>
+
+                {/* S90 — the advisory comparison: top pick vs your pick,
+                    with the factor explanation (never auto-switches) */}
+                {(() => {
+                  const scored = provScores[cap];
+                  if (!scored?.length) return null;
+                  const top = scored[0];
+                  const mine = scored.find((s) => s.provider === row.provider);
+                  const pct = (n: number) => Math.round(n * 100);
+                  const bits = `quality ${pct(top.factors.quality)} · reliability ${pct(
+                    top.factors.reliability
+                  )} · ${top.reasons[0] ?? ""}`;
+                  return (
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
+                      <Sparkles className="inline h-3 w-3 mr-1 text-primary align-[-2px]" />
+                      {top.provider === row.provider ? (
+                        <>
+                          Your pick is the top score —{" "}
+                          <b className="text-foreground">{top.score}/100</b> ({bits})
+                        </>
+                      ) : (
+                        <>
+                          Top pick:{" "}
+                          <b className="text-foreground">{top.label}</b> {top.score}
+                          /100 — yours {mine?.score ?? "?"}/100 ({bits})
+                        </>
+                      )}
+                    </p>
+                  );
+                })()}
 
                 {row.provider === "zai" ? (
                   cap === "chat" ? (

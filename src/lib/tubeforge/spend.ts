@@ -251,12 +251,25 @@ const FALLBACK_PRICE: ModelPrice = MODEL_PRICES["gpt-6-astra"];
 
 /** Longest-prefix match so dated snapshots ("gpt-6.1-sol-2026-10-15") and
  *  vendor-qualified ids ("openai/gpt-6.1-sol") resolve to their row. */
-export function priceForModel(model: string): ModelPrice {
+function resolvePrice(model: string): ModelPrice | null {
   const id = model.trim().replace(/^[a-z0-9-]+\//i, "");
   if (MODEL_PRICES[id]) return MODEL_PRICES[id];
   const keys = Object.keys(MODEL_PRICES).sort((a, b) => b.length - a.length);
   for (const key of keys) if (id.startsWith(key)) return MODEL_PRICES[key];
-  return FALLBACK_PRICE;
+  return null;
+}
+
+export function priceForModel(model: string): ModelPrice {
+  return resolvePrice(model) ?? FALLBACK_PRICE;
+}
+
+/** True when the model id resolved to a REAL registry row (not the
+ *  conservative fallback). S90 advisory-layer use: the provider scorer
+ *  labels unknown-priced models so "unknown pricing is never treated as
+ *  free" stays explainable to the user. The GATE's behavior is unchanged
+ *  either way — a fallback price still over-reserves. */
+export function modelPriced(model: string): boolean {
+  return resolvePrice(model) != null;
 }
 
 /** Actual cost from REPORTED usage — integer micro-USD, per-side rounding. */
