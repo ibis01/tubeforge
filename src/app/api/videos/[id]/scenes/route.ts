@@ -3,7 +3,7 @@ import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseScenes, serializeScenes } from "@/lib/tubeforge/story";
 import { CAMERAS, sanitizeSceneStyle } from "@/lib/tubeforge/types";
-import { parseTimeline, serializeTimeline } from "@/lib/tubeforge/timeline";
+import { parseTimeline, serializeTimeline, guardTimelineOverwrite } from "@/lib/tubeforge/timeline";
 import * as storage from "@/lib/tubeforge/storage";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -149,7 +149,13 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   // caption, nothing changed" trap. Matched by scene INDEX inside the doc;
   // absent/misaligned docs are skipped (the row flag still carries the edit).
   if (captionChanged) {
-    const doc = parseTimeline(video.timeline);
+    // S87 slice 1 — the overwrite guard first: an unknown-stamp stored doc
+    // is a newer build's doc, so the doc write below is skipped (a v2
+    // emission must never land over it — six write paths, one law). The
+    // row's caption flag above already carries the edit; this route's
+    // human-facing write is unconditional either way.
+    const guard = guardTimelineOverwrite(video.timeline);
+    const doc = guard.blocked ? null : parseTimeline(video.timeline);
     const docScene = doc?.scenes.find((s) => s.index === index) ?? null;
     if (doc && docScene) {
       docScene.caption = scene.caption

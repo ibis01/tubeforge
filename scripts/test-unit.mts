@@ -9437,50 +9437,156 @@ await test("S80: normalizeConsistencyCheckMode — the two valid non-defaults pa
   });
 }
 
-// ---------- S87 — Universal Timeline slice 0: the version stamp ----------
+// ---------- S87 — Universal Timeline: slice 0 (the stamp) + slice 1 (the v2 dual-write) ----------
 {
-  const { assembleTimeline, serializeTimeline, parseTimeline } = await import(
-    "../src/lib/tubeforge/timeline.ts"
-  );
+  const {
+    assembleTimeline,
+    serializeTimeline,
+    parseTimeline,
+    deriveTracks,
+    guardTimelineOverwrite,
+    TIMELINE_OVERWRITE_ERROR,
+  } = await import("../src/lib/tubeforge/timeline.ts");
   const scenes = [
     { index: 1, title: "A", narration: "one two three", visual: "v", camera: "c", mood: "m", caption: "", hostInScene: false, rehook: false, sfx: "none" },
   ] as never[];
 
-  await test("S87: assembleTimeline stamps every doc it builds (schema: 1)", async () => {
+  await test("S87 slice 1: assembleTimeline stamps every doc it builds (schema: 2) and derives the v2 tracks", async () => {
     const doc = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "kenburns" });
-    eq(doc.schema, 1, "the assembled doc carries the v1 stamp");
+    eq(doc.schema, 2, "the assembled doc carries the v2 stamp (slice 1 re-stamped the contract)");
+    eq(doc.tracks.map((t) => t.kind).join(","), "video,audio,subtitle", "the three scene-backed tracks are derived");
+    eq(doc.tracks[0].clips.length, 1, "one visual clip per scene");
+    eq(doc.tracks[1].clips.length, 2, "voiceover clip + the music bed (assemble seeds music on)");
+    eq(doc.tracks[2].clips.length, 0, "no captioned scene → no subtitle clips");
   });
 
-  await test("S87: serializeTimeline leads with schema: 1; the parse roundtrip carries the stamp", async () => {
+  await test("S87 slice 1: serializeTimeline leads with schema: 2, derives tracks AT SERIALIZATION, roundtrips byte-identical", async () => {
     const doc = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "kenburns" });
     const json = serializeTimeline(doc);
     const raw = JSON.parse(json) as Record<string, unknown>;
     const keys = Object.keys(raw);
     eq(keys[0], "schema", "the stamp is the first key of the serialized doc");
-    eq(raw.schema, 1, "the serialized stamp is 1");
+    eq(raw.schema, 2, "the serialized stamp is 2 — the writer owns the contract version");
+    eq(Array.isArray(raw.tracks), true, "the derived tracks ride the doc");
     const back = parseTimeline(json);
     ok(back, "the serialized doc parses");
-    eq(back?.schema, 1, "the roundtrip carries the stamp");
+    eq(back?.schema, 2, "the roundtrip carries the stamp");
     eq(back?.sceneCount, doc.sceneCount, "the roundtrip carries the scenes");
+    eq(back?.tracks, doc.tracks, "the roundtrip carries the SAME projection");
     // serialize → parse → serialize is stable (the strict writer never
-    // invents fields between roundtrips).
+    // invents fields between roundtrips — the design's round-trip pin).
     eq(back ? serializeTimeline(back) : "", json, "serialize(parse(serialize(x))) === serialize(x)");
   });
 
-  await test("S87: parseTimeline — a legacy doc (no stamp) parses as v1 (the tolerant-read law)", async () => {
+  await test("S87 slice 1: THE refinement pin — stale tracks can NEVER persist (serialize re-derives from the scenes it is handed)", async () => {
+    const doc = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "kenburns" });
+    // A doc whose in-memory tracks were carried from BEFORE a clip edit —
+    // exactly what a parse-modify-serialize cycle would persist if tracks
+    // were a carried field (the slice-1 write-site survey's stale-tracks
+    // hazard). The writer must ignore the carried copy entirely.
+    const stale = JSON.parse(JSON.stringify(doc)) as typeof doc;
+    stale.tracks = [
+      { kind: "graphics", name: "stale-carried", clips: [
+        { id: "stale", kind: "graphics", sceneIndex: null, startSec: 999, endSec: 1000, transitionIn: null, transitionOut: null, asset: null },
+      ] },
+    ];
+    const json = serializeTimeline(stale);
+    const raw = JSON.parse(json) as { tracks: unknown };
+    eq(raw.tracks, doc.tracks, "the writer emits a fresh derivation from the scenes, never the carried copy");
+    ok(!json.includes("stale-carried"), "the stale marker never reaches disk");
+  });
+
+  await test("S87 slice 1: deriveTracks — the three scene-backed projections, deterministic, junk-tolerant", async () => {
+    eq(deriveTracks([]), [
+      { kind: "video", name: "visual", clips: [] },
+      { kind: "audio", name: "audio", clips: [] },
+      { kind: "subtitle", name: "subtitle", clips: [] },
+    ], "empty scenes → the three tracks with empty clip lists (shape-stable for the compositor)");
+
+    const doc = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "kenburns" });
+    doc.scenes[0].caption = { text: "hello world", startSec: doc.scenes[0].startSec, endSec: doc.scenes[0].endSec };
+    const tracks = deriveTracks(doc.scenes);
+    eq(tracks.map((t) => t.kind).join(","), "video,audio,subtitle", "the three track kinds in order");
+    const visual = tracks[0].clips[0];
+    eq(visual.id, "s1", "visual clip id is scene-linked");
+    eq(visual.sceneIndex, 1, "the clip points back at its scene (the projection law)");
+    eq([visual.startSec, visual.endSec], [doc.scenes[0].startSec, doc.scenes[0].endSec], "visual timing mirrors the scene window");
+    eq([visual.transitionIn, visual.transitionOut], [doc.scenes[0].transitionIn, doc.scenes[0].transitionOut], "visual transitions mirror the scene");
+    eq(visual.asset, { source: "ai", stockSource: null, stockQuery: null }, "an ai scene's asset names the source");
+    const audio = tracks[1].clips;
+    eq(audio.map((c) => c.id).join(","), "a-s1,a-music", "voiceover clip + the doc-spanning music bed");
+    eq(audio[1].sceneIndex, null, "the bed is not scene-bound");
+    eq([audio[1].startSec, audio[1].endSec], [0, doc.totalDurationSec], "the bed spans the doc");
+    eq(tracks[2].clips[0].id, "sub-s1", "subtitle clip id is scene-linked");
+    eq([tracks[2].clips[0].startSec, tracks[2].clips[0].endSec], [doc.scenes[0].caption.startSec, doc.scenes[0].caption.endSec], "caption timing wins");
+    // Determinism: same scenes → an identical projection (the roundtrip's engine).
+    eq(deriveTracks(doc.scenes), tracks, "derivation is deterministic");
+    // Junk timings never become NaN (a PUT body scene is a client cast).
+    const junky = deriveTracks([{ ...(scenes[0] as object), startSec: "NaN", endSec: undefined } as never]);
+    eq(Number.isFinite(junky[0].clips[0].startSec) && Number.isFinite(junky[0].clips[0].endSec), true, "junk timings fall back to 0, never NaN");
+  });
+
+  await test("S87 slice 1: slides scenes project onto the image kind; absent caption timing falls back to the scene window", async () => {
+    const slides = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "slides" });
+    eq(slides.tracks[0].kind, "image", "slides mode → the visual track is the image kind (the designed PNG IS the frame)");
+    eq(slides.tracks[0].clips[0].kind, "image", "the clip kind mirrors the scene source");
+    eq(slides.tracks[0].clips[0].asset.source, "slides", "the asset names the slides source");
+
+    const doc = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "kenburns" });
+    doc.scenes[0].caption = { text: "x", startSec: undefined as unknown as number, endSec: undefined as unknown as number };
+    const tracks = deriveTracks(doc.scenes);
+    eq([tracks[2].clips[0].startSec, tracks[2].clips[0].endSec], [doc.scenes[0].startSec, doc.scenes[0].endSec], "absent caption timing falls back to the scene window");
+  });
+
+  await test("S87 slice 1: parseTimeline re-derives the projection — a stored (possibly junk) tracks copy never enters memory", async () => {
+    const doc = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "kenburns" });
+    const hostile = JSON.parse(serializeTimeline(doc)) as Record<string, unknown>;
+    hostile.tracks = [{ kind: "bogus-kind", name: "junk", clips: "not-a-list" }];
+    const back = parseTimeline(JSON.stringify(hostile));
+    ok(back, "junk tracks do not break the parse (tolerant read)");
+    eq(back?.tracks, doc.tracks, "the parsed projection is re-derived from the scenes — junk dropped");
+  });
+
+  await test("S87 slice 1: guardTimelineOverwrite — a doc this build cannot parse is never overwritten", async () => {
+    const doc = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "kenburns" });
+    const v2 = serializeTimeline(doc);
+    // Not blocked: absent / empty column / legacy v1 (no stamp) / this build's
+    // own v2 / corrupt JSON / non-object bodies (fail-open — not newer docs).
+    eq(guardTimelineOverwrite(null).blocked, false, "no stored doc — nothing to protect");
+    eq(guardTimelineOverwrite("").blocked, false, "empty column — nothing to protect");
+    const legacy = JSON.parse(v2) as Record<string, unknown>;
+    delete legacy.schema;
+    eq(guardTimelineOverwrite(JSON.stringify(legacy)).blocked, false, "a legacy v1 doc is writable (the tolerant-read law)");
+    eq(guardTimelineOverwrite(v2).blocked, false, "this build's own v2 doc is writable");
+    eq(guardTimelineOverwrite("broken {").blocked, false, "corrupt JSON is not a newer doc — fail-open");
+    eq(guardTimelineOverwrite("[1,2]").blocked, false, "a non-object body is not a doc");
+    // Blocked: a stamp this build does not know = a newer build's doc.
+    const future = JSON.parse(v2) as Record<string, unknown>;
+    future.schema = 3;
+    const g = guardTimelineOverwrite(JSON.stringify(future));
+    eq(g.blocked, true, "schema 3 = a newer build's doc — the write is refused");
+    eq(g.blocked ? g.storedSchema : null, 3, "the refusal echoes the stored stamp");
+    const junk = JSON.parse(v2) as Record<string, unknown>;
+    junk.schema = "garbage";
+    eq(guardTimelineOverwrite(JSON.stringify(junk)).blocked, true, "a garbage stamp refuses too (never a guessed parse)");
+    ok(TIMELINE_OVERWRITE_ERROR.includes("DELETE /assemble"), "the 409 names the human's explicit escape hatch");
+  });
+
+  await test("S87: parseTimeline — a legacy doc (no stamp) parses as v1 (the tolerant-read law), tracks re-derived", async () => {
     const doc = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "kenburns" });
     const legacy = JSON.parse(serializeTimeline(doc)) as Record<string, unknown>;
     delete legacy.schema; // docs persisted before S87 have no stamp
     const back = parseTimeline(JSON.stringify(legacy));
     ok(back, "the legacy doc still parses");
     eq(back?.schema, 1, "parsed as v1 — never a null, never a guess beyond v1");
+    eq(back?.tracks, doc.tracks, "even a legacy doc carries the re-derived projection in memory");
   });
 
   await test("S87: parseTimeline — an UNKNOWN stamp is null, never a guessed parse", async () => {
     const doc = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "kenburns" });
     const future = JSON.parse(serializeTimeline(doc)) as Record<string, unknown>;
-    future.schema = 2; // a v2 doc under a v1 build (slice 1+ territory)
-    eq(parseTimeline(JSON.stringify(future)), null, "schema 2 → null (render recomputes inline)");
+    future.schema = 3; // a v3 doc under this build (slice 1 knows 2 and 1 only)
+    eq(parseTimeline(JSON.stringify(future)), null, "schema 3 → null (render recomputes inline; the guard keeps the write paths off it)");
     future.schema = "garbage";
     eq(parseTimeline(JSON.stringify(future)), null, "a garbage stamp → null");
     // null/unreadable stays null (the pre-S87 contract, unchanged).

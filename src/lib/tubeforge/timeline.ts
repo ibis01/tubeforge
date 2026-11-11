@@ -83,6 +83,154 @@ export interface TimelineCaption {
   endSec: number;
 }
 
+// ---------- S87 slice 1 — the v2 tracks projection ----------
+//
+// The Universal Timeline contract's multi-track shape (S76 §4.C): every
+// engine describes its cut as TRACKS of kind video/image/whiteboard/3d/
+// character/audio/subtitle/graphics. Slice 1 derives the three scenes-
+// backed tracks (visual + audio + subtitle) from the scene list; slices
+// 3+ let ENGINES own their tracks (whiteboard's planner, 3D).
+//
+// THE PROJECTION LAW, ENFORCED STRUCTURALLY (the slice-1 refinement):
+// tracks are derived AT SERIALIZATION from the scenes being written —
+// never carried through parse-modify-serialize cycles. A carried tracks[]
+// goes stale the moment a clip op edits scenes; a derived one cannot
+// (every serialize re-derives from the scenes it is handed). A tracks
+// field on an in-memory doc is a display echo; the WRITER never reads it.
+
+export type TimelineTrackKind =
+  | "video"
+  | "image"
+  | "whiteboard"
+  | "3d"
+  | "character"
+  | "audio"
+  | "subtitle"
+  | "graphics";
+
+export interface TimelineClip {
+  /** Deterministic clip id — `s{sceneIndex}` (visual), `a-s{sceneIndex}`
+   *  (voiceover), `a-music` (the bed), `sub-s{sceneIndex}` (caption). */
+  id: string;
+  kind: TimelineTrackKind;
+  /** The row linkage — the scene this clip projects (null for doc-spanning
+   *  clips like the music bed). The row is the truth; clips always point
+   *  back at it (design note 1). */
+  sceneIndex: number | null;
+  /** Timing on the composition clock (seconds). */
+  startSec: number;
+  endSec: number;
+  /** The scene-boundary transitions this clip enters/exits with (null for
+   *  non-visual tracks — audio does not blend). */
+  transitionIn: string | null;
+  transitionOut: string | null;
+  /** The asset reference (the stock pointer / source kind). null = the
+   *  frame is generated (ai) or the clip is not visual (audio/subtitle). */
+  asset: {
+    source: SceneSource;
+    stockSource: string | null;
+    stockQuery: string | null;
+  } | null;
+}
+
+export interface TimelineTrack {
+  kind: TimelineTrackKind;
+  name: string;
+  clips: TimelineClip[];
+}
+
+/** Defensive timing read — a PUT body scene is a client roundtrip cast, so
+ *  derivation must tolerate junk timings (0 fallback, never NaN). */
+function trackSec(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+/** Derive the v2 tracks projection from a scene list — the pure,
+ *  deterministic function serializeTimeline applies on every write.
+ *
+ *  Three tracks, all scene-backed (the slices-3+ engine tracks land later):
+ *  • visual — one clip per scene; kind image when the scene source is
+ *    slides (the designed PNG IS the frame), video otherwise (ai/stock);
+ *    timing + transitions + the asset reference mirror the scene.
+ *  • audio — one clip per scene over the same measured window (the
+ *    voiceover/sfx/ambient bed is scene-bound), plus ONE doc-spanning
+ *    music-bed clip when the doc says the music is on (the doc mirrors
+ *    the per-video music flag identically on every scene; scenes[0] is
+ *    the honest read).
+ *  • subtitle — clips ONLY where the doc carries a caption block (the
+ *    S43 seeding rule: human-edited captions live in the doc; LLM script
+ *    captions stay on the row). Caption timing wins over scene timing.
+ *
+ *  Per-scene mix levels / creative overrides deliberately stay in the
+ *  scenes list (the S2 doctrine — clips reference scenes by index;
+ *  duplicating levels into clips would fork the truth slice 2 consumes).
+ *  Empty scenes → the three tracks with empty clip lists (shape-stable
+ *  for the compositor's dispatch). */
+export function deriveTracks(scenes: TimelineScene[]): TimelineTrack[] {
+  const list = Array.isArray(scenes) ? scenes : [];
+  const visualKind: TimelineTrackKind = list[0]?.source === "slides" ? "image" : "video";
+
+  const visualClips: TimelineClip[] = list.map((s) => ({
+    id: `s${s?.index ?? 0}`,
+    kind: s?.source === "slides" ? "image" : "video",
+    sceneIndex: typeof s?.index === "number" ? s.index : null,
+    startSec: trackSec(s?.startSec),
+    endSec: trackSec(s?.endSec),
+    transitionIn: typeof s?.transitionIn === "string" ? s.transitionIn : null,
+    transitionOut: typeof s?.transitionOut === "string" ? s.transitionOut : null,
+    asset: {
+      source: s?.source === "slides" ? "slides" : s?.source === "stock" ? "stock" : "ai",
+      stockSource: typeof s?.stockSource === "string" ? s.stockSource : null,
+      stockQuery: typeof s?.stockQuery === "string" ? s.stockQuery : null,
+    },
+  }));
+
+  const audioClips: TimelineClip[] = list.map((s) => ({
+    id: `a-s${s?.index ?? 0}`,
+    kind: "audio",
+    sceneIndex: typeof s?.index === "number" ? s.index : null,
+    startSec: trackSec(s?.startSec),
+    endSec: trackSec(s?.endSec),
+    transitionIn: null,
+    transitionOut: null,
+    asset: null,
+  }));
+  const musicOn = list[0]?.audio?.music?.enabled === true;
+  if (musicOn && list.length > 0) {
+    const total = Math.max(...list.map((s) => trackSec(s?.endSec)));
+    audioClips.push({
+      id: "a-music",
+      kind: "audio",
+      sceneIndex: null, // doc-spanning bed — not scene-bound
+      startSec: 0,
+      endSec: total,
+      transitionIn: null,
+      transitionOut: null,
+      asset: null,
+    });
+  }
+
+  const subtitleClips: TimelineClip[] = list
+    .filter((s) => typeof s?.caption?.text === "string" && s.caption.text.trim().length > 0)
+    .map((s) => ({
+      id: `sub-s${s.index}`,
+      kind: "subtitle" as const,
+      sceneIndex: typeof s.index === "number" ? s.index : null,
+      startSec: trackSec(s.caption?.startSec ?? s.startSec),
+      endSec: trackSec(s.caption?.endSec ?? s.endSec),
+      transitionIn: null,
+      transitionOut: null,
+      asset: null,
+    }));
+
+  return [
+    { kind: visualKind, name: "visual", clips: visualClips },
+    { kind: "audio", name: "audio", clips: audioClips },
+    { kind: "subtitle", name: "subtitle", clips: subtitleClips },
+  ];
+}
+
 export interface TimelineScene {
   index: number;
   title: string;
@@ -111,13 +259,19 @@ export interface TimelineScene {
 }
 
 export interface AssembledTimeline {
-  /** S87 (Universal Timeline slice 0) — the doc's schema stamp. 1 = the
-   *  scene-level projection this interface describes. A build that meets
-   *  an UNKNOWN stamp must treat the doc as unreadable (parseTimeline →
-   *  null → the render recomputes inline) — never a guessed parse. Legacy
-   *  docs without the stamp parse as v1 (the tolerant-read law). */
-  schema: 1;
+  /** S87 — the doc's schema stamp. 1 = the scene-level projection (slice 0);
+   *  2 = the doc that also carries the derived v2 tracks (slice 1). A build
+   *  that knows version N reads N and N−1 — a build meeting an UNKNOWN
+   *  stamp must treat the doc as unreadable (parseTimeline → null → the
+   *  render recomputes inline) and NEVER overwrite it (the slice-1
+   *  guardTimelineOverwrite law). Legacy docs without the stamp parse as
+   *  v1 (the tolerant-read law). */
+  schema: 1 | 2;
   scenes: TimelineScene[];
+  /** S87 slice 1 — the derived v2 tracks projection. In memory this is a
+   *  display convenience; the WRITER re-derives at serialization (the
+   *  projection law, enforced structurally — a stale copy cannot persist). */
+  tracks: TimelineTrack[];
   sceneCount: number;
   totalDurationSec: number;
   generatedAt: string;
@@ -311,8 +465,11 @@ export function assembleTimeline(scenes: Scene[], opts: AssembleOptions = {}): A
   });
 
   return {
-    schema: 1,
+    // S87 slice 1 — assemble builds the v2 doc (the writer re-stamps at
+    // serialization; the in-memory stamp describes the doc's shape).
+    schema: 2,
     scenes: out,
+    tracks: deriveTracks(out),
     sceneCount: out.length,
     totalDurationSec: Math.round(cursor * 100) / 100,
     generatedAt: new Date().toISOString(),
@@ -417,20 +574,32 @@ export function docSceneSettings(
 
 /** Parse a persisted timeline JSON. Tolerant of legacy/null — null when the
  *  structure is unreadable (the render falls back to recomputing inline).
- *  S87 slice 0 — the schema stamp: absent = legacy v1 (docs predate the
- *  field), 1 = this contract, any OTHER stamp = a doc this build does not
- *  know → null (never a guessed parse; the dual-read for v2 is slice 1). */
+ *  S87 — the schema stamp: absent = legacy v1 (docs predate the field),
+ *  1 = the scene-level projection, 2 = the doc that also carries the v2
+ *  tracks (this build re-derives tracks from the scenes — a stored copy is
+ *  never trusted on read, so junk tracks cannot enter memory). Any OTHER
+ *  stamp = a doc this build does not know → null (never a guessed parse;
+ *  the render recomputes inline, and guardTimelineOverwrite keeps every
+ *  write path from destroying the newer doc). */
 export function parseTimeline(json: string | null | undefined): AssembledTimeline | null {
   if (!json) return null;
   try {
     const raw = JSON.parse(json) as unknown;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     const obj = raw as { schema?: unknown; scenes?: unknown; sceneCount?: unknown; totalDurationSec?: unknown; generatedAt?: unknown; renderPrefs?: unknown };
-    if (obj.schema !== undefined && obj.schema !== 1) return null; // unknown future schema — refuse, never guess
+    // A build reads N and N−1: this build knows 2, so 2, 1 and absent
+    // (legacy v1) parse; anything else refuses.
+    const known = obj.schema === undefined || obj.schema === 1 || obj.schema === 2;
+    if (!known) return null; // unknown future schema — refuse, never guess
     if (!Array.isArray(obj.scenes)) return null;
+    const scenes = obj.scenes as TimelineScene[];
     return {
-      schema: 1,
-      scenes: obj.scenes as TimelineScene[],
+      schema: obj.schema === 2 ? 2 : 1,
+      scenes,
+      // The tracks projection is ALWAYS re-derived from the parsed scenes —
+      // tolerant read of junk tracks (they never enter memory), and the
+      // roundtrip (serialize → parse → serialize) holds by construction.
+      tracks: deriveTracks(scenes),
       sceneCount: Number(obj.sceneCount) || 0,
       totalDurationSec: Number(obj.totalDurationSec) || 0,
       generatedAt: typeof obj.generatedAt === "string" ? obj.generatedAt : new Date().toISOString(),
@@ -474,7 +643,11 @@ const TIMELINE_SCENE_FIELDS = [
 
 export function serializeTimeline(timeline: AssembledTimeline): string {
   return JSON.stringify({
-    schema: 1, // S87 slice 0 — the version stamp leads the doc
+    // S87 slice 1 — the writer owns the contract version: every persisted
+    // doc is stamped 2 and carries the tracks derived FROM THE SCENES IT IS
+    // HANDED (the refinement: derive at serialization — no write path can
+    // persist stale tracks). The doc's in-memory .tracks is never read here.
+    schema: 2,
     scenes: timeline.scenes.map((s) => {
       const rec = s as unknown as Record<string, unknown>;
       const out: Record<string, unknown> = {};
@@ -483,9 +656,51 @@ export function serializeTimeline(timeline: AssembledTimeline): string {
       }
       return out;
     }),
+    // The v2 projection, derived from the same scenes written above —
+    // structurally incapable of going stale (the slice-1 refinement).
+    tracks: deriveTracks(timeline.scenes),
     sceneCount: timeline.sceneCount,
     totalDurationSec: timeline.totalDurationSec,
     generatedAt: timeline.generatedAt,
     ...(timeline.renderPrefs ? { renderPrefs: timeline.renderPrefs } : {}),
   });
+}
+
+// ---------- S87 slice 1 — the overwrite guard ----------
+//
+// The forward-compat hazard the version stamp exposes: a build meeting an
+// unknown-stamp doc parses it as null, recomputes a fresh projection, and
+// a naive write path would DESTROY a newer build's doc with an older-
+// schema one. One law, six write paths (assemble POST + PUT, the scenes
+// route's caption sync, studio clip/voice/pace): read the RAW stored
+// stamp; a doc this build cannot parse must never be overwritten. The
+// explicit DELETE /assemble stays unguarded — it IS the human's escape
+// hatch, a deliberate decision rather than a blind clobber.
+
+export type TimelineOverwriteGuard = { blocked: false } | { blocked: true; storedSchema: unknown };
+
+/** The 409 body for a refused overwrite — every guarded route answers with
+ *  this message so clients match one string. */
+export const TIMELINE_OVERWRITE_ERROR =
+  "A newer-schema timeline doc is stored — this build cannot read it, so the write was refused " +
+  "(clear it explicitly via DELETE /assemble if you really want to start over)";
+
+/** Inspect the RAW stored timeline JSON (never the parsed doc — the parse
+ *  of an unknown stamp is null and loses the stamp). Blocked when the
+ *  stored doc carries a stamp this build does not parse (not absent, not
+ *  1, not 2). Corrupt JSON / non-object bodies are NOT newer docs — the
+ *  fail-open law applies (the render recomputes inline anyway), so the
+ *  write proceeds. */
+export function guardTimelineOverwrite(stored: string | null | undefined): TimelineOverwriteGuard {
+  if (!stored) return { blocked: false };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(stored);
+  } catch {
+    return { blocked: false }; // corrupt ≠ newer — legacy fail-open
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { blocked: false };
+  const schema = (raw as { schema?: unknown }).schema;
+  if (schema === undefined || schema === 1 || schema === 2) return { blocked: false };
+  return { blocked: true, storedSchema: schema };
 }

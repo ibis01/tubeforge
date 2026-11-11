@@ -32,7 +32,7 @@ import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseJson, voiceSwapSchema, ApiValidationError } from "@/lib/tubeforge/validation";
 import { performVoiceSwap, sceneWavDurations } from "@/lib/tubeforge/clip-ops";
 import { resolvePreviewVoice } from "@/lib/tubeforge/voice-preview";
-import { serializeTimeline } from "@/lib/tubeforge/timeline";
+import { serializeTimeline, guardTimelineOverwrite, TIMELINE_OVERWRITE_ERROR } from "@/lib/tubeforge/timeline";
 import { videoDir } from "@/lib/tubeforge/ai";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -45,6 +45,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const video = await db.video.findUnique({ where: { id } });
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
+
+  // S87 slice 1 — the overwrite guard, BEFORE the op's asset work: an
+  // unknown-stamp stored doc is a newer build's doc, and this op saves the
+  // row + doc in ONE update — so the whole op is refused (a re-voice must
+  // never spend paid TTS into a write that would clobber it).
+  const guard = guardTimelineOverwrite(video.timeline);
+  if (guard.blocked)
+    return NextResponse.json({ error: TIMELINE_OVERWRITE_ERROR }, { status: 409 });
 
   let body;
   try {

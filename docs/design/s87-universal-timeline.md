@@ -1,7 +1,8 @@
-# S87 — the Universal Timeline contract (design + slice 0)
+# S87 — the Universal Timeline contract (design + slices 0–1)
 
-**Status:** design recorded; slice 0 (the version stamp) implemented this
-stage. Design target: the S76 adoption decision §4.C
+**Status:** design recorded; slice 0 (the version stamp) and slice 1 (the
+v2 dual-write + the overwrite guard) implemented. Design target: the S76
+adoption decision §4.C
 (`docs/audits/s76-openmontage-adoption-decision.md`), the third shared
 quality system after the Visual Consistency Engine (S77–S83) and the Video
 Critic (S84–S86).
@@ -162,3 +163,68 @@ pins with real output artifacts and human review (the S76 standard).
 legacy doc (no stamp) parses as v1, junk keys tolerated · an unknown
 stamp (`2`, garbage) is null — never a guessed parse · `assembleTimeline`
 stamps every doc it builds.
+
+*(Evolved at slice 1: the writer's stamp is now 2, the unknown-stamp pin
+uses 3, and the pins below extend the battery — the slice-0 pins kept
+their shape.)*
+
+## 7. What slice 1 changed (code)
+
+- `timeline.ts` gains the v2 track vocabulary: `TimelineTrackKind`
+  (video/image/whiteboard/3d/character/audio/subtitle/graphics),
+  `TimelineClip` (deterministic id, scene linkage, composition-clock
+  timing, boundary transitions, asset reference) and `TimelineTrack`.
+- **Derive-at-serialization (the refinement, enforced structurally):**
+  `serializeTimeline` emits `tracks = deriveTracks(scenes)` from the
+  scenes it is handed — the in-memory `.tracks` field is never read by
+  the writer, so NO write path can persist a stale projection (a carried
+  copy would go stale the moment a clip op edited scenes). The stamp is
+  2 at every write; the writer owns the contract version.
+- `deriveTracks` (pure, deterministic): a VISUAL track — one clip per
+  scene, kind `image` when the source is slides (the designed PNG IS the
+  frame), `video` otherwise, timing/transitions/asset mirroring the
+  scene; an AUDIO track — one clip per scene over the measured window
+  plus ONE doc-spanning music-bed clip when the doc says the music is on
+  (sceneIndex null: the bed is not scene-bound); a SUBTITLE track — clips
+  only where the doc carries a caption block (the S43 seeding rule).
+  Per-scene mix levels / creative overrides stay in the scenes list (the
+  S2 doctrine — clips reference scenes by index; duplicating levels into
+  clips would fork the truth slice 2 consumes). Empty scenes → the three
+  tracks with empty clip lists (shape-stable for the compositor).
+- `parseTimeline` reads stamps 1 and 2 (a build knows N and N−1) plus
+  absent = legacy v1; any OTHER stamp stays null — never a guessed parse.
+  The parsed object's tracks are ALWAYS re-derived from the parsed
+  scenes: a stored (possibly junk) tracks copy never enters memory, and
+  the round-trip holds by construction.
+- **The overwrite guard:** `guardTimelineOverwrite(storedRaw)` reads the
+  RAW stored JSON (never the parsed doc — the parse of an unknown stamp
+  is null and loses the stamp) and refuses when the stored stamp is not
+  absent/1/2. Corrupt JSON / non-object bodies are not newer docs — the
+  fail-open law applies. `TIMELINE_OVERWRITE_ERROR` is the one 409 body
+  every guarded route answers with; it names DELETE /assemble, the
+  human's explicit escape hatch (the one UNguarded write — a deliberate
+  decision, not a blind clobber).
+- Six write sites, one law: assemble POST + PUT (409 before any work),
+  the scenes route's caption sync (the doc write skipped — the row's
+  caption flag already carries the edit), studio clip/voice/pace (409
+  BEFORE perform* — a re-voice must never spend paid TTS into a refused
+  write).
+- `types.ts`: `AssembledTimelineDTO.schema?: 1 | 2` + the structural
+  `TimelineTrackDTO` mirror (optional — the Studio still never
+  discriminates on it; slice 2 consumes it).
+
+## 8. Pinned-by-tests contract (slice 1)
+
+`serializeTimeline` emits `schema: 2` first and the derived tracks ride
+the doc · serialize(parse(serialize(x))) is byte-identical · THE
+refinement pin: a doc with a deliberately-stale carried `.tracks`
+serializes to a FRESH derivation — the stale marker never reaches disk ·
+`deriveTracks` shape pins (empty scenes → three empty tracks; visual/
+audio/subtitle kinds; `s{n}` / `a-s{n}` / `a-music` / `sub-s{n}` ids;
+the bed spans the doc and is not scene-bound; caption timing wins,
+absent caption timing falls back to the scene window; junk timings
+become 0, never NaN) · slides scenes project onto the image kind ·
+parse re-derives the projection (junk stored tracks dropped, tolerant
+read) · `guardTimelineOverwrite` truth table (absent/empty/legacy/own-v2/
+corrupt/non-object → writable; stamp 3 / garbage stamp → refused, the
+refusal echoes the stored stamp) · the 409 names DELETE /assemble.

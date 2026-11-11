@@ -543,12 +543,41 @@ export interface TimelineSceneDTO {
   } | null;
 }
 
+/** S87 slice 1 — the v2 tracks projection's client mirror (structural DTO;
+ *  no import from the server contract module — the DTO layer stays
+ *  dependency-free). Slides scenes project onto the image kind. */
+export interface TimelineTrackDTO {
+  kind: "video" | "image" | "whiteboard" | "3d" | "character" | "audio" | "subtitle" | "graphics";
+  name: string;
+  clips: {
+    id: string;
+    kind: TimelineTrackDTO["kind"];
+    /** The scene this clip projects (null for doc-spanning clips — the
+     *  music bed). */
+    sceneIndex: number | null;
+    startSec: number;
+    endSec: number;
+    transitionIn: string | null;
+    transitionOut: string | null;
+    asset: {
+      source: "ai" | "stock" | "slides";
+      stockSource: string | null;
+      stockQuery: string | null;
+    } | null;
+  }[];
+}
+
 export interface AssembledTimelineDTO {
-  /** S87 (Universal Timeline slice 0) — the doc's schema stamp, echoed by
-   *  the API. Additive + optional on the client: the Studio never
+  /** S87 — the doc's schema stamp, echoed by the API. 1 = the scene-level
+   *  projection (slice 0); 2 = the doc that also carries the derived v2
+   *  tracks (slice 1). Additive + optional on the client: the Studio never
    *  discriminates on it; the server owns the contract version. */
-  schema?: 1;
+  schema?: 1 | 2;
   scenes: TimelineSceneDTO[];
+  /** S87 slice 1 — the derived v2 tracks projection (visual/audio/
+   *  subtitle), re-derived server-side on every write. Display echo only —
+   *  slice 2's Studio consumption lands with the compositor. */
+  tracks?: TimelineTrackDTO[];
   sceneCount: number;
   totalDurationSec: number;
   generatedAt: string;

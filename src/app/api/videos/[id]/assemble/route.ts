@@ -26,6 +26,9 @@ import {
   assembleTimeline,
   serializeTimeline,
   parseTimeline,
+  deriveTracks,
+  guardTimelineOverwrite,
+  TIMELINE_OVERWRITE_ERROR,
   type AssembledTimeline,
 } from "@/lib/tubeforge/timeline";
 import { parseJson, assembleSaveSchema, ApiValidationError } from "@/lib/tubeforge/validation";
@@ -72,6 +75,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { error: "Timeline assembly is for scene-format videos" },
       { status: 400 }
     );
+
+  // S87 slice 1 — the overwrite guard: a stored doc this build cannot parse
+  // (an unknown stamp = a newer build's doc) must never be clobbered by a
+  // recompute-and-save. DELETE /assemble is the human's explicit escape
+  // hatch; everything else refuses here, before any work happens.
+  const guard = guardTimelineOverwrite(video.timeline);
+  if (guard.blocked)
+    return NextResponse.json({ error: TIMELINE_OVERWRITE_ERROR }, { status: 409 });
 
   const scenes = parseScenes(video.scenes);
   if (scenes.length === 0)
@@ -134,6 +145,12 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
+  // S87 slice 1 — the overwrite guard (same law as POST): a user-edited
+  // save must never replace a doc written by a newer build.
+  const guard = guardTimelineOverwrite(video.timeline);
+  if (guard.blocked)
+    return NextResponse.json({ error: TIMELINE_OVERWRITE_ERROR }, { status: 409 });
+
   let body;
   try {
     body = await parseJson(req, assembleSaveSchema);
@@ -167,11 +184,15 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
   }
 
   const timeline: AssembledTimeline = {
-    // S87 slice 0 — the PUT rebuilds the doc from the client's scenes; the
+    // S87 slice 1 — the PUT rebuilds the doc from the client's scenes; the
     // stamp is set HERE (never trusted from the body: the client's copy is
-    // a display echo, the server owns the contract version).
-    schema: 1,
+    // a display echo, the server owns the contract version). The tracks
+    // projection is derived from the same scenes; serializeTimeline
+    // re-derives it at the write anyway (derive-at-serialization — a
+    // carried copy could never go stale because it is never carried).
+    schema: 2,
     scenes: body.scenes as AssembledTimeline["scenes"],
+    tracks: deriveTracks(body.scenes as AssembledTimeline["scenes"]),
     sceneCount: body.scenes.length,
     totalDurationSec: body.totalDurationSec,
     generatedAt: body.generatedAt ?? new Date().toISOString(),
@@ -190,7 +211,10 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
   return NextResponse.json({ timeline });
 }
 
-/** DELETE — clear the persisted timeline (the render falls back to recomputing). */
+/** DELETE — clear the persisted timeline (the render falls back to recomputing).
+ *  S87 slice 1 — deliberately UNGUARDED: this is the human's explicit
+ *  escape hatch when a newer build's doc blocks the guarded write paths —
+ *  a deliberate decision, not a blind clobber. */
 export async function DELETE(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });

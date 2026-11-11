@@ -4211,3 +4211,58 @@ enforced structurally). The overwrite guard needs a shared
 guardTimelineOverwrite seam across all six sites. Recorded in the
 design doc's slice-1 refinement; executing slice 1 is the next
 session's clean start (docs-only change here — no code risk).
+
+## S87 slice 1 — the v2 dual-write: tracks derived at serialization + the overwrite guard (ROADMAP #6, P0)
+
+The migration ladder's second brick, executed exactly as the write-site
+survey's refinement recorded it — with the projection law now enforced
+STRUCTURALLY instead of by convention.
+
+- `serializeTimeline` derives `tracks = deriveTracks(scenes)` from the
+  scenes it is handed and stamps the doc schema: 2. The in-memory
+  `.tracks` field is never read by the writer, so the survey's hazard —
+  a carried tracks[] going stale the moment a clip op edits scenes — is
+  not merely avoided, it is IMPOSSIBLE: no write path can persist a
+  stale projection because no write path persists a carried one. The pin
+  proves it the hostile way: a doc with a deliberately-corrupted carried
+  tracks serializes to a fresh derivation, the stale marker never
+  reaching disk.
+- `deriveTracks` (pure, deterministic): a VISUAL track (one clip per
+  scene; kind image when the source is slides — the designed PNG IS the
+  frame — video otherwise; timing/transitions/asset mirror the scene),
+  an AUDIO track (one clip per scene over the measured window + one
+  doc-spanning music-bed clip when the doc says the music is on —
+  sceneIndex null, the bed is not scene-bound), a SUBTITLE track (clips
+  only where the doc carries a caption block — the S43 seeding rule;
+  caption timing wins, absent timing falls back to the scene window).
+  Per-scene mix levels and creative overrides stay in the scenes list —
+  clips reference scenes by index; duplicating levels into clips would
+  fork the truth slice 2 consumes. Junk timings (a PUT body scene is a
+  client cast) become 0, never NaN; empty scenes yield the three tracks
+  with empty clip lists — shape-stable for the compositor's dispatch.
+- `parseTimeline` reads stamps 2, 1 and absent (a build knows N and
+  N−1); anything else stays null — never a guessed parse. The parsed
+  object's tracks are ALWAYS re-derived: a stored junk tracks copy never
+  enters memory, and serialize(parse(serialize(x))) is byte-identical
+  by construction (pinned).
+- THE overwrite guard, six write sites one law: `guardTimelineOverwrite`
+  reads the RAW stored JSON (never the parsed doc — the parse of an
+  unknown stamp is null and loses the stamp) and refuses when the stored
+  stamp is not absent/1/2. assemble POST + PUT answer 409 before any
+  work; the scenes caption sync skips the doc write (the row's caption
+  flag already carries the edit); studio clip/voice/pace refuse BEFORE
+  perform* — a re-voice must never spend paid TTS into a write that
+  would clobber a newer build's doc. Corrupt JSON and non-object bodies
+  are not newer docs (fail-open). DELETE /assemble stays deliberately
+  UNGUARDED — it IS the human's escape hatch, a decision not a clobber.
+  The 409 body (TIMELINE_OVERWRITE_ERROR) is shared and names it.
+- `types.ts` DTO: schema?: 1|2 + the structural TimelineTrackDTO mirror
+  (optional; the Studio still never discriminates on it — slice 2).
+
+Verification: 413/413 unit (+5 slice-1 pins: the schema-2 dual-write +
+roundtrip byte-identity, the stale-tracks refinement pin, deriveTracks
+shape/determinism/junk-tolerance, the parse re-derivation, the guard
+truth table), typecheck 0, lint 0 on touched files. Design doc §7/§8,
+ROADMAP #6, this log. Next: slice 2 — the compositor reads tracks[]
+(parity pins first: same row → v1 path and v2 path produce identical
+cut points, durations, blend boundaries).
