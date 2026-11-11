@@ -1490,17 +1490,17 @@ await test("queue: resumableKinds covers every kind the routes start", async () 
   // in review); every one must be resumable after a crash. Since the S33
   // contract fix, resumableKinds() is DERIVED from the handler registry, so
   // this test can no longer pass with a stale list — the literal below pins
-  // exhaustiveness: all 22 JobKind values are route-started AND
+  // exhaustiveness: all 23 JobKind values are route-started AND
   // handler-registered (director + continuity joined in Stage 5, upload in
-  // Stage 6, whiteboard in S67, consistency in S77; the pre-fix copy listed
-  // only 18 and enshrined the drift).
+  // Stage 6, whiteboard in S67, consistency in S77, reference in S88; the
+  // pre-fix copy listed only 18 and enshrined the drift).
   const { resumableKinds } = await import("../src/lib/tubeforge/queue-handlers.ts");
   const kinds = resumableKinds();
   const expected = [
     "script", "research", "stock", "voiceover", "storyboard", "scene",
     "render", "short", "convert", "verify", "comments", "thumbnail",
     "variants", "slide", "portrait", "poses", "qc", "upload",
-    "director", "continuity", "whiteboard", "consistency",
+    "director", "continuity", "whiteboard", "consistency", "reference",
   ];
   for (const k of expected) {
     ok(kinds.includes(k), `"${k}" is resumable`);
@@ -10094,6 +10094,150 @@ await test("S80: normalizeConsistencyCheckMode — the two valid non-defaults pa
       true,
       "the settings projection owns cameraKeys (the channel gate reads it there)"
     );
+  });
+}
+
+// ---------- S88 — Reference-video intelligence: the structure extraction ----------
+{
+  const {
+    pacingStats,
+    pacingProfile,
+    sceneWindowsFromCuts,
+    deterministicBeats,
+    parseReferenceAnalysis,
+    serializeReferenceAnalysis,
+    referenceBlockForPrompt,
+    referenceNamespaceKeys,
+  } = await import("../src/lib/tubeforge/reference-video.ts");
+
+  await test("S88: pacingStats + pacingProfile — the pacing law (deterministic, junk-tolerant)", async () => {
+    // 3 cuts over 60s → 4 shots (10/10/10/30): mean 15, median 10, 3 cuts/min → slow.
+    const st = pacingStats([10, 20, 30], 60);
+    eq(st.cutCount, 3, "the cut count");
+    eq(st.meanShotSec, 15, "the mean shot length (the trailing 30s shot included)");
+    eq(st.medianShotSec, 10, "the median shot length");
+    eq(st.cutsPerMin, 3, "cuts per minute");
+    eq(st.profile, "slow", "3/min reads slow (<6)");
+    // 12 cuts INSIDE the span (the last at 58.8s, clear of the 0.3s edge
+    // clamp) over 60s → fast (the YouTube edit norm band).
+    eq(pacingStats(Array.from({ length: 12 }, (_, i) => Math.round(((i + 1) * 4.9) * 10) / 10), 60).profile, "fast", "12/min reads fast");
+    // Junk: NaN/edge-clamped/double-fired cuts never reach the stats.
+    const junk = pacingStats([NaN, -5, 0.1, 59.95, 10, 10.1, 10.15], 60);
+    eq(junk.cutCount, 1, "NaN, out-of-span and double-fired (≤0.3s apart) cuts are dropped");
+    // Empty span: one shot = the whole span, honest zeros.
+    const empty = pacingStats([], 0);
+    eq(empty.cutCount, 0, "no cuts, no span");
+    // The profile thresholds (documented law).
+    eq(pacingProfile(5.9), "slow", "<6 slow");
+    eq(pacingProfile(6), "measured", "6–12 measured");
+    eq(pacingProfile(11.9), "measured", "6–12 measured");
+    eq(pacingProfile(12), "fast", "12–24 fast");
+    eq(pacingProfile(23.9), "fast", "12–24 fast");
+    eq(pacingProfile(24), "very fast", "≥24 very fast");
+  });
+
+  await test("S88: sceneWindowsFromCuts + deterministicBeats — the scene map and the fail-open structure", async () => {
+    const wins = sceneWindowsFromCuts([10, 20, 30], 60);
+    eq(wins, [
+      { startSec: 0, endSec: 10 },
+      { startSec: 10, endSec: 20 },
+      { startSec: 20, endSec: 30 },
+      { startSec: 30, endSec: 60 },
+    ], "cuts become contiguous windows tiling the span");
+    eq(sceneWindowsFromCuts([], 42), [{ startSec: 0, endSec: 42 }], "no cuts → one window");
+    eq(sceneWindowsFromCuts([], 0), [], "no span → no windows");
+    eq(sceneWindowsFromCuts([5], 6), [
+      { startSec: 0, endSec: 5 },
+      { startSec: 5, endSec: 6 },
+    ], "a cut in the last 0.3s of the SPAN is clamped, but a short trailing SHOT is still a window (only cuts near the edges drop)");
+    // The deterministic beats: hook/body/close tile the span.
+    const beats = deterministicBeats(wins);
+    eq(beats.map((b) => b.role), ["hook", "body", "close"], "the fail-open thirds");
+    eq(beats[0].startSec, 0, "the hook opens the video");
+    eq(beats[2].endSec, 60, "the close ends the video");
+    eq(beats.every((b, i) => i === 0 || b.startSec >= beats[i - 1].startSec), true, "the beats are ordered");
+    eq(deterministicBeats([]), [], "no windows → no beats");
+  });
+
+  await test("S88: the doc laws — versioned, tolerant parse, strict write, round-trip", async () => {
+    const doc = {
+      version: 1 as const,
+      source: { fileName: "ref.mp4", durationSec: 60, width: 1920, height: 1080, fps: 30, hasAudio: true },
+      analyzedAt: "2026-11-11T00:00:00.000Z",
+      sceneMap: [
+        { startSec: 0, endSec: 10, keyframeKey: "v1/reference/keyframe-0.jpg" },
+        { startSec: 10, endSec: 60, keyframeKey: null },
+      ],
+      pacing: { cutCount: 1, meanShotSec: 30, medianShotSec: 30, cutsPerMin: 1, profile: "slow" as const },
+      transcript: { text: "some words about the topic", wordCount: 5, wordsPerSec: 0.1 },
+      treatment: { camera: "slow push-ins", color: "warm filmic grade", onScreenText: "sparse lower-thirds", summary: "calm documentary grammar" },
+      structure: {
+        hookPattern: "cold-open question, answer withheld until the close",
+        beats: [
+          { role: "hook", startSec: 0, endSec: 10 },
+          { role: "payoff", startSec: 10, endSec: 60 },
+        ],
+        source: "llm" as const,
+      },
+    };
+    const stored = serializeReferenceAnalysis(doc);
+    const parsed = parseReferenceAnalysis(stored);
+    ok(parsed, "the doc round-trips");
+    eq(parsed, doc, "serialize → parse is field-identical (the strict writer emits exactly the declared fields)");
+    // Round-trip stability: serialize(parse(serialize(x))) is byte-identical.
+    eq(serializeReferenceAnalysis(parsed), stored, "the round-trip is byte-stable");
+    // Tolerant read: junk keys tolerated, junk fields fall back honestly.
+    const junky = JSON.parse(stored) as Record<string, unknown>;
+    junky.bogus = "junk";
+    (junky.source as Record<string, unknown>).fps = "NaN";
+    const healed = parseReferenceAnalysis(JSON.stringify(junky));
+    ok(healed, "junk keys tolerated on read");
+    eq(healed.source.fps, 0, "a junk fps reads as 0, never NaN");
+    ok(!("bogus" in JSON.parse(serializeReferenceAnalysis(healed))), "the strict writer never stores the junk key");
+    // Unknown version → null, never a guessed parse (the S87 discipline).
+    eq(parseReferenceAnalysis(JSON.stringify({ ...JSON.parse(stored), version: 2 })), null, "an unknown version refuses");
+    eq(parseReferenceAnalysis("not json"), null, "corrupt JSON reads as absent");
+    eq(parseReferenceAnalysis(null), null, "no doc reads as absent");
+    // Absent transcript/treatment round-trip as null.
+    const lean = parseReferenceAnalysis(
+      serializeReferenceAnalysis({ ...doc, transcript: null, treatment: null })
+    );
+    eq(lean.transcript, null, "no transcript stays null");
+    eq(lean.treatment, null, "no treatment stays null");
+  });
+
+  await test("S88: THE copyright wall — referenceBlockForPrompt carries STRUCTURE, never the transcript", async () => {
+    const marker = "XYZZYPLUGH unique marker sentence never to be repeated";
+    const doc = {
+      version: 1 as const,
+      source: { fileName: "ref.mp4", durationSec: 60, width: 1920, height: 1080, fps: 30, hasAudio: true },
+      analyzedAt: "2026-11-11T00:00:00.000Z",
+      sceneMap: [{ startSec: 0, endSec: 60, keyframeKey: null }],
+      pacing: { cutCount: 12, meanShotSec: 4.6, medianShotSec: 4, cutsPerMin: 12, profile: "fast" as const },
+      transcript: { text: `${marker} more words`, wordCount: 7, wordsPerSec: 2.5 },
+      treatment: { camera: "handheld follow", color: "high-contrast teal-orange", onScreenText: "bold captions", summary: "energetic vlog grammar" },
+      structure: {
+        hookPattern: "pattern-interrupt cold open",
+        beats: [
+          { role: "hook", startSec: 0, endSec: 6 },
+          { role: "build", startSec: 6, endSec: 45 },
+          { role: "payoff", startSec: 45, endSec: 60 },
+        ],
+        source: "llm" as const,
+      },
+    };
+    const block = referenceBlockForPrompt(doc);
+    ok(!block.includes("XYZZYPLUGH"), "the transcript text NEVER reaches the Director prompt");
+    ok(!block.includes("more words"), "no transcript fragment of any length reaches the prompt");
+    ok(block.includes("fast"), "the pacing profile is carried");
+    ok(block.includes("hook"), "the beat roles are carried");
+    ok(block.includes("words/sec"), "the narration DENSITY is carried (a number, not the words)");
+    ok(block.includes("handheld follow"), "the treatment adjectives are carried");
+    ok(block.includes("pattern-interrupt"), "the hook pattern is carried (an abstract shape)");
+    // The namespace sweep covers source + keyframes.
+    const keys = referenceNamespaceKeys("vid1");
+    ok(keys.includes("vid1/reference/source.mp4"), "the source keys are swept");
+    ok(keys.some((k) => k.startsWith("vid1/reference/keyframe-")), "the keyframe keys are swept");
   });
 }
 

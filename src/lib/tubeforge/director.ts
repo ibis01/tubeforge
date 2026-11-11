@@ -31,6 +31,7 @@ import { parseScenes, sceneImageFile } from "./story";
 import * as storage from "./storage";
 import { errorText } from "./redact";
 import { TRANSITIONS } from "./transitions";
+import { parseReferenceAnalysis, referenceBlockForPrompt } from "./reference-video";
 import type { Scene } from "./types";
 import { readPortrait } from "./characters";
 import {
@@ -203,8 +204,12 @@ export function buildDirectorUserPrompt(input: {
   castBlock: string;
   worldBlock: string;
   profile: ProductionProfile;
+  /** S88 — the reference-video structure block ("" = no reference
+   *  analyzed; the prompt stays byte-identical to the pre-S88 shape,
+   *  which the regression golden test pins). */
+  referenceBlock?: string;
 }): string {
-  const { video, scenes, estTotal, castBlock, worldBlock, profile } = input;
+  const { video, scenes, estTotal, castBlock, worldBlock, profile, referenceBlock } = input;
   // Profile vocabularies narrow the catalogs. Absent → full catalog (the
   // narrative behavior — no narrowing).
   const fr = profile.vocabularies?.framings ?? FRAMINGS;
@@ -229,6 +234,7 @@ export function buildDirectorUserPrompt(input: {
     `Pacing: ${PACINGS.join(" | ")}. Ambience kinds: ${AMBIENCE_KINDS.join(" | ")}. Sfx cues: ${SFX_HINTS.join(" | ")}.`,
     `Music mood ids: suspenseful, cinematic, emotional, uplifting, calm. Ducking: subtle | standard | strong.`,
     toneHints ? `Profile defaults (advisory — override when a scene clearly demands it): ${toneHints}.` : "",
+    referenceBlock ?? "",
     worldBlock,
     "Scenes:",
     ...scenes.map((s) => sceneBrief(s, null)),
@@ -319,6 +325,15 @@ export async function runDirectorPass(
           .join("\n\n")
       : "No location/prop library — use empty locations/props arrays.";
 
+  // S88 — Reference-video intelligence: when the video carries a reference
+  // analysis, the Director sees the ABSTRACT structure (pacing profile,
+  // beat roles, treatment adjectives, narration density) — patterns to
+  // mirror, never words or footage (referenceBlockForPrompt is pinned to
+  // never emit the transcript). No analysis → empty block → the prompt
+  // stays byte-identical to the pre-S88 shape.
+  const reference = parseReferenceAnalysis(video.referenceAnalysis);
+  const referenceBlock = reference ? referenceBlockForPrompt(reference) : "";
+
   const userPrompt = buildDirectorUserPrompt({
     video: { title: video.title, topic: video.topic, niche: video.niche, tone: video.tone },
     scenes,
@@ -326,6 +341,7 @@ export async function runDirectorPass(
     castBlock,
     worldBlock,
     profile,
+    referenceBlock,
   });
 
   // S45 — parse + normalize INSIDE the retried closure. The live re-run bug:

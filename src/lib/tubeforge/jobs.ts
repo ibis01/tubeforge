@@ -58,7 +58,8 @@ export type JobKind =
   | "identity" // S82 — cross-video character identity check (entity = character)
   | "critic" // S84 — Video Critic: the rendered-cut quality report (entity = video)
   | "qc" // Stage 6 — re-run the QC battery against the existing final.mp4
-  | "whiteboard"; // S67 — Whiteboard Engine full render / scene preview (E9 Phase A)
+  | "whiteboard" // S67 — Whiteboard Engine full render / scene preview (E9 Phase A)
+  | "reference"; // S88 — Reference-video structural analysis (upload → scene map/pacing/transcript/treatment/structure)
 
 export type JobStatus = "pending" | "running" | "done" | "failed" | "interrupted" | "cancelled";
 
@@ -125,7 +126,8 @@ const STAGE_LABEL: Record<string, string> = {
   continuity: "continuity check", // S33 contract-drift fix caught the family
   consistency: "consistency check", // S77 — Visual Consistency Engine
   qc: "quality check",
-  whiteboard: "whiteboard render", // S67
+  whiteboard: "whiteboard render",
+  reference: "reference analysis", // S88
 };
 
 /** Human label for an interrupted stage ("voiceover" -> "Voiceover"). */
@@ -224,7 +226,7 @@ async function runRecovery(): Promise<void> {
         // interrupted pass simply tells the user to re-run. Unreachable today
         // while every kind is handler-registered; this is the defense for the
         // day one isn't.)
-        if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "slide", "verify", "comments", "upload", "short", "convert", "script", "stock", "qc", "director", "continuity", "whiteboard"].includes(row.kind)) {
+        if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "slide", "verify", "comments", "upload", "short", "convert", "script", "stock", "qc", "director", "continuity", "whiteboard", "reference"].includes(row.kind)) {
           const videoId = baseEntityId(row.entityId);
           const video = await rawDb.video.findUnique({ where: { id: videoId } });
           // Only set the error if the artifact never landed (completed after the row went stale).
@@ -244,7 +246,8 @@ async function runRecovery(): Promise<void> {
               (row.kind === "script" && Boolean(video.script)) ||
               (row.kind === "stock" && Boolean(video.scenes && video.scenes.includes('"stock"'))) ||
               (row.kind === "qc" && Boolean(video.qcReport)) ||
-              (row.kind === "whiteboard" && video.hasVideo);
+              (row.kind === "whiteboard" && video.hasVideo) ||
+              (row.kind === "reference" && Boolean(video.referenceAnalysis));
             if (!artifactLanded && !video.error)
               await rawDb.video.update({ where: { id: videoId }, data: { error: message } });
           }

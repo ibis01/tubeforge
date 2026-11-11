@@ -408,6 +408,13 @@ model Video {
   // null = never synced or the video is not published).
   retentionReport String?
 
+  // S88 — Reference-video intelligence: the structural analysis of the
+  // user's uploaded reference (scene map, pacing, transcript, treatment,
+  // beat structure — the ABSTRACT characteristics the Director mirrors,
+  // never the expression). The ninth JSON doc column; null = no reference
+  // analyzed. Versioned inside the doc (version 1).
+  referenceAnalysis String?
+
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)

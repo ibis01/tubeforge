@@ -57,6 +57,7 @@ import {
   type RenderJobOptions,
 } from "./video-jobs";
 import { runPortraitJob, runPosesJob } from "./character-jobs";
+import { runReferenceAnalysisJob } from "./reference-video";
 
 /** Renders become stale when the visual track changes (mirrors the stock route).
  *  Storage seam (T-3.7): final/preview die through the driver (s3-safe) —
@@ -402,6 +403,11 @@ export function registerDefaultHandlers(): void {
   registerJobHandler("whiteboard", (entityId, payload) =>
     runWhiteboardJob(entityId, parseWhiteboardPayload(payload))
   );
+
+  // S88 — Reference-video intelligence: the structural analysis of the
+  // user's uploaded reference (scene map, pacing, transcript, treatment,
+  // beat structure). Fail-open AI passes; only broken input fails the job.
+  registerJobHandler("reference", (videoId) => runReferenceAnalysisJob(videoId));
 
   // Character stages — Stage 3 close-out
   registerJobHandler("portrait", (characterId) => runPortraitJob(characterId));

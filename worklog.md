@@ -4450,3 +4450,40 @@ recorded tail: the slice-4 soak gate (≥14 days with zero v1-doc renders
 before the scenes[] slimming + v1 fallback retirement; design doc §13).
 Design doc §15/§16, ROADMAP #6, this log. Next: ROADMAP #7 —
 Reference-video intelligence (P1).
+
+## S88 — Reference-video intelligence v1 (ROADMAP #7, P1)
+
+The S76 §5 P1 spec, landed: a user can upload a video they hold the
+rights to, and the Director learns its STRUCTURE — pacing, beat shape,
+treatment — without ever seeing its words.
+
+- `reference-video.ts`: the analysis pipeline (probe → scene boundaries
+  via the QC battery's own detector at 0.30 → the scene map + ≤8
+  keyframes → the ASR transcript (chunked, fail-open) → ONE VLM
+  treatment call (fail-open) → ONE LLM structure pass (fail-open to the
+  deterministic hook/body/close thirds)); pacingStats + the profile
+  bands (slow/measured/fast/very fast at 6/12/24 cuts-per-min); the
+  versioned doc (tolerant parse, strict write, round-trip byte-stable).
+- THE COPYRIGHT WALL: referenceBlockForPrompt — the only path from the
+  analysis to a generation prompt — carries pacing numbers, beat roles,
+  treatment adjectives, narration DENSITY; the pin proves a marker-word
+  transcript emits ZERO transcript text. Upload-only ingestion (the URL
+  fetcher deferred with the rights rationale — platform terms + the SSRF
+  surface).
+- The surface: Video.referenceAnalysis (the ninth JSON doc column +
+  migration), the `reference` job kind (handler-registered, crash-
+  resumable, the ledger test updated), POST/GET(±keyframe)/DELETE
+  /api/videos/[id]/reference, the Director block (empty → the prompt is
+  byte-identical to the pre-S88 shape).
+- Real-artifact smoke (scripts/s88-reference-smoke.mts, GREEN): a 12s
+  textured reference — 2 cuts detected → 10/min → "measured", windows ≈
+  4s, keyframes stored, the VLM treatment read the fixture accurately
+  ("color bars, fractal bloom, checkerboard gradients"), the structure
+  pass labeled the beats live. The detector calibration receipt
+  recorded: chroma-only cuts score as low as 0.15 — the 0.30 threshold
+  measures CUT density on real footage (dissolves are transitions, not
+  cuts).
+
+Verification: 428/428 unit (+4 S88 pins), typecheck 0, lint on touched
+files, smoke green. Design doc, ROADMAP #7, this log. Next: ROADMAP #8
+— Advanced stock retrieval (P1).
