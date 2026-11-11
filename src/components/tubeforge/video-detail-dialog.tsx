@@ -35,6 +35,7 @@ import { SceneEditorDialog } from "@/components/tubeforge/scene-editor";
 import WhiteboardStudio from "@/components/tubeforge/whiteboard/whiteboard-studio";
 import { DirectorCard } from "@/components/tubeforge/director-card";
 import { CriticCard } from "@/components/tubeforge/critic-card";
+import { ProductionBoard } from "@/components/tubeforge/production-board";
 import { TimelineStudio } from "@/components/tubeforge/timeline-studio";
 import { CircleCheck, CircleX, CircleHelp, Ban, Brush } from "lucide-react";
 import {
@@ -4094,6 +4095,10 @@ export function VideoDetailDialog({
               {video.error}
             </p>
           )}
+
+          {/* S91 — the living production board: stages, checkpoints, costs,
+              history — one glance at where this video is */}
+          <ProductionBoard videoId={video.id} />
 
           {isStory ? (
             <Tabs

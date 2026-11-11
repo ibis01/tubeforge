@@ -101,6 +101,7 @@ import {
   scoreProviders,
   UNKNOWN_COST_FACTOR,
 } from "../src/lib/tubeforge/provider-score";
+import { deriveBoardStages, deriveCheckpoints } from "../src/lib/tubeforge/production-board";
 import { selfhostEndpoint, sharedVoiceServer } from "../src/lib/tubeforge/shared-voice";
 import {
   LOGIN_MAX_FAILURES,
@@ -1285,6 +1286,101 @@ await test("deterministic order + the configured flag", () => {
   const scored = scoreProviders("chat", ctx);
   ok(must(scored, (s) => s.provider === "openai", "openai").configured, "the user's pick is marked configured");
   ok(!must(scored, (s) => s.provider === "zai", "zai").configured, "others are not");
+});
+
+suiteStart("S91 production board — the honest derivation table");
+
+const noJobs = { script: false, storyboard: false, stock: false, voiceover: false, render: false, whiteboard: false, qc: false, upload: false };
+
+await test("deriveBoardStages: the five states, running outranks done", () => {
+  const board = deriveBoardStages({
+    sceneCount: 8, wordCount: 900, boardDone: 8, boardTotal: 8, stockMatched: 3,
+    hasVoiceover: true, voiceSource: "tts", hasVideo: true, hasPreview: false,
+    renderMode: "kenburns", hasShort: false, youtubeUrl: null,
+    running: { ...noJobs },
+  });
+  eq(board.script.state, "done", "scenes exist → script done");
+  eq(board.script.detail, "8 scenes", "the scene count is the detail");
+  eq(board.storyboard.state, "done", "8/8 art → done");
+  eq(board.storyboard.detail, "8/8 · 3 stock", "stock coverage rides the detail");
+  eq(board.voiceover.state, "done", "hasVoiceover → done");
+  eq(board.render.state, "done", "hasVideo → done");
+  eq(board.render.detail, "kenburns", "the mode is the detail");
+  eq(board.publish.state, "missing", "not published → missing");
+
+  const live = deriveBoardStages({
+    sceneCount: 8, wordCount: 900, boardDone: 8, boardTotal: 8, stockMatched: 3,
+    hasVoiceover: true, voiceSource: "tts", hasVideo: true, hasPreview: false,
+    renderMode: "kenburns", hasShort: false, youtubeUrl: "https://youtu.be/x",
+    running: { ...noJobs, render: true, upload: true },
+  });
+  eq(live.render.state, "running", "a render in flight outranks the finished artifact");
+  eq(live.publish.state, "running", "an upload in flight outranks the live URL");
+});
+
+await test("deriveBoardStages: partial is first-class, never rounded up", () => {
+  const board = deriveBoardStages({
+    sceneCount: 8, wordCount: 900, boardDone: 3, boardTotal: 8, stockMatched: 0,
+    hasVoiceover: false, voiceSource: "tts", hasVideo: false, hasPreview: true,
+    renderMode: "animate", hasShort: true, youtubeUrl: null,
+    running: { ...noJobs },
+  });
+  eq(board.storyboard.state, "partial", "3/8 art is partial");
+  eq(board.storyboard.detail, "3/8", "the honest fraction");
+  eq(board.voiceover.state, "missing", "no voiceover");
+  eq(board.render.state, "preview", "preview-only render is its own state");
+  eq(board.publish.state, "partial", "a short without a publish is partial work, not done");
+});
+
+await test("deriveBoardStages: classic script format + the empty video", () => {
+  const classic = deriveBoardStages({
+    sceneCount: 0, wordCount: 1200, boardDone: 0, boardTotal: 1, stockMatched: 0,
+    hasVoiceover: true, voiceSource: "custom", hasVideo: false, hasPreview: false,
+    renderMode: "kenburns", hasShort: false, youtubeUrl: null,
+    running: { ...noJobs },
+  });
+  eq(classic.script.state, "done", "words count for the classic format");
+  eq(classic.script.detail, "1200 words", "the word count is the detail");
+  eq(classic.voiceover.detail, "custom audio", "the custom source is visible");
+
+  const empty = deriveBoardStages({
+    sceneCount: 0, wordCount: 0, boardDone: 0, boardTotal: 1, stockMatched: 0,
+    hasVoiceover: false, voiceSource: "tts", hasVideo: false, hasPreview: false,
+    renderMode: "kenburns", hasShort: false, youtubeUrl: null,
+    running: { ...noJobs },
+  });
+  eq(empty.script.state, "missing", "nothing written → missing, never faked");
+  eq(empty.publish.state, "missing", "nothing published");
+});
+
+await test("deriveCheckpoints: each gate claims exactly its evidence", () => {
+  const cps = deriveCheckpoints({
+    directorState: "proposed", hasQcReport: true, qcOverrideAt: null,
+    hasVerifyReport: false, hasConsistencyReport: true, criticVerdict: "hold",
+  });
+  const by = (id: string) => {
+    const hit = cps.find((c) => c.id === id);
+    if (!hit) throw new Error(`no checkpoint ${id}`);
+    return hit;
+  };
+  eq(by("director").state, "attention", "a proposed plan needs the human");
+  eq(by("qc").state, "pending", "a report nobody reviewed is pending, not ok");
+  eq(by("verify").state, "na", "never run → n/a, not pending");
+  eq(by("consistency").state, "ok", "checked");
+  eq(by("critic").state, "attention", "a hold needs the human");
+
+  const approved = deriveCheckpoints({
+    directorState: "approved", hasQcReport: true, qcOverrideAt: "2026-11-11T00:00:00.000Z",
+    hasVerifyReport: true, hasConsistencyReport: true, criticVerdict: "ship",
+  });
+  for (const c of approved) eq(c.state, "ok", `${c.label} all green`);
+
+  const never = deriveCheckpoints({
+    directorState: null, hasQcReport: false, qcOverrideAt: null,
+    hasVerifyReport: false, hasConsistencyReport: false, criticVerdict: null,
+  });
+  eq(never.filter((c) => c.state === "na").length, 4, "absent evidence is n/a, never alarming");
+  eq(never.find((c) => c.id === "director")?.state, "pending", "the plan gate is the one 'not yet' that reads as pending");
 });
 
 suiteStart("art dedupe — dHash perceptual hashing");

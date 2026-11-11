@@ -4585,3 +4585,32 @@ now has a measured, explained answer instead of static registry notes.
 Verification: 455/455 unit (+11 S90 pins), typecheck 0, lint 0. Design
 doc, ROADMAP #9, this log. Next: ROADMAP #10 — Living production board
 (P2).
+
+## S91 — The living production board v1 (ROADMAP #10, P2)
+
+The S76 §5 P4 spec, landed: where a video is, what needs the human, and
+what it cost — one glance in the project studio, with zero new tables.
+
+- production-board.ts (pure, 4 pins): the honest derivation — five
+  stages (script/storyboard/voice/render/publish), RUNNING outranks done
+  (a re-render in flight shows running, not the stale artifact), partial
+  is first-class (3/8 art, preview-only render, short-without-publish),
+  and the five checkpoints each claim exactly their evidence (a proposed
+  Director plan is attention — it needs the human; an unreviewed QC
+  report is pending; absent is n/a, never alarming; a critic hold is
+  attention).
+- GET /api/videos/[id]/board: composed ENTIRELY from what production
+  already records — the Video row flags, parseScenes, storage stats
+  (scene art; the critic report rides storage), the job snapshot +
+  last errors, UsageRecords (org 30d costs WITH the attribution note:
+  metering has no videoId today — the per-video tail is recorded, not
+  papered over), and the Activity history (last 40).
+- production-board.tsx in the video detail dialog (between the header
+  and the tabs): the stage strip, the needs-you badges, the checkpoint
+  row + cost line, the collapsible history. Polls 4s while anything
+  generates, goes quiet when idle; a failed fetch renders nothing (the
+  board is context, never a blocker).
+
+Verification: 459/459 unit (+4 S91 pins), typecheck 0, lint 0. Design
+doc, ROADMAP #10, this log. Next: ROADMAP #11 — Advanced audio
+intelligence (P2).
