@@ -58,6 +58,7 @@ import {
 } from "./video-jobs";
 import { runPortraitJob, runPosesJob } from "./character-jobs";
 import { runReferenceAnalysisJob } from "./reference-video";
+import { runScene3DJob } from "./scene3d";
 
 /** Renders become stale when the visual track changes (mirrors the stock route).
  *  Storage seam (T-3.7): final/preview die through the driver (s3-safe) —
@@ -408,6 +409,11 @@ export function registerDefaultHandlers(): void {
   // user's uploaded reference (scene map, pacing, transcript, treatment,
   // beat structure). Fail-open AI passes; only broken input fails the job.
   registerJobHandler("reference", (videoId) => runReferenceAnalysisJob(videoId));
+
+  // S94 — the 3D scene render: the versioned scene3d doc through the
+  // three.js/SwiftShader chromium pipeline. Deterministic — a resumed run
+  // re-renders the same clip the crashed one was building.
+  registerJobHandler("scene3d", (videoId) => runScene3DJob(videoId));
 
   // Character stages — Stage 3 close-out
   registerJobHandler("portrait", (characterId) => runPortraitJob(characterId));

@@ -4675,3 +4675,41 @@ shapes the whole design: the rig is a MOTION SOURCE, not a pipeline.
 Verification: 468/468 unit (+4 S93 pins), typecheck 0, lint 0, smoke
 10/10. Design doc, ROADMAP #12, this log. Next: ROADMAP #13 — Blender /
 3D engine (P3) — the last row.
+
+## S94 — Blender / 3D engine v1 (ROADMAP #13, P3) — THE LAST ROW
+
+The acceptance row, proven by demonstration: a real 3D scene rendered
+through the shared timeline, no isolated pipeline.
+
+- scene3d.ts (pure, 3 pins): the versioned Scene3D contract — camera
+  orbit keyframes, box/sphere/plane objects, clamped materials and
+  lights — with the house doc laws (junk/version/empty refused, the
+  byte-stable round-trip via strict optionality: parse never invents
+  what serialize omits) and the deterministic scaffold (same topic →
+  same bytes; ground plane + topic-seeded centerpiece + satellites +
+  three-point lighting + a keyframed orbit). The never-silent law: no
+  lights → the ambient default, never a black render.
+- render3d.ts: three.js WebGL 2.0 under SwiftShader headless chromium
+  (the S94 probe receipt: "WebGL 2.0 (OpenGL ES 3.0 Chromium), ANGLE
+  SwiftShader") through the whiteboard engine's proven pipeline (E10
+  launch args, route-abort security, per-frame screenshots, ffmpeg).
+  Two finds on the way: r187's three.module.js imports ./three.core.js
+  (dual blob injection + the specifier rewritten — a blob URL has no
+  base), and the injected sources needed the </script>-escape hardening.
+  Init failures surface the page's OWN error; a blank first frame
+  throws readable — never a silent fake.
+- The governing rule BY DEMONSTRATION: the 3D clip rides the shared
+  timeline as an ORDINARY video-kind asset — assembleTimeline →
+  compositionPlan → renderVideo → a delivered cut (5.23s vs the 5.2s
+  contract) with the narration mixed. The compositor cannot tell the
+  3D clip from stock footage, and must not.
+- The surface: Video.scene3d (the tenth JSON doc column + migration),
+  the scene3d job kind (crash-resumable — a resume re-renders whole,
+  deterministic), POST/GET(?clip)/DELETE /api/videos/[id]/scene3d, and
+  BOTH kind ledgers went 23→24 in the same slice (the morning's S88 CI
+  lesson, applied where it bit: test-unit's resumable list AND
+  test-queue's Phase A ledger).
+
+Verification: 471/471 unit (+3 S94 pins), typecheck 0, lint 0, queue
+suite PASS (24/24), smoke 14/14 on real WebGL output. Design doc,
+ROADMAP #13, this log. THE 13-ITEM ROADMAP IS COMPLETE.

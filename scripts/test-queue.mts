@@ -96,9 +96,9 @@ async function phaseA(): Promise<void> {
 
   // Registry completeness — every kind the routes start must be resumable.
   // resumableKinds() is registry-derived (S33 contract fix), so the loop is
-  // a tautology by construction; the real pin is exhaustiveness — all 23
+  // a tautology by construction; the real pin is exhaustiveness — all 24
   // JobKind values registered, no strays (whiteboard joined in S67,
-  // consistency in S77, reference in S88).
+  // consistency in S77, reference in S88, scene3d in S94).
   const kinds = handlerKinds();
   for (const kind of resumableKinds()) {
     ok(kinds.includes(kind), `handler registered for "${kind}"`);
@@ -107,11 +107,11 @@ async function phaseA(): Promise<void> {
     "script", "research", "stock", "voiceover", "storyboard", "scene",
     "render", "short", "convert", "verify", "comments", "director",
     "continuity", "thumbnail", "variants", "slide", "qc", "upload",
-    "portrait", "poses", "whiteboard", "consistency", "reference",
+    "portrait", "poses", "whiteboard", "consistency", "reference", "scene3d",
   ];
   ok(
     allKinds.every((k) => kinds.includes(k)),
-    "all 23 JobKind values are handler-registered (upload since Stage 6, whiteboard since S67, consistency since S77, reference since S88)"
+    "all 24 JobKind values are handler-registered (upload since Stage 6, whiteboard since S67, consistency since S77, reference since S88, scene3d since S94)"
   );
   ok(kinds.length === allKinds.length, `no stray handler kinds (got ${kinds.length})`);
 

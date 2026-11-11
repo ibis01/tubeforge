@@ -59,7 +59,8 @@ export type JobKind =
   | "critic" // S84 — Video Critic: the rendered-cut quality report (entity = video)
   | "qc" // Stage 6 — re-run the QC battery against the existing final.mp4
   | "whiteboard" // S67 — Whiteboard Engine full render / scene preview (E9 Phase A)
-  | "reference"; // S88 — Reference-video structural analysis (upload → scene map/pacing/transcript/treatment/structure)
+  | "reference" // S88 — Reference-video structural analysis (upload → scene map/pacing/transcript/treatment/structure)
+  | "scene3d"; // S94 — the 3D scene render (the scene3d doc → the orbit clip through the shared compositor)
 
 export type JobStatus = "pending" | "running" | "done" | "failed" | "interrupted" | "cancelled";
 
@@ -128,6 +129,7 @@ const STAGE_LABEL: Record<string, string> = {
   qc: "quality check",
   whiteboard: "whiteboard render",
   reference: "reference analysis", // S88
+  scene3d: "3D scene render", // S94
 };
 
 /** Human label for an interrupted stage ("voiceover" -> "Voiceover"). */
@@ -226,7 +228,7 @@ async function runRecovery(): Promise<void> {
         // interrupted pass simply tells the user to re-run. Unreachable today
         // while every kind is handler-registered; this is the defense for the
         // day one isn't.)
-        if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "slide", "verify", "comments", "upload", "short", "convert", "script", "stock", "qc", "director", "continuity", "whiteboard", "reference"].includes(row.kind)) {
+        if (["voiceover", "thumbnail", "variants", "storyboard", "render", "scene", "slide", "verify", "comments", "upload", "short", "convert", "script", "stock", "qc", "director", "continuity", "whiteboard", "reference", "scene3d"].includes(row.kind)) {
           const videoId = baseEntityId(row.entityId);
           const video = await rawDb.video.findUnique({ where: { id: videoId } });
           // Only set the error if the artifact never landed (completed after the row went stale).
@@ -247,7 +249,8 @@ async function runRecovery(): Promise<void> {
               (row.kind === "stock" && Boolean(video.scenes && video.scenes.includes('"stock"'))) ||
               (row.kind === "qc" && Boolean(video.qcReport)) ||
               (row.kind === "whiteboard" && video.hasVideo) ||
-              (row.kind === "reference" && Boolean(video.referenceAnalysis));
+              (row.kind === "reference" && Boolean(video.referenceAnalysis)) ||
+              (row.kind === "scene3d" && Boolean(video.scene3d));
             if (!artifactLanded && !video.error)
               await rawDb.video.update({ where: { id: videoId }, data: { error: message } });
           }

@@ -103,6 +103,7 @@ import {
 } from "../src/lib/tubeforge/provider-score";
 import { deriveBoardStages, deriveCheckpoints } from "../src/lib/tubeforge/production-board";
 import { rigEligible, rigPlan, RIG_HEAD_FOCAL } from "../src/lib/tubeforge/character-rig";
+import { cameraAt as camera3dAt, parseScene3D, scaffoldScene3D, serializeScene3D } from "../src/lib/tubeforge/scene3d";
 import {
   bandOf,
   countWords,
@@ -1518,6 +1519,62 @@ await test("rigPlan: the pacing hint modulates the breath rate", () => {
   approx(slow.shots[0].sec, 2.2 / 0.88, 1e-6, "a slow hint breathes deeper");
 });
 
+suiteStart("S94 3D engine — the contract laws");
+
+await test("the doc laws: junk refused, version refused, byte-stable round-trip", () => {
+  eq(parseScene3D(null), null, "absent → absent");
+  eq(parseScene3D("{not json"), null, "junk → null (never throws)");
+  eq(
+    parseScene3D(JSON.stringify({ version: 99, objects: [{ id: "a", kind: "box", position: [0, 0, 0], material: {} }], camera: { keyframes: [{ t: 0, position: [0, 0, 6], lookAt: [0, 0, 0] }] } })),
+    null,
+    "an unknown version reads as absent and is never overwritten"
+  );
+  eq(parseScene3D(JSON.stringify({ version: 1, objects: [], camera: { keyframes: [] } })), null, "no objects or keyframes → null (an empty scene is not a scene)");
+
+  const doc = scaffoldScene3D("pin fixture", { fps: 24, durationSec: 3 });
+  const s1 = serializeScene3D(doc);
+  const back = parseScene3D(s1);
+  ok(back != null, "the scaffold parses");
+  eq(back && serializeScene3D(back), s1, "serialize → parse → serialize is byte-identical");
+  eq(serializeScene3D(scaffoldScene3D("pin fixture", { fps: 24, durationSec: 3 })), s1, "the scaffold is deterministic (same input → same bytes)");
+});
+
+await test("the scaffold derives geometry from the aspect; the object vocabulary clamps", () => {
+  const wide = scaffoldScene3D("w", { aspect: "16:9" });
+  const tall = scaffoldScene3D("w", { aspect: "9:16" });
+  eq(wide.width, 1280, "16:9 → 1280");
+  eq(tall.height, 1280, "9:16 → 1280 tall");
+  ok(wide.objects.length >= 4, "ground + centerpiece + satellites");
+  const doc = scaffoldScene3D("c");
+  const fovClamped = parseScene3D(
+    serializeScene3D({ ...doc, camera: { ...doc.camera, fov: 500 } })
+  );
+  eq(fovClamped?.camera.fov, 110, "fov clamps at 110");
+  const junkObj = parseScene3D(
+    serializeScene3D({
+      ...doc,
+      objects: [...doc.objects, { id: "bad", kind: "teapot", position: [0, 0, 0], material: { color: "not-a-color" } } as never],
+    })
+  );
+  ok(junkObj != null && !junkObj.objects.some((o) => o.id === "bad"), "an invalid object kind drops individually — the rest survive");
+  const noLights = parseScene3D(serializeScene3D({ ...doc, lights: [] }));
+  ok(noLights != null && noLights.lights.length === 1 && noLights.lights[0].kind === "ambient", "THE NEVER-SILENT LAW: no lights → the ambient default (never a black render)");
+});
+
+await test("cameraAt: exact interpolation, clamped ends", () => {
+  const keys = [
+    { t: 0, position: [0, 0, 6], lookAt: [0, 0, 0] },
+    { t: 1, position: [4, 2, 6], lookAt: [0, 1, 0] },
+  ];
+  approx(camera3dAt(keys, 0.5).position[0], 2, 1e-9, "the midpoint interpolates");
+  approx(camera3dAt(keys, 0.25).position[1], 0.5, 1e-9, "the quarter point");
+  approx(camera3dAt(keys, 0).position[0], 0, 1e-9, "t=0 → the first keyframe");
+  approx(camera3dAt(keys, 1).position[0], 4, 1e-9, "t=1 → the last keyframe");
+  approx(camera3dAt(keys, -5).position[0], 0, 1e-9, "outside → clamped, never extrapolated");
+  approx(camera3dAt(keys, 2).position[0], 4, 1e-9, "beyond → clamped");
+  approx(camera3dAt([{ t: 0, position: [1, 2, 3], lookAt: [0, 0, 0] }], 0.7).position[2], 3, 1e-9, "a single keyframe holds");
+});
+
 suiteStart("art dedupe — dHash perceptual hashing");
 
 await test("dHash pure: flat frame → zero hash, self-distance 0", () => {
@@ -2220,10 +2277,10 @@ await test("queue: resumableKinds covers every kind the routes start", async () 
   // in review); every one must be resumable after a crash. Since the S33
   // contract fix, resumableKinds() is DERIVED from the handler registry, so
   // this test can no longer pass with a stale list — the literal below pins
-  // exhaustiveness: all 23 JobKind values are route-started AND
+  // exhaustiveness: all 24 JobKind values are route-started AND
   // handler-registered (director + continuity joined in Stage 5, upload in
-  // Stage 6, whiteboard in S67, consistency in S77, reference in S88; the
-  // pre-fix copy listed only 18 and enshrined the drift).
+  // Stage 6, whiteboard in S67, consistency in S77, reference in S88,
+  // scene3d in S94; the pre-fix copy listed only 18 and enshrined the drift).
   const { resumableKinds } = await import("../src/lib/tubeforge/queue-handlers.ts");
   const kinds = resumableKinds();
   const expected = [
@@ -2231,6 +2288,7 @@ await test("queue: resumableKinds covers every kind the routes start", async () 
     "render", "short", "convert", "verify", "comments", "thumbnail",
     "variants", "slide", "portrait", "poses", "qc", "upload",
     "director", "continuity", "whiteboard", "consistency", "reference",
+    "scene3d",
   ];
   for (const k of expected) {
     ok(kinds.includes(k), `"${k}" is resumable`);

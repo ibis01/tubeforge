@@ -415,6 +415,12 @@ model Video {
   // analyzed. Versioned inside the doc (version 1).
   referenceAnalysis String?
 
+  // S94 — the 3D scene doc (the versioned Scene3D contract: camera orbit
+  // keyframes, primitive objects, lights — the deterministic scaffold or a
+  // future Blender adapter's output). The tenth JSON doc column; null = no
+  // 3D scene scaffolded. Versioned inside the doc (version 1).
+  scene3d String?
+
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
