@@ -132,7 +132,7 @@ the YouTube test-channel smoke, and the Stripe lifecycle rehearsal.
 
 TubeForge is proprietary software.
 
-Copyright (c) 2026 Tubeforge.
+Copyright (c) 2026 Ismail Ibrahim.
 All rights reserved.
 
 No permission is granted to reproduce, distribute,
@@ -140,4 +140,3 @@ modify, or commercially exploit this software without
 written authorization from the copyright holder.
 
 For licensing enquiries, contact the copyright holder.
-
