@@ -544,6 +544,10 @@ export interface TimelineSceneDTO {
 }
 
 export interface AssembledTimelineDTO {
+  /** S87 (Universal Timeline slice 0) — the doc's schema stamp, echoed by
+   *  the API. Additive + optional on the client: the Studio never
+   *  discriminates on it; the server owns the contract version. */
+  schema?: 1;
   scenes: TimelineSceneDTO[];
   sceneCount: number;
   totalDurationSec: number;

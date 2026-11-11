@@ -9437,6 +9437,68 @@ await test("S80: normalizeConsistencyCheckMode — the two valid non-defaults pa
   });
 }
 
+// ---------- S87 — Universal Timeline slice 0: the version stamp ----------
+{
+  const { assembleTimeline, serializeTimeline, parseTimeline } = await import(
+    "../src/lib/tubeforge/timeline.ts"
+  );
+  const scenes = [
+    { index: 1, title: "A", narration: "one two three", visual: "v", camera: "c", mood: "m", caption: "", hostInScene: false, rehook: false, sfx: "none" },
+  ] as never[];
+
+  await test("S87: assembleTimeline stamps every doc it builds (schema: 1)", async () => {
+    const doc = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "kenburns" });
+    eq(doc.schema, 1, "the assembled doc carries the v1 stamp");
+  });
+
+  await test("S87: serializeTimeline leads with schema: 1; the parse roundtrip carries the stamp", async () => {
+    const doc = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "kenburns" });
+    const json = serializeTimeline(doc);
+    const raw = JSON.parse(json) as Record<string, unknown>;
+    const keys = Object.keys(raw);
+    eq(keys[0], "schema", "the stamp is the first key of the serialized doc");
+    eq(raw.schema, 1, "the serialized stamp is 1");
+    const back = parseTimeline(json);
+    ok(back, "the serialized doc parses");
+    eq(back?.schema, 1, "the roundtrip carries the stamp");
+    eq(back?.sceneCount, doc.sceneCount, "the roundtrip carries the scenes");
+    // serialize → parse → serialize is stable (the strict writer never
+    // invents fields between roundtrips).
+    eq(back ? serializeTimeline(back) : "", json, "serialize(parse(serialize(x))) === serialize(x)");
+  });
+
+  await test("S87: parseTimeline — a legacy doc (no stamp) parses as v1 (the tolerant-read law)", async () => {
+    const doc = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "kenburns" });
+    const legacy = JSON.parse(serializeTimeline(doc)) as Record<string, unknown>;
+    delete legacy.schema; // docs persisted before S87 have no stamp
+    const back = parseTimeline(JSON.stringify(legacy));
+    ok(back, "the legacy doc still parses");
+    eq(back?.schema, 1, "parsed as v1 — never a null, never a guess beyond v1");
+  });
+
+  await test("S87: parseTimeline — an UNKNOWN stamp is null, never a guessed parse", async () => {
+    const doc = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "kenburns" });
+    const future = JSON.parse(serializeTimeline(doc)) as Record<string, unknown>;
+    future.schema = 2; // a v2 doc under a v1 build (slice 1+ territory)
+    eq(parseTimeline(JSON.stringify(future)), null, "schema 2 → null (render recomputes inline)");
+    future.schema = "garbage";
+    eq(parseTimeline(JSON.stringify(future)), null, "a garbage stamp → null");
+    // null/unreadable stays null (the pre-S87 contract, unchanged).
+    eq(parseTimeline(null), null, "null input → null");
+    eq(parseTimeline("broken {"), null, "corrupt JSON → null");
+  });
+
+  await test("S87: parseTimeline — junk keys tolerated on read; the strict writer never stores them", async () => {
+    const doc = assembleTimeline(scenes, { ttsSpeed: 1, renderMode: "kenburns" });
+    const hostile = JSON.parse(serializeTimeline(doc)) as Record<string, unknown>;
+    (hostile.scenes as Record<string, unknown>[])[0].art = "junk";
+    const back = parseTimeline(JSON.stringify(hostile));
+    ok(back, "junk keys do not break the parse (tolerant read)");
+    const rewritten = back ? serializeTimeline(back) : "";
+    ok(!rewritten.includes("\"art\""), "the writer never emits the junk key (strict write)");
+  });
+}
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

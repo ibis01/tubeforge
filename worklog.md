@@ -4159,3 +4159,41 @@ proposals only named the affordance; the click was missing.
 Verification: 403/403 unit, typecheck 0, lint 0 on touched files
 (the dialog's remaining warning is the pre-existing shipAnyway
 redirect). Contract tail updated (s84 §5), ROADMAP #5, this log.
+
+## S87 — the Universal Timeline contract: the design + slice 0 (ROADMAP #6, P0)
+
+The third shared quality system (S76 §4.C): every engine describes its
+cut ONE way. The survey that grounded the design found the forcing
+case — the Whiteboard engine is a fully parallel pipeline (own job
+kind, own planner/render/Studio; POST /render refuses mode whiteboard;
+ZERO timeline references). The next engine would fork the composition
+truth again unless the contract lands first (the §8 anti-goal).
+
+- New contract doc docs/design/s87-universal-timeline.md: the
+  current-state seam table (timeline.ts / render.ts / clip-ops.ts /
+  audiomix.ts / whiteboard / Timeline Studio), the v2 target
+  (engine-neutral, multi-track, versioned — tracks of kind video/
+  image/whiteboard/3d/character/audio/subtitle/graphics, clips with
+  asset/timing/transform/effects), the inherited laws that survive
+  (projection-never-truth, measured-WAV-wins, tolerant-read/strict-
+  write, fail-open), the 6-slice migration ladder (stamp → v2
+  dual-write + the PUT overwrite guard → compositor reads tracks →
+  whiteboard emits tracks (the "peer MODE" law evolves: peer at the
+  ENGINE level, unified at the CONTRACT level) → legacy branch
+  collapse → the §4.C acceptance battery in CI).
+- Slice 0 (this stage): the version stamp. AssembledTimeline gains
+  schema:1; assembleTimeline stamps; serializeTimeline leads with it;
+  the assemble PUT sets it SERVER-side (never trusted from the body);
+  parseTimeline treats absent = legacy v1 (the tolerant-read law),
+  1 = this contract, any OTHER stamp = null — never a guessed parse
+  (the render recomputes inline; the dual-read that makes that safe
+  is slice 1's first brick, recorded).
+- preview-lanes' resolveFrame/seamBoundaries take the new structural
+  TimelineProjectionInput (scenes + totalDurationSec) — satisfied by
+  BOTH the server doc and the client DTO, so the stamp never picks a
+  side in the preview path.
+
+Verification: 408/408 unit (+5 S87 pins: stamp, roundtrip stability,
+legacy tolerance, unknown-stamp refusal, junk-key tolerance/strict
+write), typecheck 0, lint 0 on touched files. New contract doc,
+ROADMAP #6, this log.

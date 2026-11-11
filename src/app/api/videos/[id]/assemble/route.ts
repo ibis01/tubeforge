@@ -167,6 +167,10 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
   }
 
   const timeline: AssembledTimeline = {
+    // S87 slice 0 — the PUT rebuilds the doc from the client's scenes; the
+    // stamp is set HERE (never trusted from the body: the client's copy is
+    // a display echo, the server owns the contract version).
+    schema: 1,
     scenes: body.scenes as AssembledTimeline["scenes"],
     sceneCount: body.scenes.length,
     totalDurationSec: body.totalDurationSec,

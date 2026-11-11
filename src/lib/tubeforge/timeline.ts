@@ -111,6 +111,12 @@ export interface TimelineScene {
 }
 
 export interface AssembledTimeline {
+  /** S87 (Universal Timeline slice 0) — the doc's schema stamp. 1 = the
+   *  scene-level projection this interface describes. A build that meets
+   *  an UNKNOWN stamp must treat the doc as unreadable (parseTimeline →
+   *  null → the render recomputes inline) — never a guessed parse. Legacy
+   *  docs without the stamp parse as v1 (the tolerant-read law). */
+  schema: 1;
   scenes: TimelineScene[];
   sceneCount: number;
   totalDurationSec: number;
@@ -305,6 +311,7 @@ export function assembleTimeline(scenes: Scene[], opts: AssembleOptions = {}): A
   });
 
   return {
+    schema: 1,
     scenes: out,
     sceneCount: out.length,
     totalDurationSec: Math.round(cursor * 100) / 100,
@@ -409,15 +416,20 @@ export function docSceneSettings(
 }
 
 /** Parse a persisted timeline JSON. Tolerant of legacy/null — null when the
- *  structure is unreadable (the render falls back to recomputing inline). */
+ *  structure is unreadable (the render falls back to recomputing inline).
+ *  S87 slice 0 — the schema stamp: absent = legacy v1 (docs predate the
+ *  field), 1 = this contract, any OTHER stamp = a doc this build does not
+ *  know → null (never a guessed parse; the dual-read for v2 is slice 1). */
 export function parseTimeline(json: string | null | undefined): AssembledTimeline | null {
   if (!json) return null;
   try {
     const raw = JSON.parse(json) as unknown;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-    const obj = raw as { scenes?: unknown; sceneCount?: unknown; totalDurationSec?: unknown; generatedAt?: unknown; renderPrefs?: unknown };
+    const obj = raw as { schema?: unknown; scenes?: unknown; sceneCount?: unknown; totalDurationSec?: unknown; generatedAt?: unknown; renderPrefs?: unknown };
+    if (obj.schema !== undefined && obj.schema !== 1) return null; // unknown future schema — refuse, never guess
     if (!Array.isArray(obj.scenes)) return null;
     return {
+      schema: 1,
       scenes: obj.scenes as TimelineScene[],
       sceneCount: Number(obj.sceneCount) || 0,
       totalDurationSec: Number(obj.totalDurationSec) || 0,
@@ -462,6 +474,7 @@ const TIMELINE_SCENE_FIELDS = [
 
 export function serializeTimeline(timeline: AssembledTimeline): string {
   return JSON.stringify({
+    schema: 1, // S87 slice 0 — the version stamp leads the doc
     scenes: timeline.scenes.map((s) => {
       const rec = s as unknown as Record<string, unknown>;
       const out: Record<string, unknown> = {};

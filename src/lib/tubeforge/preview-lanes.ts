@@ -324,6 +324,16 @@ function blendDuration(prevDur: number, nextDur: number, s: PreviewSettings): nu
   return Math.max(0.2, cap);
 }
 
+/** The timeline shape the projection helpers below read — satisfied by
+ *  BOTH the server's AssembledTimeline and the client's
+ *  AssembledTimelineDTO (S87: the doc's schema stamp is required on the
+ *  server type, optional on the DTO — these helpers never read it, so they
+ *  take the minimal structural shape instead of picking a side). */
+export interface TimelineProjectionInput {
+  scenes: AssembledTimeline["scenes"];
+  totalDurationSec: number;
+}
+
 /**
  * Resolve the frame at time t: which layers to paint, in what order, with
  * which cameras; the seam blend state; the caption. Returns null for an
@@ -331,7 +341,7 @@ function blendDuration(prevDur: number, nextDur: number, s: PreviewSettings): nu
  */
 export function resolveFrame(
   tSec: number,
-  timeline: AssembledTimeline,
+  timeline: TimelineProjectionInput,
   s: PreviewSettings
 ): FrameLayout | null {
   const scenes = timeline.scenes;
@@ -445,7 +455,7 @@ export function snapToBoundaries(t: number, boundaries: number[], maxSnap: numbe
 }
 
 /** All scene seams + start/end — the snap candidates for the playhead. */
-export function seamBoundaries(timeline: AssembledTimeline): number[] {
+export function seamBoundaries(timeline: TimelineProjectionInput): number[] {
   const out: number[] = [];
   if (timeline.totalDurationSec > 0) out.push(0, timeline.totalDurationSec);
   for (const s of timeline.scenes) {
