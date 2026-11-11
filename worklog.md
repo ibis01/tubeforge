@@ -3941,3 +3941,46 @@ an error enables, never disables), aiCall-metered, zero
 generation-prompt changes. 381/381 unit (+1 pin), typecheck 0, lint 0
 on touched files (scripts/ included — the CI lane's whole-repo lint
 scope).
+
+## S81 — shot-art lock coverage (VCE Phase B slice 4)
+
+The gap (recorded in the S77 contract's Phase B tail): `ensureShotImages`
+bypassed EVERY identity lock — extra shots rendered from `shot.prompt +
+topic anchor` alone, a fresh CogView generation per shot, so a close-up of
+the host could invent a new face, a new outfit and new set pieces while
+the scene art beside it obeyed the cast portrait, the logged outfit and
+the World library.
+
+The fix (src/lib/tubeforge/shots.ts, self-contained — the render call
+site is unchanged):
+
+- `composeLockedShotPrompt` (PURE): the shot's own prompt leads (M2 law),
+  then the same nets scene art paints under — topic-world anchor,
+  per-scene art style, the approved plan's continuity clauses (logged
+  outfit via `getApprovedAppearanceClause`, set pieces via
+  `getApprovedWorldClause`). Anchor-only composition stays BYTE-IDENTICAL
+  to the pre-S81 `${base} ${anchor}.` — an unlocked video renders exactly
+  as before.
+- `readShotLocks` (per scene, fail-open on every read): resolves the cast
+  portrait for host scenes (`video.characterId` → `readPortrait`), the
+  set-piece reference when the portrait doesn't take priority, the style
+  clause, the continuity clauses. Every failure = an absent lock.
+- The seed ladder in `ensureShotImages`: host scenes with a portrait →
+  portrait-anchored `imageEdit` (`shotLikenessEditPrompt` — the scene-art
+  likeness sentence re-aimed at the shot); else a location reference →
+  `shotLocationEditPrompt`; cast likeness > set piece
+  (`pickShotEditSeed`, the scene-art priority law inherited); every seed
+  failure falls through to the fresh generation (existing attempts), then
+  the existing pseudo demotion. Coverage never blocks the lane.
+- All image spend metered via aiCall (edit label `scene N shot M edit
+  (host likeness|location seed)`). `imageEditSupported()` is consulted
+  only when a seed exists.
+
+S74 discipline held: the frozen paired re-measure renders committed
+SCENE-art prompts only — no scene-art prompt was touched by S81.
+
+Verification: 387/387 unit (+6 S81 pins: byte-identical anchor-only, no
+locks, full-stack order, clause filtering, both edit sentences, cast
+priority), typecheck 0, lint 0 on touched files. Contract updated
+(docs/design/s77-visual-consistency.md §8 Phase B slice 4 + §10 pins),
+ROADMAP #4, this log.

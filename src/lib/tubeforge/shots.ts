@@ -10,17 +10,25 @@
 // existing art, so the picture still changes on schedule.
 import fs from "fs";
 import path from "path";
-import { imageGenerate } from "./providers/image";
+import { imageGenerate, imageEdit, imageEditSupported } from "./providers/image";
 import { aiCall } from "./budget";
 import { getVideoTopicWorld, topicWorldClause, getVideoContentPolicy } from "./story";
 import { videoDir } from "./ai";
 import { focalFromToken } from "./motion";
 import { sanitizePromptForPolicy } from "./restricted-subjects";
 import { log } from "./log";
+import { readPortrait } from "./characters";
+import {
+  getApprovedAppearanceClause,
+  getApprovedWorldClause,
+  getApprovedLocationRefKey,
+} from "./director-plan";
+import { sceneStylePrompt, type Scene } from "./types";
+import { db } from "./tenant-db";
+import * as storage from "./storage";
 
 // S57/T-57.2 — the module's logger (the old [shots] prefix became a binding).
 const shotsLog = log.child({ mod: "shots" });
-import type { Scene } from "./types";
 import type { MoveKind } from "./motion";
 import type { DirectorScene } from "./director-plan";
 import { MOVE_SPEED_FACTOR } from "./director-plan";
@@ -305,13 +313,128 @@ export function shotImageFile(sceneIndex: number, shot: number): string {
     : `shot-${String(sceneIndex).padStart(2, "0")}-${shot}.png`;
 }
 
+/** S81 — compose the LOCKED extra-shot prompt. The shot's own prompt leads
+ *  (the M2 law — imagePrompt first), then the same nets scene art paints
+ *  under: the topic-world anchor, the per-scene art style, and the approved
+ *  plan's continuity clauses (the logged outfit, the set pieces). PURE.
+ *  Anchor-only composition stays BYTE-IDENTICAL to the pre-S81 path
+ *  (`${base} ${anchor}.`) — locks that are absent change nothing, so an
+ *  unlocked video renders exactly as before. */
+export function composeLockedShotPrompt(
+  basePrompt: string,
+  locks: {
+    anchor?: string;
+    styleClause?: string;
+    continuityClauses?: string[];
+  }
+): string {
+  const anchorBit = locks.anchor ? ` ${locks.anchor}.` : "";
+  const styleBit = locks.styleClause ? ` ${locks.styleClause}.` : "";
+  const contBit =
+    locks.continuityClauses && locks.continuityClauses.length > 0
+      ? ` ${locks.continuityClauses.filter(Boolean).join(" ")}`
+      : "";
+  return `${basePrompt}${anchorBit}${styleBit}${contBit}`;
+}
+
+/** S81 — the likeness lead for a portrait-seeded extra shot. Mirrors the
+ *  scene-art edit sentence (story.ts) with "Shot:" so the framing prompt
+ *  that follows leads the edit. PURE. */
+export function shotLikenessEditPrompt(shotPrompt: string): string {
+  return `Place this exact person into the described shot, keeping their face, hairstyle, glasses, facial hair and signature outfit perfectly recognizable. Shot: ${shotPrompt}`;
+}
+
+/** S81 — the set-piece lead for a location-seeded extra shot, mirroring the
+ *  scene-art location edit sentence. PURE. */
+export function shotLocationEditPrompt(shotPrompt: string): string {
+  return `Set the described shot in this exact place, keeping its architecture, layout and distinctive features recognizable. Shot: ${shotPrompt}`;
+}
+
+/** S81 — the cast-priority seed law, inherited from scene art: the host's
+ *  LIKENESS outranks the set-piece reference when both exist. PURE. */
+export function pickShotEditSeed(locks: {
+  portrait: boolean;
+  locationRef: boolean;
+}): "likeness" | "location" | null {
+  if (locks.portrait) return "likeness";
+  if (locks.locationRef) return "location";
+  return null;
+}
+
+/** S81 — the seed image an extra shot's edit is pinned to (null = no seed,
+ *  fresh generation). */
+interface ShotEditSeed {
+  kind: "likeness" | "location";
+  image: Buffer;
+}
+
+/** S81 — one fail-open read of every identity lock an extra shot must obey:
+ *  the cast portrait (host scenes), the approved plan's logged outfit + set
+ *  pieces, and the per-scene art style — the same locks generateSceneImage
+ *  paints scene art under. Every failure = an absent lock; coverage never
+ *  blocks the lane. Read once per scene, shared by every extra shot. */
+async function readShotLocks(
+  videoId: string,
+  scene: Scene
+): Promise<{
+  editSeed: ShotEditSeed | null;
+  styleClause: string;
+  continuityClauses: string[];
+}> {
+  const host = scene.hostInScene;
+  const [characterId, styleClause, appearanceClause, worldClause] =
+    await Promise.all([
+      host
+        ? db
+            .video
+            .findUnique({
+              where: { id: videoId },
+              select: { characterId: true },
+            })
+            .then((v) => v?.characterId ?? null)
+            .catch(() => null)
+        : Promise.resolve(null),
+      Promise.resolve(sceneStylePrompt(scene.style)),
+      host
+        ? getApprovedAppearanceClause(videoId, scene.index).catch(() => "")
+        : Promise.resolve(""),
+      getApprovedWorldClause(videoId, scene.index).catch(() => ""),
+    ]);
+  const portrait = characterId
+    ? await readPortrait(characterId).catch(() => null)
+    : null;
+  // Cast likeness > set-piece likeness (the scene-art priority law): a host
+  // scene with a portrait never spends its single edit seed on the backdrop.
+  let editSeed: ShotEditSeed | null = null;
+  if (portrait) {
+    editSeed = { kind: "likeness", image: portrait };
+  } else {
+    const refKey = await getApprovedLocationRefKey(videoId, scene.index).catch(
+      () => null
+    );
+    const ref = refKey
+      ? await storage.get(refKey).catch(() => null)
+      : null;
+    if (ref) editSeed = { kind: "location", image: ref };
+  }
+  return {
+    editSeed,
+    styleClause,
+    continuityClauses: [appearanceClause, worldClause].filter(Boolean),
+  };
+}
+
 /** Generate every missing EXTRA shot image for a scene (M2 contract: the
  *  executions carry their own prompts — imagePrompt leads). Shots whose
  *  generation fails are DEMOTED to pseudo (crop over the scene image) in the
  *  returned plan, so the render always has a full shot list. Returns the
  *  updated plan — the caller never mutates. S49: under a restricted content
  *  policy the composed prompt is sanitized (restricted-figure sentences →
- *  alternative compositions + the hard negative clause rides along). */
+ *  alternative compositions + the hard negative clause rides along).
+ *  S81 (shot-art lock coverage): extra shots paint under the same identity
+ *  locks as scene art — the continuity clauses join the composed prompt and
+ *  host/set-piece edits seed the likeness. Every lock failure falls through
+ *  to the unlocked path; an absent plan or portrait changes nothing. */
 export async function ensureShotImages(opts: {
   videoId: string;
   scene: Scene;
@@ -324,6 +447,13 @@ export async function ensureShotImages(opts: {
   const anchor = topicWorldClause(await getVideoTopicWorld(opts.videoId));
   // S49 (L3) — the content policy for this video, read once per scene.
   const contentPolicy = await getVideoContentPolicy(opts.videoId);
+  // S81 — the identity locks, read once per scene (fail-open: every read
+  // failure = an absent lock, never a blocked lane).
+  const locks = await readShotLocks(opts.videoId, opts.scene);
+  const seed = locks.editSeed;
+  // Edit-capable providers seed the likeness; text-to-image providers keep
+  // the fresh-generation path (the seed is prompt-side only for them).
+  const canEdit = seed ? await imageEditSupported() : false;
   const available: ShotExecution[] = [];
   for (const shot of opts.plan.available) {
     if (shot.source !== "extra" || !shot.prompt) {
@@ -336,8 +466,14 @@ export async function ensureShotImages(opts: {
       continue;
     }
     // Compose, then sanitize under the policy (standard = identity + no
-    // negative clause — byte-identical to the pre-S49 prompt).
-    const composed = anchor ? `${shot.prompt} ${anchor}.` : shot.prompt;
+    // negative clause — byte-identical to the pre-S49 prompt). S81: the
+    // locks' clauses ride after the anchor; anchor-only stays byte-identical
+    // to the pre-S81 composition.
+    const composed = composeLockedShotPrompt(shot.prompt, {
+      anchor: anchor || undefined,
+      styleClause: locks.styleClause || undefined,
+      continuityClauses: locks.continuityClauses,
+    });
     const sanitized = sanitizePromptForPolicy(composed, contentPolicy);
     if (sanitized.substituted > 0) {
       shotsLog.warn(
@@ -346,16 +482,44 @@ export async function ensureShotImages(opts: {
       );
     }
     try {
-      const buffer = await aiCall(
-        "image",
-        `scene ${opts.scene.index} shot ${shot.shotIndex}`,
-        () =>
-          imageGenerate({
-            prompt: sanitized.prompt,
-            size: "1344x768",
-          }),
-        { attempts: 2, baseDelayMs: 4000 }
-      );
+      let buffer: Buffer | null = null;
+      if (seed && canEdit) {
+        // S81 — identity-locked extra shot: seed the edit with the cast
+        // portrait (host likeness) or the location reference (set piece),
+        // the same ladder scene art uses. Real failures fall through to the
+        // fresh generation below — the shot never blocks on its lock.
+        buffer = await aiCall(
+          "image",
+          `scene ${opts.scene.index} shot ${shot.shotIndex} edit (${
+            seed.kind === "likeness" ? "host likeness" : "location seed"
+          })`,
+          () =>
+            imageEdit({
+              prompt:
+                seed.kind === "likeness"
+                  ? shotLikenessEditPrompt(sanitized.prompt)
+                  : shotLocationEditPrompt(sanitized.prompt),
+              imagePngBase64: seed.image.toString("base64"),
+              size: "1344x768",
+            }).then((b) => {
+              if (!b) throw new Error("Image edit returned no data");
+              return b;
+            }),
+          { attempts: 2, baseDelayMs: 4000 }
+        ).catch(() => null);
+      }
+      if (!buffer) {
+        buffer = await aiCall(
+          "image",
+          `scene ${opts.scene.index} shot ${shot.shotIndex}`,
+          () =>
+            imageGenerate({
+              prompt: sanitized.prompt,
+              size: "1344x768",
+            }),
+          { attempts: 2, baseDelayMs: 4000 }
+        );
+      }
       if (buffer && buffer.length > 10_000) {
         fs.writeFileSync(file, buffer);
         available.push(shot);

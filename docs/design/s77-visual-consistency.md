@@ -253,10 +253,28 @@ normalizer (junk → auto, never silently disabled), both auto-chains
 gated to `auto`, the manual POST refused at `off`, the Settings →
 Pipeline Robustness control.
 
+**Phase B slice 4 (S81 — implemented):** shot-art lock coverage —
+`ensureShotImages` now paints extra shots under the same identity locks
+as scene art: `composeLockedShotPrompt` weaves the topic-world anchor,
+the per-scene art style and the approved plan's continuity clauses
+(logged outfit + set pieces) after the shot's own prompt (anchor-only
+stays BYTE-IDENTICAL to the pre-S81 composition — an unlocked video
+renders exactly as before); `readShotLocks` gathers the locks once per
+scene, fail-open on every read; host scenes with a cast portrait seed
+the shot through a portrait-anchored `imageEdit`
+(`shotLikenessEditPrompt` — the scene-art likeness sentence re-aimed at
+the shot), set-piece scenes without a portrait seed through the
+location reference (`shotLocationEditPrompt`), cast likeness > set
+piece (`pickShotEditSeed` — the scene-art priority law inherited);
+every seed failure falls through to the fresh generation, then the
+existing pseudo demotion — coverage never blocks the lane. All
+metered via aiCall; no scene-art prompt touched (S74's frozen
+measurement is insulated — it renders committed scene-art prompts
+only). Six unit pins.
+
 **Phase B tail (recorded, not built):** reconciling the photoreal-suffix
-contradiction in `artPromptRaw` (after S74 closes); shot-art lock
-coverage (`ensureShotImages` bypasses every identity lock today);
-org-wide cross-video character scoring; pose-level identity rows.
+contradiction in `artPromptRaw` (after S74 closes); org-wide
+cross-video character scoring; pose-level identity rows.
 
 ## 9. Acceptance mapping (S76 §4.A / §6)
 
@@ -308,3 +326,12 @@ S80 additions: `normalizeConsistencyCheckMode` (the two valid
 non-defaults pass; junk/blank/null → `auto` — never silently
 disabled) · the settings allow-list entry · both chains gated to
 `auto` · the POST refusal at `off`.
+
+S81 additions: `composeLockedShotPrompt` (anchor-only
+BYTE-IDENTICAL to the pre-S81 composition; no locks → base
+untouched; full stack order shot → anchor → style → continuity,
+falsy clauses filtered) · `shotLikenessEditPrompt` /
+`shotLocationEditPrompt` (the scene-art edit sentences re-aimed at
+the shot, "Shot:" marks the framing prompt) · `pickShotEditSeed`
+(cast likeness outranks the set piece; neither → fresh generation,
+exactly as before S81).

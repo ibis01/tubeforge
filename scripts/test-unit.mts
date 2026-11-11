@@ -9033,6 +9033,77 @@ await test("S80: normalizeConsistencyCheckMode — the two valid non-defaults pa
   eq(normalizeConsistencyCheckMode("never"), "auto", "a corrupt setting must NOT disable the quality system");
 });
 
+// S81 — shot-art lock coverage: extra-shot images paint under the same
+// identity locks as scene art (continuity clauses + seed ladder).
+{
+  const { composeLockedShotPrompt, shotLikenessEditPrompt, shotLocationEditPrompt, pickShotEditSeed } =
+    await import("../src/lib/tubeforge/shots.ts");
+
+  await test("S81: composeLockedShotPrompt — anchor-only is BYTE-IDENTICAL to the pre-S81 composition", () => {
+    const base = "A wide shot of the courtyard. ultra-realistic photograph.";
+    const anchor = "Story world: this frame belongs to a video about \"Yam farming\"";
+    eq(
+      composeLockedShotPrompt(base, { anchor }),
+      `${base} ${anchor}.`,
+      "the S31/S49 composition must survive S81 untouched"
+    );
+  });
+
+  await test("S81: composeLockedShotPrompt — no locks returns the base prompt unchanged", () => {
+    const base = "Insert shot of the teacup. documentary realism.";
+    eq(composeLockedShotPrompt(base, {}), base);
+    eq(composeLockedShotPrompt(base, { anchor: "", styleClause: "", continuityClauses: [] }), base, "empty-string locks are absent locks");
+  });
+
+  await test("S81: composeLockedShotPrompt — full stack: anchor, then style, then continuity clauses joined by space", () => {
+    const base = "Close-up of the host reacting.";
+    const anchor = "Story world: this frame belongs to a video about \"Pottery\"";
+    const style = "Rendered as a muted watercolor illustration";
+    const appearance = "Ada is wearing a red clay-stained apron, brass bangles.";
+    const world = "Set pieces: the wheel-thrown kiln courtyard, oak shelves.";
+    eq(
+      composeLockedShotPrompt(base, { anchor, styleClause: style, continuityClauses: [appearance, world] }),
+      `${base} ${anchor}. ${style}. ${appearance} ${world}`,
+      "order + separators pinned: shot leads, anchor, style, continuity"
+    );
+  });
+
+  await test("S81: composeLockedShotPrompt — continuity rides without an anchor or style", () => {
+    const base = "Medium shot of the wheel spinning.";
+    const appearance = "Ada is wearing a red clay-stained apron.";
+    eq(
+      composeLockedShotPrompt(base, { continuityClauses: [appearance] }),
+      `${base} ${appearance}`
+    );
+    eq(
+      composeLockedShotPrompt(base, { continuityClauses: [appearance, ""] }),
+      `${base} ${appearance}`,
+      "falsy clauses are filtered, never double-spaced"
+    );
+  });
+
+  await test("S81: shotLikenessEditPrompt / shotLocationEditPrompt — the scene-art edit sentences, re-aimed at the shot", () => {
+    const p = "Close-up of the host. ultra-realistic photograph.";
+    eq(
+      shotLikenessEditPrompt(p),
+      `Place this exact person into the described shot, keeping their face, hairstyle, glasses, facial hair and signature outfit perfectly recognizable. Shot: ${p}`,
+      "likeness lead pinned — same law as the scene-art edit, 'Shot:' marks the framing prompt"
+    );
+    eq(
+      shotLocationEditPrompt(p),
+      `Set the described shot in this exact place, keeping its architecture, layout and distinctive features recognizable. Shot: ${p}`,
+      "set-piece lead pinned"
+    );
+  });
+
+  await test("S81: pickShotEditSeed — cast likeness outranks the set piece; neither means fresh generation", () => {
+    eq(pickShotEditSeed({ portrait: true, locationRef: true }), "likeness", "the scene-art priority law inherited: a host scene never spends its edit seed on the backdrop");
+    eq(pickShotEditSeed({ portrait: true, locationRef: false }), "likeness");
+    eq(pickShotEditSeed({ portrait: false, locationRef: true }), "location");
+    eq(pickShotEditSeed({ portrait: false, locationRef: false }), null, "no seed — the fresh-generation path, exactly as before S81");
+  });
+}
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
