@@ -102,6 +102,16 @@ import {
   UNKNOWN_COST_FACTOR,
 } from "../src/lib/tubeforge/provider-score";
 import { deriveBoardStages, deriveCheckpoints } from "../src/lib/tubeforge/production-board";
+import {
+  bandOf,
+  countWords,
+  pacingProposal,
+  pacingReport,
+  ROLE_TARGETS,
+  sceneRole,
+  sceneWpm,
+  WPM_BANDS,
+} from "../src/lib/tubeforge/pacing";
 import { selfhostEndpoint, sharedVoiceServer } from "../src/lib/tubeforge/shared-voice";
 import {
   LOGIN_MAX_FAILURES,
@@ -1381,6 +1391,79 @@ await test("deriveCheckpoints: each gate claims exactly its evidence", () => {
   });
   eq(never.filter((c) => c.state === "na").length, 4, "absent evidence is n/a, never alarming");
   eq(never.find((c) => c.id === "director")?.state, "pending", "the plan gate is the one 'not yet' that reads as pending");
+});
+
+suiteStart("S92 narration pacing — measured, not guessed");
+
+await test("countWords: English tokens; CJK counts per character", () => {
+  eq(countWords("The market crashed overnight."), 4, "whitespace tokens");
+  eq(countWords("市场 崩盘"), 4, "two CJK words = FOUR characters (each is a word-equivalent)");
+  eq(countWords("市场 crash"), 3, "two CJK chars + one English word");
+});
+
+await test("sceneWpm: the real arithmetic, honest nulls", () => {
+  eq(sceneWpm("word ".repeat(155), 60), 155, "155 words in 60s = 155 wpm");
+  eq(sceneWpm("hello world", 30), null, "too little speech → unmeasured, never a fake pace");
+  eq(sceneWpm("some narration here", null), null, "no WAV yet → unmeasured");
+  eq(sceneWpm("some narration here", 0.1), null, "a sub-0.2s blip is not a measurement");
+});
+
+await test("the bands + the roles", () => {
+  eq(bandOf(120), "dragging", "under 130 drags");
+  eq(bandOf(150), "measured", "the body sweet spot");
+  eq(bandOf(190), "brisk", "the hook zone");
+  eq(bandOf(230), "rushed", "over 205 falls apart");
+  eq(bandOf(null), "unmeasured", "no data is no verdict");
+  eq(sceneRole(1, 8, false), "hook", "scene 1 is the hook");
+  eq(sceneRole(5, 8, true), "hook", "a re-hook scene is a hook");
+  eq(sceneRole(8, 8, false), "close", "the last scene is the close");
+  eq(sceneRole(4, 8, false), "body", "the middle is body");
+  eq(sceneRole(1, 1, false), "hook", "a single scene reads as its hook");
+});
+
+await test("pacingProposal: speaks the plan's own vocabulary", () => {
+  const drag = pacingProposal(100, "body"); // target 155, factor 1.55
+  eq(drag.verdict, "dragging", "100 wpm body drags");
+  eq(drag.hint, "fast", "the proposal is the plan hint: fast");
+  eq(drag.projectedWpm, 112, "fast = ×1.12 → 112 wpm projected");
+
+  const rush = pacingProposal(250, "close"); // target 150, factor 0.6
+  eq(rush.hint, "slow", "a rushed close asks for slow");
+  eq(rush.projectedWpm, 220, "slow = ×0.88 → 220 projected");
+
+  const fine = pacingProposal(155, "body"); // target 155, factor 1.0
+  eq(fine.hint, "normal", "in-band → normal (never churn a good scene)");
+  eq(fine.projectedWpm, 155, "normal delivers the same pace");
+
+  const briskHook = pacingProposal(190, "hook"); // target 185, factor 0.97
+  eq(briskHook.hint, "normal", "a brisk hook FITS its role — no churn");
+  eq(pacingProposal(null, "body").hint, "normal", "unmeasured → the no-op hint");
+});
+
+await test("pacingReport: the summary a creator reads first", () => {
+  // words chosen so wpm is exact: words/duration×60
+  const scenes = [
+    { index: 1, narration: "word ".repeat(190), rehook: false }, // 190 wpm, hook → brisk fits
+    { index: 2, narration: "word ".repeat(120), rehook: false }, // 120 wpm, body → dragging
+    { index: 3, narration: "word ".repeat(160), rehook: false }, // 160 wpm, body → measured
+    { index: 4, narration: "word ".repeat(210), rehook: false }, // 210 wpm, close → rushed
+  ];
+  const { perScene, summary } = pacingReport(scenes, [60, 60, 60, 60]);
+  eq(summary.measured, 4, "all four measured");
+  eq(summary.unmeasured, 0, "no gaps");
+  eq(summary.medianWpm, 175, "(160+190)/2 = 175");
+  eq(summary.inBand, 2, "brisk-hook fits + measured-body fits; drag and rush do not");
+  eq(summary.toSpeedUp, 1, "one dragging scene");
+  eq(summary.toSlowDown, 1, "one rushed scene");
+  eq(perScene[0].role, "hook", "roles derived");
+  eq(perScene[3].role, "close", "the last scene is the close");
+
+  // A missing WAV lands as unmeasured, excluded from the stats honestly.
+  const gapped = pacingReport(scenes, [60, 60, null, 60]);
+  eq(gapped.summary.unmeasured, 1, "scene 3 has no WAV → unmeasured");
+  eq(gapped.summary.measured, 3, "only real WAVs measure");
+  eq(gapped.summary.medianWpm, 190, "median of [190,120,210]");
+  ok(Number.isFinite(WPM_BANDS.draggingUnder) && ROLE_TARGETS.hook > ROLE_TARGETS.body, "the documented bands are sane");
 });
 
 suiteStart("art dedupe — dHash perceptual hashing");

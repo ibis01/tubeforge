@@ -36,6 +36,7 @@ import WhiteboardStudio from "@/components/tubeforge/whiteboard/whiteboard-studi
 import { DirectorCard } from "@/components/tubeforge/director-card";
 import { CriticCard } from "@/components/tubeforge/critic-card";
 import { ProductionBoard } from "@/components/tubeforge/production-board";
+import { PacingStrip } from "@/components/tubeforge/pacing-strip";
 import { TimelineStudio } from "@/components/tubeforge/timeline-studio";
 import { CircleCheck, CircleX, CircleHelp, Ban, Brush } from "lucide-react";
 import {
@@ -3295,6 +3296,7 @@ export function VideoDetailDialog({
             {(video?.ttsSpeed ?? 1).toFixed(1)}x
             {isStory && scenes.length > 0 ? ` · ${scenes.length} scenes` : ""}
           </p>
+          {video?.id && isStory && scenes.length > 0 && <PacingStrip videoId={video.id} />}
         </div>
         <Button
           variant={video?.script ? "outline" : "default"}

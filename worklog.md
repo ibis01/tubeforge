@@ -4614,3 +4614,33 @@ what it cost — one glance in the project studio, with zero new tables.
 Verification: 459/459 unit (+4 S91 pins), typecheck 0, lint 0. Design
 doc, ROADMAP #10, this log. Next: ROADMAP #11 — Advanced audio
 intelligence (P2).
+
+## S92 — Narration pacing intelligence v1 (ROADMAP #11, P2)
+
+The S76 audio row — "Improve intelligence" — landed as the first thing
+that MEASURES the delivered narration pace instead of estimating it.
+
+- pacing.ts (pure, 5 pins): the real per-scene WPM (scene-XX.wav
+  durations ÷ word counts — CJK counts per character so the ratio stays
+  proportional), the documented English bands (dragging/measured/brisk/
+  rushed), roles with different targets (hook 185, body 155, close 150),
+  and the proposal in the system's own vocabulary: the plan's
+  slow/normal/fast hint + the PROJECTED WPM each hint delivers via
+  pacingSpeedFactor. "normal" when in-band — a brisk hook FITS its
+  role; never churn a scene that measures fine.
+- GET /api/videos/[id]/pacing: the measured report + the approved
+  plan's current hints + the video speed alongside, so the comparison
+  the creator needs is one response. Story format only (the classic
+  read refuses honestly; tail recorded).
+- pacing-strip.tsx in the Script tab header: "measured pacing: 148 wpm
+  median · 2 drag · 1 rush" — expanding to the offenders with hints and
+  projections. ADVISORY ONLY.
+
+The pins caught two things worth recording: the CJK fixture miscounted
+twice in review (市场 = 2 characters — the CODE was right both times),
+and the projection carried float noise (100 × 1.12 = 112.00000000000001)
+— now rounded to a tenth.
+
+Verification: 464/464 unit (+5 S92 pins), typecheck 0, lint 0. Design
+doc, ROADMAP #11, this log. Next: ROADMAP #12 — Character animation
+engine (P3).

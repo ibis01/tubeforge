@@ -103,7 +103,7 @@ export function pacingProposal(
   return {
     verdict: bandOf(wpm),
     hint,
-    projectedWpm: wpm * pacingSpeedFactor(hint),
+    projectedWpm: Math.round(wpm * pacingSpeedFactor(hint) * 10) / 10,
   };
 }
 
