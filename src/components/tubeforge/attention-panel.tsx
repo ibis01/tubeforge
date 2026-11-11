@@ -25,6 +25,7 @@ import {
   Layers,
   RefreshCcwDot,
   ShieldCheck,
+  Drama,
 } from "lucide-react";
 
 const KIND_META: Record<
@@ -66,6 +67,13 @@ const KIND_META: Record<
     label: "consistency",
     icon: ShieldCheck,
     endpoint: (id) => [`/api/videos/${id}/consistency`, "POST"],
+  },
+  // S84 — the Video Critic (the rendered cut judged as a story; its
+  // resume re-runs the whole report — deterministic rows + the VLM pass).
+  critic: {
+    label: "critic",
+    icon: Drama,
+    endpoint: (id) => [`/api/videos/${id}/critic`, "POST"],
   },
   verify: {
     label: "narration check",

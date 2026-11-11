@@ -1,9 +1,12 @@
 # S84 — the Video Critic (foundation)
 
-**Status:** implemented (foundation slice). Design target: the S76
+**Status:** implemented (foundation slice + the S85 UI card). Design target: the S76
 adoption decision §4.B (`docs/audits/s76-openmontage-adoption-decision.md`).
 Implementation: `src/lib/tubeforge/video-critic.ts`; surface
-`/api/videos/[id]/critic`; job kind `"critic"` (entity = video).
+`/api/videos/[id]/critic`; job kind `"critic"` (entity = video); the human
+surface is `src/components/tubeforge/critic-card.tsx` (S85 — the video
+detail dialog's Video tab, after the QC scorecard; Mission Control resumes
+interrupted critic jobs).
 
 **The question it answers:** "Is this RENDERED video worth shipping —
 and if not, what exactly do I fix?" The VCE judges scene stills before
@@ -92,8 +95,13 @@ identity are explicitly disclaimed (judged elsewhere). STRICT JSON
   work).
 - Auto-run after render (today manual-only; the S74-informed motion
   thresholds land first).
-- A critic card in the UI (the API surface is live; the card is UI
-  work).
+- ~~A critic card in the UI~~ — **landed in S85**
+  (`src/components/tubeforge/critic-card.tsx`): the report card in the
+  Video tab — verdict badge, one row per dimension (status icon,
+  source, issues, evidence), the repair proposals (still names-only,
+  §0.2), the engine's honesty notes, run/re-run with the rerunQc poll
+  pattern, and a pre-existing running job picked up on mount; the
+  attention panel resumes interrupted `critic` jobs.
 
 ## 6. Pinned-by-tests contract
 

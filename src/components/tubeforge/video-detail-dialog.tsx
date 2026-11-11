@@ -34,6 +34,7 @@ import { BrandKitCard } from "@/components/tubeforge/brand-kit";
 import { SceneEditorDialog } from "@/components/tubeforge/scene-editor";
 import WhiteboardStudio from "@/components/tubeforge/whiteboard/whiteboard-studio";
 import { DirectorCard } from "@/components/tubeforge/director-card";
+import { CriticCard } from "@/components/tubeforge/critic-card";
 import { TimelineStudio } from "@/components/tubeforge/timeline-studio";
 import { CircleCheck, CircleX, CircleHelp, Ban, Brush } from "lucide-react";
 import {
@@ -2395,6 +2396,14 @@ export function VideoDetailDialog({
           </div>
         </div>
       ) : null}
+
+      {/* S85 — the Video Critic card: the rendered cut judged as a story
+          (S84's API surface, human side). Story-format only — the critic
+          judges rendered scene-format cuts; the ship gate above stays the
+          one enforcement, this is the advisory report after it. */}
+      {video.format === "story" && (
+        <CriticCard videoId={video.id} hasVideo={video.hasVideo} disabled={Boolean(busy) || pubBusy} />
+      )}
 
       {/* Final video */}
       {video.hasVideo && video.videoUrl ? (

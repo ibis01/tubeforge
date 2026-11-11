@@ -4092,3 +4092,40 @@ docs/design/s84-video-critic.md):
 
 Verification: 403/403 unit (+8 S84 pins), typecheck 0, lint 0 on
 touched files. New contract doc, ROADMAP #5, this log.
+
+## S85 — the Video Critic card (ROADMAP #5 tail, P0)
+
+S84 shipped the API; this is its human surface. New
+`src/components/tubeforge/critic-card.tsx` + the dialog/panel wiring:
+
+- The card lives in the video detail dialog's Video tab, right after
+  the QC scorecard, story-format only (the POST refuses non-story
+  cuts; a dead card for other formats would be a lie). Self-contained
+  like DirectorCard: the report interfaces are defined locally,
+  client-safe — never imported from the server module (that would
+  drag db/storage into the bundle).
+- GET on mount (await-first IIFE, DirectorCard's effect pattern); a
+  pre-existing running critic job (e.g. resumed from Mission Control)
+  is picked up and polled to the end. POST run/re-run reuses the
+  rerunQc poll pattern: the route's own surface, 2.5s cadence,
+  6-minute deadline, the server-recorded error surfaced honestly.
+- The report: verdict badge (ship | hold ·N flagged |
+  insufficient-evidence — never a pass on no evidence), one row per
+  dimension in pipeline order (status icon, source label, issues cap
+  3, evidence line), the repair proposals (still names-only — §0.2
+  propose-never-auto-edit, the one-click lane stays recorded), and
+  the engine's honesty notes (§0.3: unavailable layers listed, never
+  a silent green).
+- Empty state explains what the critic judges and gates the run on
+  hasVideo (final.mp4 must exist); the ship gate stays qc-policy's —
+  the card states it is advisory, and so does the copy.
+- The attention panel's KIND_META learns `critic` (Drama icon) so an
+  interrupted critic job resumes from Mission Control — the same
+  one-click Resume as every other kind.
+
+No new pure surface — the report semantics stay pinned by the S84
+suite (UI slices don't get component tests; S17/S40 set that
+precedent). Verification: 403/403 unit, typecheck 0, lint 0 on
+touched files (the one remaining warning in the dialog is the
+pre-existing shipAnyway download redirect). Contract doc tail
+updated (s84 §5), ROADMAP #5, this log.
