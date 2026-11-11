@@ -555,14 +555,15 @@ export async function runRenderJob(
   if (!video) return;
   if (video.format !== "story") return;
 
-  // S67 — whiteboard is a peer MODE with its own job kind and its own studio
-  // route. The compositor never renders it: a legacy or hand-rolled client
-  // hitting POST /render on a whiteboard video gets a readable refusal
-  // instead of a silently wrong kenburns render.
-  if (video.renderMode === "whiteboard")
-    throw new Error(
-      "This video renders through the Whiteboard Studio — the compositor does not render mode whiteboard"
-    );
+  // S87 slice 3 — the shared path: POST /render routes whiteboard videos to
+  // their engine lane (peer at the engine level, unified at the contract
+  // level), and a stale durable replay or a bypassed caller that reaches
+  // THIS entry DELEGATES rather than refusing — the S67 refusal is retired.
+  // runWhiteboardJob quietly no-ops when the mode flipped back (the
+  // symmetric mode-drift law), so a replay honors the row's latest truth.
+  if (video.renderMode === "whiteboard") {
+    return runWhiteboardJob(videoId);
+  }
 
   const scenes = parseScenes(video.scenes);
   if (scenes.length === 0)

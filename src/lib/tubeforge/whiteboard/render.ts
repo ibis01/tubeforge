@@ -30,11 +30,17 @@ import {
   buildGeometry,
   estimateProjectFrames,
   frameAt,
-  frameCount,
   scheduleScene,
   WB_RENDER_FRAME_BUDGET,
   type FrameState,
 } from "./timing";
+// S87 slice 3 — the engine EMITS the timeline contract: the frame plan maps
+// onto whiteboard-kind clips, and the render loop + assembly read the SAME
+// frame-quantized clock the tracks carry (one derivation, pinned equal —
+// peer at the engine level, unified at the contract level).
+import { framePlanClock, whiteboardTracks } from "./tracks";
+import { planFromTracks, type CompositionPlan } from "../composition-plan";
+import type { TimelineTrack } from "../timeline";
 import type { WhiteboardProject } from "./storyboard";
 
 const execFileP = promisify(execFile);
@@ -114,6 +120,21 @@ export interface SceneRenderResult {
   durationMs: number;
   frames: number;
   file: string;
+}
+
+/** The contract artifacts a whiteboard render now returns alongside the
+ * files: the engine-authored tracks (the frame plan in the universal
+ * grammar) and the composition plan read BACK from them through the same
+ * planFromTracks every engine-lane consumer uses — the two-clock pin
+ * (plan ≡ delivered frames) is enforced below, and slices 4–5 consume
+ * these (the legacy collapse + the acceptance battery). */
+export interface WhiteboardRenderResult {
+  scenes: SceneRenderResult[];
+  file: string;
+  /** The frame plan as contract tracks (visual/audio/subtitle). */
+  tracks: TimelineTrack[];
+  /** The composition plan derived FROM those tracks (origin "tracks"). */
+  plan: CompositionPlan;
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +236,7 @@ export async function probeAssetRasterization(
 export async function renderWhiteboard(
   project: WhiteboardProject,
   opts: RenderWhiteboardOptions
-): Promise<{ scenes: SceneRenderResult[]; file: string }> {
+): Promise<WhiteboardRenderResult> {
   // S65 (E1) pre-flight — the frame budget. Compute every scene's duration
   // the EXACT way the loop below will (explicit > VO-measured > narration
   // estimate, via the shared pure estimator), then refuse the project
@@ -243,6 +264,26 @@ export async function renderWhiteboard(
     );
   }
 
+  // S87 slice 3 — COMPOSE THROUGH THE CONTRACT. The frame plan maps onto
+  // whiteboard-kind clips (the universal grammar), and the plan is read
+  // back from those tracks through the same planFromTracks the compositor
+  // lane uses. The loop and the assembly below read the frame-quantized
+  // clock the tracks carry — one derivation, so the delivered cut and the
+  // contract projection cannot disagree (a null plan here is an engine
+  // bug: we JUST derived the tracks from a validated project + the
+  // estimator's clamped durations; it is not a user-fixable state).
+  const clock = framePlanClock(sceneMs, project.fps);
+  const tracks = whiteboardTracks(project, sceneMs, {
+    voSceneIds: voResolved.keys(),
+    musicOn: opts.musicPath != null,
+  });
+  const plan = planFromTracks({ tracks }, project.scenes.length);
+  if (!plan) {
+    throw new Error(
+      "the whiteboard frame plan failed the timeline contract — an engine bug, not a project problem"
+    );
+  }
+
   const { chromium } = await import("playwright");
   const lib = loadLibrary(opts.uploadedAssets ?? []);
   const geometry = buildGeometry(
@@ -260,10 +301,15 @@ export async function renderWhiteboard(
       const scene = project.scenes[si];
       // Pre-flight already probed every VO and computed the durations the
       // estimator returned — reuse them so budget and render agree by
-      // construction (never re-probe, never diverge).
+      // construction (never re-probe, never diverge). S87 slice 3: the
+      // frames/delivered seconds come from the SHARED frame-quantized clock
+      // (the same derivation the contract tracks carry) — the numbers are
+      // identical to the old inline math by construction (frameCount), and
+      // the clock is now the one source both the render and the contract
+      // read.
       const durationMs = sceneMs[si];
       const events = scheduleScene(scene, durationMs, geometry);
-      const frames = frameCount(durationMs, project.fps);
+      const frames = clock.scenes[si].frames;
 
       // Per-scene page recycling (the S75 E10 receipt): ONE page held across
       // the whole project grew until the 4GB worker's OOM killer fired —
@@ -362,7 +408,7 @@ export async function renderWhiteboard(
       // voResolved carries the LOUDNESS-CONTRACT slots — see normalizeVoSlot.
       const voPath = voResolved.get(scene.id) ?? null;
       const sceneFile = path.join(opts.outDir, `scene-${si + 1}.mp4`);
-      const durSec = frames / project.fps;
+      const durSec = clock.scenes[si].deliveredSec;
       const args: string[] = [
         "-y",
         "-framerate", String(project.fps),
@@ -393,8 +439,17 @@ export async function renderWhiteboard(
     }
 
     // Final assembly: concat + the music bed (or stream copy when silent).
+    // S87 slice 3 — the assembly total reads the shared clock (the exact
+    // sum of delivered per-scene seconds) and the CONTRACT assert holds the
+    // plan to it: if anyone ever edits the loop math away from the clock,
+    // the render refuses here instead of shipping a desynced projection.
     const finalFile = path.join(opts.outDir, "final.mp4");
-    const totalSec = sceneFiles.reduce((a, s) => a + s.frames / project.fps, 0);
+    const totalSec = clock.scenes.reduce((a, s) => a + s.deliveredSec, 0);
+    if (Math.abs(plan.totalSec - Math.round(totalSec * 100) / 100) > 0.001) {
+      throw new Error(
+        "the whiteboard assembly clock diverged from the timeline contract — an engine bug, not a project problem"
+      );
+    }
     const listFile = path.join(opts.outDir, "concat.txt");
     fs.writeFileSync(listFile, sceneFiles.map((s) => `file '${path.resolve(s.file)}'`).join("\n") + "\n");
     if (opts.musicPath) {
@@ -434,7 +489,7 @@ export async function renderWhiteboard(
     } else {
       await runFfmpeg(["-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", finalFile]);
     }
-    return { scenes: sceneFiles, file: finalFile };
+    return { scenes: sceneFiles, file: finalFile, tracks, plan };
   } finally {
     await browser.close();
   }

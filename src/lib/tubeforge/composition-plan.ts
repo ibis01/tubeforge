@@ -13,26 +13,30 @@
 //
 // What the plan owns vs. what stays behind:
 //   • OWNED (the composition clock): per-scene start/end/duration, the
-//     boundary transition INTO each scene, the visual kind (video|image)
-//     and the asset source (ai|stock|slides). These are exactly the facts
-//     the visual track's clips carry (slice 1's deriveTracks).
+//     boundary transition INTO each scene, the visual kind (video|image|
+//     whiteboard) and the asset source (ai|stock|slides). These are exactly
+//     the facts the visual track's clips carry (slice 1's deriveTracks; the
+//     whiteboard engine's own derivation since slice 3).
 //   • NOT OWNED: per-scene mix levels, captions, creative overrides (the
 //     S2 doctrine — clips reference scenes by index; those settings ride
 //     docSceneSettings from the doc's scenes list in both paths), and the
 //     execution channel (kenburns/i2v/stock liveliness — a production
-//     decision, not a composition fact; slice 3 revisits it with a real
-//     engine at the table).
+//     decision, not a composition fact; slice 3 settled it at the engine
+//     level: whiteboard-kind clips execute through the Whiteboard lane,
+//     never through the compositor's segment builders).
 //
 // Pure functions only — deterministic, ffmpeg-free, DB-free. The parity
 // pins live in scripts/test-unit.mts (S87 slice 2 block).
 
-import type { AssembledTimeline } from "./timeline";
+import type { AssembledTimeline, TimelineTrack } from "./timeline";
 
 /** The per-scene visual execution kind the track dispatch keys on.
  *  "image" = the designed PNG IS the frame (slides today); "video" = a
- *  moving or footage-derived clip. The wider kinds (whiteboard/3d/
- *  character/graphics) land with the engines that own them (slice 3+). */
-export type PlanVisualKind = "video" | "image";
+ *  moving or footage-derived clip; "whiteboard" = the engine DRAWS the
+ *  frames (the Whiteboard lane owns execution — the compositor's segment
+ *  builders refuse the kind as a routing wall). 3d/character/graphics land
+ *  with the engines that own them. */
+export type PlanVisualKind = "video" | "image" | "whiteboard";
 
 export interface CompositionPlanScene {
   /** Play-order position (0-based) — the row's scenes align BY POSITION
@@ -69,14 +73,18 @@ function r2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-/** The v2 read: derive the plan from the doc's VISUAL track. The clips
- *  are the ordered play list (slice 1 derives them from the scenes in
- *  order), aligned BY POSITION to the row's scene count — the same
- *  all-or-nothing law docSceneSettings applies. ANY misalignment (wrong
- *  clip count, non-finite window, non-positive duration, junk linkage)
- *  refuses the WHOLE read → the caller falls back to scenes. */
+/** The v2 read: derive the plan from a VISUAL track's clips — a doc's
+ *  derived projection (slice 1) or an ENGINE-authored track list (slice 3:
+ *  the whiteboard planner emits the grammar directly; there is no doc, so
+ *  the parameter is the structural tracks carrier an AssembledTimeline
+ *  also satisfies). The clips are the ordered play list, aligned BY
+ *  POSITION to the expected scene count — the same all-or-nothing law
+ *  docSceneSettings applies. ANY misalignment (wrong clip count,
+ *  non-finite window, non-positive duration, junk linkage) refuses the
+ *  WHOLE read → the caller falls back (fail-open for docs; for the engine
+ *  lanes a null here is an engine bug, refused loudly upstream). */
 export function planFromTracks(
-  doc: AssembledTimeline,
+  doc: { tracks: TimelineTrack[] },
   sceneCount: number
 ): CompositionPlan | null {
   const visual = doc.tracks.find((t) => t.name === "visual") ?? null;
@@ -96,7 +104,7 @@ export function planFromTracks(
     scenes.push({
       position: i,
       sceneIndex: typeof c.sceneIndex === "number" ? c.sceneIndex : i + 1,
-      kind: c.kind === "image" ? "image" : "video",
+      kind: c.kind === "image" ? "image" : c.kind === "whiteboard" ? "whiteboard" : "video",
       assetSource:
         c.asset?.source === "stock"
           ? "stock"

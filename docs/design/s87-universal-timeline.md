@@ -1,8 +1,9 @@
-# S87 — the Universal Timeline contract (design + slices 0–1)
+# S87 — the Universal Timeline contract (design + slices 0–3)
 
-**Status:** design recorded; slices 0–2 implemented (the version stamp;
+**Status:** design recorded; slices 0–3 implemented (the version stamp;
 the v2 dual-write + the overwrite guard; the compositor reads tracks[] —
-the composition plan + parity). Design target: the S76
+the composition plan + parity; Whiteboard emits tracks[] — the engine
+joins the contract). Design target: the S76
 adoption decision §4.C
 (`docs/audits/s76-openmontage-adoption-decision.md`), the third shared
 quality system after the Visual Consistency Engine (S77–S83) and the Video
@@ -121,6 +122,15 @@ planner but composes through the contract. S67's "peer MODE" law
 EVOLVES by design: peer at the ENGINE level (own planner, own Studio),
 unified at the CONTRACT level (one composition truth). The refusal in
 `POST /render` is replaced by the shared path.
+
+*Landed shape (recorded in §11):* the engine-authored tracks are a
+DERIVE-AT-RENDER projection (never persisted in slice 3 — the frame plan
+is the truth, the tracks are its contract form, exactly as the story
+lane's writer re-derives tracks at serialization). Persisting
+engine-authored tracks (a schema-3 doc where derivation-at-serialize
+gives way to engine ownership + a re-derive/compare consistency check)
+stays OPEN for the slice that needs a stored cross-engine doc — slice
+5's acceptance battery decides whether it needs one.
 
 **Slice 4 — the legacy branches collapse.** Slides/stock/ai sources map
 onto track kinds; the `scenes[]` compat emission and the v1 render path
@@ -295,3 +305,93 @@ no doc → null · the honest-geometry pin: a lying durationSec field loses
 to the window. (Fixture discipline recorded in the pin: parseTimeline
 re-derives tracks, so junk-tracks fixtures are built on the in-memory doc
 — the slice-3+ shape where engines own their tracks.)
+
+## 11. What slice 3 changed (code)
+
+- New `src/lib/tubeforge/whiteboard/tracks.ts` — the engine's frame plan
+  in the contract's grammar, PURE and deterministic:
+  - `framePlanClock(sceneMs, fps)` — THE one derivation of the shared
+    frame-quantized clock: per scene `frames = frameCount(ms, fps)`, the
+    delivered second is exactly `frames/fps` (the encode's own `-t`
+    math), windows are the running exact cursor rounded to the 2-dp
+    composition clock (contiguous by construction — each edge is one
+    rounded value, so clip[i].endSec === clip[i+1].startSec), and the
+    total is the exact cursor rounded once. Junk ms (non-finite/≤0)
+    refuses loudly — the estimator clamps every scene, so junk input is
+    an engine bug, never a user state.
+  - `whiteboardTracks(project, sceneMs, { voSceneIds, musicOn })` — the
+    VISUAL track (kind "whiteboard", one clip per scene over its window,
+    `asset: null` — the frame is DRAWN, transitions null — board
+    boundaries are the concat's hard cuts), the AUDIO track (VO slot
+    clips ONLY where a WAV actually plays, over the same window — the
+    apad law; plus the doc-spanning `a-music` bed clip when the bed is
+    on), and an EMPTY subtitle track (whiteboard narration is drawn, not
+    captioned — shape-stable). Clip ids are positional (`wb{i}` /
+    `a-wb{i}`); the row linkage is honest: scaffold ids `scene-N` link
+    back to the story row, hand-authored ids carry null (position still
+    orders the clip).
+- `composition-plan.ts`: `PlanVisualKind` gains `"whiteboard"` and
+  `planFromTracks` passes it through; the parameter widens to the
+  structural `{ tracks }` carrier — engine-authored tracks have NO doc
+  (the whiteboard lane hands its tracks directly; an AssembledTimeline
+  satisfies the same shape). One reader, every engine.
+- `whiteboard/render.ts` — COMPOSE THROUGH THE CONTRACT: the render
+  derives clock + tracks + plan right after the budget wall, the scene
+  loop reads its frames/delivered seconds from the shared clock (the
+  numbers identical to the old inline math BY CONSTRUCTION — both are
+  frameCount), the assembly total reads the clock with a contract assert
+  (a future edit that diverges the loop from the clock fails the render
+  instead of shipping a desynced projection), and the result gains
+  `{ tracks, plan }` (the contract artifacts slices 4–5 consume — the
+  legacy collapse + the acceptance battery).
+- `video-jobs.ts`: the S67 refusal in `runRenderJob` is RETIRED — a
+  whiteboard video reaching the compositor entry (a stale durable replay
+  or a bypassed caller) DELEGATES to `runWhiteboardJob`, which quietly
+  no-ops when the mode flipped back (the symmetric mode-drift law).
+- `POST /render` — the shared path: a whiteboard video routes to its
+  engine lane BEFORE the story-lane gates (no storyboard-art gate — the
+  scaffold doesn't need it; no hasVoiceover gate — silent drafts are
+  legal; no credit gate — the engine renders natively at $0), mirroring
+  the lane's own validation (the merged library, the validator's
+  verbatim errors) and enqueuing the SAME `whiteboard` job kind the
+  Whiteboard Studio's route enqueues (crash-recovery-native, the
+  full-render idempotence wall applies). Scene previews stay on the
+  Studio's own route. `GET /render` now sees both lanes (a whiteboard
+  video reports the `whiteboard` job kind's running state, progress and
+  error).
+- `whiteboard/render/route.ts` — the VO interlock, safety parity: this
+  lane reads the SAME per-scene WAVs, so a concurrent voiceover regen
+  gets the same 409 the story lane answers (the mixed-narration hazard,
+  seen live once).
+- `render.ts` — the routing wall: a whiteboard-kind plan reaching the
+  compositor's segment builders throws BEFORE any paid motion planning
+  or geometry work (peer ENGINE, shared CONTRACT — the compositor never
+  rasterizes boards).
+- NOT moved (recorded): the QC battery's cut lens for whiteboard
+  finals — today "unmeasured" (no story timeline doc on a whiteboard
+  row); making it read the whiteboard windows is REAL, but whiteboard
+  scene changes share the board's visual continuity, so a hard cut
+  between two boards may not register on a lens calibrated on cinematic
+  full-frame changes — slice 5's battery (deterministic pins + real
+  artifacts + human review) is the honest place to decide. Persisting
+  engine-authored tracks (schema 3) stays open for the same reason.
+
+## 12. Pinned-by-tests contract (slice 3)
+
+framePlanClock: windows ≡ delivered frames (96f/24fps = 4.000s from
+4001ms — the estimator's ms is the plan, the frames are the delivery) ·
+contiguity survives 2-dp rounding (133/24 = 5.5416… → edges 5.54/5.54,
+total 9.54 — one rounded value per edge, the exact cursor rounded once) ·
+junk ms (NaN/0/negative/Infinity) refuses loudly · whiteboardTracks: the
+three kinds (whiteboard/audio/subtitle), positional ids (`wb0`, `a-wb1`,
+`a-music`), asset null, transitions null, scaffold `scene-N` → row
+linkage N, hand-authored id → null, VO slots only where a WAV plays and
+over the SAME window as the visual clip, the bed spans [0, total] only
+when on, silent drafts carry no audio clips, empty projects → three
+empty tracks, ms/project count mismatch refuses loudly · planFromTracks
+reads engine tracks through the SAME reader (kind passes through, origin
+"tracks", count mismatch → null all-or-nothing, no-linkage → positional
+fallback) · THE two-clock pin: estimateProjectFrames → tracks → plan —
+every window within a centisecond of frameCount(ms)/fps, the plan total
+within a centisecond of the assembly total, deterministic byte-identical
+re-derivation.

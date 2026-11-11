@@ -3,13 +3,16 @@ import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseScenes } from "@/lib/tubeforge/story";
 import { isJobRunning, lastJobError, jobProgress, startJob } from "@/lib/tubeforge/jobs";
-import { runRenderJob, type RenderJobOptions } from "@/lib/tubeforge/video-jobs";
+import { runRenderJob, runWhiteboardJob, type RenderJobOptions } from "@/lib/tubeforge/video-jobs";
 import { resolveMusicForVideo, isMusicEnabledForVideo, musicBedActive } from "@/lib/tubeforge/music";
 import { docMusicPick, resolveDeliveryQuality, resolveBurnSubtitles } from "@/lib/tubeforge/studio-doc";
 import { parseTimeline } from "@/lib/tubeforge/timeline";
 import { getApprovedAudioMap } from "@/lib/tubeforge/director-plan";
 import { sanitizeTransition } from "@/lib/tubeforge/transitions";
 import { resolveUserPlan, hasCredits, RENDER_ESTIMATE_MICRO, planSupportsResolution, microToCredits } from "@/lib/tubeforge/billing";
+import { parseWhiteboardDoc } from "@/lib/tubeforge/whiteboard/whiteboard-planner";
+import { validateWhiteboardProject } from "@/lib/tubeforge/whiteboard/storyboard";
+import { loadVideoLibrary } from "@/lib/tubeforge/whiteboard/asset-store";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -26,13 +29,24 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (video.format !== "story")
     return NextResponse.json({ error: "Not a scene-based video" }, { status: 400 });
 
+  // S87 slice 3 — the shared status surface sees BOTH lanes: a whiteboard
+  // video renders through the "whiteboard" job kind (the engine lane), so
+  // the compositor's "render" kind reads empty and the honest answer comes
+  // from the lane that is actually running.
+  const wb = video.renderMode === "whiteboard";
+  const rendering = isJobRunning(id, "render") || (wb && isJobRunning(id, "whiteboard"));
   return NextResponse.json({
-    rendering: isJobRunning(id, "render"),
-    mode: isJobRunning(id, "render") ? video.renderMode : null,
-    progress: jobProgress(id, "render"),
+    rendering,
+    mode: rendering ? video.renderMode : null,
+    progress:
+      jobProgress(id, "render") ??
+      (wb ? jobProgress(id, "whiteboard") : null),
     hasVideo: video.hasVideo,
     videoDuration: video.videoDuration,
-    error: lastJobError(id, "render") ?? video.error,
+    error:
+      lastJobError(id, "render") ??
+      (wb ? lastJobError(id, "whiteboard") : null) ??
+      video.error,
   });
 }
 
@@ -76,12 +90,48 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // during a regen because the voiceover route clears its flags upfront):
   // the compositor reads every scene WAV to time the cuts — a concurrent
   // voiceover regen would feed it half-old, half-new narration (seen live:
-  // mixed stub-tone + re-spoken audio in one render).
+  // mixed stub-tone + re-spoken audio in one render). The whiteboard lane
+  // reads the SAME WAVs (its VO slots), so the interlock guards both lanes.
   if (isJobRunning(id, "voiceover"))
     return NextResponse.json(
       { error: "The voiceover is still regenerating — wait for it to finish before rendering" },
       { status: 409 }
     );
+
+  // S87 slice 3 — THE SHARED PATH. A whiteboard video renders through its
+  // ENGINE lane: peer at the engine level (own planner, own renderer, own
+  // Studio), unified at the contract level (the engine emits timeline
+  // tracks; its render composes on the shared frame-quantized clock). The
+  // story-lane gates below do NOT apply — the whiteboard scaffold needs
+  // neither storyboard art nor the hasVoiceover flag (silent drafts are a
+  // legal render), and the engine renders natively at $0 (no generation
+  // API, so no credit gate). Scene previews stay on the Whiteboard
+  // Studio's own route (a full render is what "the render button" means).
+  if (video.renderMode === "whiteboard") {
+    const doc = parseWhiteboardDoc(video.whiteboardProject);
+    if (!doc)
+      return NextResponse.json(
+        { error: "No whiteboard project yet — scaffold one in the Whiteboard Studio first" },
+        { status: 409 }
+      );
+    // Same gate the lane's own route applies — the validator's verbatim
+    // errors on click, not in a failed job card (and the SAME merged
+    // library the render will see, per S69).
+    const { lib } = await loadVideoLibrary(id);
+    const { project, errors } = validateWhiteboardProject(doc.project, lib.libraryIndex);
+    if (!project)
+      return NextResponse.json(
+        { error: "The whiteboard project is invalid — fix it in the Studio first", errors },
+        { status: 400 }
+      );
+
+    await db.video.update({ where: { id }, data: { error: null } });
+    const accepted = await startJob(id, "whiteboard", () => runWhiteboardJob(id, {}));
+    return NextResponse.json(
+      { accepted, generating: true, mode: "whiteboard", scope: "full" },
+      { status: accepted ? 202 : 200 }
+    );
+  }
 
   const body = await req.json().catch(() => ({}));
 

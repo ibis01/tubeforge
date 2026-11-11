@@ -4315,3 +4315,62 @@ touched files. Design doc §9/§10, ROADMAP #6, this log. Next: slice 3 —
 Whiteboard emits tracks[] (the planner maps its frame plan onto
 whiteboard-kind clips; S67's "peer MODE" law evolves to peer at the
 ENGINE level, unified at the CONTRACT level).
+
+## S87 slice 3 — Whiteboard emits tracks[]: the engine joins the contract (ROADMAP #6, P0)
+
+The ladder's forcing case, closed: the newest engine — the one whose
+parallel pipeline PROVED the composition truth had forked — now speaks
+the Universal Timeline. Peer at the ENGINE level (own planner, own
+renderer, own Studio), unified at the CONTRACT level (one composition
+grammar every consumer reads).
+
+- New `whiteboard/tracks.ts` (pure, the leaf law intact — contract types
+  + the engine's own timing module only): `framePlanClock` is THE one
+  derivation of the shared frame-quantized clock (frames =
+  frameCount(ms, fps); delivered = frames/fps — the encode's own -t
+  math; windows = the exact running cursor on the 2-dp clock, contiguous
+  by construction; junk ms refuses loudly — the estimator clamps every
+  scene, so junk is an engine bug). `whiteboardTracks` maps the frame
+  plan onto the grammar: visual track kind "whiteboard" (asset null —
+  the frame is DRAWN; transitions null — board boundaries are the
+  concat's hard cuts; scaffold `scene-N` ids link to the story row,
+  hand-authored ids honestly null), audio track (VO slots ONLY where a
+  WAV plays, over the same window — the apad law; the doc-spanning
+  `a-music` bed when on), empty subtitle track (shape-stable).
+- `renderWhiteboard` COMPOSES THROUGH THE CONTRACT: clock + tracks +
+  plan derived right after the budget wall; the scene loop and the
+  assembly read the shared clock (identical to the old inline math BY
+  CONSTRUCTION — both frameCount); a contract assert fails the render if
+  the loop ever diverges from the clock; the result gains
+  { tracks, plan } (slices 4-5 consume them).
+- `planFromTracks` reads ENGINE-authored tracks through the same reader:
+  `PlanVisualKind` gains "whiteboard"; the parameter widens to the
+  structural `{ tracks }` carrier (an AssembledTimeline satisfies it —
+  no doc exists for engine tracks).
+- The S67 refusal in POST /render is RETIRED: a whiteboard video routes
+  to its engine lane BEFORE the story gates (no storyboard-art /
+  hasVoiceover / credit gates — the scaffold needs neither art nor VO,
+  and the engine renders natively at $0), mirrors the lane's validation,
+  enqueues the same `whiteboard` job kind (crash-recovery-native).
+  `runRenderJob` DELEGATES on stale replays (runWhiteboardJob's own
+  mode-drift law, symmetric). GET /render sees both lanes. The whiteboard
+  route gains the VO interlock (safety parity — it reads the SAME WAVs
+  the story lane protects). The compositor gains the routing wall: a
+  whiteboard plan throws BEFORE any paid motion planning (the compositor
+  never rasterizes boards).
+- NOT moved (recorded in the design doc §11): the QC cut lens for
+  whiteboard finals (boards share visual continuity — a hard cut may not
+  register on a cinematic-calibrated lens; slice 5's battery decides with
+  real artifacts) and persisting engine-authored tracks (a schema-3 doc;
+  derive-at-render is the honest projection law for now).
+
+Verification: 421/421 unit (+4 slice-3 pins: the frame-quantized clock
+law incl. the 2-dp contiguity + junk refusal; the grammar pin — kinds,
+ids, linkages, VO slots, the bed, silent drafts, empty projects, the
+count-mismatch refusal; the shared-reader pin — engine tracks through
+planFromTracks, all-or-nothing, the no-linkage fallback; THE two-clock
+pin — estimateProjectFrames → tracks → plan ≡ delivered frames ≡
+assembly total, deterministic), typecheck 0, lint 0 on touched files.
+Design doc §11/§12, ROADMAP #6, this log. Next: slice 4 — the legacy
+branches collapse (slides/stock/ai sources map onto track kinds; the
+scenes[] compat emission and the v1 render path retire after a soak).

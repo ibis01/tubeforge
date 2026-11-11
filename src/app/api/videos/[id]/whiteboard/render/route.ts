@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
-import { startJob } from "@/lib/tubeforge/jobs";
+import { isJobRunning, startJob } from "@/lib/tubeforge/jobs";
 import { runWhiteboardJob } from "@/lib/tubeforge/video-jobs";
 import { validateWhiteboardProject, validWhiteboardId } from "@/lib/tubeforge/whiteboard/storyboard";
 import { parseWhiteboardDoc } from "@/lib/tubeforge/whiteboard/whiteboard-planner";
@@ -34,6 +34,17 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (video.renderMode !== "whiteboard")
     return NextResponse.json(
       { error: "Switch this video's render mode to Whiteboard first" },
+      { status: 409 }
+    );
+
+  // S87 slice 3 — the voiceover interlock, safety parity with the story
+  // lane: this render reads the SAME per-scene WAVs (the VO slots), so a
+  // concurrent regen would feed it half-old, half-new narration — the
+  // exact hazard the story lane fixed after seeing it live. The shared
+  // POST /render path enforces the same gate for both lanes.
+  if (isJobRunning(id, "voiceover"))
+    return NextResponse.json(
+      { error: "The voiceover is still regenerating — wait for it to finish before rendering" },
       { status: 409 }
     );
 

@@ -1372,6 +1372,15 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
   // renders). Homogeneous docs make the two reads identical — the parity
   // pins hold them to it.
   const planScenes = opts.timelinePlan?.scenes ?? null;
+  // S87 slice 3 — the routing wall: whiteboard-kind clips execute through
+  // the Whiteboard lane (peer ENGINE, shared CONTRACT); runRenderJob routes
+  // mode-whiteboard videos there before this entry. A whiteboard plan
+  // reaching the compositor's segment builders means a routing bug — refuse
+  // BEFORE any paid motion planning or geometry work runs.
+  if (planScenes?.some((ps) => ps.kind === "whiteboard"))
+    throw new Error(
+      "whiteboard clips execute through the Whiteboard lane — the compositor received a whiteboard plan, which is a routing bug (not a render input problem)"
+    );
   const sceneKindOf = (i: number): PlanVisualKind =>
     planScenes?.[i]?.kind ?? (opts.mode === "slides" ? "image" : "video");
   const assetSourceOf = (i: number): "ai" | "stock" | "slides" | null =>

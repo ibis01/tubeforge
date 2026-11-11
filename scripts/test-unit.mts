@@ -9805,6 +9805,187 @@ await test("S80: normalizeConsistencyCheckMode — the two valid non-defaults pa
   });
 }
 
+// ---------- S87 slice 3 — Whiteboard emits tracks[]: the engine joins the contract ----------
+{
+  const { planFromTracks } = await import("../src/lib/tubeforge/composition-plan.ts");
+  const { framePlanClock, whiteboardTracks } = await import(
+    "../src/lib/tubeforge/whiteboard/tracks.ts"
+  );
+  const { estimateProjectFrames, frameCount } = await import(
+    "../src/lib/tubeforge/whiteboard/timing.ts"
+  );
+  type WBProject = import("../src/lib/tubeforge/whiteboard/storyboard.ts").WhiteboardProject;
+
+  // The fixture: a 3-scene scaffold-shaped project (ids mirror story scene
+  // indexes — the row linkage) + a hand-authored id (no linkage).
+  const scene = (id: string, durationMs?: number) => ({
+    id,
+    narration: "one two three four",
+    background: "#ffffff" as const,
+    placements: [],
+    animations: [],
+    camera: [{ cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 }],
+    ...(durationMs != null ? { durationMs } : {}),
+  });
+  const project: WBProject = {
+    title: "t",
+    width: 1920,
+    height: 1080,
+    fps: 24,
+    hand: { style: "marker", scale: 1 },
+    scenes: [scene("scene-1", 4001), scene("scene-2", 5000), scene("scene-3", 4000)],
+  };
+
+  await test("S87 slice 3: framePlanClock — the frame-quantized clock (windows ≡ delivered frames, contiguous by construction)", async () => {
+    // 4001ms @ 24fps → 96 frames (4.000s delivered — the estimator's ms is
+    // the PLAN, the frames are the DELIVERY; the contract carries delivery).
+    const clock = framePlanClock([4001, 5000, 4000], 24);
+    eq(clock.scenes.map((s) => s.frames), [96, 120, 96], "frames = round(ms/1000·fps), the encoder's exact count");
+    eq(clock.scenes.map((s) => s.deliveredSec), [4, 5, 4], "delivered seconds = frames/fps (the encode's own -t math)");
+    eq(clock.scenes.map((s) => s.startSec), [0, 4, 9], "windows open where the previous closed (contiguous)");
+    eq(clock.scenes.map((s) => s.endSec), [4, 9, 13], "windows close at the frame-quantized boundary");
+    eq(clock.totalSec, 13, "the total is the exact sum on the 2-dp clock");
+
+    // A non-quantizing duration: 5550ms @ 24fps → 133.2 → 133 frames →
+    // 5.54166…s delivered → the 2-dp edge reads 5.54, the NEXT window
+    // opens at the SAME rounded edge (contiguity survives rounding).
+    const odd = framePlanClock([5550, 4000], 24);
+    eq(odd.scenes[0].frames, 133, "the odd duration quantizes to 133 frames");
+    eq(odd.scenes[0].endSec, 5.54, "the edge is the 2-dp rounding of 133/24");
+    eq(odd.scenes[1].startSec, odd.scenes[0].endSec, "contiguity: the next window opens at the same rounded edge");
+    eq(odd.totalSec, 9.54, "the total accumulates the exact cursor, rounded once (5.5416… + 4 = 9.5416… → 9.54)");
+
+    // Junk input is an ENGINE bug — the estimator clamps every scene, so
+    // the clock refuses loudly rather than emitting a zero/NaN window.
+    for (const junk of [NaN, 0, -4000, Infinity]) {
+      let threw: unknown = null;
+      try {
+        framePlanClock([junk], 24);
+      } catch (err) {
+        threw = err;
+      }
+      ok(threw instanceof Error && /junk scene duration/.test(threw.message), `junk ms (${String(junk)}) refuses loudly`);
+    }
+  });
+
+  await test("S87 slice 3: whiteboardTracks — the frame plan in the universal grammar (kinds, ids, linkages, slots)", async () => {
+    const tracks = whiteboardTracks(project, [4001, 5000, 4000], {
+      voSceneIds: ["scene-2"],
+      musicOn: true,
+    });
+    eq(tracks.map((t) => t.kind), ["whiteboard", "audio", "subtitle"], "three tracks: the engine's visual kind, audio, subtitle");
+    eq(tracks.map((t) => t.name), ["visual", "audio", "subtitle"], "the track names match the contract grammar");
+
+    const [visual, audio] = tracks;
+    eq(visual.clips.map((c) => c.id), ["wb0", "wb1", "wb2"], "visual clip ids are positional (the play order)");
+    eq(visual.clips.map((c) => c.kind), ["whiteboard", "whiteboard", "whiteboard"], "every visual clip carries the engine kind");
+    eq(visual.clips.map((c) => c.sceneIndex), [1, 2, 3], "scaffold ids link back to the story row (scene-N → N)");
+    eq(visual.clips.every((c) => c.asset === null), true, "asset null — the frame is DRAWN, not referenced (the generated-frame law)");
+    eq(visual.clips.every((c) => c.transitionIn === null && c.transitionOut === null), true, "board boundaries are the concat's hard cuts — no blend declarations");
+
+    // The hand-authored id carries NO row linkage — null is the honest read.
+    const handAuthored = whiteboardTracks(
+      { ...project, scenes: [scene("intro-board", 4000)] },
+      [4000],
+      { voSceneIds: [], musicOn: false }
+    );
+    eq(handAuthored[0].clips[0].sceneIndex, null, "a hand-authored scene id has no row linkage");
+    eq(handAuthored[0].clips[0].id, "wb0", "the id stays positional (deterministic for any id charset)");
+
+    // Audio: VO clips ONLY where a WAV actually plays, over the same window.
+    eq(audio.clips.map((c) => c.id), ["a-wb1", "a-music"], "one VO slot clip + the bed");
+    eq(audio.clips[0].sceneIndex, 2, "the VO slot links to its scene");
+    eq(audio.clips[0].startSec, 4, "the VO slot opens at its scene window");
+    eq(audio.clips[0].endSec, 9, "the VO slot closes at its scene window (apad pads to it)");
+    eq(audio.clips[1].id, "a-music", "the bed keeps the contract's bed id grammar");
+    eq(audio.clips[1].sceneIndex, null, "the bed is doc-spanning, not scene-bound");
+    eq(audio.clips[1].startSec, 0, "the bed opens at 0");
+    eq(audio.clips[1].endSec, 13, "the bed spans the doc total");
+
+    // Music off → no bed; no VO → no slot clips (silent draft).
+    const silent = whiteboardTracks(project, [4001, 5000, 4000], { voSceneIds: [], musicOn: false });
+    eq(silent[1].clips, [], "a silent draft carries no audio clips at all");
+
+    // Empty scenes → the three tracks with empty clip lists (shape-stable).
+    const empty = whiteboardTracks({ ...project, scenes: [] }, [], { voSceneIds: [], musicOn: true });
+    eq(empty.map((t) => t.clips), [[], [], []], "empty project → three empty tracks (shape-stable for the dispatch)");
+
+    // A duration/project mismatch is an engine bug, refused loudly.
+    let mismatch: unknown = null;
+    try {
+      whiteboardTracks(project, [4000], { voSceneIds: [], musicOn: false });
+    } catch (err) {
+      mismatch = err;
+    }
+    ok(mismatch instanceof Error && /durations for/.test(mismatch.message), "a frame plan that disagrees with the project refuses loudly");
+  });
+
+  await test("S87 slice 3: the engine tracks READ BACK through the shared planFromTracks (one consumer, every engine)", async () => {
+    const tracks = whiteboardTracks(project, [4001, 5000, 4000], {
+      voSceneIds: ["scene-2", "scene-3"],
+      musicOn: true,
+    });
+    // The structural carrier — no doc exists for engine-authored tracks;
+    // the SAME reader the compositor lane uses consumes them.
+    const plan = planFromTracks({ tracks }, 3);
+    ok(plan, "the engine tracks parse through the shared reader");
+    eq(plan.origin, "tracks", "the origin ledger names the contract read");
+    eq(plan.scenes.map((s) => s.kind), ["whiteboard", "whiteboard", "whiteboard"], "the whiteboard kind passes through (the dispatch key)");
+    eq(plan.scenes.map((s) => s.sceneIndex), [1, 2, 3], "the row linkages survive the read");
+    eq(plan.scenes.map((s) => s.startSec), [0, 4, 9], "windows survive the read");
+    eq(plan.scenes.map((s) => s.endSec), [4, 9, 13], "edges survive the read");
+    eq(plan.totalSec, 13, "the total survives the read");
+    eq(planFromTracks({ tracks }, 2), null, "a clip-count mismatch still refuses the whole read (all-or-nothing)");
+    // The positional fallback when no row linkage exists (hand-authored ids).
+    const noLink = whiteboardTracks({ ...project, scenes: [scene("board-one", 4000)] }, [4000], {
+      voSceneIds: [],
+      musicOn: false,
+    });
+    const noLinkPlan = planFromTracks({ tracks: noLink }, 1);
+    ok(noLinkPlan, "the hand-authored plan parses");
+    eq(noLinkPlan.scenes[0].sceneIndex, 1, "no linkage → the positional fallback (i+1)");
+    eq(noLinkPlan.scenes[0].kind, "whiteboard", "the kind holds without a linkage");
+  });
+
+  await test("S87 slice 3: THE two-clock pin — the plan ≡ the estimator's frame plan (estimateProjectFrames → tracks → plan)", async () => {
+    // The full derivation chain the renderer runs: the estimator's sceneMs
+    // (explicit > VO-measured > narration estimate) → the contract tracks →
+    // the plan. Every window must equal the DELIVERED frame count the render
+    // loop encodes (frameCount(ms)/fps), and the total the assembly mixes.
+    const voMs = new Map<string, number>([["scene-2", 5200]]); // measured VO — but scene-2's EXPLICIT 5000ms wins (the estimator's precedence)
+    const { sceneMs } = estimateProjectFrames(project, voMs);
+    const tracks = whiteboardTracks(project, sceneMs, {
+      voSceneIds: ["scene-2"],
+      musicOn: true,
+    });
+    const plan = planFromTracks({ tracks }, 3);
+    ok(plan, "the plan parses");
+
+    for (let i = 0; i < sceneMs.length; i++) {
+      const frames = frameCount(sceneMs[i], project.fps);
+      const deliveredSec = frames / project.fps;
+      const clip = tracks[0].clips[i];
+      // The 2-dp window edges are the exact frame boundaries rounded —
+      // never off by more than the clock's own centisecond.
+      ok(
+        Math.abs(clip.endSec - clip.startSec - deliveredSec) <= 0.01,
+        `scene ${i}: the clip window ≡ the delivered frames (${frames}f = ${deliveredSec}s, window ${clip.startSec}–${clip.endSec})`
+      );
+      ok(
+        Math.abs(plan.scenes[i].durationSec - deliveredSec) <= 0.011,
+        `scene ${i}: the plan duration ≡ the delivered frames (${plan.scenes[i].durationSec}s vs ${deliveredSec}s)`
+      );
+    }
+    const exactTotal = sceneMs.reduce((a, ms) => a + frameCount(ms, project.fps) / project.fps, 0);
+    ok(Math.abs(plan.totalSec - exactTotal) <= 0.01, `the plan total ≡ the assembly total (${plan.totalSec}s vs ${exactTotal}s)`);
+    // The VO slot sits over its scene's window (the apad law).
+    eq(tracks[1].clips[0].startSec, tracks[0].clips[1].startSec, "the VO slot opens with its scene");
+    eq(tracks[1].clips[0].endSec, tracks[0].clips[1].endSec, "the VO slot closes with its scene");
+    // Determinism: the same frame plan always yields byte-identical tracks.
+    eq(whiteboardTracks(project, sceneMs, { voSceneIds: ["scene-2"], musicOn: true }), tracks, "the derivation is deterministic");
+  });
+}
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
