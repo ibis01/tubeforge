@@ -4756,3 +4756,31 @@ Net: the audit's remaining-work inventory matches the recorded tails
 with two corrections (E12 ×2 closed) and one gap closed (CI). Its
 sequencing is already the law of the house. No code changed this
 entry — receipts only.
+
+## CI receipt — the apt mirror outage, and the standing failover (2026-11-11)
+
+The audit-reconciliation receipt's commit (39e8ccd, docs-only) went
+red three times on CI — and all three were the INFRASTRUCTURE, not the
+diff: `Install ffmpeg (QC fixtures + render pipeline)` died at its
+8-minute step timeout with `Temporary failure resolving
+'azure.archive.ubuntu.com'` (attempts 1-2), while Production build,
+PostgreSQL integration and Secret scan (which need no apt) stayed
+green. Measured from this sandbox: DNS resolves (traffic manager)
+but the mirror's HTTP flaps hard — noble 200 while noble-updates and
+noble-security return 000/404 in the same minute, for 45+ minutes.
+The Ubuntu 24.04 runner image ships NO ffmpeg (checked the
+runner-images README), so apt is genuinely required and there is no
+skip fast path.
+
+The fix keeps the law — DISTRO ffmpeg stays the source of truth, same
+Ubuntu packages, a different host: apt's mirror+file transport reads
+/etc/apt/apt-mirrors.txt and fails over down its list, so the canonical
+archive (archive.ubuntu.com/ubuntu/) is appended as the standing
+second mirror in all FIVE ffmpeg steps (ci.yml ×3, nightly.yml ×2),
+and attempt 2 of the existing ladder now swaps the azure host out
+entirely before retrying. The 2026-11-10 dpkg-lock hardening and the
+step timeout stand unchanged. Normal days still hit the fast local
+Azure mirror first.
+
+Verification: both workflows parse (yaml.safe_load), the failover
+present 3+2 times. This commit lands the failover AND its receipt.

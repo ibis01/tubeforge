@@ -73,6 +73,17 @@ jobs:
         timeout-minutes: 8
         run: |
           set -euo pipefail
+          # 2026-11-11 mirror failover (run 43051204925, three red attempts):
+          # azure.archive.ubuntu.com flapped for 45+ minutes — DNS failures,
+          # then 000/404 flaps where each dist index (noble-updates,
+          # noble-security) succeeded and failed independently. apt's
+          # mirror+file transport reads /etc/apt/apt-mirrors.txt and fails
+          # over down its list, so the canonical archive is appended as the
+          # standing second mirror, and attempt 2 swaps the azure host out
+          # entirely. Distro ffmpeg stays the source of truth — same Ubuntu
+          # packages, a different host. Full receipt: ci.yml main job step.
+          grep -q "archive.ubuntu.com/ubuntu" /etc/apt/apt-mirrors.txt 2>/dev/null || \
+            echo "http://archive.ubuntu.com/ubuntu/" | sudo tee -a /etc/apt/apt-mirrors.txt >/dev/null
           sudo systemd-run --property="After=apt-daily.service apt-daily-upgrade.service" --wait /bin/true 2>/dev/null || true
           for ATTEMPT in 1 2; do
             if sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update -qq && \
@@ -81,7 +92,8 @@ jobs:
               exit 0
             fi
             if [ "$ATTEMPT" -eq 1 ]; then
-              echo "apt attempt 1 failed — retrying in 45s"
+              echo "apt attempt 1 failed — swapping to the canonical archive for attempt 2"
+              sudo sed -i "s|azure.archive.ubuntu.com|archive.ubuntu.com|g" /etc/apt/apt-mirrors.txt
               sleep 45
             fi
           done
@@ -112,6 +124,17 @@ jobs:
         timeout-minutes: 8
         run: |
           set -euo pipefail
+          # 2026-11-11 mirror failover (run 43051204925, three red attempts):
+          # azure.archive.ubuntu.com flapped for 45+ minutes — DNS failures,
+          # then 000/404 flaps where each dist index (noble-updates,
+          # noble-security) succeeded and failed independently. apt's
+          # mirror+file transport reads /etc/apt/apt-mirrors.txt and fails
+          # over down its list, so the canonical archive is appended as the
+          # standing second mirror, and attempt 2 swaps the azure host out
+          # entirely. Distro ffmpeg stays the source of truth — same Ubuntu
+          # packages, a different host. Full receipt: ci.yml main job step.
+          grep -q "archive.ubuntu.com/ubuntu" /etc/apt/apt-mirrors.txt 2>/dev/null || \
+            echo "http://archive.ubuntu.com/ubuntu/" | sudo tee -a /etc/apt/apt-mirrors.txt >/dev/null
           sudo systemd-run --property="After=apt-daily.service apt-daily-upgrade.service" --wait /bin/true 2>/dev/null || true
           for ATTEMPT in 1 2; do
             if sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update -qq && \
@@ -120,7 +143,8 @@ jobs:
               exit 0
             fi
             if [ "$ATTEMPT" -eq 1 ]; then
-              echo "apt attempt 1 failed — retrying in 45s"
+              echo "apt attempt 1 failed — swapping to the canonical archive for attempt 2"
+              sudo sed -i "s|azure.archive.ubuntu.com|archive.ubuntu.com|g" /etc/apt/apt-mirrors.txt
               sleep 45
             fi
           done
