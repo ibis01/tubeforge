@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentType } from "react";
+import dynamic from "next/dynamic";
 import { useAppStore, type ViewId } from "@/lib/store";
 import {
   AppSidebar,
@@ -9,16 +10,6 @@ import {
 } from "@/components/tubeforge/app-sidebar";
 import { AuthGate } from "@/components/tubeforge/auth-gate";
 import { DashboardView } from "@/components/tubeforge/views/dashboard-view";
-import { AnalyticsView } from "@/components/tubeforge/views/analytics-view";
-import { ResearchView } from "@/components/tubeforge/views/research-view";
-import { CreateView } from "@/components/tubeforge/views/create-view";
-import { LibraryView } from "@/components/tubeforge/views/library-view";
-import { CastView } from "@/components/tubeforge/views/cast-view";
-import { WorldView } from "@/components/tubeforge/views/world-view";
-import { VoiceView } from "@/components/tubeforge/views/voice-view";
-import { CalendarView } from "@/components/tubeforge/views/calendar-view";
-import { ChannelsView } from "@/components/tubeforge/views/channels-view";
-import { SettingsView } from "@/components/tubeforge/views/settings-view";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -26,9 +17,96 @@ import {
   SheetTrigger,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { Menu, Plus, Search } from "lucide-react";
+import { Loader2, Menu, Plus, Search } from "lucide-react";
 import { TubeForgeLogo, TubeForgeWordmark } from "@/components/tubeforge/logo";
 import { CommandPalette } from "@/components/tubeforge/command-palette";
+
+// Code splitting (boot-payload fix, 2026-11): statically importing all 11
+// views forced every phone to download the whole studio (~10 MB gz in dev)
+// before the AuthGate could resolve, leaving the "Warming up the forge…"
+// splash on screen for minutes on a slow link. The dashboard — the landing
+// view — stays eager; every other view streams in on first visit and is
+// cached by the browser afterwards.
+function ViewFallback() {
+  return (
+    <div
+      className="min-h-[50vh] flex items-center justify-center"
+      role="status"
+      aria-label="Loading view"
+    >
+      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
+
+const lazyView = (loader: () => Promise<{ default: ComponentType }>) =>
+  dynamic(loader, { ssr: false, loading: () => <ViewFallback /> });
+
+// Every view file uses a named export (no `default`), so the loader must
+// unwrap the named export into the `{ default: Component }` shape that
+// next/dynamic expects — otherwise React.lazy receives the bare module
+// namespace and throws "Lazy element type must resolve to a class or
+// function" the first time the view is visited.
+const AnalyticsView = lazyView(
+  () =>
+    import("@/components/tubeforge/views/analytics-view").then((m) => ({
+      default: m.AnalyticsView,
+    })),
+);
+const ResearchView = lazyView(
+  () =>
+    import("@/components/tubeforge/views/research-view").then((m) => ({
+      default: m.ResearchView,
+    })),
+);
+const CreateView = lazyView(
+  () =>
+    import("@/components/tubeforge/views/create-view").then((m) => ({
+      default: m.CreateView,
+    })),
+);
+const LibraryView = lazyView(
+  () =>
+    import("@/components/tubeforge/views/library-view").then((m) => ({
+      default: m.LibraryView,
+    })),
+);
+const CastView = lazyView(
+  () =>
+    import("@/components/tubeforge/views/cast-view").then((m) => ({
+      default: m.CastView,
+    })),
+);
+const WorldView = lazyView(
+  () =>
+    import("@/components/tubeforge/views/world-view").then((m) => ({
+      default: m.WorldView,
+    })),
+);
+const VoiceView = lazyView(
+  () =>
+    import("@/components/tubeforge/views/voice-view").then((m) => ({
+      default: m.VoiceView,
+    })),
+);
+const CalendarView = lazyView(
+  () =>
+    import("@/components/tubeforge/views/calendar-view").then((m) => ({
+      default: m.CalendarView,
+    })),
+);
+const ChannelsView = lazyView(
+  () =>
+    import("@/components/tubeforge/views/channels-view").then((m) => ({
+      default: m.ChannelsView,
+    })),
+);
+const SettingsView = lazyView(
+  () =>
+    import("@/components/tubeforge/views/settings-view").then((m) => ({
+      default: m.SettingsView,
+    })),
+);
 
 const VIEW_META: Record<ViewId, { title: string; subtitle: string }> = {
   dashboard: {
