@@ -66,6 +66,7 @@ import {
   type SceneContext,
   type ShotJoinMark,
 } from "./motion";
+import { rigPlan } from "./character-rig";
 import {
   gradeFilter,
   titleDrawtextFilter,
@@ -167,6 +168,9 @@ export interface RenderOptions {
   transition?: TransitionSettings | null;
   /** Video-level context so scene classification can read tone/niche. */
   motionContext?: SceneContext;
+  /** S93 — the video's cast character (portrait-backed) — the rig's
+   *  eligibility. Null/absent = no cast, the rig never applies. */
+  character?: { hasPortrait: boolean } | null;
   /** Video topic — drives the slide deck's art direction (slides mode). */
   topic?: string;
   /** Brand kit overrides for keynote slides (accent recolor + logo badge). */
@@ -1622,6 +1626,42 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       }
     }
 
+    // S93 — the character rig: cast-character scenes on the Ken Burns
+    // channel WITHOUT a Director shot plan read their motion from the rig
+    // (the breath cycle, character-rig.ts) instead of the generic
+    // scene-aware plan. The rig sits at the BOTTOM of the seniority ladder:
+    // the M2 per-shot plan is senior (skipped), the studio motion overrides
+    // are senior (skipped — the block above already re-planned those), and
+    // the S2 camera keyframes below keep the LAST word. The rig itself
+    // honors the stillness contract (motion off → a hold plan). Rig off
+    // (no cast/portrait) → this loop never runs → plans untouched,
+    // byte-identical legacy path.
+    // Stage 5 (module E) — the APPROVED plan's audio direction is HOISTED
+    // here: the rig's breath rate reads the same pacing hints the voiceover
+    // applied (one read, one truth — the module E section below consumes
+    // the same map).
+    const planAudio = await getApprovedAudioMap(opts.videoId);
+    if (
+      opts.character?.hasPortrait &&
+      needsPlan &&
+      opts.mode !== "slides" &&
+      plans.length === scenes.length
+    ) {
+      for (let i = 0; i < scenes.length; i++) {
+        if (shotPlans?.[i]) continue; // M2: the Director's per-shot moves are senior
+        if (channels[i]?.channel !== "kenburns") continue; // S35: footage modes keep their own motion
+        if (motionOverrides.has(scenes[i].index)) continue; // Stage 5 D: the override is senior
+        if (!scenes[i].hostInScene) continue; // the rig moves CAST scenes only (the continuity law)
+        plans[i] = rigPlan({
+          sceneIndex: scenes[i].index,
+          durationSec: durations[i] ?? 4,
+          intensity: motion.intensity,
+          motionMode: motion.mode,
+          pacingHint: planAudio.pacing.get(scenes[i].index),
+        });
+      }
+    }
+
     // S2 wave 2 — the studio's per-scene CAMERA KEYFRAMES outrank every auto
     // camera (LAST word, after the Director's motion map): the doc's two-key
     // plan replaces the motion plan AND drops the Director's shot graph for
@@ -1645,7 +1685,7 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     // S5 — the doc's studio picks outrank the plan's; beds materialize
     // ON DEMAND (a doc-only pick synthesizes its own bed — the old
     // plan-prebuilt map could never have heard it).
-    const planAudio = await getApprovedAudioMap(opts.videoId);
+    // (S93: the planAudio read is HOISTED above the rig block — one read.)
     const ambienceCache = new Map<string, string | null>();
     const ambiencePathFor = async (kind: string | null): Promise<string | null> => {
       if (!kind) return null;

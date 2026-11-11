@@ -694,11 +694,21 @@ export async function runRenderJob(
   // Brand kit (keynote slides): accent recolor + corner logo badge.
   const brand = mode === "slides" ? await slideBrandFor(videoId, video.brandAccent, video.brandLogoOn) : null;
 
+  // S93 — the character rig's eligibility: a portrait-backed cast character
+  // (the rig reads nothing else — the identity anchors stay untouched).
+  const rigCharacter = video.characterId
+    ? await db.character.findUnique({
+        where: { id: video.characterId },
+        select: { hasPortrait: true },
+      })
+    : null;
+
   try {
     const result = await renderVideo({
       videoId,
       scenes,
       mode,
+      character: rigCharacter ? { hasPortrait: rigCharacter.hasPortrait } : null,
       burnSubtitles: subtitles,
       smartCaptions,
       music,

@@ -4644,3 +4644,34 @@ and the projection carried float noise (100 × 1.12 = 112.00000000000001)
 Verification: 464/464 unit (+5 S92 pins), typecheck 0, lint 0. Design
 doc, ROADMAP #11, this log. Next: ROADMAP #12 — Character animation
 engine (P3).
+
+## S93 — Character animation engine v1 (ROADMAP #12, P3)
+
+The S76 deferral condition is met (the Universal Timeline closed at S87
+with the §4.C battery), so the P3 era starts — and the governing rule
+shapes the whole design: the rig is a MOTION SOURCE, not a pipeline.
+
+- character-rig.ts (pure, 4 pins): the rig emits MotionScenePlans — the
+  zoompan engine's own vocabulary — for portrait-backed cast scenes.
+  The breath cycle: alternating 2.2s push-in/pull-back on the face band
+  (0.5/0.35), amplitude clamped to intensity×0.25 within [1%, 3%] — a
+  whisper, never a punch (the VCE anchors judge framing drift, so the
+  rig stays under kenburns' 12% default). The approved plan's pacing
+  hints modulate the breath rate (module E's factor, one hoisted read).
+  The stillness contract is senior to the rig itself; the continuity
+  law limits the rig to cast scenes; a still portrait cannot blink and
+  the rig will not fake it — the pose sheet and i2v stay the paths to
+  real motion.
+- The wiring: render.ts's rig overlay sits at the BOTTOM of the
+  seniority ladder (M2 per-shot > overrides > S2 camera keys > rig >
+  auto plan); no cast → the loop never runs → byte-identical legacy
+  path. renderVideo gains character:{hasPortrait}; the render job
+  reads it.
+- The smoke (10/10): the rig's graph DIFFERS from the auto plan's (the
+  rig actually replaced it), the 3% amplitude + one-zoompan-per-beat
+  visible in the emitted graph, and a REAL render lands (5.23s exact,
+  audio present) + the rig-off legacy render.
+
+Verification: 468/468 unit (+4 S93 pins), typecheck 0, lint 0, smoke
+10/10. Design doc, ROADMAP #12, this log. Next: ROADMAP #13 — Blender /
+3D engine (P3) — the last row.

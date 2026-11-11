@@ -102,6 +102,7 @@ import {
   UNKNOWN_COST_FACTOR,
 } from "../src/lib/tubeforge/provider-score";
 import { deriveBoardStages, deriveCheckpoints } from "../src/lib/tubeforge/production-board";
+import { rigEligible, rigPlan, RIG_HEAD_FOCAL } from "../src/lib/tubeforge/character-rig";
 import {
   bandOf,
   countWords,
@@ -1464,6 +1465,57 @@ await test("pacingReport: the summary a creator reads first", () => {
   eq(gapped.summary.measured, 3, "only real WAVs measure");
   eq(gapped.summary.medianWpm, 190, "median of [190,120,210]");
   ok(Number.isFinite(WPM_BANDS.draggingUnder) && ROLE_TARGETS.hook > ROLE_TARGETS.body, "the documented bands are sane");
+});
+
+suiteStart("S93 character rig — a motion source, not a pipeline");
+
+await test("rigEligible: portrait-backed cast scenes only", () => {
+  const v = { characterId: "c1" };
+  const c = { hasPortrait: true };
+  ok(rigEligible(v, c, true), "cast + portrait + host scene → eligible");
+  ok(!rigEligible(v, c, false), "non-host scenes keep their own motion (the continuity law)");
+  ok(!rigEligible({ characterId: null }, c, true), "no cast → never");
+  ok(!rigEligible(v, { hasPortrait: false }, true), "no portrait → nothing to rig");
+});
+
+await test("rigPlan: the breath cycle — alternation, focal, amplitude", () => {
+  const p = rigPlan({ sceneIndex: 1, durationSec: 8, intensity: 12, motionMode: "smart" });
+  eq(p.sceneType, "emotional", "cast scenes classify emotional (the hostInScene law)");
+  eq(p.move, "Rig breath cycle", "the label says what moves");
+  ok(p.shots.length >= 2, `at least one in/out pair (${p.shots.length} beats for 8s)`);
+  for (let i = 0; i < p.shots.length; i++) {
+    eq(p.shots[i].kind, i % 2 === 0 ? "zoom-in" : "zoom-out", `beat ${i} alternates`);
+    eq(p.shots[i].focal.x, RIG_HEAD_FOCAL.x, "the face band focal (upper-center)");
+    eq(p.shots[i].focal.y, RIG_HEAD_FOCAL.y, "0.35 — where a portrait head sits");
+    eq(p.shots[i].travel, 0, "pure zoom breathing, no pan drift");
+  }
+  // intensity 12 → amp clamp(12*0.25=3, 1, 3) = 3 → z endpoints 1.03 / 1.0
+  eq(p.shots[0].zStart, 1, "breath starts at rest");
+  approx(p.shots[0].zEnd, 1.03, 1e-9, "12% intensity → the rig's 3% ceiling");
+  approx(p.shots[1].zStart, 1.03, 1e-9, "the out-beat reverses from the peak");
+  approx(p.shots[1].zEnd, 1, 1e-9, "and returns to rest");
+});
+
+await test("rigPlan: amplitude clamps + the stillness contract", () => {
+  const gentle = rigPlan({ sceneIndex: 1, durationSec: 6, intensity: 4, motionMode: "smart" });
+  approx(gentle.shots[0].zEnd, 1.01, 1e-9, "4% intensity → 1% breath (the floor)");
+  const maxed = rigPlan({ sceneIndex: 1, durationSec: 6, intensity: 30, motionMode: "smart" });
+  approx(maxed.shots[0].zEnd, 1.03, 1e-9, "30% intensity still caps at the rig's 3% — a whisper, never a punch");
+  const still = rigPlan({ sceneIndex: 1, durationSec: 6, intensity: 0, motionMode: "smart" });
+  eq(still.shots.length, 1, "the stillness contract: one hold");
+  eq(still.shots[0].kind, "hold", "the user's stillness outranks the rig");
+  eq(still.move, "Rig hold (stillness contract)", "the label says why");
+  const off = rigPlan({ sceneIndex: 1, durationSec: 6, intensity: 12, motionMode: "off" });
+  eq(off.shots[0].kind, "hold", "motion mode off → hold, whatever the intensity");
+});
+
+await test("rigPlan: the pacing hint modulates the breath rate", () => {
+  const normal = rigPlan({ sceneIndex: 1, durationSec: 10, intensity: 12, motionMode: "smart" });
+  const fast = rigPlan({ sceneIndex: 1, durationSec: 10, intensity: 12, motionMode: "smart", pacingHint: "fast" });
+  const slow = rigPlan({ sceneIndex: 1, durationSec: 10, intensity: 12, motionMode: "smart", pacingHint: "slow" });
+  approx(normal.shots[0].sec, 2.2, 1e-6, "the resting breath rate");
+  approx(fast.shots[0].sec, 2.2 / 1.12, 1e-6, "a fast hint breathes quicker (module E's factor)");
+  approx(slow.shots[0].sec, 2.2 / 0.88, 1e-6, "a slow hint breathes deeper");
 });
 
 suiteStart("art dedupe — dHash perceptual hashing");
