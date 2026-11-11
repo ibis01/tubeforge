@@ -4129,3 +4129,33 @@ precedent). Verification: 403/403 unit, typecheck 0, lint 0 on
 touched files (the one remaining warning in the dialog is the
 pre-existing shipAnyway download redirect). Contract doc tail
 updated (s84 §5), ROADMAP #5, this log.
+
+## S86 — the critic's one-click repair lane (ROADMAP #5 tail, P0)
+
+The S76 design target's last hop: report → proposals → THE HUMAN APPROVES
+→ selective regeneration through the EXISTING affordances. Until now the
+proposals only named the affordance; the click was missing.
+
+- The card's REPAIR_ACTIONS map each held dimension to its affordance:
+  open the Storyboard (motion/visual/consistency/narrative — the
+  Director card and scene re-rolls live there), re-run the voiceover
+  (audio), re-render with the standing settings (technical). The
+  buttons fire callbacks passed down from the dialog — runStage /
+  startRender / setActiveTab — so the card NEVER duplicates
+  regeneration logic; single-sourced affordances stay single-sourced.
+- §0.2 intact by construction: the button is the human's approval;
+  nothing regenerates without the click. Unmeasured dimensions ask
+  for evidence — no button (status looked up from the report's own
+  dimensions, not assumed from the proposal text).
+- Navigation buttons stay enabled while stages run (watching the
+  storyboard during a render is harmless); action buttons follow the
+  dialog's busy state. Tooltips say what each button does and what it
+  costs (the voiceover button names the paid AI call).
+- The story-format Tabs became CONTROLLED (activeTab state, same
+  default as the old defaultValue, re-seeded per video in the seed
+  block) — the lane's navigation needs it; the non-story Tabs stays
+  uncontrolled (untouched surface).
+
+Verification: 403/403 unit, typecheck 0, lint 0 on touched files
+(the dialog's remaining warning is the pre-existing shipAnyway
+redirect). Contract tail updated (s84 §5), ROADMAP #5, this log.

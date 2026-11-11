@@ -1,12 +1,15 @@
 # S84 — the Video Critic (foundation)
 
-**Status:** implemented (foundation slice + the S85 UI card). Design target: the S76
+**Status:** implemented (foundation slice + the S85 UI card + the S86
+repair lane). Design target: the S76
 adoption decision §4.B (`docs/audits/s76-openmontage-adoption-decision.md`).
 Implementation: `src/lib/tubeforge/video-critic.ts`; surface
 `/api/videos/[id]/critic`; job kind `"critic"` (entity = video); the human
 surface is `src/components/tubeforge/critic-card.tsx` (S85 — the video
 detail dialog's Video tab, after the QC scorecard; Mission Control resumes
-interrupted critic jobs).
+interrupted critic jobs; S86 — the one-click repair lane wires each hold's
+proposal to the affordance it names through the dialog's existing
+handlers).
 
 **The question it answers:** "Is this RENDERED video worth shipping —
 and if not, what exactly do I fix?" The VCE judges scene stills before
@@ -89,19 +92,27 @@ identity are explicitly disclaimed (judged elsewhere). STRICT JSON
 ## 5. Recorded tail (not built in the foundation)
 
 - The **factual** dimension (claims vs research briefs) — needs the
-  research-brief surface; recorded.
-- Selective regeneration flows wired from proposals (today the
-  proposals NAME the affordance; a one-click repair lane is future
-  work).
+  research-brief surface (research today is org-scoped topic ideation,
+  not per-video claims); recorded.
+- ~~Selective regeneration flows wired from proposals~~ — **landed in
+  S86** (the one-click repair lane): each hold's proposal gains the
+  button that fires the affordance it names — open the Storyboard
+  (Director card / scene re-rolls: motion, visual, consistency,
+  narrative), re-run the voiceover (audio), re-render with the standing
+  settings (technical) — through callbacks into the dialog's EXISTING
+  handlers (runStage / startRender), never duplicated in the card. The
+  human's click is the approval (§0.2); unmeasured dimensions ask for
+  evidence, not repair; navigation buttons stay enabled while stages
+  run, action buttons follow the dialog's busy state.
 - Auto-run after render (today manual-only; the S74-informed motion
   thresholds land first).
 - ~~A critic card in the UI~~ — **landed in S85**
   (`src/components/tubeforge/critic-card.tsx`): the report card in the
   Video tab — verdict badge, one row per dimension (status icon,
-  source, issues, evidence), the repair proposals (still names-only,
-  §0.2), the engine's honesty notes, run/re-run with the rerunQc poll
-  pattern, and a pre-existing running job picked up on mount; the
-  attention panel resumes interrupted `critic` jobs.
+  source, issues, evidence), the repair proposals, the engine's honesty
+  notes, run/re-run with the rerunQc poll pattern, and a pre-existing
+  running job picked up on mount; the attention panel resumes
+  interrupted `critic` jobs.
 
 ## 6. Pinned-by-tests contract
 

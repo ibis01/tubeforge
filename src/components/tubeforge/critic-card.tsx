@@ -7,14 +7,17 @@
 // What it shows: the persisted critic report — the verdict
 // (ship | hold | insufficient-evidence), one row per dimension (technical /
 // motion / audio / visual / consistency / narrative, each with its source
-// and issues), the repair proposals (§0.2: they NAME the existing
-// affordances — propose, never auto-edit), and the engine's honesty notes
+// and issues), the repair proposals, and the engine's honesty notes
 // (§0.3: unavailable layers are listed, never silently green).
+//
+// S86 — the one-click repair lane: each hold's proposal fires the
+// affordance it names (open the Storyboard / re-run the voiceover /
+// re-render) through callbacks into the dialog's EXISTING handlers — the
+// card never owns regeneration logic. The human's click is the approval
+// (§0.2 propose-never-auto-edit holds: nothing regenerates without it).
 //
 // What it does NOT do: gate anything. The ship gate stays qc-policy's; the
 // critic is a report for the human, not a new automated gate (S84 §0.4).
-// Selective regeneration wired from proposals is the recorded repair-lane
-// tail — today the actions point at the existing affordances by name.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -26,7 +29,10 @@ import {
   CircleX,
   Ban,
   Drama,
+  LayoutGrid,
   Loader2,
+  Mic,
+  RefreshCw,
   Sparkles,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -82,6 +88,62 @@ const SOURCE_LABELS: Record<CriticDimension["source"], string> = {
   "critic-vlm": "critic VLM",
 };
 
+/** S86 — the one-click repair lane: each hold's proposal gains the button
+ *  that fires the EXISTING affordance it names. The card never owns
+ *  regeneration — the callbacks come from the dialog's standing handlers
+ *  (§0.2: the human's click is the approval; nothing regenerates on its
+ *  own). A proposal for an unmeasured dimension asks for evidence, not
+ *  repair — no button. */
+const REPAIR_ACTIONS: Partial<
+  Record<
+    CriticDimension["id"],
+    {
+      label: string;
+      icon: typeof Mic;
+      kind: "storyboard" | "voiceover" | "render";
+      title: string;
+    }
+  >
+> = {
+  technical: {
+    label: "Re-render",
+    icon: RefreshCw,
+    kind: "render",
+    title:
+      "Re-render the final cut with the standing render settings — a fresh QC report lands on completion",
+  },
+  motion: {
+    label: "Open Storyboard",
+    icon: LayoutGrid,
+    kind: "storyboard",
+    title: "The Director card lives there — adjust the shot plan's rhythm, then re-render",
+  },
+  audio: {
+    label: "Re-run voiceover",
+    icon: Mic,
+    kind: "voiceover",
+    title: "Regenerate the voice track (a paid AI call); re-render to match the new timing",
+  },
+  visual: {
+    label: "Open Storyboard",
+    icon: LayoutGrid,
+    kind: "storyboard",
+    title: "Scene re-rolls live there — repaint the offending art",
+  },
+  consistency: {
+    label: "Open Storyboard",
+    icon: LayoutGrid,
+    kind: "storyboard",
+    title: "The Director card's one-click consistency fixes live there",
+  },
+  narrative: {
+    label: "Open Storyboard",
+    icon: LayoutGrid,
+    kind: "storyboard",
+    title: "Regenerate the scenes that miss their beats (scene re-roll)",
+  },
+};
+
 function statusIcon(status: CriticDimension["status"], className = "h-3.5 w-3.5") {
   switch (status) {
     case "pass":
@@ -120,12 +182,21 @@ export function CriticCard({
   videoId,
   hasVideo,
   disabled,
+  onOpenStoryboard,
+  onRerunVoiceover,
+  onRerender,
 }: {
   videoId: string;
   /** The critic judges final.mp4 — no render, nothing to judge. */
   hasVideo: boolean;
-  /** Parent busy state (stages that would race the critic's reads). */
+  /** Parent busy state (stages that would race the critic's reads); also
+   *  gates the repair lane's ACTION buttons (navigation stays free). */
   disabled?: boolean;
+  /** S86 repair lane — the dialog's EXISTING affordances, passed down as
+   *  callbacks so the card never duplicates regeneration logic. */
+  onOpenStoryboard?: () => void;
+  onRerunVoiceover?: () => void;
+  onRerender?: () => void;
 }) {
   const { toast } = useToast();
   const [report, setReport] = useState<CriticReport | null>(null);
@@ -332,28 +403,55 @@ export function CriticCard({
             })}
           </div>
 
-          {/* Repair proposals — they NAME the existing affordances; nothing
-              auto-edits (§0.2). One-click wiring is the recorded tail. */}
+          {/* Repair proposals — the one-click lane (S86): each hold's
+              proposal fires the affordance it names through the dialog's
+              existing handlers. The human's click is the approval (§0.2);
+              unmeasured dimensions ask for evidence, not repair. */}
           {report.proposals.length > 0 && (
             <div className="mt-3">
               <p className="text-[11px] font-semibold mb-1.5">
                 Proposed repairs{" "}
                 <span className="text-muted-foreground font-normal">
-                  — through the existing tools; nothing regenerates without you
+                  — one click through the existing tools; nothing regenerates without you
                 </span>
               </p>
               <ul className="space-y-1">
-                {report.proposals.map((p, i) => (
-                  <li key={i} className="flex items-start gap-2 text-[11px]">
-                    <Badge
-                      variant="outline"
-                      className="text-[9px] h-4 px-1.5 shrink-0 mt-0.5 border-white/15 bg-white/5 text-muted-foreground"
-                    >
-                      {p.dimension}
-                    </Badge>
-                    <span className="text-foreground/85 leading-snug">{p.action}</span>
-                  </li>
-                ))}
+                {report.proposals.map((p, i) => {
+                  const dim = report.dimensions.find((d) => d.id === p.dimension);
+                  const action = dim?.status === "hold" ? REPAIR_ACTIONS[p.dimension] : undefined;
+                  const fire =
+                    action?.kind === "storyboard"
+                      ? onOpenStoryboard
+                      : action?.kind === "voiceover"
+                        ? onRerunVoiceover
+                        : action?.kind === "render"
+                          ? onRerender
+                          : undefined;
+                  return (
+                    <li key={i} className="flex items-start gap-2 text-[11px]">
+                      <Badge
+                        variant="outline"
+                        className="text-[9px] h-4 px-1.5 shrink-0 mt-0.5 border-white/15 bg-white/5 text-muted-foreground"
+                      >
+                        {p.dimension}
+                      </Badge>
+                      <span className="text-foreground/85 leading-snug flex-1 min-w-0">{p.action}</span>
+                      {action && fire && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-5 px-2 text-[10px] shrink-0 border-white/15 bg-white/4"
+                          disabled={disabled && action.kind !== "storyboard"}
+                          onClick={fire}
+                          title={action.title}
+                        >
+                          <action.icon className="h-2.5 w-2.5" />
+                          {action.label}
+                        </Button>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}

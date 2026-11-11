@@ -150,6 +150,14 @@ export function VideoDetailDialog({
   const [busy, setBusy] = useState<string | null>(null);
   const [variants, setVariants] = useState<VariantDTO[]>([]);
 
+  // S86 — the story-format tab is CONTROLLED so surfaces can navigate to
+  // it (the critic card's repair lane: "Open Storyboard" lands the human
+  // where the Director card + scene re-rolls live). Seeded with the same
+  // default the uncontrolled Tabs had; re-seeded per video below.
+  const [activeTab, setActiveTab] = useState<string>(
+    video?.hasVideo || video?.hasVoiceover ? "video" : "script"
+  );
+
   // Storyboard state
   const [scenes, setScenes] = useState<SceneDTO[]>([]);
   const [boardGenerating, setBoardGenerating] = useState(false);
@@ -335,6 +343,7 @@ export function VideoDetailDialog({
       setSlides(null);
     } else {
       setRenderMode(video.renderMode ?? "kenburns");
+      setActiveTab(video.hasVideo || video.hasVoiceover ? "video" : "script");
       setMusicDraft({
         enabled: video.musicEnabled ?? null,
         trackId: video.musicTrackId ?? null,
@@ -2402,7 +2411,14 @@ export function VideoDetailDialog({
           judges rendered scene-format cuts; the ship gate above stays the
           one enforcement, this is the advisory report after it. */}
       {video.format === "story" && (
-        <CriticCard videoId={video.id} hasVideo={video.hasVideo} disabled={Boolean(busy) || pubBusy} />
+        <CriticCard
+          videoId={video.id}
+          hasVideo={video.hasVideo}
+          disabled={Boolean(busy) || pubBusy}
+          onOpenStoryboard={() => setActiveTab("storyboard")}
+          onRerunVoiceover={() => void runStage("voiceover")}
+          onRerender={() => void startRender(renderMode)}
+        />
       )}
 
       {/* Final video */}
@@ -4081,7 +4097,8 @@ export function VideoDetailDialog({
 
           {isStory ? (
             <Tabs
-              defaultValue={video.hasVideo || video.hasVoiceover ? "video" : "script"}
+              value={activeTab}
+              onValueChange={setActiveTab}
               className="mt-4"
             >
               <TabsList className="grid grid-cols-4 bg-white/5">
