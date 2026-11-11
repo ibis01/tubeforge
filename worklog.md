@@ -4801,3 +4801,18 @@ apt's rotation. Healthy days never touch the swap (probe ≈ 3s, the
 fast azure mirror stays primary); outage days pay a ≈ 60s worst-case
 probe and apt never touches the dead mirror. Attempt 2's azure→canonical
 sed swap remains as belt-and-suspenders against a mid-run flap.
+
+**Follow-up two — the E2E job exposed a SECOND trap (attempt 5, run
+43062033177).** The probe-and-swap WORKED in check and coverage (their
+logs show three curl DNS failures → "swapping the runner to the
+canonical archive" → green suites), but e2e — running for the first
+time in this series after four skips — hung SILENTLY for the whole
+step: azure had briefly recovered for curl by 16:57, so the probe
+passed, and then `systemd-run --wait` blocked INDEFINITELY on
+apt-daily.service — unattended-upgrades, started at VM boot during the
+outage, was still stuck in its own retry loop, and the 2026-11-10
+comment's own law ("an apt lock wait has no timeout of its own")
+applies to the systemd-run wait too. The finish: the apt-daily wait is
+bounded (`timeout 60`), apt itself carries `-o DPkg::Lock::Timeout=120`
+(fail fast instead of eating the budget), and the step budget went 8 →
+10 minutes for probe + wait headroom. All five steps, both workflows.
