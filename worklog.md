@@ -4713,3 +4713,46 @@ through the shared timeline, no isolated pipeline.
 Verification: 471/471 unit (+3 S94 pins), typecheck 0, lint 0, queue
 suite PASS (24/24), smoke 14/14 on real WebGL output. Design doc,
 ROADMAP #13, this log. THE 13-ITEM ROADMAP IS COMPLETE.
+
+## External repo audit — reconciled against the record (2026-11-11)
+
+A second external audit arrived (13/13 engine rows confirmed at
+46a8cd0; the recommended sequence S74 → Docker → shared-quality tails
+→ production integration → staging → beta → launch — the same working
+order adopted 2026-11-10). Two of its rows were flagged "needs
+confirmation"; both resolve against receipts already on origin, and
+its one self-reported verification gap is closed:
+
+- **E12 queue recovery drill — CLOSED, not open.** The live drill ran
+  and its closure landed 2026-11-10 (845552c, CI 6/6 first try). It
+  caught TWO real production defects on the way: the uncancellable
+  render (/api/jobs/cancel now derives KINDS from resumableKinds()
+  live) and the 0.0s duration row (probe-before-put — the S68 trap).
+- **E12 entitlements ledger — CLOSED.** The D1–D5 decisions landed in
+  the same commit. Nothing in the ledger remains open or deferred.
+- **CI verification gap — closed.** The audit saw only the Vercel
+  check; the full Actions run at 46a8cd0 was polled green this
+  session: Production build, Typecheck·Lint·Unit, Money-path
+  coverage, Secret scan, PostgreSQL integration, E2E (6/6) plus two
+  Dependabot runs.
+
+Confirmed-open, re-measured rather than assumed:
+
+- **S74 — 0/8 profiles, lane not started.** The gateway-free status
+  read (`s74-paired-remeasure.mts --status`) shows an empty manifest —
+  the audit's "8 pairs + 16 blind scores remain" is exact. Watcher job
+  521163 armed (3 cycles/day); the standing blocker is the gateway
+  quota (S54 forensics: one probe per cycle, 429s persist).
+- **Docker smoke — blocked on the runner, as recorded.** No docker or
+  podman binary here (measured 2026-11-10); the Dockerfile carries the
+  Chromium contract but has never been built. Operator-side.
+- **Soak gate — reminder armed** (job 524546, 2026-11-19 09:00
+  Africa/Lagos): verify zero v1-doc renders, then the schema-3
+  slimming + v1-fallback retirement become actionable.
+- Deployment topology (Fly.io / Neon / R2) verified in DEPLOYMENT.md
+  as the audit states.
+
+Net: the audit's remaining-work inventory matches the recorded tails
+with two corrections (E12 ×2 closed) and one gap closed (CI). Its
+sequencing is already the law of the house. No code changed this
+entry — receipts only.
