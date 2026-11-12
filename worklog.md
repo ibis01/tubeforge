@@ -4951,3 +4951,37 @@ errors) now, pinned by the no-hang law (the stub asserts the signal).
 
 Suite count 471 → 481. Verified: typecheck, lint (0 errors), 481/481
 unit, coverage 54.47% (floor 50%), queue, billing, production build.
+
+## S96 — the watermark-free free image lane: Together AI FLUX.1-schnell (2026-11-12)
+
+**THE USER COMPLAINT.** "Pollinations generates with a watermark" —
+confirmed against the provider's current state: the API moved to
+gen.pollinations.ai behind sk_ keys, and the old anonymous watermark
+scheme (nologo=true on keyless calls) no longer applies. Every image
+TubeForge generated on the pollinations lane carried a watermark.
+
+**THE FIX — a better free lane, not a workaround.** Together AI offers
+black-forest-labs/FLUX.1-schnell-Free: $0, un-watermarked, real FLUX,
+~10 images/min (vs pollinations' 1 per 45s — a 16-scene storyboard
+goes from ~12 min to ~2), and the endpoint HONORS seed, so the
+per-character identity pinning story.ts builds for pollinations works
+here too. New `together` image adapter (POST /v1/images/generations,
+schema verified against docs.together.ai: width/height/steps/n/seed/
+negative_prompt/response_format "base64"→b64_json, output_format
+"png" — native PNG, no sharp re-encode). schnell models pin steps=4
+(the distilled design; the API's 20-step default just burns latency);
+non-schnell models (FLUX.1.1-pro) take the provider default. 429/402
+rethrow with the "429" token so budget.ts cools the storyboard loop
+down instead of failing it. Registry: three models (Free / schnell
+~$0.004 / 1.1-pro ~$0.04), keyed — the UI key field and the
+paid-test confirm light up automatically.
+
+**THE LAWS HELD.** S90 sync: IMAGE_PRIORS.together landed with the
+registry row (quality 0.84 / latency 0.8 / fit 0.62 — above
+pollinations' 0.68/0.25, pinned as THE BETTER-FREE LAW). Cost
+honesty: a keyed free TIER is cost-unknown, never free (the heygen
+law, now an image-lane pin). Pollinations keeps its keyless lane and
+requiresKey=false, but its registry note now SAYS the watermark word
+and points at the alternative — pinned, so nobody re-hides it.
+
+Suite count 481 → 488. Verified: typecheck, 488/488 unit.

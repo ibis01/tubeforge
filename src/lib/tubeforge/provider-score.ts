@@ -85,6 +85,9 @@ const TTS_PRIORS: Record<string, ProviderPriors> = {
 const IMAGE_PRIORS: Record<string, ProviderPriors> = {
   zai: { quality: 0.82, latency: 0.7, fit: 0.9 }, // CogView identity-locked edits
   pollinations: { quality: 0.68, latency: 0.25, fit: 0.55 }, // free, 1 img/45s, no edits
+  // S96 — the watermark-free free lane: real FLUX.1-schnell (un-watermarked,
+  // unlike pollinations' anonymous tier) at ~10 img/min. Seed honored, no edits.
+  together: { quality: 0.84, latency: 0.8, fit: 0.62 },
   openai: { quality: 0.88, latency: 0.78, fit: 0.88 }, // gpt-image-1 edits
   stability: { quality: 0.8, latency: 0.74, fit: 0.7 },
   fal: { quality: 0.88, latency: 0.8, fit: 0.72 },

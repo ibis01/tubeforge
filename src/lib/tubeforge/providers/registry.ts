@@ -257,8 +257,30 @@ export const IMAGE_PROVIDERS: ProviderMeta[] = [
       { id: "turbo", hint: "faster, slightly lower quality" },
       { id: "flux-realism", hint: "photorealistic" },
     ],
-    note: "No API key. Free tier is 1 image / 45s / IP (a 16-scene storyboard takes ~12 min). Buy a pollen key for unlimited at enter.pollinations.ai. No identity-locked edits (host scenes fall back to prompt-seeded generation).",
+    note: "No API key, but the anonymous tier stamps a WATERMARK on every image (the old nologo=true parameter no longer applies to keyless calls) and allows 1 image / 45s / IP — a 16-scene storyboard takes ~12 min. For watermark-free free images switch to Together AI's FLUX.1-schnell-Free, or buy a pollen key here to remove it. No identity-locked edits (host scenes fall back to prompt-seeded generation).",
     requiresKey: false,
+  },
+  {
+    id: "together",
+    kind: "native",
+    label: "Together AI (FLUX.1-schnell)",
+    defaultBaseUrl: "https://api.together.xyz/v1",
+    keyUrl: "https://api.together.ai/settings/api-keys",
+    models: [
+      {
+        id: "black-forest-labs/FLUX.1-schnell-Free",
+        hint: "FREE — no watermark, ~10 images/min",
+      },
+      {
+        id: "black-forest-labs/FLUX.1-schnell",
+        hint: "paid — ~$0.004/image, higher limits",
+      },
+      {
+        id: "black-forest-labs/FLUX.1.1-pro",
+        hint: "premium — ~$0.04/image, best quality",
+      },
+    ],
+    note: "The better free lane: a free API key unlocks FLUX.1-schnell-Free — real FLUX quality with NO watermark (unlike Pollinations' anonymous tier) and ~10 images/min instead of 1 per 45s. Honors the per-character seed, so recurring hosts stay recognizable across scenes. Paid schnell ~$0.004/image, FLUX.1.1-pro ~$0.04/image. No identity-locked edits (host scenes fall back to prompt-seeded generation).",
   },
   {
     id: "openai",

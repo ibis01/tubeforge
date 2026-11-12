@@ -9,6 +9,9 @@
 //   ideogram   → POST {baseUrl}/generate
 //   recraft    → POST {baseUrl}/images/generations
 //   pollinations → Free URL-based generation
+//   together   → POST {baseUrl}/images/generations (FLUX.1-schnell; the
+//                -Free model is $0, ~10 img/min, NO watermark — the better
+//                free lane vs pollinations' watermarked anonymous tier)
 //
 // imageEdit() returns null when the provider/model can't edit images —
 // callers fall back to a prompt-seeded fresh generation (cast fragment), the
@@ -65,11 +68,12 @@ async function callZaiImage<T>(label: string, fn: () => Promise<T>): Promise<T> 
 export interface ImageRequest {
   prompt: string;
   size: string;
-  /** Optional generation seed. HONORED ONLY by Pollinations (the URL API takes
-   *  `&seed=`); z.ai + OpenAI-compatible APIs have no seed parameter, so the
-   *  field is silently ignored there. Callers pin a stable seed per character
-   *  or per video+scene to keep a recurring host recognizable across scenes —
-   *  the closest a text-to-image-only provider gets to identity locking. */
+  /** Optional generation seed. HONORED by Pollinations (URL `&seed=`) and
+   *  Together (body `seed` — reproducible FLUX generations); z.ai + the other
+   *  OpenAI-compatible APIs have no seed parameter, so the field is silently
+   *  ignored there. Callers pin a stable seed per character or per video+scene
+   *  to keep a recurring host recognizable across scenes — the closest a
+   *  text-to-image-only provider gets to identity locking. */
   seed?: number;
   /** S49 — optional negative prompt (content-policy exclusions). Rides the
    *  providers whose APIs take one (stability, fal, replicate, ideogram,
@@ -108,8 +112,8 @@ export async function imageEditSupported(
     const model = config.model?.trim() || "dall-e-3";
     return model !== "dall-e-3";
   }
-  // All other providers (stability, fal, replicate, ideogram, recraft, pollinations)
-  // do not support identity-locked edits in this pipeline yet.
+  // All other providers (stability, fal, replicate, ideogram, recraft, pollinations,
+  // together) do not support identity-locked edits in this pipeline yet.
   return false;
 }
 
@@ -122,6 +126,8 @@ export async function imageGenerate(
   switch (config.provider) {
     case "pollinations":
       return pollinationsImage(req, config);
+    case "together":
+      return togetherImage(req, config);
     case "openai":
       return openaiImage(req, config);
     case "stability":
@@ -594,4 +600,104 @@ async function pollinationsImage(
     }
   }
   return bytes;
+}
+
+// ---------- Together AI (FLUX.1-schnell; -Free is the $0 lane) ----------
+//
+// POST {baseUrl}/images/generations with an OpenAI-ish body. Schema verified
+// against docs.together.ai/reference/post-images-generations (2026-11-12):
+//   request  { model, prompt, width, height, steps, n, seed,
+//              negative_prompt?, response_format: "base64"|"url",
+//              output_format: "jpeg"|"png" }
+//   response { data: [{ b64_json } | { url }] }
+// The model enum offered there is exactly the three FLUX ids in the registry.
+//
+// S96 — the reason this adapter exists: Pollinations' anonymous tier stamps a
+// watermark on every image (nologo=true no longer applies to keyless calls),
+// while black-forest-labs/FLUX.1-schnell-Free is $0, un-watermarked, real
+// FLUX, and allows ~10 images/min (a 16-scene storyboard renders in ~2 min
+// instead of pollinations' ~12). The free tier rate limit surfaces as HTTP
+// 429 — rethrown with the "429" token so budget.ts triggers the shared
+// cool-down and the storyboard loop waits it out instead of failing.
+//
+// Seed policy mirrors Pollinations: a CALLER-PROVIDED seed rides the body
+// verbatim (clamped to [0, 2^31-1]) for identity pinning — same seed + same
+// cast fragment + different scene prompts keeps a recurring host
+// recognizable across scenes. No seed → the provider picks one.
+
+export async function togetherImage(
+  req: ImageRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
+  const meta = providerMetaRequired("image", "together");
+  const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
+  const model =
+    config.model?.trim() || meta.models[0]?.id || "black-forest-labs/FLUX.1-schnell-Free";
+  const key = config.apiKey?.trim();
+  if (!key) throw new Error("Together AI needs an API key");
+
+  // App sizes are already FLUX-friendly (multiples of 16, ≤2MP) — pass
+  // straight through: 1344x768 (wide), 1024x1024 (square), 1024x1792 (tall).
+  const m = req.size.match(/^(\d+)x(\d+)$/);
+  const width = m ? Number(m[1]) : 1344;
+  const height = m ? Number(m[2]) : 768;
+
+  const body: Record<string, unknown> = {
+    model,
+    prompt: req.prompt,
+    width,
+    height,
+    n: 1,
+    response_format: "base64",
+    // Native PNG — the pipeline assumes PNG end to end, so we never need the
+    // sharp JPEG re-encode the pollinations lane sometimes runs.
+    output_format: "png",
+  };
+  // schnell is a 4-step distilled model (the API default of 20 steps is for
+  // the dev/pro families and just burns latency there); non-schnell models
+  // take the provider's own default.
+  if (/schnell/i.test(model)) body.steps = 4;
+  if (typeof req.seed === "number" && Number.isFinite(req.seed)) {
+    body.seed = Math.max(0, Math.min(2_147_483_647, Math.floor(req.seed)));
+  }
+  if (req.negativePrompt) body.negative_prompt = req.negativePrompt;
+
+  let data: { data?: { b64_json?: string; url?: string }[] };
+  try {
+    data = await providerFetchJson<{ data?: { b64_json?: string; url?: string }[] }>(
+      "Together AI",
+      joinUrl(baseUrl, "images/generations"),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify(body),
+      },
+    );
+  } catch (err) {
+    if (
+      err instanceof ProviderHttpError &&
+      (err.status === 429 || err.status === 402)
+    ) {
+      // 429 = the ~10 img/min free-tier window; 402 = out of credits on a
+      // paid model. Both should trigger the shared cool-down so the
+      // storyboard waits instead of failing.
+      throw new Error(
+        redactText(
+          `429 too many requests — Together AI rate-limited (HTTP ${err.status}); the FLUX.1-schnell-Free tier allows ~10 images/min. ${err.message.slice(0, 200)}`
+        )
+      );
+    }
+    throw err;
+  }
+
+  const first = data.data?.[0];
+  if (first?.b64_json) return decodeB64("Together AI", first.b64_json, "image");
+  if (first?.url) {
+    const response = await providerFetch("Together AI download", first.url, {});
+    return Buffer.from(new Uint8Array(await response.arrayBuffer()));
+  }
+  throw new Error("Together AI returned no image data");
 }

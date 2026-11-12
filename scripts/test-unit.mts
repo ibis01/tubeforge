@@ -11440,6 +11440,200 @@ await test("S95 magichour: missing upload shape, no job id, failure status, url-
   );
 });
 
+// ---------- S96 — together image: the watermark-free free lane ----------
+//
+// The user-facing complaint: Pollinations' anonymous tier stamps a watermark
+// on every storyboard frame (nologo=true stopped applying to keyless calls
+// when the API moved to gen.pollinations.ai behind sk_ keys). The fix is not
+// a workaround on the watermarked lane — it's a better free lane: Together
+// AI's black-forest-labs/FLUX.1-schnell-Free is $0, un-watermarked, real
+// FLUX, ~10 img/min, and honors the per-character seed. These pins hold the
+// adapter, the priors sync, and the cost-honesty law in place.
+
+await test("S96 priors + registry: together joins the image lane in lockstep", async () => {
+  const reg = await import("../src/lib/tubeforge/providers/registry.ts");
+  const meta = reg.IMAGE_PROVIDERS.find((p) => p.id === "together");
+  ok(meta, "the together registry row exists");
+  ok(
+    meta?.models.some((m) => m.id === "black-forest-labs/FLUX.1-schnell-Free"),
+    "the registry offers the FREE schnell model (the whole point of the lane)"
+  );
+  ok(
+    meta?.requiresKey !== false,
+    "together is keyed — pollinations stays the only keyless image lane"
+  );
+  ok(priorsComplete(), "PROVIDERS_BY_CAPABILITY and the priors table stay in lockstep");
+  eq(priorsFor("image", "together").quality, 0.84, "the priors row reads back");
+});
+
+await test("S96 THE BETTER-FREE LAW: together beats pollinations' anonymous lane on quality AND latency", () => {
+  const t = priorsFor("image", "together");
+  const p = priorsFor("image", "pollinations");
+  ok(
+    t.quality > p.quality,
+    "real FLUX, un-watermarked — the quality prior sits above the watermarked anonymous tier"
+  );
+  ok(
+    t.latency > p.latency,
+    "~10 img/min vs 1 img/45s — the latency prior sits above the free-tier crawl"
+  );
+});
+
+await test("S96 together cost honesty: a keyed free TIER is cost-unknown, never free", () => {
+  const image = scoreProviders("image", {
+    models: {},
+    observations: {},
+    weights: { ...DEFAULT_WEIGHTS },
+  });
+  const t = must(image, (s) => s.provider === "together", "together");
+  eq(
+    t.costBasis,
+    "unknown",
+    "FLUX.1-schnell-Free is free until Together says otherwise — unknown is the honest basis (the heygen law)"
+  );
+  ok(t.factors.cost < 1, "the unknown-cost factor discounts the score (cautious, not optimistic)");
+  ok(
+    t.reasons.some((r) => r.includes("never assumed free")),
+    "the reason text carries the never-free law to the UI"
+  );
+});
+
+await test("S96 pollinations watermark honesty: the registry note discloses the anonymous-tier watermark", async () => {
+  const reg = await import("../src/lib/tubeforge/providers/registry.ts");
+  const note = reg.IMAGE_PROVIDERS.find((p) => p.id === "pollinations")?.note ?? "";
+  ok(/watermark/i.test(note), "the note says the word watermark — users picking the keyless lane must know");
+  ok(/Together/i.test(note), "the note points at the watermark-free alternative");
+});
+
+await test("S96 together: URL, bearer key, and the full body contract (model/prompt/size/steps 4/seed/negative/png)", async () => {
+  const { togetherImage } = await import("../src/lib/tubeforge/providers/image.ts");
+  type Core = typeof togetherImage;
+  const cfg = { provider: "together", apiKey: "tgk-pin", baseUrl: "", model: "" } as Parameters<Core>[1];
+  let sawUrl = "";
+  let sawAuth = "";
+  let sawBody: Record<string, unknown> = {};
+  const png = Buffer.from("x".repeat(1500)); // decodeB64 floors at 1000 bytes
+  let buf: Buffer | null = null;
+  await withFetchStub(
+    async (url, init) => {
+      sawUrl = url;
+      sawAuth = String((init.headers as Record<string, string>)["Authorization"] ?? "");
+      sawBody = JSON.parse(String(init.body));
+      return S95_JSON({ data: [{ index: 0, b64_json: png.toString("base64"), type: "b64_json" }] });
+    },
+    async () => {
+      buf = await togetherImage(
+        { prompt: "a serene lake at dawn", size: "1344x768", seed: 12345, negativePrompt: "blurry" },
+        cfg,
+      );
+    },
+  );
+  eq(sawUrl, "https://api.together.xyz/v1/images/generations", "the default base url + path");
+  eq(sawAuth, "Bearer tgk-pin", "the key rides as a bearer token");
+  eq(sawBody.model, "black-forest-labs/FLUX.1-schnell-Free", "empty model → the registry default (the FREE one)");
+  eq(sawBody.prompt, "a serene lake at dawn", "the prompt");
+  eq(sawBody.width, 1344, "the wide size passes through (FLUX-friendly, multiple of 16)");
+  eq(sawBody.height, 768, "the height passes through");
+  eq(sawBody.steps, 4, "schnell is a 4-step distilled model — never the API's 20-step default");
+  eq(sawBody.n, 1, "one image per call");
+  eq(sawBody.response_format, "base64", "base64 in");
+  eq(sawBody.output_format, "png", "native png out — no sharp re-encode needed");
+  eq(sawBody.seed, 12345, "the caller seed rides the body (identity pinning)");
+  eq(sawBody.negative_prompt, "blurry", "the negative prompt rides along (S49)");
+  eq(buf?.length, 1500, "the b64 payload decodes to the image bytes");
+});
+
+await test("S96 together: non-schnell models take the provider step default; the url envelope downloads; seeds clamp", async () => {
+  const { togetherImage } = await import("../src/lib/tubeforge/providers/image.ts");
+  type Core = typeof togetherImage;
+  const cfg = {
+    provider: "together",
+    apiKey: "k",
+    baseUrl: "",
+    model: "black-forest-labs/FLUX.1.1-pro",
+  } as Parameters<Core>[1];
+  let sawBody: Record<string, unknown> = {};
+  let downloads = 0;
+  const img = Buffer.from("y".repeat(2000));
+  let buf: Buffer | null = null;
+  await withFetchStub(
+    async (url, init) => {
+      if (url.includes("images/generations")) {
+        sawBody = JSON.parse(String(init.body));
+        return S95_JSON({ data: [{ index: 0, url: "https://cdn.test/img.png", type: "url" }] });
+      }
+      downloads += 1;
+      return new Response(new Uint8Array(img), { headers: { "content-type": "image/png" } });
+    },
+    async () => {
+      buf = await togetherImage({ prompt: "p", size: "1024x1024", seed: 9_999_999_999 }, cfg);
+    },
+  );
+  eq(sawBody.model, "black-forest-labs/FLUX.1.1-pro", "the configured model overrides the default");
+  eq(sawBody.steps, undefined, "FLUX.1.1-pro is not distilled — steps omitted, the provider default applies");
+  eq(sawBody.seed, 2_147_483_647, "seeds clamp to [0, 2^31-1] (int32, pollinations parity)");
+  eq(downloads, 1, "the url envelope falls back to a download");
+  eq(buf?.length, 2000, "the downloaded bytes come back");
+});
+
+await test("S96 together: no key, 429 cool-down, and image-less JSON all throw honestly", async () => {
+  const { togetherImage } = await import("../src/lib/tubeforge/providers/image.ts");
+  type Core = typeof togetherImage;
+  const base = { provider: "together", baseUrl: "", model: "" } as Parameters<Core>[1];
+
+  // No key — fails before any fetch leaves the building.
+  let err: unknown = null;
+  try {
+    await togetherImage({ prompt: "p", size: "1024x1024" }, { ...base, apiKey: "  " });
+  } catch (e) {
+    err = e;
+  }
+  ok(
+    err instanceof Error && /needs an API key/.test(err.message),
+    `blank key → the needs-a-key error (${String(err)})`
+  );
+
+  // 429 — the ~10 img/min free-tier window; must rethrow with the "429"
+  // token so the budget.ts retry layer cools down instead of failing.
+  err = null;
+  try {
+    await withFetchStub(
+      async () =>
+        new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+          status: 429,
+          headers: { "content-type": "application/json" },
+        }),
+      async () => {
+        await togetherImage({ prompt: "p", size: "1024x1024" }, { ...base, apiKey: "k" });
+      },
+    );
+  } catch (e) {
+    err = e;
+  }
+  ok(
+    err instanceof Error && err.message.startsWith("429"),
+    `429 → the cool-down token leads the message (${String(err)})`
+  );
+  ok(err instanceof Error && /rate-limited/.test(err.message), "the message names the rate limit");
+
+  // JSON without an image — honest error, not a crash on undefined.
+  err = null;
+  try {
+    await withFetchStub(
+      async () => S95_JSON({ data: [] }),
+      async () => {
+        await togetherImage({ prompt: "p", size: "1024x1024" }, { ...base, apiKey: "k" });
+      },
+    );
+  } catch (e) {
+    err = e;
+  }
+  ok(
+    err instanceof Error && /no image data/.test(err.message),
+    `empty data → the no-image error (${String(err)})`
+  );
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
