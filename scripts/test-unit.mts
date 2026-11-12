@@ -12076,6 +12076,10 @@ await test("S104 THE OWNERSHIP LAW: middleware owns the CSP, next.config ships n
     "middleware sets the CSP on the REQUEST headers — the documented Next nonce-stamping mechanism",
   );
   ok(
+    mw.includes("{ dev: !isProd }"),
+    "middleware passes dev:!isProd — production gets the strict contract (no unsafe-eval) by CONSTRUCTION, dev keeps HMR",
+  );
+  ok(
     mw.includes('"/((?!api/|_next/static|_next/image|favicon.ico).*)"'),
     "the matcher covers documents now — they used to bypass middleware entirely and carry the static policy",
   );

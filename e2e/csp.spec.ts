@@ -4,12 +4,21 @@
 //
 // Runs against the LIVE dev server (the e2e suite's own boot): the document
 // response must carry the middleware's nonce CSP — script-src with a fresh
-// 'nonce-…' and 'strict-dynamic', NEVER 'unsafe-inline'/'unsafe-eval' in
-// script-src — and Next.js must have stamped its bootstrap scripts with
-// that nonce (the mechanism the whole law rests on). Also guards the
-// double-CSP footgun: exactly ONE Content-Security-Policy header.
+// 'nonce-…' and 'strict-dynamic', NEVER 'unsafe-inline' — and Next.js must
+// have stamped its bootstrap scripts with that nonce (the mechanism the
+// whole law rests on). The strict PRODUCTION contract (no unsafe-eval
+// either) is pinned byte-for-byte on the pure builder in the unit suite
+// (buildCsp dev:false) plus the middleware wiring pin ({ dev: !isProd });
+// this runtime spec asserts the MECHANISM, and treats 'unsafe-eval' as
+// legal ONLY when the server under test is a dev server (HMR/react-refresh
+// need it there — csp.ts's documented exception).
+//
+// Also guards the double-CSP footgun: exactly ONE Content-Security-Policy
+// header.
 
 import { test, expect } from "@playwright/test";
+
+const serverIsDev = process.env.NODE_ENV !== "production";
 
 test("the document CSP carries a fresh nonce and never relaxes script-src", async ({ page }) => {
   const responses: { csp: string[]; url: string }[] = [];
@@ -32,8 +41,11 @@ test("the document CSP carries a fresh nonce and never relaxes script-src", asyn
   const scriptSrc = csp.match(/script-src[^;]*/)?.[0] ?? "";
   expect(scriptSrc).toContain("'nonce-");
   expect(scriptSrc).toContain("'strict-dynamic'");
+  // 'unsafe-inline' is dead in EVERY mode — the textual exit criterion.
   expect(scriptSrc).not.toContain("'unsafe-inline'");
-  expect(scriptSrc).not.toContain("'unsafe-eval'");
+  // 'unsafe-eval' is legal ONLY on a dev server (HMR); the production law
+  // is byte-pinned on buildCsp(dev:false) in the unit suite.
+  if (!serverIsDev) expect(scriptSrc).not.toContain("'unsafe-eval'");
 
   // The other documented laws (csp.ts pins them at the unit layer; this is
   // the runtime cross-check).
@@ -44,19 +56,19 @@ test("the document CSP carries a fresh nonce and never relaxes script-src", asyn
 });
 
 test("Next.js stamps its bootstrap scripts with the middleware nonce", async ({ page }) => {
-  await page.goto("/", { waitUntil: "domcontentloaded" });
+  // The SERVED HTML — not the post-hydration DOM: React rewrites script
+  // attributes when it hydrates, so the document's own stamped nonces are
+  // only visible in the raw response.
+  const res = await page.request.get("/");
+  expect(res.ok()).toBeTruthy();
+  const html = await res.text();
+  const csp = res.headers()["content-security-policy"] ?? "";
+  const policyNonce = csp.match(/'nonce-([^']+)'/)?.[1] ?? "";
 
-  // Extract the nonce from the response policy…
-  const csp = await page.evaluate(() => {
-    // The document is already loaded; read the nonce from any stamped script.
-    const scripts = Array.from(document.querySelectorAll("script[nonce]"));
-    return scripts.map((s) => s.getAttribute("nonce"));
-  });
-
-  // …the nonce-stamped scripts exist (Next read the CSP request header and
-  // propagated the nonce to its bootstrap scripts — the mechanism the law
-  // rests on; zero stamped scripts means the mechanism is broken and the
-  // app only still renders because dev carries 'unsafe-eval').
-  expect(csp.length).toBeGreaterThan(0);
-  for (const n of csp) expect(n).not.toBe("");
+  const stamped = [...html.matchAll(/<script[^>]*nonce="([^"]*)"/g)].map((m) => m[1]);
+  expect(stamped.length).toBeGreaterThan(0); // the mechanism ran at all
+  expect(policyNonce).not.toBe(""); // the policy carries a real nonce
+  // THE LAW: the nonce Next stamped on its bootstrap scripts is EXACTLY the
+  // one the policy admits — an attacker nonce (or none) is not.
+  expect(stamped).toContain(policyNonce);
 });

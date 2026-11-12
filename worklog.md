@@ -5464,3 +5464,18 @@ Verified locally: bash -n, eslint (0 problems), typecheck, production
 build (which also validated the concurrent s104 CSP change in the
 merged tree). The walk itself is CI-proven (docker is not available
 in the sandbox); the first CI run is the evidence line.
+
+**S104 ADDENDUM — the CI e2e failure and the hydration-DOM lesson.** The
+first push's e2e failed in CI (green locally — the worst kind): (1) the
+spec asserted the PRODUCTION contract (no unsafe-eval) against the DEV
+server, whose policy legitimately carries 'unsafe-eval' for HMR — the
+spec now respects the dev/prod split, and the production contract is
+held by CONSTRUCTION: the byte-level pin on buildCsp(dev:false) plus
+the new wiring pin ({ dev: !isProd }) in middleware. (2) The
+nonce-stamping assertion read the POST-HYDRATION DOM — where React
+rewrites script attributes to nonce="" — and concluded the mechanism
+was broken while the served HTML carried the REAL per-request nonces
+(proven raw: script nonce="7854929c-…" matching the policy's
+'nonce-…'). The assertion now reads the SERVED HTML and pins the true
+law: the nonce Next stamped on its bootstrap scripts is EXACTLY the
+one the policy admits — an attacker nonce (or none) is not.
