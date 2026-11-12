@@ -104,4 +104,5 @@ recovery.
 | P0.2  | S100   | CI run 43282465637 (success)         | worklog.md §S100 |
 | P0.3  | S101   | push-gate run recorded in worklog.md | worklog.md §S101 |
 | P0.4  | S102   | push-gate run recorded in worklog.md | worklog.md §S102 |
+| P0.5  | S104   | push-gate run recorded in worklog.md | worklog.md §S104 |
 | P1.1  | S103   | push-gate run recorded in worklog.md | worklog.md §S103 |

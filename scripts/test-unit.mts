@@ -12022,6 +12022,75 @@ await test("S102 THE SHARED LAW: the authoritative limiter is DB-backed, atomic,
   ok(!!mig, `the counters migration is in the chain (${mig ?? "missing"})`);
 });
 
+// ---------- S104 — P0.5 production-readiness: CSP hardening + SVG gate ----------
+//
+// docs/production-readiness.md P0.5: the security regression suite passes;
+// production CSP drops unsafe-inline/unsafe-eval. The SVG ingestion gate was
+// already closed (S64's sanitizeSvg suite — sanitization before storage,
+// rasterization before trust); the remaining hole was the CSP. The runtime
+// regression lives in e2e/csp.spec.ts (live documents + stamped nonces);
+// these pins hold the pure header law and the ownership law.
+
+await test("S104 THE CSP LAW: production script-src carries a nonce + strict-dynamic, never unsafe-inline/unsafe-eval", async () => {
+  const { buildCsp } = await import("../src/lib/tubeforge/csp");
+  const prod = buildCsp("NONCE123", { dev: false });
+  const scriptSrc = prod.match(/script-src[^;]*/)?.[0] ?? "";
+  ok(scriptSrc.includes("'nonce-NONCE123'"), "the per-request nonce is embedded verbatim");
+  ok(
+    scriptSrc.includes("'strict-dynamic'"),
+    "strict-dynamic lets the nonce-stamped bootstrap scripts load framework chunks while an XSS payload gains nothing",
+  );
+  ok(
+    !scriptSrc.includes("'unsafe-inline'") && !scriptSrc.includes("'unsafe-eval'"),
+    "production drops BOTH holes — the P0.5 exit criterion, textual and absolute",
+  );
+  const devScript = buildCsp("DEVN", { dev: true }).match(/script-src[^;]*/)?.[0] ?? "";
+  ok(
+    devScript.includes("'unsafe-eval'") && !devScript.includes("'unsafe-inline'"),
+    "dev allows eval for HMR/react-refresh — inline stays dead even in dev",
+  );
+  ok(
+    prod.includes("style-src 'self' 'unsafe-inline'"),
+    "style-src keeps its documented exception (React style={} attributes and Next's injected <style> cannot carry nonces)",
+  );
+  ok(
+    prod.includes("object-src 'none'") && prod.includes("base-uri 'self'") && prod.includes("form-action 'self'"),
+    "the Stage-1 hard directives stand",
+  );
+  ok(
+    !prod.includes("frame-ancestors"),
+    "frame-ancestors is DELIBERATELY absent — the studio previews inside cross-origin sandbox iframes (pinned so nobody breaks them blind)",
+  );
+  ok(buildCsp("A", { dev: false }) !== buildCsp("B", { dev: false }), "the header is deterministic per nonce — two requests never share one");
+});
+
+await test("S104 THE OWNERSHIP LAW: middleware owns the CSP, next.config ships no static policy, documents match the middleware", () => {
+  const nc = fs.readFileSync("next.config.ts", "utf8");
+  ok(
+    !nc.includes("Content-Security-Policy"),
+    "next.config ships NO static CSP — two policies intersect (most restrictive wins) and would break the nonce-stamped scripts",
+  );
+  const mw = fs.readFileSync("src/middleware.ts", "utf8");
+  ok(
+    mw.includes("buildCsp(nonce") && mw.includes('docHeaders.set("Content-Security-Policy", csp)'),
+    "middleware sets the CSP on the REQUEST headers — the documented Next nonce-stamping mechanism",
+  );
+  ok(
+    mw.includes('"/((?!api/|_next/static|_next/image|favicon.ico).*)"'),
+    "the matcher covers documents now — they used to bypass middleware entirely and carry the static policy",
+  );
+  ok(
+    mw.indexOf('pathname.startsWith("/api/")') >= 0 &&
+      mw.indexOf("PRODUCTION FAIL-SAFE") > mw.indexOf('pathname.startsWith("/api/")'),
+    "the document branch returns BEFORE the API gate — signed-out pages still render the sign-in screen",
+  );
+  const svg = fs.readFileSync("src/lib/tubeforge/whiteboard/svg.ts", "utf8");
+  ok(
+    svg.includes("export function sanitizeSvg") && svg.includes('"script"'),
+    "the SVG ingestion gate stands (S64): sanitize before storage, rasterize before trust — the audit's PARTIAL is now FULL",
+  );
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

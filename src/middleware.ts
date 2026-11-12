@@ -30,6 +30,7 @@ import {
   parseAllowedOrigins,
 } from "@/lib/tubeforge/origin-trust";
 import { REQUEST_ID_HEADER, log } from "@/lib/tubeforge/log";
+import { buildCsp } from "@/lib/tubeforge/csp";
 
 // Reachable without a token. /api/auth/token is deliberately NOT here —
 // minting an API token requires an authenticated session. /api/auth/status
@@ -76,7 +77,25 @@ export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const isProd = process.env.NODE_ENV === "production";
 
-  if (!pathname.startsWith("/api/")) return NextResponse.next();
+  // S104 / P0.5 — the nonce CSP for DOCUMENTS. Pages used to bypass this
+  // middleware entirely (matcher was API-only) and carried the static
+  // next.config CSP with 'unsafe-inline' 'unsafe-eval' — the audit's exact
+  // finding. Now: every request gets a FRESH nonce, the CSP goes on the
+  // REQUEST headers (Next.js reads it there and stamps its own bootstrap
+  // scripts — the documented nonce mechanism) and on the response. The
+  // strict contract lives in csp.ts (unit-pinned); the old static CSP is
+  // GONE from next.config — two CSP headers on one document means BOTH
+  // policies apply (intersection = most restrictive), a classic footgun.
+  if (!pathname.startsWith("/api/")) {
+    const nonce = crypto.randomUUID();
+    const csp = buildCsp(nonce, { dev: !isProd });
+    const docHeaders = new Headers(req.headers);
+    docHeaders.set("x-tf-csp-nonce", nonce);
+    docHeaders.set("Content-Security-Policy", csp);
+    const res = NextResponse.next({ request: { headers: docHeaders } });
+    res.headers.set("Content-Security-Policy", csp);
+    return res;
+  }
 
   // S57/T-57.1 — request correlation: every /api/* request carries a FRESH
   // x-request-id of OURS (an inbound id is untrusted client input — always
@@ -89,8 +108,15 @@ export async function middleware(req: NextRequest) {
   const requestId = crypto.randomUUID();
   const requestHeaders = new Headers(req.headers);
   requestHeaders.set(REQUEST_ID_HEADER, requestId);
+  // S104 — API responses carry the CSP too (hygiene: a JSON body that ever
+  // renders as a document inherits the same law). Static per-request nonce —
+  // cheap, and consistent with the documents.
+  const apiCsp = buildCsp(crypto.randomUUID(), { dev: !isProd });
   const respond = (body: unknown, status: number, headers: Record<string, string> = {}) =>
-    NextResponse.json(body, { status, headers: { [REQUEST_ID_HEADER]: requestId, ...headers } });
+    NextResponse.json(body, {
+      status,
+      headers: { [REQUEST_ID_HEADER]: requestId, "Content-Security-Policy": apiCsp, ...headers },
+    });
   const rlog = mwLog.child({ req: requestId });
 
   // Coarse per-IP rate limit — runs BEFORE auth so unauthenticated floods
@@ -111,7 +137,11 @@ export async function middleware(req: NextRequest) {
       );
   }
 
-  if (PUBLIC_API.has(pathname)) return NextResponse.next({ request: { headers: requestHeaders } });
+  if (PUBLIC_API.has(pathname)) {
+    const res = NextResponse.next({ request: { headers: requestHeaders } });
+    res.headers.set("Content-Security-Policy", apiCsp);
+    return res;
+  }
 
   // PRODUCTION FAIL-SAFE — no secret, no data.
   if (!secret) {
@@ -179,7 +209,9 @@ export async function middleware(req: NextRequest) {
     }
   }
 
-  return NextResponse.next({ request: { headers: requestHeaders } });
+  const res = NextResponse.next({ request: { headers: requestHeaders } });
+  res.headers.set("Content-Security-Policy", apiCsp);
+  return res;
 }
 
 // Runtime: Node.js (Next 16 compiles ALL middleware/proxy to Node — the
@@ -191,6 +223,14 @@ export async function middleware(req: NextRequest) {
 // invisible until registration was attempted. The middleware itself stays
 // WebCrypto-only (see auth-token.ts "Edge-safe token utilities") and must
 // never import node:* APIs regardless.
+//
+// S104 / P0.5 — the matcher now ALSO matches documents (everything except
+// the framework's immutable asset paths) so they can carry the nonce CSP;
+// the /api/* branch is unchanged. csp.ts is pure (no imports) so the edge
+// contract stays clean.
 export const config = {
-  matcher: ["/api/:path*"],
+  matcher: [
+    "/api/:path*",
+    "/((?!api/|_next/static|_next/image|favicon.ico).*)",
+  ],
 };

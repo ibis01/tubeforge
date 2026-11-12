@@ -8,25 +8,17 @@ import type { NextConfig } from "next";
 //     cross-origin sandbox iframes; a blanket DENY would break those embeds.
 //   - COEP require-corp: would break any cross-origin subresource lacking
 //     CORP headers (risky until the media pipeline is fully CDN-backed).
-// CSP keeps 'unsafe-inline'/'unsafe-eval' — Next 16 needs both for its inline
-// bootstrap and dev overlay; Stage 4a tightens this with nonces.
-const CSP = [
-  "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https:",
-  "media-src 'self' blob: https:",
-  "connect-src 'self' https:",
-  "font-src 'self' data:",
-  "worker-src 'self' blob:",
-  "manifest-src 'self'",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-].join("; ");
+//
+// S104 / P0.5 — the CSP moved OUT of this file: a static header cannot carry
+// a per-request nonce, so middleware now owns the policy entirely
+// (src/middleware.ts + csp.ts — production script-src is 'self' 'nonce-…'
+// 'strict-dynamic', NO unsafe-inline, NO unsafe-eval; style-src keeps its
+// documented unsafe-inline exception). A static CSP here would ALSO apply
+// (browsers intersect multiple policies = most restrictive wins) and break
+// the nonce-stamped scripts. These headers keep applying to every route
+// including the static assets the middleware matcher skips.
 
 const securityHeaders = [
-  { key: "Content-Security-Policy", value: CSP },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   {

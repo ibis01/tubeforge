@@ -5362,3 +5362,59 @@ and the P0.4 stage row are recorded in docs/production-readiness.md.
 Verified: typecheck, lint (0 errors), 501/501 unit, billing 40/40,
 storage 15/15, rate 17/17, drill 7/7 (RTO 58ms first, 61ms gate),
 alert probe HEALTH 0 failed, production build.
+
+## S104 — P0.5 closed: nonce CSP (unsafe-inline/unsafe-eval dropped) + the SVG gate confirmed (2026-11-13)
+
+**THE HOLE.** next.config.ts shipped the Stage-1 static CSP with
+`script-src 'self' 'unsafe-inline' 'unsafe-eval'` — the audit's exact
+remaining finding (its own comment said "Stage 4a tightens this with
+nonces"; Stage 4a never got there). The SVG ingestion boundary was
+ALREADY sound (S64's sanitizeSvg: scripts/foreignObject/event-
+handlers/script-URLs stripped before storage, rasterized before
+trust) — the PARTIAL verdict was CSP-shaped.
+
+**THE DESIGN.** A static header cannot carry a per-request nonce, so
+the policy MOVED: csp.ts (pure, unit-pinned) builds the header;
+middleware generates a fresh `crypto.randomUUID()` nonce per request,
+sets the CSP on the REQUEST headers (the documented Next mechanism —
+Next reads it there and stamps its own bootstrap scripts) and on the
+response. The matcher now covers documents too (`/((?!api/|_next/
+static|_next/image|favicon.ico).*)`) — they used to bypass middleware
+entirely; the document branch returns BEFORE the API gate so signed-
+out pages still render the sign-in screen. next.config's static CSP
+is GONE — two CSP headers on one document intersect (most restrictive
+wins) and would have broken the nonce-stamped scripts.
+
+**THE LAW (csp.ts, byte-pinned).** Production script-src =
+`'self' 'nonce-…' 'strict-dynamic'` — NO unsafe-inline, NO
+unsafe-eval, textual and absolute (the exit criterion). strict-dynamic
+lets the nonce-stamped bootstrap scripts load framework chunks while
+an injected payload gains nothing. Dev adds 'unsafe-eval' (HMR/
+react-refresh) — inline stays dead even in dev. style-src keeps its
+documented 'unsafe-inline' exception (React style={} attributes and
+injected <style> cannot carry nonces — style injection is a nuisance,
+not a script primitive). object-src 'none', base-uri 'self',
+form-action 'self' stand. frame-ancestors DELIBERATELY absent (the
+sandbox-iframe embed decision stands) — pinned so nobody breaks it
+blind.
+
+**THE EVIDENCE (the P0.5 exit condition).** Two layers: e2e/csp.spec.ts
+against the LIVE server — exactly ONE CSP header on the document (the
+double-CSP footgun guarded), script-src carries a nonce + strict-
+dynamic and never the two holes, the other directives stand,
+frame-ancestors stays absent, and Next's bootstrap scripts carry the
+nonce attribute (the mechanism proven working, not assumed); and 2
+unit pins (501 → 503) on the pure header law + the ownership law
+(middleware owns CSP, next.config ships none, documents match,
+document branch precedes the auth gate, the S64 SVG gate stands).
+FULL e2e suite 16/16 — palette, script editor, voice studio, cast,
+whiteboard render, mobile sweep — the studio works entirely under the
+strict policy.
+
+**COST.** One uuid per request and one header set — the nonce is
+WebCrypto-native, the middleware already ran for every API call; pages
+now hit it too (a Headers copy + passthrough).
+
+Verified: typecheck, lint (0 errors), 503/503 unit, billing 40/40,
+storage 15/15, rate 17/17, production build, e2e 16/16 incl. the new
+CSP regression.
