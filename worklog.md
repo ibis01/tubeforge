@@ -5526,3 +5526,51 @@ freeze is at its decision point (see docs/production-readiness.md).
 Verified: typecheck, eslint (0 errors, 0 warnings), 503/503 unit,
 billing 40/40, storage 15/15, rate 17/17, drill held (RTO 152ms),
 alert probe HEALTH 0 failed, production build.
+
+## S107 — P2 decision point reached: every production-readiness gate is closed (2026-11-13)
+
+**THE CLOSING EVIDENCE.** HEAD `27ef67b` — CI run 43305937761, ALL jobs
+green: secret scan, clean-clone bootstrap (P0.1), typecheck/lint/unit
+(0 errors, 0 warnings, 503+ pins), PostgreSQL integration (the S60
+wedge + self-heal, every migration applied), production build,
+money-path coverage, e2e 16/16 (incl. the CSP regression), and the
+Docker production-topology smoke (P0.6) walking the FULL acceptance
+sequence: register → login → create project over real HTTP → ffmpeg
+renders a real MP4 in-container → the artifact round-trips the
+S3-compatible store with the S101 hold lifecycle settled → a job
+executes cross-process in the worker container → the worker restarts
+and the S100 reaper bumps the fencing token on an expired-lease row.
+
+**THE GATES, CLOSED IN ORDER:** P0.1 clean-clone + deterministic
+dual-dialect Prisma generation (S99) · P0.2 renewable leases + fencing
+tokens (S100) · P0.3 atomic storage admission with durable holds
+(S101) · P0.4 trusted-proxy IP law + shared DB-backed limiter (S102) ·
+P0.5 nonce CSP, unsafe-inline/unsafe-eval dropped, SVG gate confirmed
+(S104) · P0.6 the full topology smoke (S105) · P1.1 measured restore
+drill + actionable alert probe (S103) · P1.2 zero avoidable warnings +
+the storage module decomposed (S106).
+
+**WHAT THE NEW GATES CAUGHT WHILE BEING BUILT** (the proof they earn
+their keep): the compose web command would have wedge-crash-looped on
+a clean Postgres at auth_setting (the S60 fingerprint, live in the
+first smoke boot); MinIO's Docker Hub org is PURGED and dl.min.io
+returns 410 — the documented container topology had stopped existing
+for everyone (re-based Hub-free: ECR Public mirrors + SeaweedFS 3.96,
+the roadmap's "S3-compatible" clause); the standalone bundle shipped
+without the Prisma query engine (outputFileTracingIncludes); the S3
+gateway bound to loopback so the containers' host-gateway hop died
+mid-walk; and the S101 source pins caught a refactor REVERTING the
+upgraded admission law mid-flight.
+
+**P2 — THE DECISION POINT.** The governing decision (S99) froze major
+feature development "until the production-readiness gates are closed".
+They are closed, with evidence at HEAD. The freeze therefore reaches
+its decision point: lifting it is an OPERATOR call, not an
+autonomous one — this record does not unfreeze anything by itself.
+Reliability work continues to be welcome; the next feature engine now
+needs an explicit sign-off against a fully-gated baseline.
+
+Verified at HEAD: typecheck, lint (0 errors, 0 warnings), 503/503
+unit, billing 40/40, storage 15/15, rate 17/17, drill held, alert
+probe HEALTH 0 failed, production build, e2e 16/16, clean-clone 21/21,
+docker smoke green.

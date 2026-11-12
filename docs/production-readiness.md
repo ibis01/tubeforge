@@ -105,6 +105,9 @@ recovery.
 | P0.3  | S101   | push-gate run recorded in worklog.md | worklog.md §S101 |
 | P0.4  | S102   | push-gate run recorded in worklog.md | worklog.md §S102 |
 | P0.5  | S104   | push-gate run recorded in worklog.md | worklog.md §S104 |
+| P0.6  | S105    | the full production topology walks the acceptance sequence in CI (run 43305937761, HEAD `27ef67b`) — the gate caught THREE real findings: the compose wedged on a clean Postgres (the S60 fingerprint, fixed by booting migrate-stage2's self-heal), MinIO's Docker Hub org is PURGED (topology re-based on an S3-compatible store, Hub-free image sourcing via ECR Public), and the standalone bundle missed the Prisma query engine (outputFileTracingIncludes) | worklog.md §S105 |
+| P1.1  | S103   | the restore drill is MEASURED (RTO printed per run) and the alert probe prints actionable ALERT lines (8 checks) | worklog.md §S103 |
+| P1.2  | S106   | 20 lint warnings → 0 (fixed at site, none suppressed); storage.ts decomposed into storage-s3.ts + storage-quota.ts + facade; S101 source pins caught a reversion of the admission law mid-refactor | worklog.md §S106 |
 | P0.6  | S105   | push-gate run recorded in worklog.md | worklog.md §S105 |
 | P1.1  | S103   | push-gate run recorded in worklog.md | worklog.md §S103 |
 | P1.2  | S106   | push-gate run recorded in worklog.md | worklog.md §S106 |
