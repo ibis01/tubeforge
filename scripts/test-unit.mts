@@ -11864,6 +11864,86 @@ await test("S100 the lease columns are real schema, backed by a migration in the
   );
 });
 
+// ---------- S101 — P0.3 production-readiness: storage reservations ----------
+//
+// docs/production-readiness.md P0.3: durable reservations with atomic
+// accounting, expiry, and release-on-failure — concurrent uploads cannot
+// exceed quota. The REAL battery lives in test-storage.mts (DB + real
+// serialization); these pins hold the admission law in the source.
+
+await test("S101 THE ADMISSION LAW: the ceiling check and the hold are ONE serialized transaction", () => {
+  const src = fs.readFileSync("src/lib/tubeforge/storage.ts", "utf8");
+  ok(
+    src.includes("storageAdmissionTx") && src.includes('isolationLevel: "Serializable"'),
+    "the admission runs Serializable on Postgres (SQLite serializes through its write lock) — the S32 spend-admission pattern",
+  );
+  ok(
+    src.includes("P2034") && src.includes("attempt < 4"),
+    "P2034 serialization conflicts retry against the winner's committed rows",
+  );
+  ok(
+    /storageUsage\.upsert\(\{[\s\S]*?update: \{\},[\s\S]*?create: \{ organizationId, bytes: 0 \}/.test(src),
+    "the admission WRITES FIRST (ensure-counter upsert) — on SQLite this takes the write lock at tx open, so concurrent racers serialize before their reads",
+  );
+  ok(
+    /aggregate\(\{[\s\S]*?expiresAt: \{ gt: new Date\(\) \}/.test(src),
+    "the admission sums LIVE holds only — an expired hold never blocks an upload beyond its TTL",
+  );
+  ok(
+    src.includes("committed + inFlight - replacesBytes + Math.max(0, incomingBytes) > quota"),
+    "the ceiling counts committed bytes + live holds, credits replaced bytes, floors the incoming delta at 0",
+  );
+});
+
+await test("S101 THE INTEGRATION LAW: put and putFromPath hold BEFORE writing, release on failure, settle the real delta", () => {
+  const src = fs.readFileSync("src/lib/tubeforge/storage.ts", "utf8");
+  // Both write paths reserve before the driver write…
+  const putReserves = (src.match(/reserveStorageBytes\(/g) ?? []).length;
+  ok(putReserves >= 3, `put + putFromPath + the battery all admit through reserveStorageBytes (${putReserves} call sites)`);
+  // …release in the failure catch…
+  const releases = (src.match(/reservation\?\.release\(\)/g) ?? []).length;
+  ok(releases === 2, `both write paths release their hold when the write fails (${releases} catch-release sites)`);
+  // …and settle the real bytes after it lands.
+  const commits = (src.match(/reservation\?\.commit\(/g) ?? []).length;
+  ok(commits === 2, `both write paths settle the real byte count (${commits} commit sites)`);
+  // The hold never moves the committed counter: release() touches ONLY the
+  // reservation table — the quota it held is fully reclaimable.
+  ok(
+    /release: async \(\) => \{[\s\S]*?storageReservation\.deleteMany/.test(src),
+    "release() deletes ONLY the hold row — a hold never moved the committed counter, so dropping one frees exactly the bytes it reserved",
+  );
+});
+
+await test("S101 the sweep + wiring: expired holds drop lazily from the queue tick, the model is real schema", () => {
+  const src = fs.readFileSync("src/lib/tubeforge/storage.ts", "utf8");
+  ok(
+    src.includes("export async function sweepExpiredStorageReservations"),
+    "the expiry sweep is exported (crash net for processes that died between admission and settle)",
+  );
+  ok(src.includes("take: 200"), "the sweep is bounded (200 rows per pass) — a backlog cannot wedge the tick");
+
+  const queueSrc = fs.readFileSync("src/lib/tubeforge/queue.ts", "utf8");
+  ok(
+    queueSrc.includes("sweepExpiredStorageReservations") && queueSrc.includes("% 60"),
+    "the queue tick sweeps expired holds lazily (~1/min per process) through a cycle-free dynamic import",
+  );
+
+  const pg = fs.readFileSync("prisma/schema.prisma", "utf8");
+  ok(/model StorageReservation \{/.test(pg), "the StorageReservation model is in the postgres schema");
+  ok(/storageReservations\s+StorageReservation\[\]/.test(pg), "Organization carries the hold back-relation");
+  const dirs = fs
+    .readdirSync("prisma/migrations", { withFileTypes: true })
+    .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+    .map((d) => d.name);
+  const mig = dirs.find((d) => d.includes("storage_reservations"));
+  ok(!!mig, `the reservations migration is in the chain (${mig ?? "missing"})`);
+  const sql = fs.readFileSync(`prisma/migrations/${mig}/migration.sql`, "utf8");
+  ok(
+    /CREATE TABLE "StorageReservation"/.test(sql) && /expiresAt/.test(sql),
+    "the migration creates the hold table with its expiry column",
+  );
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
