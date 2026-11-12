@@ -16,6 +16,17 @@
 #   → start worker → the reaper bumps the fencing token, both jobs land done
 #
 # Any failure exits non-zero. The compose project is torn down on exit.
+#
+# Registry strategy (S105 follow-up — three CI runs died on it): Docker Hub
+# DENIES anonymous pulls from GitHub's shared runner IP pools ("pull access
+# denied … repository does not exist") regardless of backoff. Every image the
+# topology needs is therefore sourced HUB-FREE:
+#   node:20-bookworm-slim + postgres:16-alpine → pulled from the ECR Public
+#     library mirror (public.ecr.aws/docker/library/…) and tagged locally to
+#     the names the Dockerfile / compose expect, so the build and compose
+#     find them in the local cache and never contact Hub;
+#   MinIO → a HOST process downloaded from dl.min.io (MinIO's own CDN), with
+#     the containers talking S3 to it over host.docker.internal:9000.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -29,32 +40,54 @@ export MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-$(openssl rand -hex 16)}"
 
 COMPOSE=(docker compose -p tf-smoke -f docker-compose.yml -f docker-compose.smoke.yml)
 
+MINIO_PID=""
 cleanup() {
   "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
+  [ -n "$MINIO_PID" ] && kill "$MINIO_PID" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-# S105 fix — Docker Hub anonymous pulls from GitHub's SHARED runner IP pools
-# rate-limit into exactly "pull access denied for minio/minio, repository
-# does not exist or may require 'docker login'" (two consecutive runs died
-# on it: 43293441260, 43293505991). The image is fine; the pool is throttled.
-# Pre-pull every external image with bounded backoff BEFORE compose up so a
-# throttled window is waited out instead of failing the whole gate.
-for img in minio/minio:latest amazon/aws-cli:latest postgres:17; do
-  if docker image inspect "$img" >/dev/null 2>&1; then continue; fi
-  pulled=false
-  for attempt in 1 2 3 4; do
-    echo "[smoke] docker pull $img (attempt $attempt)"
-    if docker pull "$img" >/dev/null 2>&1; then pulled=true; break; fi
-    sleep $((attempt * 20))
-  done
-  if [ "$pulled" != true ]; then
-    echo "[smoke] FAIL: docker pull exhausted retries for $img (Docker Hub throttling?)"
-    exit 1
+# --- Hub-free image sourcing (ECR Public mirrors, tagged to local names) ---
+for pair in \
+  "public.ecr.aws/docker/library/node:20-bookworm-slim node:20-bookworm-slim" \
+  "public.ecr.aws/docker/library/postgres:16-alpine postgres:16-alpine"; do
+  set -- $pair
+  if docker image inspect "$2" >/dev/null 2>&1; then
+    echo "[smoke] $2 already cached"
+    continue
   fi
+  echo "[smoke] pulling $2 from the ECR Public mirror"
+  docker pull "$1"
+  docker tag "$1" "$2"
 done
 
-echo "[smoke] building + booting the production topology (postgres + minio + web + worker)"
+# --- MinIO as a HOST process (dl.min.io — MinIO's own CDN, Hub-free) ---
+echo "[smoke] downloading MinIO + mc from dl.min.io"
+curl -fsSLo /tmp/minio https://dl.min.io/server/minio/release/linux-amd64/minio
+curl -fsSLo /tmp/mc https://dl.min.io/client/mc/release/linux-amd64/mc
+chmod +x /tmp/minio /tmp/mc
+rm -rf /tmp/minio-data && mkdir -p /tmp/minio-data
+MINIO_ROOT_USER="$MINIO_ROOT_USER" MINIO_ROOT_PASSWORD="$MINIO_ROOT_PASSWORD" \
+  /tmp/minio server /tmp/minio-data --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 \
+  >/tmp/minio.log 2>&1 &
+MINIO_PID=$!
+
+MINIO_OK=false
+for i in $(seq 1 30); do
+  if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1; then MINIO_OK=true; break; fi
+  sleep 1
+done
+if [ "$MINIO_OK" != true ]; then
+  echo "[smoke] FAIL: the MinIO host process never became healthy"
+  tail -20 /tmp/minio.log || true
+  exit 1
+fi
+/tmp/mc alias set local http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
+/tmp/mc mb --ignore-existing local/tubeforge >/dev/null
+echo "[smoke] MinIO healthy — bucket ready (host process, :9000)"
+
+# --- build + boot the topology ---
+echo "[smoke] building + booting the production topology (postgres + web + worker → MinIO)"
 "${COMPOSE[@]}" up -d --build
 
 echo "[smoke] waiting for web health (the image healthcheck: /api/auth/status)"
