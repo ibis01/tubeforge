@@ -41,6 +41,18 @@ const nextConfig: NextConfig = {
   // audit — all previously-suppressed errors were fixed at the source.)
   reactStrictMode: true,
   devIndicators: false,
+  // S105 addendum — the Docker production smoke caught the first real
+  // deployment bug the gate exists for: `output: "standalone"` traces files
+  // through nft, and the Prisma QUERY ENGINE binary
+  // (node_modules/.prisma/client/libquery_engine-debian-openssl-3.0.x.so.node)
+  // is loaded via a dynamic path the tracer misses — the standalone server
+  // died at boot with "Prisma Client could not locate the Query Engine".
+  // Trace the whole generated-client directory (engine + schema copy) into
+  // every bundle; a few MB, and every standalone deployment carries the
+  // engine its platform's generate produced.
+  outputFileTracingIncludes: {
+    "/**": ["./node_modules/.prisma/client/**", "./node_modules/@prisma/client/**"],
+  },
   async headers() {
     return [
       {
