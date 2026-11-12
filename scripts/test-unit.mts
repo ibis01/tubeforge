@@ -11689,6 +11689,112 @@ await test("S98 imageTestFreeLane: the free lanes skip the paid-test confirm, ev
   eq(imageTestFreeLane("", ""), false, "no provider: no exemption");
 });
 
+// ---------- S99 — P0.1 production-readiness: the schema sync law + the clean-clone contract ----------
+//
+// The governing roadmap now lives in docs/production-readiness.md (feature
+// development FROZEN at S98; security/reliability/maintenance only until the
+// P0.* gates close). P0.1 is the Prisma + clean-clone gate. These pins are
+// the fast, in-suite half; the slow, real-clone half is
+// scripts/test-clean-clone.mts (`npm run verify:clone` + the CI clean-clone
+// job). The two MUST agree — the last test pins that agreement.
+
+await test("S99 schema sync law: the committed SQLite mirror is byte-identical to what sync-sqlite-schema.mjs derives", () => {
+  const pg = fs.readFileSync("prisma/schema.prisma", "utf8");
+  const lite = fs.readFileSync("prisma/schema.sqlite.prisma", "utf8");
+  const script = fs.readFileSync("scripts/sync-sqlite-schema.mjs", "utf8");
+
+  // The transform contract, pinned first: if the syncer changes shape, this
+  // pin forces the derivation below to be updated with it.
+  ok(
+    /datasource db \{\s*provider = "postgresql"/.test(pg),
+    'schema.prisma carries the postgresql datasource block the syncer swaps',
+  );
+  ok(
+    script.includes('provider = "sqlite"') && script.includes("const header = `// GENERATED from schema.prisma"),
+    "the syncer still swaps the provider and stamps the GENERATED header",
+  );
+
+  // Derive the mirror EXACTLY as scripts/sync-sqlite-schema.mjs does
+  // (header + the provider-swapped postgres schema, everything else verbatim)
+  // and demand byte-identity with what is committed. Editing schema.prisma
+  // without `npm run db:sync-sqlite` fails here, not in production.
+  const header = `// GENERATED from schema.prisma by scripts/sync-sqlite-schema.mjs — DO NOT EDIT.
+// Regenerate with: npm run db:sync-sqlite (also run by setup:local / postinstall).
+// Provider swapped to SQLite for local development; every field definition is
+// a verbatim copy of schema.prisma (the PostgreSQL deployment schema).
+
+`;
+  const derived = header + pg.replace(
+    /datasource db \{\s*provider = "postgresql"/,
+    'datasource db {\n  provider = "sqlite"',
+  );
+  eq(
+    lite,
+    derived,
+    "the committed SQLite mirror is exactly the derived copy — run `npm run db:sync-sqlite` after editing schema.prisma",
+  );
+  ok(!lite.includes('provider = "postgresql"'), "the mirror is fully SQLite — no postgres provider line survives");
+});
+
+await test("S99 migration chain: Postgres-owned, alive, and every migration carries SQL", () => {
+  const lock = fs.readFileSync("prisma/migrations/migration_lock.toml", "utf8");
+  ok(
+    /provider\s*=\s*"postgresql"/.test(lock),
+    "migration_lock.toml pins the chain to postgresql (SQLite is db-push, deliberately not migration-managed)",
+  );
+  const chainRoot = path.join("prisma", "migrations");
+  const dirs = fs
+    .readdirSync(chainRoot, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+    .map((d) => d.name)
+    .sort();
+  ok(dirs.length >= 20, `the chain is alive (${dirs.length} migrations)`);
+  for (const d of dirs) {
+    const sql = fs.readFileSync(path.join(chainRoot, d, "migration.sql"), "utf8");
+    ok(sql.trim().length > 0, `${d}/migration.sql is non-empty`);
+  }
+});
+
+await test("S99 fresh-clone hygiene law: .gitignore buries every runtime artifact, postinstall selects the dialect by protocol", () => {
+  const gitignore = fs.readFileSync(".gitignore", "utf8");
+  for (const pattern of ["node_modules", ".env*", "/.next/", "next-env.d.ts", "/db/*", "*.db", "/coverage", "test-results/"]) {
+    ok(gitignore.includes(pattern), `.gitignore covers ${pattern} — the verifier's forbidden-state law depends on it`);
+  }
+
+  const post = fs.readFileSync("scripts/postinstall.mjs", "utf8");
+  ok(post.includes("url.startsWith('file:')"), "postinstall picks the dialect by URL protocol (the S90-era P1012 lesson)");
+  ok(
+    post.includes("'prisma/schema.sqlite.prisma'") && post.includes("'prisma/schema.prisma'"),
+    "postinstall references BOTH dialect schemas",
+  );
+  ok(
+    post.includes("TUBEFORGE_AUTH_SECRET") && post.includes("TUBEFORGE_ENCRYPTION_KEY"),
+    "postinstall provisions the auth + encryption secrets (the middleware fails closed without them)",
+  );
+  ok(post.includes("next-env.d.ts"), "postinstall creates next-env.d.ts (tsc needs it before the first build)");
+
+  const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")) as { scripts: Record<string, string> };
+  eq(pkg.scripts.postinstall, "node scripts/postinstall.mjs", "npm wires postinstall to the dialect selector");
+  eq(pkg.scripts["verify:clone"], "node --import tsx scripts/test-clean-clone.mts", "verify:clone runs the clean-clone verifier");
+});
+
+await test("S99 the verifier's own contract: forbidden list, the .gitkeep allowance, dual-dialect determinism, and the boot probe", () => {
+  const v = fs.readFileSync("scripts/test-clean-clone.mts", "utf8");
+  for (const f of ["node_modules", ".env", ".next", "coverage", "next-env.d.ts", "test-results"]) {
+    ok(v.includes(`"${f}"`), `the verifier treats ${f} as forbidden fresh-clone state`);
+  }
+  ok(
+    v.includes('".gitkeep"') && v.includes("dbEntries.every"),
+    "the verifier allowlists only .gitkeep inside db/ (the dbEntries.every guard) — the only tracked db/ entry",
+  );
+  ok(
+    v.includes("prisma/schema.sqlite.prisma") && v.includes('"prisma/schema.prisma"'),
+    "the verifier determinism-checks BOTH dialect clients",
+  );
+  ok(v.includes("organization.count"), "the verifier boots the fresh clone and queries it (the boot proof)");
+  ok(v.includes("delete freshEnv.DATABASE_URL"), "the verifier strips an injected DATABASE_URL — the fresh-clone story has none");
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

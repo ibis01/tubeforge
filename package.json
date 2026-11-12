@@ -30,7 +30,8 @@
     "worker:daemon": "python3 scripts/daemonize.py scripts/worker-daemon.log npm run worker",
     "check": "npm run typecheck && npm run lint && npm run test && npm run test:billing",
     "test:e2e": "playwright test",
-    "test:billing": "node --import tsx scripts/test-billing.mts"
+    "test:billing": "node --import tsx scripts/test-billing.mts",
+    "verify:clone": "node --import tsx scripts/test-clean-clone.mts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

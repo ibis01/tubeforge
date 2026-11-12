@@ -5080,3 +5080,67 @@ needed its chromium v1254 binary installed locally — expected.
 Suite count 488 → 489 unit; premium-ux 7 → 8 e2e. Verified:
 typecheck, lint (0 errors), 489/489 unit, billing 40/40, premium-ux
 8/8, mobile-sweep 4/4, production build green.
+
+## S99 — the production-readiness roadmap adopted; P0.1 (Prisma + clean-clone CI) closed (2026-11-13)
+
+**THE GOVERNING DECISION.** The production-readiness review was adopted
+as the project's new roadmap and recorded verbatim in
+docs/production-readiness.md: major feature development is FROZEN at
+S98 — only security fixes, reliability improvements, bug fixes, and
+maintenance until the P0.1–P1.2 gates close; no new video engine
+before the exit criteria pass. The 13-engine roadmap is complete;
+TubeForge's next advantage is operational reliability, not another
+engine. The doc carries the eight validated priorities, the
+P0.1→P2 stage table with exit conditions, and the P0.6 target
+topology (web + Postgres + worker + FFmpeg/Chromium + object storage,
+with the register→render→recover acceptance walk).
+
+**P0.1 — THE CLEAN-CLONE GATE.** The gap: check/build/coverage prove
+the CI CHECKOUT installs, but nothing proved what a contributor's
+fresh `git clone` experiences — tracked runtime state, a drifted
+SQLite schema mirror, a Postgres-only generate breakage, or
+non-deterministic client output. Closed with three layers:
+
+1. scripts/test-clean-clone.mts (`npm run verify:clone`, plus a new
+   `clean-clone` CI job): real `git clone --depth 1` of HEAD into a
+   clean temp dir, then 21 assertions — forbidden-state law
+   (node_modules/.env/.next/coverage/next-env.d.ts/test-results/
+   playwright-report/.vercel absent, db/ holds only .gitkeep); the
+   boot proof (npm ci with NO injected DATABASE_URL → postinstall
+   creates .env with file:../db/custom.db, provisions
+   TUBEFORGE_AUTH_SECRET + TUBEFORGE_ENCRYPTION_KEY, creates
+   next-env.d.ts, pushes db/custom.db); the boot probe (the generated
+   client queries the pushed Stage-2 schema — organization.count());
+   the determinism law (SQLite regenerate → byte-identical sha256
+   manifest; Postgres generate + regenerate → byte-identical; the two
+   dialect manifests DIFFER, so a silent provider swap cannot pass);
+   and the hygiene law (install + generation touch no tracked file —
+   git status stays empty).
+2. Four S99 unit pins (suite 489 → 493): the committed
+   schema.sqlite.prisma must be BYTE-IDENTICAL to what
+   sync-sqlite-schema.mjs derives from schema.prisma (the drift that
+   bit Stage 1's VoiceProfile can now never ship); the migration
+   chain is Postgres-owned (migration_lock.toml) and every migration
+   carries SQL; .gitignore buries every runtime artifact + the
+   postinstall dialect-selection and npm wiring; and the verifier's
+   own contract (forbidden list, the .gitkeep allowance, dual-dialect
+   determinism, the DATABASE_URL strip) is pinned so the fast and
+   slow halves of the gate can never drift apart.
+3. The DATABASE_URL strip matters: postinstall must pick SQLite by
+   the ABSENCE of a postgres URL — a leaked shell var would test the
+   wrong dialect and prove nothing.
+
+**THE GATE EARNED ITS KEEP ALREADY.** The first verifier run failed
+on MY bug, not the repo's: the boot probe wrote boot-probe.cjs INTO
+the clone, dirtying the exact git-status hygiene assertion that
+follows. Fixed by running the probe via `node -e` (bare requires
+resolve against CWD, no file lands in the clone) — and the failure
+proved the hygiene assertion has teeth. Also learned from run 1:
+cross-clone manifest digests differ (path/cache-dependent bytes),
+which is exactly why the determinism law is WITHIN-clone
+regenerate-and-compare, never cross-clone.
+
+Verified locally: typecheck, lint (0 errors), 493/493 unit, billing
+40/40, verify:clone 21/21 assertions, production build. CI adds the
+clean-clone job (no ffmpeg, no services — two npm cis on the warm
+cache) on every push.

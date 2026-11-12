@@ -320,6 +320,34 @@ jobs:
       - name: Verify healed chain + provider portability (S60 regression battery)
         run: node --import tsx scripts/pg-ci-verify.mts
 
+  # S99 — the P0.1 clean-clone gate (docs/production-readiness.md). The
+  # check/build/coverage jobs prove the CI CHECKOUT installs; THIS job proves
+  # a FRESH CLONE of the pushed commit boots with zero hidden local state:
+  #   forbidden state absent (node_modules/.env/db/.next/... not tracked),
+  #   postinstall bootstraps SQLite end-to-end (.env + secrets +
+  #   next-env.d.ts + generate + db push + stage-2),
+  #   the generated client queries the pushed schema (the boot probe),
+  #   and BOTH dialect clients regenerate byte-identically (the
+  #   deterministic-Prisma-generation law — a drifted sqlite mirror or a
+  #   postgres-only generate failure fails HERE, not in production).
+  clean-clone:
+    name: Clean-clone bootstrap (P0.1)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies (provides tsx; warms the npm cache for the clone)
+        run: npm ci
+
+      - name: Clean-clone verifier (fresh clone → npm ci → boot probe → determinism)
+        run: node --import tsx scripts/test-clean-clone.mts
+
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-24.04
