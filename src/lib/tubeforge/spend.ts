@@ -210,6 +210,42 @@ export const PRICING_SOURCES = [
     covers: [],
     note: "TOMBSTONE — 404 as of the S34 re-check (2026-11-05 UTC / 2026-11-06 Asia/Shanghai local). The legacy gpt-4.1/gpt-4o rows it sourced are gone from MODEL_PRICES (unverifiable-cheap under-prices the gate); legacy ids price at FALLBACK_PRICE until a live source exists",
   },
+  {
+    url: "https://docs.x.ai/developers/models",
+    retrievedAt: "2026-11-12", // UTC
+    covers: ["grok-4"],
+    note: "S95 re-reconciliation (2026-11-12 UTC): grok-4 priced $3/$15 per 1M tokens (cross-checked against the live price tracker pricepertoken.com/pricing-page/model/xai-grok-4). grok-3 NO LONGER appears on the current models page — retired: removed from the provider registry, not priced here (a stale configured id prices at FALLBACK_PRICE)",
+  },
+  {
+    url: "https://docs.claude.com/en/docs/about-claude/pricing",
+    retrievedAt: "2026-11-12", // UTC
+    covers: ["claude-sonnet-4-5", "claude-sonnet-4.5", "claude-haiku-4-5"],
+    note: "S95 (2026-11-12 UTC): Sonnet 4.5 $3/$15 (both spellings — the hyphen id is the canonical API id, the dot alias resolves the openrouter row), Haiku 4.5 $1/$5 (cross-checked against Anthropic's pricing page as re-quoted 2026-11-05 by reflektlab.ai, which also documents opus-4-1 as RETIRED on the Claude API — no row, registry no longer offers it)",
+  },
+  {
+    url: "https://ai.google.dev/gemini-api/docs/pricing",
+    retrievedAt: "2026-11-12", // UTC
+    covers: ["gemini-2.5-pro"],
+    note: "S95 (2026-11-12 UTC): gemini-2.5-pro $1.25/$10 per 1M tokens standard tier (<=200k prompt). The page flags both 2.5 models deprecated — they auto-route to the 3.x flash models from 2026-12-01; the row prices the id the registry still offers",
+  },
+  {
+    url: "https://api-docs.deepseek.com/quick_start/pricing",
+    retrievedAt: "2026-11-12", // UTC
+    covers: ["deepseek-flash", "deepseek-v4-pro"],
+    note: "S95 (2026-11-12 UTC): PEAK cache-miss rates (flash $0.30/$1.20, v4-pro $1.32/$3.96) — off-peak is exactly half, so the peak figure is the conservative side of the split. deepseek-chat/deepseek-reasoner are gone from the page; the registry offers the current ids",
+  },
+  {
+    url: "https://docs.mistral.ai/inference/pricing",
+    retrievedAt: "2026-11-12", // UTC
+    covers: ["mistral-large-latest"],
+    note: "S95 (2026-11-12 UTC): Mistral Large 4 $0.7/$2.1 per 1M tokens — mistral-large-latest is the rolling alias for the current flagship Large. Pixtral Large is not in the current lineup: no row, registry no longer offers it",
+  },
+  {
+    url: "https://openrouter.ai/meta-llama/llama-3.3-70b-instruct",
+    retrievedAt: "2026-11-12", // UTC
+    covers: ["llama-3.3-70b-instruct"],
+    note: "S95 (2026-11-12 UTC): OpenRouter lists $0.10/$0.32 per 1M tokens for the openrouter registry row 'meta-llama/llama-3.3-70b-instruct'; distinct from the retired groq 'llama-3.3-70b-versatile' row (different model, different vendor)",
+  },
 ] as const;
 
 /** True only when the registry has been reconciled against its sources.
@@ -276,6 +312,47 @@ const MODEL_PRICES: Record<string, ModelPrice> = {
   "llama-3.3-70b-versatile": { in: 590_000, out: 790_000 },
   "llama-3.1-8b-instant": { in: 50_000, out: 80_000 },
 
+  // --- xAI Models (grok-4 verified 2026-11-12 UTC against the live docs
+  //  and price trackers — see PRICING_SOURCES; grok-3 is NOT priced here:
+  //  it left xAI's current models page, the registry stopped offering it,
+  //  and a stale configured id prices at the conservative fallback) ---
+  "grok-4": { in: 3_000_000, out: 15_000_000 },
+
+  // --- Claude Sonnet 4.5 + Haiku 4.5 (verified 2026-11-12 UTC on
+  //  docs.claude.com pricing / Anthropic's own page as re-quoted by a live
+  //  tracker: sonnet $3/$15, haiku $1/$5; opus-4-1 is RETIRED — no row).
+  //  Both spellings priced: "claude-sonnet-4-5" is the canonical API id the
+  //  anthropic registry offers; the openrouter row
+  //  "anthropic/claude-sonnet-4.5" resolves through the dotted alias. ---
+  "claude-sonnet-4-5": { in: 3_000_000, out: 15_000_000 },
+  "claude-sonnet-4.5": { in: 3_000_000, out: 15_000_000 },
+  "claude-haiku-4-5": { in: 1_000_000, out: 5_000_000 },
+
+  // --- Google Gemini (ai.google.dev/gemini-api/docs/pricing, verified
+  //  2026-11-12 UTC; standard tier = prompts <= 200k tokens. gemini-2.5-pro
+  //  is deprecated-but-callable until 2026-12-01, when it auto-routes to
+  //  gemini-3.8-flash — the row prices the id the registry offers) ---
+  "gemini-2.5-pro": { in: 1_250_000, out: 10_000_000 },
+
+  // --- DeepSeek (api-docs.deepseek.com/quick_start/pricing, verified
+  //  2026-11-12 UTC: PEAK cache-miss rates — the conservative direction of
+  //  the peak/off-peak split; off-peak is half of peak, so the estimate
+  //  stays >= the actual bill whichever window the call lands in) ---
+  "deepseek-flash": { in: 300_000, out: 1_200_000 },
+  "deepseek-v4-pro": { in: 1_320_000, out: 3_960_000 },
+
+  // --- Mistral (docs.mistral.ai/inference/pricing, verified 2026-11-12
+  //  UTC: Mistral Large 4 $0.7/$2.1 — "mistral-large-latest" is the rolling
+  //  alias for the current Large. Pixtral Large is no longer listed — no
+  //  row, and the registry no longer offers it) ---
+  "mistral-large-latest": { in: 700_000, out: 2_100_000 },
+
+  // --- OpenRouter Models (openrouter.ai model pages, verified 2026-11-12 UTC) ---
+  // "meta-llama/llama-3.3-70b-instruct" resolves here via vendor-prefix
+  // strip; distinct from the RETIRED groq "llama-3.3-70b-versatile" row
+  // above (different model, different vendor, both legitimately priced).
+  "llama-3.3-70b-instruct": { in: 100_000, out: 320_000 },
+
   // --- Magic Hour Models (estimate, micro-USD/1M tokens) ---
   "ltx-2.5": { in: 1_000_000, out: 1_000_000 },
   "wan-2.2": { in: 1_000_000, out: 1_000_000 },
@@ -291,11 +368,22 @@ const MODEL_PRICES: Record<string, ModelPrice> = {
 const FALLBACK_PRICE: ModelPrice = MODEL_PRICES["gpt-6-astra"];
 
 /** Longest-prefix match so dated snapshots ("gpt-6.1-sol-2026-10-15") and
- *  vendor-qualified ids ("openai/gpt-6.1-sol") resolve to their row. */
+ *  vendor-qualified ids ("openai/gpt-6.1-sol") resolve to their row.
+ *
+ *  S95 fix (2026-11-12): the OLD body stripped a vendor prefix BEFORE any
+ *  exact match — which made rows keyed WITH a vendor prefix unreachable.
+ *  Groq's registry ids ARE fully qualified ("openai/gpt-oss-120b"), so the
+ *  entire groq pricing section a2eabd8 added silently resolved to the ~60x
+ *  fallback for every dispatch. Resolution order is now: exact raw id,
+ *  exact stripped id, longest-prefix on the raw id, longest-prefix on the
+ *  stripped id. */
 function resolvePrice(model: string): ModelPrice | null {
-  const id = model.trim().replace(/^[a-z0-9-]+\//i, "");
+  const raw = model.trim();
+  if (MODEL_PRICES[raw]) return MODEL_PRICES[raw];
+  const id = raw.replace(/^[a-z0-9-]+\//i, "");
   if (MODEL_PRICES[id]) return MODEL_PRICES[id];
   const keys = Object.keys(MODEL_PRICES).sort((a, b) => b.length - a.length);
+  for (const key of keys) if (raw.startsWith(key)) return MODEL_PRICES[key];
   for (const key of keys) if (id.startsWith(key)) return MODEL_PRICES[key];
   return null;
 }

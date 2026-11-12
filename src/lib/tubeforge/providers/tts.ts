@@ -210,7 +210,10 @@ async function zhipuTts(
  *  via req.voice (which the UI would populate from a voice list). */
 const HEYGEN_DEFAULT_VOICE = "83548de556df48ba8c09c42a57c51d85";
 
-async function heygenTts(
+/** Exported for the S95 pin suite — called with a caller-built config so
+ *  the pins run with no DB and no tenant context, exactly like the
+ *  S37 zaiVideoViaClient seam. */
+export async function heygenTts(
   req: TtsRequest,
   config: CapabilityConfig,
 ): Promise<Buffer> {

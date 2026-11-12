@@ -11029,6 +11029,417 @@ await test("S80: normalizeConsistencyCheckMode — the two valid non-defaults pa
   });
 }
 
+
+// ---------- S95 — the multi-provider adapters: pins for what a2eabd8 shipped ----------
+//
+// The multi-provider commit added groq (chat), heygen (tts) and magichour
+// (video) with ZERO unit pins. The S90 sync law caught the missing priors
+// rows and the nightly s7 probe caught the dropped settings contract, but
+// nothing pinned the adapters themselves or the pricing registry they ride.
+// This section closes that: THE PRICING SYNC LAW (every registry chat model
+// of a PAID provider prices at a REAL row — the same miss-class as
+// priorsComplete: grok-4, claude-sonnet-4.5 and openrouter's llama-3.3-70b
+// were riding the ~15x fallback), the tombstone law for retired ids
+// (grok-3), heygen's cost honesty (a keyed free TIER is "unknown", never
+// "free" — the free status expires), and the two new adapters end-to-end
+// against a scripted fetch.
+
+/** S95 — scripted global fetch for the providerFetch seam. providerFetch
+ *  merges its own AbortSignal into init, so the stub sees exactly what the
+ *  wire would see (the no-hang law is assertable off `signal`). Restores
+ *  the real fetch in finally — a leaking stub would poison every later
+ *  suite. */
+async function withFetchStub(
+  handler: (url: string, init: RequestInit) => Response | Promise<Response>,
+  fn: (calls: Array<{ url: string; method?: string; signal?: unknown }>) => Promise<void>,
+) {
+  const calls: Array<{ url: string; method?: string; signal?: unknown }> = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (url: RequestInfo | URL, init: RequestInit = {}) => {
+    calls.push({ url: String(url), method: init.method, signal: init.signal });
+    return handler(String(url), init);
+  }) as typeof fetch;
+  try {
+    await fn(calls);
+  } finally {
+    globalThis.fetch = real;
+  }
+}
+
+const S95_WAV = () =>
+  new Response(new ArrayBuffer(500), { headers: { "content-type": "audio/wav" } });
+const S95_JSON = (obj: unknown) =>
+  new Response(JSON.stringify(obj), { headers: { "content-type": "application/json" } });
+const S95_VID = () =>
+  new Response(new ArrayBuffer(10_000), { headers: { "content-type": "video/mp4" } });
+
+await test("S95 THE PRICING SYNC LAW: every registry chat model of a PAID provider prices at a real row", async () => {
+  const reg = await import("../src/lib/tubeforge/providers/registry.ts");
+  const spend = await import("../src/lib/tubeforge/spend.ts");
+  const unpriced: string[] = [];
+  for (const p of reg.PROVIDERS_BY_CAPABILITY.chat) {
+    if (!spend.isPaidProvider(p.id)) continue;
+    for (const m of p.models ?? []) {
+      if (!spend.modelPriced(m.id)) unpriced.push(`${p.id}/${m.id}`);
+    }
+  }
+  eq(
+    unpriced,
+    [],
+    "unpriced registry chat models ride the ~15x flagship fallback — price them (with a source) or retire them"
+  );
+});
+
+await test("S95 pricing provenance: the three reconciled rows price at their verified sources", async () => {
+  const spend = await import("../src/lib/tubeforge/spend.ts");
+  // grok-4 — xAI docs + price tracker, verified 2026-11-12 UTC: $3 in / $15 out.
+  const grok = spend.priceForModel("grok-4");
+  eq(grok.in, 3_000_000, "grok-4 input $3/1M");
+  eq(grok.out, 15_000_000, "grok-4 output $15/1M");
+  // claude-sonnet-4.5 — docs.claude.com pricing, verified 2026-11-12 UTC:
+  // $3/$15. The openrouter registry id resolves through the vendor-prefix
+  // strip (anthropic/claude-sonnet-4.5 → claude-sonnet-4.5).
+  const cs45 = spend.priceForModel("anthropic/claude-sonnet-4.5");
+  eq(cs45.in, 3_000_000, "openrouter claude-sonnet-4.5 resolves to the canonical $3 in");
+  eq(cs45.out, 15_000_000, "openrouter claude-sonnet-4.5 resolves to the canonical $15 out");
+  // llama-3.3-70b-instruct — openrouter.ai model page, verified 2026-11-12
+  // UTC: $0.10/$0.32. Distinct from the RETIRED groq llama-3.3-70b-versatile
+  // row (different model, different vendor — both legitimately priced).
+  const llama = spend.priceForModel("meta-llama/llama-3.3-70b-instruct");
+  eq(llama.in, 100_000, "openrouter llama-3.3-70b-instruct $0.10/1M in");
+  eq(llama.out, 320_000, "openrouter llama-3.3-70b-instruct $0.32/1M out");
+  // The longest-prefix law still holds for dated snapshots.
+  eq(
+    spend.priceForModel("openai/gpt-oss-120b-2026-01-15").in,
+    150_000,
+    "a dated snapshot resolves to its base row (longest-prefix)"
+  );
+});
+
+await test("S95 THE TOMBSTONE LAW: a retired model has NO row — it rides the conservative fallback, never a stale cheap one", async () => {
+  const spend = await import("../src/lib/tubeforge/spend.ts");
+  const reg = await import("../src/lib/tubeforge/providers/registry.ts");
+  ok(!spend.modelPriced("grok-3"), "grok-3 left xAI's current models page — no price row");
+  const offered = reg.PROVIDERS_BY_CAPABILITY.chat
+    .find((p) => p.id === "xai")
+    ?.models?.some((m) => m.id === "grok-3");
+  eq(offered, false, "the registry no longer offers grok-3 (a dispatch to it fails at the provider)");
+  // The unpriced fallback still OVER-reserves (the safety direction).
+  const unknown = spend.priceForModel("grok-3");
+  ok(
+    unknown.in > spend.priceForModel("grok-4").in,
+    "grok-3's fallback price exceeds grok-4's real price — over-reserve only, never under"
+  );
+});
+
+await test("S95 heygen cost honesty: a keyed free TIER is cost-unknown, never free", async () => {
+  const tts = scoreProviders("tts", { models: {}, observations: {}, weights: { ...DEFAULT_WEIGHTS } });
+  const h = must(tts, (s) => s.provider === "heygen", "heygen");
+  eq(
+    h.costBasis,
+    "unknown",
+    "heygen-voice-1-turbo-free is free only until 2026-11-30 and the provider requires a key — unknown is the honest basis"
+  );
+  ok(h.factors.cost < 1, "the unknown-cost factor discounts the score (cautious, not optimistic)");
+  ok(
+    h.reasons.some((r) => r.includes("never assumed free")),
+    "the reason text carries the never-free law to the UI"
+  );
+});
+
+await test("S95 heygen: the voice-id law, the free model default, and the x-api-key ride along", async () => {
+  const { heygenTts } = await import("../src/lib/tubeforge/providers/tts.ts");
+  type Core = typeof heygenTts;
+  const cfg = { provider: "heygen", apiKey: "hk-pin", baseUrl: "", model: "" } as Parameters<Core>[1];
+  let sawUrl = "";
+  let sawAuth = "";
+  let sawBody: Record<string, unknown> = {};
+  await withFetchStub(async (url, init) => {
+    sawUrl = url;
+    sawAuth = String((init.headers as Record<string, string>)["x-api-key"]);
+    sawBody = JSON.parse(String(init.body));
+    return S95_WAV();
+  }, async () => {
+    const buf = await heygenTts({ input: "hello world", voice: "jam", speed: 1 }, cfg);
+    ok(buf.length >= 44, `binary wav buffers (${buf.length} bytes)`);
+  });
+  eq(sawUrl, "https://api.heygen.com/v3/models/audio/tts", "default base url + the v3 tts path");
+  eq(sawAuth, "hk-pin", "the key rides in x-api-key (HeyGen's header, not Bearer)");
+  eq(sawBody.text, "hello world", "text passes through");
+  eq(sawBody.language, "en", "language pinned");
+  eq(
+    sawBody.voice_id,
+    "83548de556df48ba8c09c42a57c51d85",
+    "a zai-style voice name NEVER rides to heygen as-is — falls back to the Nadine default"
+  );
+  eq(sawBody.model, "heygen-voice-1-turbo-free", "the free model default");
+});
+
+await test("S95 heygen: a 32-hex voice id passes through; custom base url and model are honored", async () => {
+  const { heygenTts } = await import("../src/lib/tubeforge/providers/tts.ts");
+  type Core = typeof heygenTts;
+  const cfg = {
+    provider: "heygen",
+    apiKey: "hk-pin",
+    baseUrl: "http://127.0.0.1:9/heygen/",
+    model: "heygen-voice-2",
+  } as Parameters<Core>[1];
+  let sawUrl = "";
+  let sawBody: Record<string, unknown> = {};
+  await withFetchStub(async (url, init) => {
+    sawUrl = url;
+    sawBody = JSON.parse(String(init.body));
+    return S95_WAV();
+  }, async () => {
+    await heygenTts(
+      { input: "hi", voice: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", speed: 1 },
+      cfg
+    );
+  });
+  ok(
+    sawUrl.startsWith("http://127.0.0.1:9/heygen/v3/models/audio/tts"),
+    `the caller's baseUrl wins and joins cleanly (${sawUrl})`
+  );
+  eq(sawBody.voice_id, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", "a 32-hex heygen voice id passes through");
+  eq(sawBody.model, "heygen-voice-2", "a caller model wins over the free default");
+});
+
+await test("S95 heygen: the JSON envelope — audio_url, nested data.audio_url and bare url all resolve", async () => {
+  const { heygenTts } = await import("../src/lib/tubeforge/providers/tts.ts");
+  type Core = typeof heygenTts;
+  const cfg = { provider: "heygen", apiKey: "k", baseUrl: "", model: "" } as Parameters<Core>[1];
+  for (const [label, payload] of [
+    ["audio_url", { audio_url: "https://cdn.test/a.wav" }],
+    ["nested data.audio_url", { data: { audio_url: "https://cdn.test/a.wav" } }],
+    ["bare url", { url: "https://cdn.test/a.wav" }],
+  ] as Array<[string, Record<string, unknown>]>) {
+    let downloaded = false;
+    await withFetchStub(async (url) => {
+      if (url.includes("cdn.test")) {
+        downloaded = true;
+        return S95_WAV();
+      }
+      return S95_JSON(payload);
+    }, async () => {
+      const buf = await heygenTts({ input: "hi", speed: 1 }, cfg);
+      ok(buf.length >= 44, `${label}: the envelope is followed and real audio returns`);
+    });
+    ok(downloaded, `${label}: the audio url was actually fetched`);
+  }
+});
+
+await test("S95 heygen: JSON without a url, empty audio, HTTP 401, and a missing key all throw honestly", async () => {
+  const { heygenTts } = await import("../src/lib/tubeforge/providers/tts.ts");
+  type Core = typeof heygenTts;
+  const cfg = { provider: "heygen", apiKey: "k", baseUrl: "", model: "" } as Parameters<Core>[1];
+
+  // SEQUENTIAL — each case installs its stub, runs, and restores before the
+  // next one starts. Three concurrent stubs would fight over the global
+  // fetch and leak each other's captures (the first draft of this pin did
+  // exactly that; the leaked stub then answered an unrelated background
+  // call and poisoned the restore chain).
+  const http = await import("../src/lib/tubeforge/providers/http.ts");
+  const cases: Array<[string, (url: string, init: RequestInit) => Response | Promise<Response>]> = [
+    // JSON envelope with no resolvable url
+    ["JSON without a resolvable url", async () => S95_JSON({ error: "nope" })],
+    // envelope url resolves to a sub-44-byte body
+    [
+      "envelope url with an empty download",
+      async (url) =>
+        url.includes("cdn.test")
+          ? new Response(new ArrayBuffer(10), { headers: { "content-type": "audio/wav" } })
+          : S95_JSON({ audio_url: "https://cdn.test/a.wav" }),
+    ],
+    // provider 401 — ProviderHttpError with the redacted body
+    ["HTTP 401", async () => new Response("unauthorized", { status: 401 })],
+  ];
+  let sawHttpError = false;
+  for (const [label, handler] of cases) {
+    let err: unknown = null;
+    await withFetchStub(handler, async () => {
+      try {
+        await heygenTts({ input: "hi", speed: 1 }, cfg);
+      } catch (e) {
+        err = e;
+      }
+    });
+    ok(err instanceof Error, `${label} throws (got ${String(err)})`);
+    if (err instanceof http.ProviderHttpError) {
+      sawHttpError = true;
+      eq((err as http.ProviderHttpError).status, 401, "the 401 keeps its status");
+    }
+  }
+  ok(sawHttpError, "the HTTP failure surfaces as ProviderHttpError");
+
+  // Missing key throws BEFORE any fetch — the friendly setup error.
+  const noKey = { provider: "heygen", apiKey: "", baseUrl: "", model: "" } as Parameters<Core>[1];
+  let missing: unknown = null;
+  try {
+    await heygenTts({ input: "hi", speed: 1 }, noKey);
+  } catch (e) {
+    missing = e;
+  }
+  ok(
+    missing instanceof Error && String((missing as Error).message).includes("platform.heygen.com"),
+    "the missing-key error points at the key page"
+  );
+});
+
+await test("S95 magichour: the four-step happy path — upload-url, timed PUT, submit, video-projects poll, download", async () => {
+  const { magicHourVideo } = await import("../src/lib/tubeforge/providers/video.ts");
+  type Core = typeof magicHourVideo;
+  const cfg = {
+    provider: "magichour",
+    apiKey: "mh-pin",
+    baseUrl: "",
+    model: "",
+  } as Parameters<Core>[1];
+  const polls: string[] = [];
+  let submitBody: Record<string, unknown> = {};
+  let uploadSignal: unknown = null;
+  let uploadMethod = "";
+  let sawAuth = "";
+  const polledUrl = "";
+  let done = false;
+  await withFetchStub(async (url, init) => {
+    if (url.includes("files/upload-urls")) {
+      sawAuth = String((init.headers as Record<string, string>).Authorization);
+      return S95_JSON({ items: [{ upload_url: "https://s3.test/up?sig=1", file_path: "f/test.png" }] });
+    }
+    if (url.startsWith("https://s3.test/")) {
+      uploadSignal = init.signal;
+      uploadMethod = String(init.method);
+      return new Response(null, { status: 200 });
+    }
+    if (url.includes("image-to-video")) {
+      submitBody = JSON.parse(String(init.body));
+      return S95_JSON({ id: "proj-1", credits_charged: 1 });
+    }
+    if (url.includes("video-projects/proj-1")) {
+      polls.push(url);
+      if (polls.length < 2) return S95_JSON({ status: "rendering" });
+      return S95_JSON({ status: "complete", downloads: [{ url: "https://cdn.test/v.mp4" }] });
+    }
+    if (url.includes("cdn.test")) {
+      done = true;
+      return S95_VID();
+    }
+    return new Response("unexpected " + url, { status: 500 });
+  }, async () => {
+    const buf = await magicHourVideo(
+      { prompt: "slow pan", imagePngBase64: "aGVsbG8=", duration: 8 },
+      cfg,
+      { pollMs: 1, maxPolls: 10 }
+    );
+    ok(buf.length >= 10_000, `the clip downloads (${buf.length} bytes)`);
+  });
+  ok(done, "the download url was fetched");
+  eq(sawAuth, "Bearer mh-pin", "the key rides as Bearer (magichour's auth)");
+  eq(uploadMethod, "PUT", "step 2 is the presigned PUT");
+  ok(
+    uploadSignal !== undefined && uploadSignal !== null,
+    "THE NO-HANG LAW: the presigned upload carries an AbortSignal (it used to ride raw fetch, unkillable)"
+  );
+  eq(submitBody.model, "wan-2.2", "the default model");
+  eq(submitBody.end_seconds, 8, "the requested duration passes through");
+  eq(submitBody.resolution, "480p", "the free-tier resolution");
+  eq(
+    (submitBody.assets as Record<string, string> | undefined)?.image_file_path,
+    "f/test.png",
+    "step 1's file_path links into step 3 (the upload handshake)"
+  );
+  eq((submitBody.style as Record<string, string> | undefined)?.prompt, "slow pan", "the prompt rides in style");
+  ok(
+    polls.length >= 1 && polls.every((u) => u.includes("/video-projects/proj-1")),
+    `THE 404 PIN: polling hits /video-projects/{id} (${polledUrl || polls[0]}) — NOT /image-to-video/{id}`
+  );
+});
+
+await test("S95 magichour: missing upload shape, no job id, failure status, url-less complete, and the poll budget all throw", async () => {
+  const { magicHourVideo } = await import("../src/lib/tubeforge/providers/video.ts");
+  type Core = typeof magicHourVideo;
+  const cfg = { provider: "magichour", apiKey: "k", baseUrl: "", model: "" } as Parameters<Core>[1];
+  const req = { prompt: "pan", imagePngBase64: "aGVsbG8=", duration: 5 } as Parameters<Core>[0];
+
+  const run = (
+    pollScript: Array<Record<string, unknown>>,
+    opts: { pollMs?: number; maxPolls?: number } = { pollMs: 1, maxPolls: 5 },
+    override?: (url: string) => Response
+  ) =>
+    withFetchStub(async (url) => {
+      if (override) return override(url);
+      if (url.includes("files/upload-urls"))
+        return S95_JSON({ items: [{ upload_url: "https://s3.test/up", file_path: "f/x.png" }] });
+      if (url.startsWith("https://s3.test/")) return new Response(null, { status: 200 });
+      if (url.includes("image-to-video")) return S95_JSON({ id: "proj-9" });
+      if (url.includes("video-projects/"))
+        return S95_JSON(pollScript[Math.min(pollScript.length - 1, 0)] ?? pollScript[0]);
+      if (url.includes("cdn.test")) return S95_VID();
+      return new Response("unexpected", { status: 500 });
+    }, async () => {
+      await magicHourVideo(req, cfg, opts);
+    });
+
+  // THUNKS, not started promises — each case's stub installs, runs and
+  // restores INSIDE the sequential loop. Building the array with started
+  // promises raced six global-fetch stubs against each other (the first
+  // draft did exactly that and the error case got answered by a rival
+  // stub's script).
+  const cases: Array<[string, () => Promise<void>]> = [
+    ["upload-urls missing items[0]", async () => {
+      await withFetchStub(async () => S95_JSON({ items: [] }), async () => {
+        await magicHourVideo(req, cfg, { pollMs: 1 });
+      });
+    }],
+    ["submit without an id", async () => {
+      await withFetchStub(async (url) => {
+        if (url.includes("files/upload-urls"))
+          return S95_JSON({ items: [{ upload_url: "https://s3.test/up", file_path: "f/x.png" }] });
+        if (url.startsWith("https://s3.test/")) return new Response(null, { status: 200 });
+        if (url.includes("image-to-video")) return S95_JSON({ status: "submitted" });
+        return new Response("unexpected", { status: 500 });
+      }, async () => {
+        await magicHourVideo(req, cfg, { pollMs: 1 });
+      });
+    }],
+    ["poll reports an error status", () => run([{ status: "error", error: { message: "credit exhausted" } }])],
+    ["complete without a download url", () => run([{ status: "complete", downloads: [] }])],
+    ["the poll budget expires", () => run([{ status: "rendering" }], { pollMs: 1, maxPolls: 3 })],
+    ["the presigned upload fails", async () => {
+      await withFetchStub(async (url) => {
+        if (url.includes("files/upload-urls"))
+          return S95_JSON({ items: [{ upload_url: "https://s3.test/up", file_path: "f/x.png" }] });
+        return new Response("denied", { status: 403 });
+      }, async () => {
+        await magicHourVideo(req, cfg, { pollMs: 1 });
+      });
+    }],
+  ];
+  let timedOutMsg = "";
+  for (const [label, runCase] of cases) {
+    let err: unknown = null;
+    try {
+      await runCase();
+    } catch (e) {
+      err = e;
+    }
+    ok(err instanceof Error, `${label} throws (got ${String(err)})`);
+    if (label === "poll reports an error status") {
+      ok(
+        String((err as Error).message).includes("credit exhausted"),
+        "the provider's own error message surfaces (not a generic wrapper)"
+      );
+    }
+    if (label === "the poll budget expires") {
+      timedOutMsg = String((err as Error).message);
+    }
+  }
+  ok(
+    timedOutMsg.includes("timed out after 0s"),
+    `the timeout message reflects the real budget (${timedOutMsg})`
+  );
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

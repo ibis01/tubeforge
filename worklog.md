@@ -4888,3 +4888,66 @@ writing each only when non-empty, "Nothing to save" only when both
 are. The capability and scope-"zai" paths are untouched. Verified:
 typecheck, lint, 471/471 unit, and the s7 probe green against a live
 dev server (the audition refuses again — the write lands).
+
+## S95 — the multi-provider hardening: pins, pricing reconciliation, one real pricing bug (2026-11-12)
+
+"Keep building" picked the biggest gap the multi-provider push left:
+the three new adapters shipped with ZERO unit pins and an unreconciled
+pricing registry. This session closed it — and the new pins caught a
+REAL gate bug on the way.
+
+**THE PRICING BUG (the pin's catch).** resolvePrice stripped a vendor
+prefix BEFORE trying the exact match — which made every row keyed WITH
+a prefix unreachable. Groq's registry ids ARE fully qualified
+("openai/gpt-oss-120b"), so the entire groq pricing section a2eabd8
+added silently resolved to the ~60x flagship fallback on every
+dispatch: safe (over-reserve only) but wrong — the scorer told users
+groq's free-tier models were "unknown — priced at the conservative
+fallback". Resolution order is now exact-raw → exact-stripped →
+prefix-raw → prefix-stripped, pinned by the dated-snapshot and
+vendor-qualified tests.
+
+**THE PRICING SYNC LAW (S95, new pin).** Every registry chat model of
+a PAID provider must price at a REAL row — the same miss-class as
+priorsComplete, for pricing. First run failed with SIXTEEN unpriced
+models: the whole current Anthropic lineup (sonnet-4-5, opus-4-1,
+haiku-4-5), gemini-2.5-pro, ALL SIX groq ids (the resolvePrice bug),
+deepseek-chat/reasoner, mistral-large + pixtral-large, and three
+OpenAI legacy ids. Reconciled against live sources (every price
+fetched and cited in PRICING_SOURCES, 2026-11-12 UTC): sonnet-4-5
+$3/$15, haiku-4-5 $1/$5, gemini-2.5-pro $1.25/$10, deepseek's CURRENT
+lineup (flash $0.30/$1.20, v4-pro $1.32/$3.96 — PEAK cache-miss rates,
+the conservative side of the peak/off-peak split), Mistral Large 4
+$0.7/$2.1 under the mistral-large-latest alias.
+
+**THE TOMBSTONE LAW (S95, new pin).** No live price source → no row
+AND no registry slot: grok-3 (left xAI's models page), claude-opus-4-1
+(retired per Anthropic's pricing page), pixtral-large-latest (not in
+Mistral's current lineup), gpt-4.1/4.1-mini/o4-mini (the S34 tombstone
+now extends to the registry). A stale configured id prices at the
+conservative fallback and fails at the provider — never silently
+billed.
+
+**HEYGEN COST HONESTY (S95, new pin).** heygen-voice-1-turbo-free is
+free only until 2026-11-30 and the provider requires a key, so the
+scorer's honest basis is "unknown, never free" — pinned with the
+discounted factor and the reason text the UI shows.
+
+**THE ADAPTER PINS.** heygenTts and magicHourVideo are exported for
+the suite (the S37 zaiVideoViaClient seam). heygen: the voice-id law
+(a 32-hex id passes, a zai-style name falls back to Nadine), the free
+model default, x-api-key auth, binary and JSON-envelope response
+shapes (audio_url / data.audio_url / url), and four honest failures.
+magichour: the four-step flow with body asserts, THE 404 PIN (status
+polls /video-projects/{id}, not /image-to-video/{id} — the exact bug
+the settings test hit), poll budget injectable (pollMs/maxPolls, the
+zai-video-core opts pattern), and six failure paths.
+
+**ONE HARDENING FIX inside magichour.** The presigned image upload
+rode RAW fetch — no AbortSignal, a hung upload would stall the video
+job past every other timeout in the pipeline. It goes through
+providerFetch (download capability, 10-minute deadline, redacted
+errors) now, pinned by the no-hang law (the stub asserts the signal).
+
+Suite count 471 → 481. Verified: typecheck, lint (0 errors), 481/481
+unit, coverage 54.47% (floor 50%), queue, billing, production build.

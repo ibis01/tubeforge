@@ -313,10 +313,17 @@ async function lumaVideo(
 // The status endpoint is /video-projects/{id}, NOT /image-to-video/{id}.
 // That path mismatch was the "HTTP 404" the settings test was hitting.
 
-async function magicHourVideo(
+/** Exported for the S95 pin suite (the S37 zaiVideoViaClient seam).
+ *  opts.pollMs / opts.maxPolls exist so the pins can script the whole
+ *  4-step flow in milliseconds; production defaults keep 5s x 60 = the
+ *  5-minute poll budget the status endpoint's latency justifies. */
+export async function magicHourVideo(
   req: ImageToVideoRequest,
   config: CapabilityConfig,
+  opts: { pollMs?: number; maxPolls?: number } = {},
 ): Promise<Buffer> {
+  const pollMs = opts.pollMs ?? 5000;
+  const maxPolls = opts.maxPolls ?? 60;
   const baseUrl = config.baseUrl?.trim() || "https://api.magichour.ai/v1";
   const key = config.apiKey?.trim();
   if (!key) throw new Error("Magic Hour needs an API key");
@@ -346,17 +353,21 @@ async function magicHourVideo(
   }
 
   // Step 2 — PUT the raw image bytes to the presigned URL.
+  // S95 hardening: this rode RAW fetch — no AbortSignal, so a hung upload
+  // stalled the whole video job past every other timeout in the pipeline.
+  // providerFetch gives it the download-capability deadline (10 min) and
+  // the redacted error surface every other provider step already had.
   const imageBuffer = Buffer.from(req.imagePngBase64, "base64");
-  const uploadRes = await fetch(uploadItem.upload_url, {
-    method: "PUT",
-    body: new Uint8Array(imageBuffer),
-    headers: { "Content-Type": "image/png" },
-  });
-  if (!uploadRes.ok) {
-    throw new Error(
-      `Magic Hour image upload failed: HTTP ${uploadRes.status} ${uploadRes.statusText}`,
-    );
-  }
+  await providerFetch(
+    "Magic Hour image upload",
+    uploadItem.upload_url,
+    {
+      method: "PUT",
+      body: new Uint8Array(imageBuffer),
+      headers: { "Content-Type": "image/png" },
+    },
+    { capability: "download" },
+  );
 
   // Step 3 — submit the image-to-video job with the uploaded file_path.
   const submitRes = await providerFetch(
@@ -391,8 +402,8 @@ async function magicHourVideo(
   }
 
   // Step 4 — poll the video-project status endpoint (NOT /image-to-video/{id}).
-  for (let i = 0; i < 60; i++) {
-    await new Promise((r) => setTimeout(r, 5000));
+  for (let i = 0; i < maxPolls; i++) {
+    await new Promise((r) => setTimeout(r, pollMs));
     const pollRes = await providerFetch(
       "Magic Hour Poll",
       joinUrl(baseUrl, `video-projects/${submitted.id}`),
@@ -421,5 +432,7 @@ async function magicHourVideo(
     }
     // queued / rendering → keep polling
   }
-  throw new Error("Magic Hour timed out after 5 minutes");
+  throw new Error(
+    `Magic Hour timed out after ${Math.round((maxPolls * pollMs) / 1000)}s`
+  );
 }

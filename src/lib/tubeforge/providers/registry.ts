@@ -40,12 +40,15 @@ export const CHAT_PROVIDERS: ProviderMeta[] = [
     label: "OpenAI",
     defaultBaseUrl: "https://api.openai.com/v1",
     keyUrl: "https://platform.openai.com/api-keys",
+    // gpt-4.1-mini / gpt-4.1 / o4-mini removed (S95, 2026-11-12 UTC): the
+    // S34 tombstone already pulled their price rows (OpenAI's live page no
+    // longer lists them) — the registry now stops OFFERING them too, per the
+    // same law as grok-3: a model with no live price source gets no row and
+    // no registry slot; a stale configured id prices at the conservative
+    // fallback.
     models: [
       { id: "gpt-4o-mini", hint: "cheap + fast — great for scripts" },
       { id: "gpt-4o" },
-      { id: "gpt-4.1-mini" },
-      { id: "gpt-4.1" },
-      { id: "o4-mini", hint: "reasoning model" },
     ],
   },
   {
@@ -54,9 +57,11 @@ export const CHAT_PROVIDERS: ProviderMeta[] = [
     label: "Anthropic (Claude)",
     defaultBaseUrl: "https://api.anthropic.com",
     keyUrl: "https://console.anthropic.com/settings/keys",
+    // claude-opus-4-1 removed (S95, 2026-11-12 UTC): Anthropic's pricing
+    // page lists it as retired on the Claude API ("Opus 4.1, Opus 4, Sonnet
+    // 4 and Haiku 3.5 are retired ... remain only on some cloud platforms").
     models: [
       { id: "claude-sonnet-4-5", hint: "recommended" },
-      { id: "claude-opus-4-1" },
       { id: "claude-haiku-4-5", hint: "fast + affordable" },
     ],
   },
@@ -93,9 +98,13 @@ export const CHAT_PROVIDERS: ProviderMeta[] = [
     label: "DeepSeek",
     defaultBaseUrl: "https://api.deepseek.com/v1",
     keyUrl: "https://platform.deepseek.com/api_keys",
+    // deepseek-chat / deepseek-reasoner replaced (S95, 2026-11-12 UTC):
+    // DeepSeek's live pricing page no longer lists those ids — the current
+    // lineup is deepseek-flash and deepseek-v4-pro (peak/off-peak billing).
+    // The registry offers the ids the provider actually prices today.
     models: [
-      { id: "deepseek-chat", hint: "V3 general" },
-      { id: "deepseek-reasoner", hint: "R1 reasoning" },
+      { id: "deepseek-flash", hint: "fast general — peak $0.30/$1.20 per 1M" },
+      { id: "deepseek-v4-pro", hint: "pro reasoning — peak $1.32/$3.96 per 1M" },
     ],
   },
   {
@@ -104,7 +113,10 @@ export const CHAT_PROVIDERS: ProviderMeta[] = [
     label: "Mistral",
     defaultBaseUrl: "https://api.mistral.ai/v1",
     keyUrl: "https://console.mistral.ai/api-keys/",
-    models: [{ id: "mistral-large-latest" }, { id: "pixtral-large-latest" }],
+        // pixtral-large-latest removed (S95, 2026-11-12 UTC): not in Mistral's
+    // current model lineup (docs.mistral.ai generalist table). mistral-large
+    // -latest stays — the rolling alias maps to Mistral Large 4 ($0.7/$2.1).
+    models: [{ id: "mistral-large-latest" }],
   },
   {
     id: "xai",
@@ -112,7 +124,10 @@ export const CHAT_PROVIDERS: ProviderMeta[] = [
     label: "xAI Grok",
     defaultBaseUrl: "https://api.x.ai/v1",
     keyUrl: "https://console.x.ai/",
-    models: [{ id: "grok-4" }, { id: "grok-3" }],
+    // grok-3 removed (S95, 2026-11-12 UTC): it no longer appears on xAI's
+    // current models page — a new dispatch to it fails at the provider, so
+    // the registry stops offering it. Same law as the groq retired lineup.
+    models: [{ id: "grok-4" }],
   },
   {
     id: "openrouter",
