@@ -401,9 +401,14 @@ export async function tickQueue(): Promise<void> {
     // that is a no-op the overwhelming majority of ticks. One minute per
     // process keeps the amortized cost at zero; the dynamic import avoids
     // a load-time cycle (storage.ts sits below the queue in the graph).
+    // S102 — the shared rate limiter's stale windows are swept in the same
+    // lazy slot (kept 5 windows for forensics, deleted after).
     if (++storageSweepTick % 60 === 0) {
       void import("./storage")
         .then((m) => m.sweepExpiredStorageReservations())
+        .catch(() => {});
+      void import("./shared-rate-limit")
+        .then((m) => m.sweepRateLimitCounters())
         .catch(() => {});
     }
 

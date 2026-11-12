@@ -20,6 +20,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { NextRequest } from "next/server";
 import { db as rawDb } from "@/lib/db";
 import { randomToken } from "./crypto";
+import { trustedClientIp } from "./proxy-trust";
+import { enforceSharedRateLimit } from "./shared-rate-limit";
 import {
   API_TOKEN_MAX_AGE_SEC,
   SESSION_COOKIE,
@@ -273,6 +275,9 @@ export type AuthResult =
 
 const AUTH_REQUIRED = "Authentication required — sign in to use TubeForge";
 
+/** S102 — the shared limiter's write tier covers every state-changing method. */
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
 export async function requireUser(req: NextRequest): Promise<AuthResult> {
   const secret = getAuthSecret();
   if (!secret) {
@@ -298,6 +303,20 @@ export async function requireUser(req: NextRequest): Promise<AuthResult> {
         ? await resolveApiCtx(payload.uid, payload.jti)
         : null;
   if (!ctx) return { ok: false, status: 401, error: AUTH_REQUIRED };
+
+  // S102 / P0.4 — the SHARED per-IP limiter: DB-backed, shared by every
+  // instance, surviving deploys (the middleware's in-memory gate is the
+  // coarse per-instance shed). Mapped straight onto the AuthResult union so
+  // EVERY protected route answers 429 without per-route wiring. Fail-open
+  // on DB errors, loudly — see shared-rate-limit.ts.
+  const shared = await enforceSharedRateLimit(req.headers, MUTATING_METHODS.has(req.method));
+  if (!shared.ok) {
+    return {
+      ok: false,
+      status: 429,
+      error: `Too many requests — shared limit reached, retry in ${shared.retryAfterSec}s`,
+    };
+  }
 
   enterTenant(ctx);
   // enter() re-enters the ALS scope in the CALLER's frame — the await above
@@ -422,11 +441,9 @@ export function clearedSessionCookie() {
 // Stage 3" never happened; the DB table is the no-new-infrastructure
 // answer). Routes import it from auth-throttle; clientIp stays here.
 
-/** Client IP for rate limiting (best effort behind the preview proxy). */
+/** Client IP for rate limiting — S102: the trusted-proxy law (proxy-trust.ts),
+ *  NOT the spoofable first x-forwarded-for value. This IP keys the S46 login
+ *  lockout, so a spoofable resolver was a lockout-poisoning vector. */
 export function clientIp(headers: Headers): string {
-  return (
-    headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    headers.get("x-real-ip") ||
-    "local"
-  );
+  return trustedClientIp(headers);
 }

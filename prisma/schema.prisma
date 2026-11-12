@@ -911,3 +911,20 @@ model AuthAttempt {
   @@index([key, at])
 }
 
+
+// S102 / P0.4 — the SHARED per-IP rate limiter's fixed-window counters.
+// The middleware's in-memory buckets stay (edge runtime is architecture-
+// banned from the DB — they are coarse per-instance shedding); THIS table is
+// the authoritative multi-instance law, enforced at requireUser: one row per
+// (tiered key, 60s window), atomically incremented via a raw upsert
+// RETURNING count. Survives deploys, shared by every instance, immune to the
+// X-Forwarded-For first-value spoof (trusted-proxy law in shared-rate-limit.ts).
+model RateLimitCounter {
+  key         String   // "<tier>:<client ip>" — tier is r (read) or w (write)
+  windowStart BigInt   // epoch SECONDS of the fixed 60s window (BigInt: int32 epoch dies in 2038)
+  count       Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  @@id([key, windowStart])
+  @@index([updatedAt]) // the sweep scan
+}

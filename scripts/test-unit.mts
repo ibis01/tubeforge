@@ -11944,6 +11944,84 @@ await test("S101 the sweep + wiring: expired holds drop lazily from the queue ti
   );
 });
 
+// ---------- S102 — P0.4 production-readiness: shared rate limiting + proxy trust ----------
+//
+// docs/production-readiness.md P0.4: multi-instance limits and spoofing
+// tests pass. The REAL battery lives in test-rate-limit.mts (DB + pure
+// cases); these pins hold the architecture laws in the source.
+
+await test("S102 THE TRUST LAW: one proxy-trust module, both resolvers delegate, the edge bundle stays pure", () => {
+  const pt = fs.readFileSync("src/lib/tubeforge/proxy-trust.ts", "utf8");
+  ok(
+    pt.includes("for (let i = entries.length - 1; i >= 0; i -= 1)") && pt.includes("isTrustedProxyIp(entries[i])"),
+    "the walk is RIGHT to LEFT, trusted entries skipped — the spoofable first XFF value is dead",
+  );
+  ok(
+    !/from "\.(?!\/proxy-trust)/.test(pt.split("\n").filter((l) => l.startsWith("import")).join("\n")) &&
+      !pt.includes("tenant-db") &&
+      !pt.includes("@prisma/client"),
+    "proxy-trust.ts imports NOTHING runtime-bound — the edge middleware may safely import its consumers",
+  );
+
+  const rl = fs.readFileSync("src/lib/tubeforge/rate-limit.ts", "utf8");
+  ok(
+    rl.includes('import { trustedClientIp } from "./proxy-trust"') && !rl.includes('.split(",")[0]'),
+    "the middleware's resolver delegates to the law — no first-XFF-value code path survives in rate-limit.ts",
+  );
+  const tenant = fs.readFileSync("src/lib/tubeforge/tenant.ts", "utf8");
+  ok(
+    tenant.includes("return trustedClientIp(headers)") && !tenant.includes(`split(",")[0]`),
+    "tenant.clientIp (the S46 login-lockout key) delegates too — the lockout-poisoning vector is closed at BOTH call sites",
+  );
+  const mw = fs.readFileSync("src/middleware.ts", "utf8");
+  ok(
+    !mw.includes("@/lib/db") && !mw.includes("tenant-db") && !mw.includes("prisma"),
+    "the middleware stays DB-banned (edge runtime) — the in-memory gate is the coarse shed, by design",
+  );
+});
+
+await test("S102 THE SHARED LAW: the authoritative limiter is DB-backed, atomic, fail-open, and wired at the universal gate", () => {
+  const src = fs.readFileSync("src/lib/tubeforge/shared-rate-limit.ts", "utf8");
+  ok(
+    src.includes('ON CONFLICT ("key", "windowStart")') && src.includes('RETURNING "count"'),
+    "the admission is ONE statement — the upsert increments and returns the count, so the DB serializes the racers",
+  );
+  ok(src.includes("windowStart") && src.includes("BIGINT") === false, "sanity: the JS side keys windows in epoch seconds");
+  ok(
+    /catch \(err\)[\s\S]{0,400}fail OPEN|warnFailOpen\(err\)[\s\S]{0,200}ok: true/s.test(src),
+    "DB errors fail OPEN, loudly (once-per-process) — the auth-throttle posture, never a silent open",
+  );
+  ok(
+    src.includes('await import("./proxy-trust")'),
+    "the limiter keys on the TRUSTED client ip — forged chains converge on the victim's bucket, rotation cannot evade",
+  );
+
+  const tenant = fs.readFileSync("src/lib/tubeforge/tenant.ts", "utf8");
+  ok(
+    tenant.includes("await enforceSharedRateLimit(req.headers, MUTATING_METHODS.has(req.method))"),
+    "requireUser enforces the shared limiter — every protected route inherits it with zero per-route wiring",
+  );
+  ok(
+    tenant.includes("status: 429"),
+    "the shared decision maps onto the AuthResult union — routes answer 429 with an honest retry window",
+  );
+
+  const queueSrc = fs.readFileSync("src/lib/tubeforge/queue.ts", "utf8");
+  ok(
+    queueSrc.includes("sweepRateLimitCounters"),
+    "stale windows are swept from the queue tick's lazy slot (5 windows kept for forensics)",
+  );
+
+  const pg = fs.readFileSync("prisma/schema.prisma", "utf8");
+  ok(/model RateLimitCounter \{/.test(pg) && /@@id\(\[key, windowStart\]\)/.test(pg), "the RateLimitCounter model is real schema (composite window key)");
+  const dirs = fs
+    .readdirSync("prisma/migrations", { withFileTypes: true })
+    .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+    .map((d) => d.name);
+  const mig = dirs.find((d) => d.includes("rate_limit_counters"));
+  ok(!!mig, `the counters migration is in the chain (${mig ?? "missing"})`);
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

@@ -165,6 +165,12 @@ jobs:
       - name: Storage reservation battery (P0.3)
         run: npm run test:storage
 
+      # S102 — the P0.4 rate limiter battery (multi-instance limits + the
+      # trusted-proxy spoofing law): XFF right-to-left walk, the shared
+      # fixed-window counter (atomic upsert RETURNING), the sweep.
+      - name: Shared rate limiter battery (P0.4)
+        run: npm run test:rate
+
   build:
     name: Production build
     runs-on: ubuntu-24.04

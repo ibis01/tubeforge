@@ -5252,3 +5252,67 @@ fresh-clone boot with the new table: 21/21).
 
 Verified: typecheck, lint (0 errors), 496/496 unit, billing 40/40,
 storage 15/15, verify:clone 21/21, production build.
+
+## S102 — P0.4 closed: shared rate limiting + trusted-proxy IP law (2026-11-13)
+
+**THE TWO HOLES.** (1) Both IP resolvers took x-forwarded-for's FIRST
+value — the entry the CLIENT typed. An attacker could rotate fake IPs
+to evade every per-IP gate, or name a VICTIM's IP and have the
+victim's bucket flooded — and clientIp keys the S46 login lockout, so
+a forged header could lock a victim out of their own studio (lockout
+poisoning). (2) The middleware limiter was an in-memory Map: per-
+instance truth, wiped on every deploy — multi-instance deployments
+each got their own idea of "too many".
+
+**THE TRUST LAW (proxy-trust.ts — pure, edge-safe).** Walk the
+X-Forwarded-For chain RIGHT to LEFT (the closest proxy appends the
+rightmost entry), skip TRUSTED proxies (loopback + private + link-
+local + CGNAT by default; TUBEFORGE_TRUSTED_PROXIES adds CIDRs), and
+the first untrusted entry is the client. A spoofed leftmost value is
+ignored whenever a real proxy appended a public IP — which is every
+supported topology. All-trusted chains (direct private traffic) fall
+back to their leftmost entry. No XFF → x-real-ip → "local". Both old
+resolvers (rate-limit.ts clientIpFrom — the middleware gate; tenant.ts
+clientIp — the login-lockout key) now delegate to this ONE law; the
+module imports nothing runtime-bound so the edge bundle stays clean
+(the S98 build lesson).
+
+**THE SHARED LAW (shared-rate-limit.ts + RateLimitCounter).** The
+middleware's in-memory buckets STAY (edge runtime is architecture-
+banned from the DB — they are the coarse shed). The authoritative
+limiter is DB-backed and enforced at requireUser — the universal gate
+every protected route funnels through — so every route answers 429
+with zero per-route wiring via the AuthResult union. The admission is
+ONE statement (INSERT ... ON CONFLICT DO UPDATE SET count = count+1
+RETURNING count — quoted identifiers, no booleans: the S60 lesson);
+the DB serializes the racers, so two instances cannot both admit the
+overflow. Fixed 60s windows keyed (tier, ip, windowStart-epoch-seconds
+as BIGINT — int32 epoch dies in 2038). Fail-OPEN, loudly (the S46
+auth-throttle posture) — a DB error degrades to no shared limit with a
+once-per-process announcement while the middleware keeps shedding.
+Stale windows swept from the queue tick's lazy slot (5 windows kept
+for forensics).
+
+**THE EVIDENCE (the P0.4 exit condition).** test-rate-limit.mts joins
+the check job: 10 pure spoofing assertions (leftmost spoof ignored,
+private hops skipped, all-trusted fallback, IPv6, real-ip fallback,
+TUBEFORGE_TRUSTED_PROXIES CIDR mask honored) + the shared law against
+the real DB (12 concurrent racers against a 5-hit window: exactly 5
+admitted; an INDEPENDENT client reads the same counter — no in-memory
+truth; the next window admits again; two forged chains from
+"different attackers" converge on the victim's bucket — XFF rotation
+cannot evade; the sweep prunes stale windows and spares fresh ones).
+Suite 499 → 502 unit pins (the trust law, the shared law, the
+middleware-stays-DB-banned architecture law).
+
+**THE GATE EARNED ITS KEEP.** The first battery run caught a real bug
+in the module itself — it imported rawDatabase but CALLED rawDb, so
+every hit threw ReferenceError, was swallowed by the fail-open catch,
+and the whole limiter silently no-op'd (12/12 admitted). The battery's
+"no in-memory truth" assertion (independent client reads count=0) made
+the silent failure visible; the fail-open design did exactly what it
+promises, which is why the ASSERTIONS must read the table, not trust
+the ok flags.
+
+Verified: typecheck, lint (0 errors), 502/502 unit, billing 40/40,
+storage 15/15, rate 17/17, production build.

@@ -8,6 +8,14 @@
 // (same pattern as jobs.ts and auth.ts). Pure + clock-injectable so the
 // offline unit suite can regression-test the window math (no next/server
 // import — middleware builds the 429 response itself).
+//
+// S102 / P0.4 — this gate stays the COARSE per-instance shed (edge runtime,
+// DB-banned); the authoritative SHARED limiter lives in shared-rate-limit.ts
+// and is enforced at requireUser. The client IP now comes from the
+// trusted-proxy law (proxy-trust.ts) — the spoofable first-XFF-value bug is
+// closed at BOTH layers.
+
+import { trustedClientIp } from "./proxy-trust";
 
 export interface RateHit {
   ok: boolean;
@@ -78,13 +86,14 @@ export function resetBuckets(): void {
   buckets.clear();
 }
 
-/** Best-effort client IP behind the preview proxy (mirrors auth.ts). */
+/**
+ * Best-effort client IP — S102: delegates to the trusted-proxy law
+ * (proxy-trust.ts, pure + edge-safe) instead of trusting the spoofable
+ * FIRST x-forwarded-for value. The walk is right-to-left over the chain,
+ * skipping trusted proxies; see proxy-trust.ts for the full receipt.
+ */
 export function clientIpFrom(headers: {
   get(name: string): string | null;
 }): string {
-  return (
-    headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    headers.get("x-real-ip") ||
-    "local"
-  );
+  return trustedClientIp(headers);
 }
