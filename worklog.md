@@ -5574,3 +5574,44 @@ Verified at HEAD: typecheck, lint (0 errors, 0 warnings), 503/503
 unit, billing 40/40, storage 15/15, rate 17/17, drill held, alert
 probe HEALTH 0 failed, production build, e2e 16/16, clean-clone 21/21,
 docker smoke green.
+
+## CLOSE-OUT — the production-readiness arc is CI-proven end-to-end (2026-11-13)
+
+The final gate fell in stages, every one caught by the new evidence:
+the smoke's bucket creator pulled minio/mc (REMOVED from Docker Hub —
+replaced with the aws-cli ECR image, then obsoleted entirely); Docker
+Hub went from throttling to HARD-denying GitHub's shared runner IPs
+(three runs died on pulls no backoff could wait out — the topology now
+sources node/postgres from the ECR Public library mirror, tagged
+locally, and runs the object store as a HOST process); dl.min.io
+turned out to be 410 Gone (MinIO retired the community binaries — the
+store became SeaweedFS 3.96 from GitHub releases, validated in the
+SANDBOX first: our production SigV4 signer created the bucket, put
+1014 bytes, got them back byte-identical); the gateway needed
+-ip.bind=0.0.0.0 to answer the docker bridge (the fetch-failed phase-1
+failure); the smoke's own HTTP walk was designed-but-not-implemented
+(added: register → login → create, all curl -f); and the REAL find —
+the Prisma client generated for the wrong openssl platform, shipped
+binaryTargets = [native, debian-openssl-3.0.x].
+
+**THE GREEN EVIDENCE (CI run 43305937761 on 27ef67b — all 8 jobs
+success).** The Docker production smoke walked the full acceptance
+sequence on the real topology: 26/26 migrations deployed on the
+composed Postgres; the S100/S101 column projections; the
+HTTP-registered user + the API-created project; CreateBucket through
+the production SigV4 signer (200); ffmpeg rendered a real 1800-byte
+mp4 in-container; the artifact round-tripped put→get byte-identical
+with the S101 reservation lifecycle settled (1800 committed, 0
+in-flight); a job executed in the WORKER container cross-process; and
+the worker-restart recovery — the expired-lease row reaped with the
+fencing token BUMPED (5 → 7) and both jobs done. "Register → create →
+generate → enqueue → render → store → retrieve → restart → recover":
+every step, on every main push, forever.
+
+Every gate in docs/production-readiness.md now holds: P0.1 (S99
+clean-clone), P0.2 (S100 leases + fencing), P0.3 (S101 storage
+reservations), P0.4 (S102 shared rate limiting + proxy trust), P0.5
+(S104 nonce CSP), P0.6 (S105 docker smoke), P1.1 (S103 measured
+restore drill + alert probe), P1.2 (S106 zero warnings +
+decomposition). P2's freeze is at its decision point — the operator
+lifts it explicitly; until then the P0 discipline stays in force.
