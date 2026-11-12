@@ -135,7 +135,9 @@ async function main(): Promise<void> {
     // 6. EXPIRY — the sweep drops holds past their TTL and frees the bytes.
     //    Reset the counter (the sweep's freedom is measured on a clean slate).
     await db.storageUsage.deleteMany({ where: { organizationId: org.id } });
-    const dying = await reserveStorageBytes(org.id, "probe/dying.mp4", 512 * MB, 0, 1);
+    // The dying hold needs no handle — the sweep owns its lifecycle; keeping
+    // the assignment would be an unused variable (the lint gate caught it).
+    await reserveStorageBytes(org.id, "probe/dying.mp4", 512 * MB, 0, 1);
     await new Promise((r) => setTimeout(r, 30));
     const swept = await sweepExpiredStorageReservations();
     ok(swept >= 1, `the expiry sweep drops holds past their TTL (${swept} swept)`);

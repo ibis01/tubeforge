@@ -163,9 +163,9 @@ try {
   // (leaseToken/leaseExpiresAt, StorageReservation) 500s the queue and the
   // upload routes. count() would not catch it — projection does.
   await db.job.findMany({ take: 1 });
-  check("Job probe — leaseToken/leaseExpiresAt present (S100 migration deployed)");
+  check("Job probe — leaseToken/leaseExpiresAt present (S100 migration deployed)", true);
   await db.storageReservation.findMany({ take: 1 });
-  check("StorageReservation probe — S101 migration deployed");
+  check("StorageReservation probe — S101 migration deployed", true);
 
   // ---------- cleanup (probe rows; the DB itself is disposable) ----------
   await db.video.delete({ where: { id: video.id } });
