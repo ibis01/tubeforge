@@ -34,6 +34,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# S105 fix — Docker Hub anonymous pulls from GitHub's SHARED runner IP pools
+# rate-limit into exactly "pull access denied for minio/minio, repository
+# does not exist or may require 'docker login'" (two consecutive runs died
+# on it: 43293441260, 43293505991). The image is fine; the pool is throttled.
+# Pre-pull every external image with bounded backoff BEFORE compose up so a
+# throttled window is waited out instead of failing the whole gate.
+for img in minio/minio:latest amazon/aws-cli:latest postgres:17; do
+  if docker image inspect "$img" >/dev/null 2>&1; then continue; fi
+  pulled=false
+  for attempt in 1 2 3 4; do
+    echo "[smoke] docker pull $img (attempt $attempt)"
+    if docker pull "$img" >/dev/null 2>&1; then pulled=true; break; fi
+    sleep $((attempt * 20))
+  done
+  if [ "$pulled" != true ]; then
+    echo "[smoke] FAIL: docker pull exhausted retries for $img (Docker Hub throttling?)"
+    exit 1
+  fi
+done
+
 echo "[smoke] building + booting the production topology (postgres + minio + web + worker)"
 "${COMPOSE[@]}" up -d --build
 
