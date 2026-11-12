@@ -117,7 +117,7 @@ let pass = 0;
 let fail = 0;
 const check = (name, ok, detail) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok || detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
-  ok ? pass++ : fail++;
+  if (ok) pass++; else fail++;
 };
 check("the settled SpendReservation rows survived the restart",
   settledCount === snapshot.settledCount, { before: snapshot.settledCount, after: settledCount });

@@ -5479,3 +5479,50 @@ was broken while the served HTML carried the REAL per-request nonces
 'nonce-…'). The assertion now reads the SERVED HTML and pins the true
 law: the nonce Next stamped on its bootstrap scripts is EXACTLY the
 one the policy admits — an attacker nonce (or none) is not.
+
+## S106 — P1.2 closed: zero avoidable warnings + the storage module decomposed (2026-11-13)
+
+**THE WARNINGS (20 → 0).** Every one fixed at the site, none suppressed:
+the 11 `ok ? pass++ : fail++` expression-statement warnings across the
+sXX test scripts became honest `if (ok) pass++; else fail++;`; the k6
+load-test's anonymous default export got a name
+(loadScenario); the export-bundle navigation in video-detail-dialog
+became a programmatic anchor click (the endpoint streams a download —
+location.href would navigate the SPA away, and the Next rule rightly
+said so); redact.ts's replacer tuple went any[] → string[] (the
+bivariance any buys still satisfies String.replace); the Replicate
+prediction envelope got a real body type (input + version?); and
+create-view's five anys became two structural interfaces
+(ProviderCapabilityShape, AnalysisReport/ScriptIssue) documenting
+exactly the fields the wizard reads. eslint: 0 errors, 0 warnings.
+
+**THE DECOMPOSITION (768 lines → three cohesive units).** storage.ts
+was config + key hygiene + S3 SigV4 driver + materialize cache + quota
+admission + reservations + the public API in one file. Now:
+storage-s3.ts (154 lines — the zero-dependency signer; keys arrive
+PRE-NORMALIZED so the dependency arrow points one way),
+storage-quota.ts (204 lines — the S101 admission law, holds, sweep),
+and the storage.ts facade (455 lines — key hygiene, local paths,
+cache, public API, re-exporting the extracted halves so every
+importer stays unchanged). A cycle was avoided deliberately: the s3
+module never imports the facade.
+
+**THE GATE EARNED ITS KEEP TWICE.** (1) The first extraction attempt
+was a line-slicer script that cut mid-function — typecheck caught it
+in one run; reverted and redone with verified reads. (2) The S101
+source pins caught something far worse: my hand-written quota module
+reverted the CONCURRENT session's upgraded admission law (the
+write-first ensure-counter upsert that takes SQLite's write lock at
+tx open, and the LIVE-holds-only aggregate). The pins failed, the
+diff against HEAD proved the reversion, and the law is restored
+verbatim — the pins follow the law's home now (storage-quota.ts), not
+the old layout. Also learned: a grep for "ethod," matches inside
+"[method," — the suspected canonicalRequest corruption was a
+grep-substring illusion, byte-verified clean.
+
+Ledger: P1.2 closed. Every P0.* and P1.* gate now holds — the P2
+freeze is at its decision point (see docs/production-readiness.md).
+
+Verified: typecheck, eslint (0 errors, 0 warnings), 503/503 unit,
+billing 40/40, storage 15/15, rate 17/17, drill held (RTO 152ms),
+alert probe HEALTH 0 failed, production build.

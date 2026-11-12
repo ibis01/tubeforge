@@ -30,15 +30,26 @@
 // use withLocalFile()/materialize() — a zero-copy passthrough on local, a
 // content-hash-cached download on s3.
 
-import { createHash, createHmac, randomUUID } from "crypto";
+import { createHash } from "crypto";
 import fs from "fs";
 import fsp from "fs/promises";
 import os from "os";
 import path from "path";
 import { Readable } from "stream";
-import { rawDatabase as rawDb } from "./tenant-db";
-import { Prisma } from "@prisma/client";
 import { currentCtx } from "./tenant";
+import { s3Config, s3Fetch, s3Presign } from "./storage-s3";
+import { bumpUsage, reserveStorageBytes, storageQuotaBytes, type StoragePutReservation } from "./storage-quota";
+
+// The two extracted halves re-export through the facade — every existing
+// importer of "./storage" keeps its import sites unchanged.
+export {
+  storageQuotaBytes,
+  StorageQuotaError,
+  usageBytes,
+  reserveStorageBytes,
+  sweepExpiredStorageReservations,
+  type StoragePutReservation,
+} from "./storage-quota";
 import { log } from "./log";
 
 // ---------------------------------------------------------------------------
@@ -55,12 +66,6 @@ export const UPLOAD_ROOT = process.env.TUBEFORGE_UPLOAD_ROOT
   ? path.resolve(process.env.TUBEFORGE_UPLOAD_ROOT)
   : path.join(process.cwd(), "uploads");
 
-/** Per-organization quota ceiling. Default 10 GiB; 0 = unlimited. */
-export function storageQuotaBytes(): number {
-  const gb = Number(process.env.TUBEFORGE_STORAGE_QUOTA_GB ?? "");
-  if (!Number.isFinite(gb) || gb <= 0) return 10 * 1024 ** 3;
-  return Math.floor(gb * 1024 ** 3);
-}
 
 export interface PutOptions {
   /** Platform asset (music library seed, fonts) — skips the org quota. */
@@ -96,149 +101,6 @@ async function ensureDirFor(file: string): Promise<void> {
   await fsp.mkdir(path.dirname(file), { recursive: true });
 }
 
-// ---------------------------------------------------------------------------
-// S3 driver — zero-dependency SigV4
-
-interface S3Config {
-  bucket: string;
-  region: string;
-  endpoint: string; // origin only, e.g. https://acct.r2.cloudflarestorage.com
-  accessKeyId: string;
-  secretAccessKey: string;
-}
-
-function s3Config(): S3Config | null {
-  const bucket = process.env.TUBEFORGE_S3_BUCKET;
-  const accessKeyId = process.env.TUBEFORGE_S3_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.TUBEFORGE_S3_SECRET_ACCESS_KEY;
-  if (!bucket || !accessKeyId || !secretAccessKey) return null;
-  return {
-    bucket,
-    region: process.env.TUBEFORGE_S3_REGION ?? "auto",
-    endpoint: (process.env.TUBEFORGE_S3_ENDPOINT ?? `https://s3.${process.env.TUBEFORGE_S3_REGION ?? "auto"}.amazonaws.com`).replace(/\/+$/, ""),
-    accessKeyId,
-    secretAccessKey,
-  };
-}
-
-/** S3 key encoding: encode everything except unreserved chars and "/". */
-function encodeS3Key(key: string): string {
-  return key
-    .split("/")
-    .map((seg) =>
-      seg
-        .split("")
-        .map((ch) => {
-          const code = ch.charCodeAt(0);
-          const unreserved =
-            (code >= 0x41 && code <= 0x5a) || // A-Z
-            (code >= 0x61 && code <= 0x7a) || // a-z
-            (code >= 0x30 && code <= 0x39) || // 0-9
-            "-._~".includes(ch);
-          return unreserved ? ch : `%${code.toString(16).toUpperCase().padStart(2, "0")}`;
-        })
-        .join("")
-    )
-    .join("/");
-}
-
-const sha256Hex = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
-const hmac = (key: Buffer | string, data: string) => createHmac("sha256", key).update(data).digest();
-
-function sigv4Headers(
-  cfg: S3Config,
-  method: string,
-  key: string,
-  payload: Buffer | string,
-  extraQuery: Record<string, string> = {}
-): { url: string; headers: Record<string, string> } {
-  const amzDate = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, ""); // YYYYMMDDTHHMMSSZ
-  const dateStamp = amzDate.slice(0, 8);
-  const payloadHash = sha256Hex(payload);
-  const host = new URL(cfg.endpoint).host;
-
-  const encodedKey = encodeS3Key(normalizeKey(key));
-  const canonicalUri = `/${cfg.bucket}/${encodedKey}`;
-
-  const query: Record<string, string> = { ...extraQuery };
-  const canonicalQuery = Object.keys(query)
-    .sort()
-    .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(query[k])}`)
-    .join("&");
-
-  const headers: Record<string, string> = {
-    host,
-    "x-amz-content-sha256": payloadHash,
-    "x-amz-date": amzDate,
-  };
-  const signedHeaders = Object.keys(headers).sort().join(";");
-  const canonicalHeaders = Object.keys(headers)
-    .sort()
-    .map((k) => `${k}:${headers[k]}\n`)
-    .join("");
-
-  const canonicalRequest = [method, canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders, payloadHash].join("\n");
-  const scope = `${dateStamp}/${cfg.region}/s3/aws4_request`;
-  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest)].join("\n");
-
-  const kDate = hmac(`AWS4${cfg.secretAccessKey}`, dateStamp);
-  const kRegion = hmac(kDate, cfg.region);
-  const kService = hmac(kRegion, "s3");
-  const kSigning = hmac(kService, "aws4_request");
-  const signature = createHmac("sha256", kSigning).update(stringToSign).digest("hex");
-
-  headers["authorization"] =
-    `AWS4-HMAC-SHA256 Credential=${cfg.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-
-  const qs = canonicalQuery ? `?${canonicalQuery}` : "";
-  return { url: `${cfg.endpoint}${canonicalUri}${qs}`, headers };
-}
-
-/** Presigned GET URL (query-string signature — no Authorization header). */
-function s3Presign(cfg: S3Config, key: string, ttlSeconds: number): string {
-  const amzDate = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-  const dateStamp = amzDate.slice(0, 8);
-  const host = new URL(cfg.endpoint).host;
-
-  const canonicalUri = `/${cfg.bucket}/${encodeS3Key(normalizeKey(key))}`;
-  const query: Record<string, string> = {
-    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
-    "X-Amz-Credential": `${cfg.accessKeyId}/${dateStamp}/${cfg.region}/s3/aws4_request`,
-    "X-Amz-Date": amzDate,
-    "X-Amz-Expires": String(Math.max(1, Math.min(ttlSeconds, 7 * 24 * 3600))),
-    "X-Amz-SignedHeaders": "host",
-  };
-  const canonicalQuery = Object.keys(query)
-    .sort()
-    .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(query[k])}`)
-    .join("&");
-
-  const canonicalRequest = ["GET", canonicalUri, canonicalQuery, `host:${host}\n`, "host", "UNSIGNED-PAYLOAD"].join("\n");
-  const scope = `${dateStamp}/${cfg.region}/s3/aws4_request`;
-  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest)].join("\n");
-
-  const kDate = hmac(`AWS4${cfg.secretAccessKey}`, dateStamp);
-  const kRegion = hmac(kDate, cfg.region);
-  const kService = hmac(kRegion, "s3");
-  const kSigning = hmac(kService, "aws4_request");
-  const signature = createHmac("sha256", kSigning).update(stringToSign).digest("hex");
-
-  return `${cfg.endpoint}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
-}
-
-async function s3Fetch(
-  method: string,
-  key: string,
-  cfg: S3Config,
-  body?: Buffer,
-  extraQuery?: Record<string, string>
-): Promise<Response> {
-  const { url, headers } = sigv4Headers(cfg, method, key, body ?? Buffer.alloc(0), extraQuery);
-  return fetch(url, { method, headers, body: body ? new Uint8Array(body) : undefined });
-}
-
-// ---------------------------------------------------------------------------
-// S3 materialize cache — ffmpeg/Playwright need real paths.
 
 const S3_CACHE = process.env.TUBEFORGE_S3_CACHE_DIR
   ? path.resolve(process.env.TUBEFORGE_S3_CACHE_DIR)
@@ -282,183 +144,6 @@ export async function materialize(key: string): Promise<string> {
 export async function withLocalFile<T>(key: string, fn: (filePath: string) => Promise<T>): Promise<T> {
   const p = await materialize(key);
   return fn(p);
-}
-
-// ---------------------------------------------------------------------------
-// Quota accounting (StorageUsage — per-org byte counter)
-
-export class StorageQuotaError extends Error {
-  constructor(public readonly organizationId: string, public readonly used: number, public readonly quota: number) {
-    super(`Storage quota exceeded for organization (${used} of ${quota} bytes) — delete old videos or ask an admin to raise the cap.`);
-    this.name = "StorageQuotaError";
-  }
-}
-
-async function currentUsage(orgId: string): Promise<number> {
-  const row = await rawDb.storageUsage.findUnique({ where: { organizationId: orgId } });
-  return row ? Number(row.bytes) : 0;
-}
-
-/** Org usage in bytes (0 when the driver-level quota is disabled). */
-export async function usageBytes(orgId: string): Promise<number> {
-  return currentUsage(orgId);
-}
-
-async function bumpUsage(orgId: string, delta: number): Promise<void> {
-  await rawDb.storageUsage.upsert({
-    where: { organizationId: orgId },
-    update: { bytes: { increment: delta } },
-    create: { organizationId: orgId, bytes: BigInt(Math.max(0, delta)) },
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Reservations (S101 / P0.3 — atomic quota admission with durable holds)
-//
-// The old flow was read-check-write-write: assertQuota read the counter, the
-// object was written, bumpUsage moved the counter AFTER the bytes landed —
-// two concurrent uploads could both pass the check and exceed the org cap.
-// Admission is now ONE serializable transaction (Serializable on Postgres;
-// SQLite is single-writer — the S32 spend-admission pattern): read the
-// committed counter, sum the org's live holds, check the ceiling, insert
-// THIS upload's hold. The DB serializes the racers — the loser sees the
-// winner's hold and is refused.
-//
-// Counter semantics: StorageUsage.bytes counts COMMITTED bytes only. A hold
-// is the durable record of in-flight bytes: a process that dies between
-// admission and settle leaves the hold behind, and sweepExpiredStorage
-// Reservations() drops it — a hold never moved the committed counter, so
-// dropping one always frees exactly the bytes it reserved. Settle (the
-// object landed) deletes the hold and moves the REAL delta (actual -
-// replaces) into the counter, atomically with the hold's removal.
-
-function reservationTtlMs(): number {
-  const v = Number(process.env.TUBEFORGE_STORAGE_RESERVATION_TTL_MS ?? "");
-  return Number.isFinite(v) && v > 0 ? v : 60 * 60_000;
-}
-
-export interface StoragePutReservation {
-  /** The upload failed — drop the hold (quota freed). Idempotent. */
-  release(): Promise<void>;
-  /** The object landed — settle the REAL byte delta and drop the hold. */
-  commit(actualBytes: number): Promise<void>;
-}
-
-/** Serializable on Postgres with P2034 conflict retry; default on SQLite. */
-async function storageAdmissionTx<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
-  const serializable = !`${process.env.DATABASE_URL ?? ""}`.startsWith("file:");
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      return await rawDb.$transaction(fn, serializable ? { isolationLevel: "Serializable" } : undefined);
-    } catch (err) {
-      // P2034 — the transaction conflict Serializable exists to produce.
-      // Retry against the winner's committed rows (spend.ts's
-      // admitWithConflictRetry law).
-      if ((err as { code?: string })?.code === "P2034" && attempt < 4) {
-        await new Promise((r) => setTimeout(r, 25 * attempt));
-        continue;
-      }
-      throw err;
-    }
-  }
-}
-
-/**
- * Atomically admit `incomingBytes` for an org (accounting for `replacesBytes`
- * freed by an overwrite) and return the hold that settles or releases it.
- * Throws StorageQuotaError when the ceiling would be crossed — concurrently
- * SAFE: the check and the hold are one serialized transaction.
- */
-export async function reserveStorageBytes(
-  organizationId: string,
-  key: string,
-  incomingBytes: number,
-  replacesBytes: number,
-  ttlMs: number = reservationTtlMs(),
-): Promise<StoragePutReservation> {
-  const quota = storageQuotaBytes();
-
-  // Quota disabled — no admission gate, but the counter still tracks real bytes.
-  if (quota <= 0) {
-    return {
-      release: async () => {},
-      commit: async (actual) => {
-        if (actual - replacesBytes !== 0) await bumpUsage(organizationId, actual - replacesBytes);
-      },
-    };
-  }
-
-  const holdId = `stor-${randomUUID()}`;
-  await storageAdmissionTx(async (tx) => {
-    // Write FIRST: ensure the counter row exists (an org's FIRST upload has
-    // none). On SQLite this takes the database write lock at transaction
-    // open, so concurrent admissions serialize HERE — the loser's reads see
-    // the winner's hold. On Postgres the Serializable snapshot does the
-    // same job; the upsert also guarantees the counter row the settle path
-    // increments actually exists.
-    await tx.storageUsage.upsert({
-      where: { organizationId },
-      update: {},
-      create: { organizationId, bytes: 0 },
-    });
-    const [usage, holds] = await Promise.all([
-      tx.storageUsage.findUnique({ where: { organizationId } }),
-      tx.storageReservation.aggregate({
-        _sum: { bytes: true },
-        where: { organizationId, expiresAt: { gt: new Date() } }, // LIVE holds only
-      }),
-    ]);
-    const committed = usage ? Number(usage.bytes) : 0;
-    const inFlight = holds._sum.bytes ? Number(holds._sum.bytes) : 0;
-    if (committed + inFlight - replacesBytes + Math.max(0, incomingBytes) > quota) {
-      throw new StorageQuotaError(organizationId, committed + inFlight, quota);
-    }
-    await tx.storageReservation.create({
-      data: {
-        id: holdId,
-        organizationId,
-        key,
-        bytes: BigInt(Math.max(0, incomingBytes)),
-        expiresAt: new Date(Date.now() + ttlMs),
-      },
-    });
-  });
-
-  return {
-    release: async () => {
-      await rawDb.storageReservation.deleteMany({ where: { id: holdId } });
-    },
-    commit: async (actual) => {
-      // Settle atomically: the hold comes off and the REAL delta lands in
-      // the counter in one transaction (a crash cannot split them).
-      const delta = actual - replacesBytes;
-      await storageAdmissionTx(async (tx) => {
-        await tx.storageReservation.deleteMany({ where: { id: holdId } });
-        if (delta !== 0) {
-          await tx.storageUsage.upsert({
-            where: { organizationId },
-            update: { bytes: { increment: delta } },
-            create: { organizationId, bytes: BigInt(Math.max(0, delta)) },
-          });
-        }
-      });
-    },
-  };
-}
-
-/** Drop every expired hold (crashed uploaders' TTL passed). Holds never
- *  moved the committed counter, so dropping is pure quota reclaim. */
-export async function sweepExpiredStorageReservations(): Promise<number> {
-  const rows = await rawDb.storageReservation.findMany({
-    where: { expiresAt: { lt: new Date() } },
-    select: { id: true },
-    take: 200,
-  });
-  for (const r of rows) {
-    await rawDb.storageReservation.deleteMany({ where: { id: r.id } }).catch(() => {});
-  }
-  if (rows.length) log.info("storage: expired reservations swept (quota freed)", { count: rows.length });
-  return rows.length;
 }
 
 // ---------------------------------------------------------------------------

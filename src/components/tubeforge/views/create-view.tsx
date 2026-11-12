@@ -234,7 +234,12 @@ export function CreateView() {
   const heldSourcesRef = useRef<import("@/lib/tubeforge/types").ResearchSource[] | null>(null);
 
   const [settingsLoaded, setSettingsLoaded] = useState(false);
-  const [aiConfig, setAiConfig] = useState<any>(null);
+  // The provider capabilities map the settings API returns — only the fields
+  // the create wizard reads are declared (structural typing keeps the rest).
+  type ProviderCapabilityShape = { baseUrl?: string; provider?: string; hasKey?: boolean };
+  const [aiConfig, setAiConfig] = useState<{
+    capabilities?: Record<string, ProviderCapabilityShape | undefined>;
+  } | null>(null);
 
   const [topic, setTopic] = useState("");
   const [niche, setNiche] = useState<string>("Motivation");
@@ -308,7 +313,7 @@ export function CreateView() {
   // user can create a video from it. Approved = engine verdict accepted.
   type AnalysisState = "idle" | "analyzing" | "done" | "error";
   const [analysisState, setAnalysisState] = useState<AnalysisState>("idle");
-  const [analysisReport, setAnalysisReport] = useState<any>(null);
+  const [analysisReport, setAnalysisReport] = useState<AnalysisReport | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [scriptApproved, setScriptApproved] = useState(false);
 
@@ -712,7 +717,7 @@ export function CreateView() {
     setAnalysisError(null);
     setScriptApproved(false);
     try {
-      const d = await api<{ analysis: any }>("/api/videos/analyze-script", {
+      const d = await api<{ analysis: AnalysisReport | null }>("/api/videos/analyze-script", {
         method: "POST",
         body: JSON.stringify({
           script: customScript,
@@ -2421,23 +2426,43 @@ export function CreateView() {
 // The Approve/Revoke toggle is the user's manual accept/reject of the verdict.
 // --------------------------------------------------------------------------- //
 
+// The analyze-script engine's report shape (S106 / P1.2 — the former `any`s).
+// Fields the card actually reads are declared; everything else stays out.
+interface ScriptIssue {
+  severity?: string;
+  category?: string;
+  message?: string;
+  suggestion?: string;
+}
+interface AnalysisReport {
+  verdict?: "approved" | "needs_revision" | "rejected";
+  score?: number;
+  summary?: string;
+  strengths?: string[];
+  issues?: ScriptIssue[];
+  recommendations?: string[];
+  wordCount?: number;
+  estimatedDurationSec?: number;
+  durationMs?: number;
+}
+
 function AnalysisReportCard({
   report,
   approved,
   onApprove,
   onRevoke,
 }: {
-  report: any;
+  report: AnalysisReport | null;
   approved: boolean;
   onApprove: () => void;
   onRevoke: () => void;
 }) {
   if (!report) return null;
-  const verdict = report.verdict as "approved" | "needs_revision" | "rejected";
+  const verdict = report.verdict ?? "needs_revision";
   const score = Math.max(0, Math.min(100, Number(report.score) || 0));
   const summary = String(report.summary ?? "");
   const strengths: string[] = Array.isArray(report.strengths) ? report.strengths : [];
-  const issues: any[] = Array.isArray(report.issues) ? report.issues : [];
+  const issues: ScriptIssue[] = Array.isArray(report.issues) ? report.issues : [];
   const recommendations: string[] = Array.isArray(report.recommendations)
     ? report.recommendations
     : [];

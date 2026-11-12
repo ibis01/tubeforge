@@ -27,7 +27,7 @@ let pass = 0;
 let fail = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
   console.log(`${ok ? "✓" : "✗"} ${name}${ok || detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
-  ok ? pass++ : fail++;
+  if (ok) pass++; else fail++;
 };
 
 const decide = (o: {

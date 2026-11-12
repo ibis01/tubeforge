@@ -53,7 +53,7 @@ export const options = {
 const RUN = Date.now().toString(36);
 let seq = 0;
 
-export default function () {
+export default function loadScenario() {
   seq += 1;
   const email = `k6-${RUN}-${seq}@tubeforge.test`;
   const password = "k6-load-test-123";

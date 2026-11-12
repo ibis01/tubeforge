@@ -47,8 +47,8 @@ not features that attract them.
 | P0.5  | CSP + SVG security                         | Security regression suite passes; production CSP drops `unsafe-inline`/`unsafe-eval`                                                                          | **S104** — nonce-based CSP (scripts + styles), middleware extended to pages, e2e CSP regression |
 | P0.6  | Docker production smoke                    | The full production topology renders successfully end-to-end (see the target topology below)                                                                  | **S105** — `docker-smoke.sh` walks postgres+MinIO+web+worker: HTTP register→create, ffmpeg render, MinIO round-trip, cross-process job, worker-restart recovery (CI job on main pushes) |
 | P1.1  | Monitoring + restore drills                | Measured recovery time and actionable alerts                                                                                                                  | **S103** — measured restore drill (CI, RTO printed) + `alert:probe` (8 actionable checks) + runbook §4.1 |
-| P1.2  | Module decomposition                       | Reduced complexity and zero avoidable warnings                                                                                                                 | OPEN |
-| P2    | Feature expansion                          | Remains frozen until the gates above close                                                                                                                     | FROZEN |
+| P1.2  | Module decomposition                       | Reduced complexity and zero avoidable warnings                                                                                                                 | **S106** — 20 warnings fixed at the site (eslint 0/0); storage.ts (768 lines) split into facade + `storage-s3.ts` + `storage-quota.ts` with re-exports |
+| P2    | Feature expansion                          | Remains frozen until the gates above close                                                                                                                     | **GATES CLOSED (S106)** — the freeze lifts on the operator's explicit call; until then P0 discipline stays in force |
 
 ## P0.1 spec — what the gate asserts
 
@@ -107,3 +107,4 @@ recovery.
 | P0.5  | S104   | push-gate run recorded in worklog.md | worklog.md §S104 |
 | P0.6  | S105   | push-gate run recorded in worklog.md | worklog.md §S105 |
 | P1.1  | S103   | push-gate run recorded in worklog.md | worklog.md §S103 |
+| P1.2  | S106   | push-gate run recorded in worklog.md | worklog.md §S106 |

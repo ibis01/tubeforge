@@ -1086,7 +1086,16 @@ export function VideoDetailDialog({
         title: "Findings accepted — export unlocked",
         description: "Recorded in the activity log; the acceptance travels with the exported bundle.",
       });
-      window.location.href = `/api/videos/${video.id}/export`;
+      // The export endpoint streams a file bundle (Content-Disposition), not a
+      // page — a programmatic anchor click downloads it while the dialog stays
+      // mounted (window.location.href would navigate the SPA away; the
+      // next/no-location-assign rule rightly flags that).
+      const a = document.createElement("a");
+      a.href = `/api/videos/${video.id}/export`;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
     } catch (e) {
       toast({
         title: "Could not accept findings",

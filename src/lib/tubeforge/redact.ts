@@ -11,7 +11,7 @@
 // can regression-test it — same discipline as settings-public.ts.
 
 const REDACTIONS: Array<
-  [RegExp, string | ((substring: string, ...args: any[]) => string)]
+  [RegExp, string | ((substring: string, ...args: string[]) => string)]
 > = [
   // Google API keys (AIza…) — also matches Firebase web keys.
   [/\bAIza[0-9A-Za-z_-]{20,}\b/g, "<google-key>"],

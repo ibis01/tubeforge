@@ -386,7 +386,10 @@ async function replicateImage(
         : "1:1";
 
   let url = joinUrl(baseUrl, `models/${model}/predictions`);
-  const body: any = {
+  const body: {
+    input: { prompt: string; aspect_ratio: string; output_format: string; negative_prompt?: string };
+    version?: string;
+  } = {
     input: {
       prompt: req.prompt,
       aspect_ratio: aspectRatio,

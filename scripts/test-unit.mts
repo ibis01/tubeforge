@@ -11872,7 +11872,9 @@ await test("S100 the lease columns are real schema, backed by a migration in the
 // serialization); these pins hold the admission law in the source.
 
 await test("S101 THE ADMISSION LAW: the ceiling check and the hold are ONE serialized transaction", () => {
-  const src = fs.readFileSync("src/lib/tubeforge/storage.ts", "utf8");
+  // S106 split: the admission law lives in storage-quota.ts (the facade
+  // re-exports it — the pin follows the law's home, not the old layout).
+  const src = fs.readFileSync("src/lib/tubeforge/storage-quota.ts", "utf8");
   ok(
     src.includes("storageAdmissionTx") && src.includes('isolationLevel: "Serializable"'),
     "the admission runs Serializable on Postgres (SQLite serializes through its write lock) — the S32 spend-admission pattern",
@@ -11897,9 +11899,11 @@ await test("S101 THE ADMISSION LAW: the ceiling check and the hold are ONE seria
 
 await test("S101 THE INTEGRATION LAW: put and putFromPath hold BEFORE writing, release on failure, settle the real delta", () => {
   const src = fs.readFileSync("src/lib/tubeforge/storage.ts", "utf8");
-  // Both write paths reserve before the driver write…
+  // Both write paths reserve before the driver write (S106 split: the
+  // facade carries exactly the two put-path call sites — the admission
+  // law itself + the battery live in storage-quota.ts / test-storage).
   const putReserves = (src.match(/reserveStorageBytes\(/g) ?? []).length;
-  ok(putReserves >= 3, `put + putFromPath + the battery all admit through reserveStorageBytes (${putReserves} call sites)`);
+  ok(putReserves >= 2, `put + putFromPath both admit through reserveStorageBytes (${putReserves} call sites)`);
   // …release in the failure catch…
   const releases = (src.match(/reservation\?\.release\(\)/g) ?? []).length;
   ok(releases === 2, `both write paths release their hold when the write fails (${releases} catch-release sites)`);
@@ -11907,20 +11911,30 @@ await test("S101 THE INTEGRATION LAW: put and putFromPath hold BEFORE writing, r
   const commits = (src.match(/reservation\?\.commit\(/g) ?? []).length;
   ok(commits === 2, `both write paths settle the real byte count (${commits} commit sites)`);
   // The hold never moves the committed counter: release() touches ONLY the
-  // reservation table — the quota it held is fully reclaimable.
+  // reservation table — the quota it held is fully reclaimable. (S106 split:
+  // the release/commit bodies live in storage-quota.ts.)
+  const quotaSrc = fs.readFileSync("src/lib/tubeforge/storage-quota.ts", "utf8");
   ok(
-    /release: async \(\) => \{[\s\S]*?storageReservation\.deleteMany/.test(src),
+    /release: async \(\) => \{[\s\S]*?storageReservation\.deleteMany/.test(quotaSrc),
     "release() deletes ONLY the hold row — a hold never moved the committed counter, so dropping one frees exactly the bytes it reserved",
   );
 });
 
 await test("S101 the sweep + wiring: expired holds drop lazily from the queue tick, the model is real schema", () => {
-  const src = fs.readFileSync("src/lib/tubeforge/storage.ts", "utf8");
+  const quotaSrc = fs.readFileSync("src/lib/tubeforge/storage-quota.ts", "utf8");
   ok(
-    src.includes("export async function sweepExpiredStorageReservations"),
+    quotaSrc.includes("export async function sweepExpiredStorageReservations"),
     "the expiry sweep is exported (crash net for processes that died between admission and settle)",
   );
-  ok(src.includes("take: 200"), "the sweep is bounded (200 rows per pass) — a backlog cannot wedge the tick");
+  ok(quotaSrc.includes("take: 200"), "the sweep is bounded (200 rows per pass) — a backlog cannot wedge the tick");
+
+  // The facade re-exports the sweep (the queue's dynamic import resolves it
+  // through "./storage" — the import graph stays one-directional).
+  const facadeSrc = fs.readFileSync("src/lib/tubeforge/storage.ts", "utf8");
+  ok(
+    /export \{[\s\S]*?sweepExpiredStorageReservations[\s\S]*?\} from "\.\/storage-quota"/.test(facadeSrc),
+    "the facade re-exports the sweep (the queue tick's dynamic import keeps resolving through ./storage)",
+  );
 
   const queueSrc = fs.readFileSync("src/lib/tubeforge/queue.ts", "utf8");
   ok(
