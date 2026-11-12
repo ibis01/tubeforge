@@ -75,6 +75,7 @@ const CHAT_PRIORS: Record<string, ProviderPriors> = {
 const TTS_PRIORS: Record<string, ProviderPriors> = {
   zai: { quality: 0.78, latency: 0.85, fit: 0.8 }, // 7 studio voices, zero setup
   zhipu: { quality: 0.88, latency: 0.75, fit: 0.95 }, // the cloning lane
+  heygen: { quality: 0.76, latency: 0.88, fit: 0.72 }, // free turbo lane; public voice ids, no clone-from-sample
   selfhost: { quality: 0.7, latency: 0.3, fit: 0.85 }, // free forever, CPU speed, cloning
   openai: { quality: 0.82, latency: 0.85, fit: 0.78 },
   elevenlabs: { quality: 0.95, latency: 0.8, fit: 0.9 },
@@ -94,6 +95,7 @@ const IMAGE_PRIORS: Record<string, ProviderPriors> = {
 const VIDEO_PRIORS: Record<string, ProviderPriors> = {
   zai: { quality: 0.78, latency: 0.65, fit: 0.85 }, // CogVideoX; Ken Burns needs no AI
   fal: { quality: 0.84, latency: 0.78, fit: 0.8 },
+  magichour: { quality: 0.8, latency: 0.72, fit: 0.78 }, // kling-3.0/wan-2.2 aggregator; daily free credits
   replicate: { quality: 0.82, latency: 0.7, fit: 0.78 },
   runway: { quality: 0.9, latency: 0.74, fit: 0.82 },
   luma: { quality: 0.86, latency: 0.72, fit: 0.8 },
