@@ -3,7 +3,7 @@
 
 Cover is rendered separately (Template 07 Crystal Blue via html2poster.js)
 and merged as page 0 by merge_final.py.
-All figures verified against the live repo at revision 42238f7 (2026-11-12).
+All figures verified against the live repo at revision d03bed9 (2026-11-12).
 """
 import os
 import sys
@@ -393,13 +393,13 @@ body(story,
 body(story,
      'Repository state at the time of writing: <b>origin/main is ce7e9c3</b> with CI '
      'green on all six jobs and the unit suite at 471/471. Local HEAD is '
-     '<b>42238f7</b>, two commits ahead of origin and not yet pushed (the development '
+     '<b>d03bed9</b>, two commits ahead of origin and not yet pushed (the development '
      'sandbox holds no TF_TOKEN credential). The delta is the boot-payload '
      'code-splitting fix described in Section 2.2 and Chapter 9. Every figure in this '
-     'handbook was re-measured against the working tree at 42238f7 on 2026-11-12; '
+     'handbook was re-measured against the working tree at d03bed9 on 2026-11-12; '
      'where a repository document disagrees, Chapter 11 records the drift explicitly.')
 make_table(story,
-    ['Metric', 'Value at 42238f7'],
+    ['Metric', 'Value at d03bed9'],
     [
         ['Source files under src/', '356'],
         ['Library modules (src/lib/tubeforge)', '132'],
@@ -418,7 +418,7 @@ make_table(story,
     center_cols=(1,))
 embed_chart(story, os.path.join(BUILD, 'chart-boot.png'),
             'Figure 1 - Dev boot payload before and after the code-splitting fix '
-            '(commit 42238f7), as measured by scripts/measure-boot.js.')
+            '(commit d03bed9), as measured by scripts/measure-boot.js.')
 body(story,
      'How to read this handbook. Chapters 2 through 10 describe the system as it '
      'exists: architecture, data model, security, the job and render pipeline, the '
@@ -457,7 +457,7 @@ h2(story, '2.2 Frontend: eleven views, one eager')
 body(story,
      'The application surface is composed of eleven views: dashboard, create, '
      'library, cast, voice, research, channels, calendar, analytics, settings and '
-     'world. Until revision 42238f7 the landing page statically imported all eleven, '
+     'world. Until revision d03bed9 the landing page statically imported all eleven, '
      'so a phone on a 4G connection could sit on the AuthGate splash ("Warming up '
      'the forge...") for minutes while roughly 10 MB of gzipped JavaScript arrived. '
      'The fix keeps the dashboard eager and streams the other ten views in on first '
@@ -723,7 +723,7 @@ body(story,
 # =================================================================
 h1(story, '6. API Surface (Route Map)')
 body(story,
-     'There are 123 route.ts files under src/app/api at 42238f7 - the S75 '
+     'There are 123 route.ts files under src/app/api at d03bed9 - the S75 '
      'reconciliation recorded 116, and the S88 through S94 slices added the rest. '
      'The surface is uniform: every route is tenant-scoped through the ALS-injected '
      'Prisma client, every mutation carries the origin check, and the middleware '
@@ -751,7 +751,7 @@ make_table(story,
         ['Admin & retention', '/api/admin/*', 'QC enforcement, content policy, retention reports.'],
     ],
     [0.20, 0.40, 0.40],
-    caption='Table 6 - Route map by area. 123 route files total at 42238f7.',
+    caption='Table 6 - Route map by area. 123 route files total at d03bed9.',
     font_size=8.6)
 body(story,
      'Two disciplines keep this surface honest. First, the kind ledgers: the job '
@@ -842,7 +842,7 @@ h1(story, '8. Testing and Quality Assurance')
 h2(story, '8.1 The unit suite')
 body(story,
      'The unit suite runs through scripts/test-unit.mts and stands at 471 passing, '
-     'zero failing, at 42238f7. It grew by 27 tests across the last six ROADMAP '
+     'zero failing, at d03bed9. It grew by 27 tests across the last six ROADMAP '
      'sessions alone (Figure 2), because the standing practice is that every v1 '
      'lands with its contract pinned: the S89 stock work alone added 16 pins, and '
      'the S88 doc laws, copyright wall and pacing bands are all unit-pinned '
@@ -851,7 +851,7 @@ body(story,
      'npm run check chains typecheck, lint, the unit suite and the billing suite '
      'into the one command a maintainer runs before pushing.')
 callout(story, '471 / 471',
-        'Unit tests passing at 42238f7 - plus the billing and queue suites, '
+        'Unit tests passing at d03bed9 - plus the billing and queue suites, '
         '7 Playwright e2e specifications, and the 18-check S87 acceptance battery.')
 embed_chart(story, os.path.join(BUILD, 'chart-tests.png'),
             'Figure 2 - Unit-test count across the closing 2.0 sessions, from the '
@@ -899,7 +899,7 @@ body(story,
      'All six jobs are green on origin/main at ce7e9c3. The nightly workflow '
      '(nightly.yml) runs the battery job - the extended route battery - on a '
      'schedule so slow regressions surface within a day. The one live caveat: '
-     'local HEAD 42238f7 (plus its backup commit) is two commits ahead and '
+     'local HEAD d03bed9 (plus its backup commit) is two commits ahead and '
      'unpushed, because the development sandbox holds no TF_TOKEN; pushing from an '
      'authenticated environment is the first item of the runbook in Chapter 11.')
 h2(story, '9.2 The apt mirror outage (a CI lesson in three acts)')
@@ -990,7 +990,7 @@ h1(story, '11. Documentation Audit and Maintenance Runbook')
 h2(story, '11.1 What the audit found')
 body(story,
      'The audit re-measured every headline figure in the repository documents '
-     'against the working tree at 42238f7. Three numbers in ARCHITECTURE.md have '
+     'against the working tree at d03bed9. Three numbers in ARCHITECTURE.md have '
      'drifted, all with the same root cause: the document was reconciled against '
      'the live source at S75 (2026-11-10), and the S88 through S94 slices landed '
      'after that reconciliation without a fresh pass. The design contracts for '
@@ -999,9 +999,9 @@ body(story,
      'reconciliation ages past a landing.')
 callout(story, '116 -> 123  |  22 -> 23  |  117 -> 132',
         'Route files, migrations and library modules: documented at the S75 '
-        'reconciliation versus measured at 42238f7.')
+        'reconciliation versus measured at d03bed9.')
 make_table(story,
-    ['Artifact', 'Documented', 'Actual at 42238f7'],
+    ['Artifact', 'Documented', 'Actual at d03bed9'],
     [
         ['API route files (ARCHITECTURE.md 1.1)', '116', '123 route.ts files'],
         ['Prisma migrations (ARCHITECTURE.md 1.2)', '22', '23 (s94_scene3d added)'],
@@ -1030,14 +1030,14 @@ make_table(story,
     ['Command', 'Purpose'],
     [
         ['npm run check', 'Typecheck + lint + unit suite + billing suite. Run before every push.'],
-        ['npm test', 'The unit suite alone (471 tests at 42238f7).'],
+        ['npm test', 'The unit suite alone (471 tests at d03bed9).'],
         ['npm run test:e2e', 'The seven Playwright specifications.'],
         ['npm run worker', 'Run the durable-queue worker locally.'],
         ['npm run db:migrate', 'Create a migration from schema changes.'],
         ['npm run db:sync-sqlite', 'Regenerate the SQLite dev mirror from the source schema.'],
         ['npm run db:backup:pg', 'Backup the production Postgres (see the restore runbook).'],
         ['npm run auth:reset', 'Local credential reset helper.'],
-        ['node scripts/measure-boot.js', 'The boot-payload diagnostic added with 42238f7.'],
+        ['node scripts/measure-boot.js', 'The boot-payload diagnostic added with d03bed9.'],
         ['git push origin main', 'Push the two unpushed commits (needs TF_TOKEN; first runbook item).'],
     ],
     [0.32, 0.68],
@@ -1052,7 +1052,7 @@ make_table(story,
         ['Z.ai gateway outages', 'One-probe resumption discipline; LLM whiteboard planner stays gated on it.'],
         ['Production TUBEFORGE_ENCRYPTION_KEY on Vercel', 'Owner-side, unverified; Vercel carries no production data but the key audit is open.'],
         ['Open dependency PRs', 'Majors tested individually, never batch-merged.'],
-        ['Unpushed local commits', '42238f7 + backup commit await a TF_TOKEN-capable push.'],
+        ['Unpushed local commits', 'd03bed9 + backup commit await a TF_TOKEN-capable push.'],
     ],
     [0.36, 0.64],
     caption='Table 15 - Standing risks tracked in the worklog and ROADMAP.', font_size=8.8)
@@ -1094,7 +1094,7 @@ make_table(story,
     [0.32, 0.68],
     caption='Table 17 - Where the knowledge lives.', font_size=8.8)
 body(story,
-     'This handbook was generated from the live repository at revision 42238f7 on '
+     'This handbook was generated from the live repository at revision d03bed9 on '
      '12 November 2026. Figures were measured, not quoted: route, module and '
      'migration counts come from the working tree; test counts from the suite '
      'run; the boot payload from scripts/measure-boot.js receipts; and the '

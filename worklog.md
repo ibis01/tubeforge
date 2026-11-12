@@ -4816,3 +4816,44 @@ applies to the systemd-run wait too. The finish: the apt-daily wait is
 bounded (`timeout 60`), apt itself carries `-o DPkg::Lock::Timeout=120`
 (fail fast instead of eating the budget), and the step budget went 8 →
 10 minutes for probe + wait headroom. All five steps, both workflows.
+
+## CI receipt — the multi-provider push went red twice, both fixed (2026-11-12)
+
+The a2eabd8 push (multi-provider architecture, free-tier adapters —
+made outside this sandbox) went red on two jobs, one real pin and one
+stale pin, and each only surfaced after the other was fixed:
+
+1. **Unit + Money-path coverage: the S90 sync law.** a2eabd8 added
+   heygen (tts) and magichour (video) to PROVIDERS_BY_CAPABILITY but
+   not to the priors tables in provider-score.ts — exactly the class
+   of miss priorsComplete exists for. Unit failed 470/471; coverage
+   aborts at its unit stage (no report at all). Groq was covered.
+   Fix 32cdf36: two priors rows, calibrated from the registry notes
+   (heygen = free turbo lane, public voice ids; magichour = the
+   kling-3.0/wan-2.2 aggregator with daily free credits).
+
+2. **E2E: the isolation spec spoke the old settings API.** With unit
+   green, E2E ran for the first time against the new route and
+   TypeError'd: `dA.settings["music.volume"]` — the unified API
+   returns {zai, capabilities, meta, providers, defaults}, no flat
+   settings map. The isolation LAW is intact (verified: no leak), the
+   pin was stale. Fix 2e62e5a: B PUTs a distinctive scope-"zai"
+   baseUrl, A's GET must keep the default gateway. 8/8 local.
+
+The rebase underneath: the sandbox's three unpushed commits (preview
+harness, the code-split fix, the handbook build) were rebuilt on the
+new main — and the rebuild caught a fourth thing: the code-split
+commit had DELETED src/app/api/videos/[id]/storyboard/upload/route.ts
+(the snapshot mechanism's file-eating accident, swept into the commit
+by an add -A; two live components still call that endpoint, and the
+route's own provenance comment documents the same accident happening
+to it once before). Restored in the rebuild; the diff vs the old
+local main is now exactly a2eabd8 + priors + nothing else.
+
+The handbook re-stamp: cover and body carried 42238f7, which the
+rebase orphaned (now d03bed9) — every hash in a maintenance handbook
+must resolve on origin, so body.py and cover.html were re-stamped
+and the 22-page PDF rebuilt (download/TubeForge_Maintenance_Handbook
+.pdf; merge_final.py gained render_cover.js for the Playwright cover).
+
+Green at 2e62e5a: all six jobs, run 43193109971.
