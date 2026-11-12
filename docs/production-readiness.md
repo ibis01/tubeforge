@@ -46,7 +46,7 @@ not features that attract them.
 | P0.4  | Shared rate limiting + proxy trust         | Multi-instance limits hold (key-value backend); trusted-proxy chain design; spoofing tests pass                                                              | **S102** — `proxy-trust.ts` right-to-left trusted walk + DB-backed `RateLimitCounter` enforced at requireUser (`test:rate`) |
 | P0.5  | CSP + SVG security                         | Security regression suite passes; production CSP drops `unsafe-inline`/`unsafe-eval`                                                                          | OPEN |
 | P0.6  | Docker production smoke                    | The full production topology renders successfully end-to-end (see the target topology below)                                                                  | OPEN |
-| P1.1  | Monitoring + restore drills                | Measured recovery time and actionable alerts                                                                                                                  | OPEN |
+| P1.1  | Monitoring + restore drills                | Measured recovery time and actionable alerts                                                                                                                  | **S103** — measured restore drill (CI, RTO printed) + `alert:probe` (8 actionable checks) + runbook §4.1 |
 | P1.2  | Module decomposition                       | Reduced complexity and zero avoidable warnings                                                                                                                 | OPEN |
 | P2    | Feature expansion                          | Remains frozen until the gates above close                                                                                                                     | FROZEN |
 
@@ -104,3 +104,4 @@ recovery.
 | P0.2  | S100   | CI run 43282465637 (success)         | worklog.md §S100 |
 | P0.3  | S101   | push-gate run recorded in worklog.md | worklog.md §S101 |
 | P0.4  | S102   | push-gate run recorded in worklog.md | worklog.md §S102 |
+| P1.1  | S103   | push-gate run recorded in worklog.md | worklog.md §S103 |

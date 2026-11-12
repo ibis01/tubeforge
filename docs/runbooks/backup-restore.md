@@ -97,7 +97,28 @@ into the drill log in §4.
 
 | Date | Dump stamp | Size | Restore time | Boot + smoke time | Result | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| — | — | — | — | — | _first drill pending_ | — |
+| — | — | — | — | — | _first quarterly drill pending_ | — |
+
+### 4.1 The automated companion drill (S103 / P1.1, 2026-11-13)
+
+`scripts/restore-drill.mts` (`npm run test:drill`, CI check job) runs the
+full drill against the live SQLite lane on EVERY push: VACUUM INTO hot
+snapshot → destroy a scratch casualty with random bytes (the lost-database
+scenario) → restore the artifact bytes → verify integrity_check, row counts
+vs the live DB, a real query, and the S100 column projections → print the
+measured RTO. First measured run (2026-11-13, live sandbox DB): **RTO 58 ms**
+(backup + destroy + restore + verify, 7/7 assertions). The quarterly manual
+Postgres drill above stays the production-control drill; the automated one
+proves the backup machinery never rots between drills.
+
+`scripts/alert-probe.mts` (`npm run alert:probe`) is the always-on companion
+monitor from §5's "alert on absence" note: DB reachability, column reality
+(the S60 P2022 class), pending-backlog age, stale-lease count (S100),
+migration-chain stuckness, fail-closed secrets, disk headroom, and — opt-in
+via `TUBEFORGE_ALERT_BACKUPS_DIR` — backup artifact freshness. Every failure
+prints one actionable `[ALERT] <check> — <what to do>` line and the final
+`HEALTH <n> failed` is machine-scrapable; exit code 1 wakes the monitor.
+Point a cron/uptime monitor at it in production.
 
 ## 5. Failure modes and responses
 

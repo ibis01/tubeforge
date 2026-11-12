@@ -5316,3 +5316,49 @@ the ok flags.
 
 Verified: typecheck, lint (0 errors), 502/502 unit, billing 40/40,
 storage 15/15, rate 17/17, production build.
+
+## S103 — P1.1 closed: the restore drill is MEASURED and the alert probe is actionable (2026-11-13)
+
+**THE GAP.** The runbook's own law — "a backup that has never been
+restored is a hypothesis, not a control" — sat with an empty drill
+log and a "first drill pending" row, and the §5 failure-mode table
+said "alert on absence" for a monitor that did not exist. Backups
+existed (backup.sh + the nightly pg_dump); recovery was unmeasured
+and monitoring unevidenced.
+
+**THE MEASURED DRILL.** scripts/restore-drill.mts (npm run test:drill,
+joined the CI check job) runs the full drill against the live SQLite
+lane on every push: VACUUM INTO hot snapshot through Prisma raw
+execute (no sqlite3 CLI dependency — the sandbox lacks it) → a scratch
+"production" copy is DESTROYED with random bytes (the lost-database
+scenario, not a polite delete) → the artifact bytes restore onto the
+casualty path → verify PRAGMA integrity_check, row counts vs the live
+DB (Video/User/Organization/Job), a real structured query, and the
+S100 lease-column projections (the P2022 guard class rides along) →
+print the measured RTO. First measured run: RTO 58ms; the
+pre-push gate run measured 61ms (7/7 assertions both). The quarterly MANUAL Postgres drill stays the
+production-control drill; the automated one proves the machinery
+never rots between drills. Runbook §4.1 records the companion.
+
+**THE ACTIONABLE ALERTS.** scripts/alert-probe.mts (npm run
+alert:probe, CI check job): 8 checks, each printing one actionable
+`[ALERT] <check> — <what to do>` line on failure and a machine-
+scrapable final `HEALTH <n> failed` (exit 1 wakes the monitor):
+db reachability; column reality (Job + StorageReservation full-
+projection — a failed migration surfaces HERE instead of as mystery
+route 500s, the S60 P2022 class); pending-backlog age (a wedged
+queue); stale-lease count (S100's dead-worker signal); migration-chain
+stuckness (Postgres — the S60 self-heal hint is in the alert text);
+the fail-closed secrets; disk headroom on the upload root; and —
+opt-in via TUBEFORGE_ALERT_BACKUPS_DIR — the backup-artifact freshness
+check that closes the runbook's "nightly dump missing" loop. The
+probe reads .env directly (the postinstall parse) so it runs OUTSIDE
+the Next runtime — a cron job or uptime monitor can call it against
+production with zero app dependencies.
+
+Also closed the accounting: the S102 ledger row (landed concurrently)
+and the P0.4 stage row are recorded in docs/production-readiness.md.
+
+Verified: typecheck, lint (0 errors), 501/501 unit, billing 40/40,
+storage 15/15, rate 17/17, drill 7/7 (RTO 58ms first, 61ms gate),
+alert probe HEALTH 0 failed, production build.

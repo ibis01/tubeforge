@@ -171,6 +171,18 @@ jobs:
       - name: Shared rate limiter battery (P0.4)
         run: npm run test:rate
 
+      # S103 — the P1.1 measured restore drill: backup (VACUUM INTO) →
+      # destroy a scratch casualty → restore → verify counts/integrity/probes
+      # → print the measured RTO. "A backup that has never been restored is
+      # a hypothesis, not a control" (the runbook's law), now CI-proven.
+      - name: Restore drill with measured RTO (P1.1)
+        run: npm run test:drill
+
+      # S103 — the alert probe (the always-on health check cron/monitors run
+      # against production): must report HEALTH 0 failed on a healthy lane.
+      - name: Alert probe (P1.1 — actionable alerts)
+        run: npm run alert:probe
+
   build:
     name: Production build
     runs-on: ubuntu-24.04
