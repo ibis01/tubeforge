@@ -97,6 +97,20 @@ async function phase1(): Promise<void> {
   check("the video created through the API landed", !!video, video ? video.id : "(missing)");
   if (!video) throw new Error("the API-created video is missing — the walk cannot continue");
 
+  // --- the object store must exist before the first put: CreateBucket IS a
+  // plain PUT /bucket in S3 — done here through the PRODUCTION SigV4 signer
+  // from inside the container (also proves the host-gateway route). Works on
+  // MinIO AND SeaweedFS; 409 = already exists on a re-run. ---
+  const { s3Config, s3Fetch } = await import("../src/lib/tubeforge/storage-s3");
+  const s3cfg = s3Config();
+  if (!s3cfg) throw new Error("the s3 driver env is missing in the smoke container");
+  const mkBucket = await s3Fetch("PUT", "", s3cfg);
+  check(
+    "the artifact bucket exists (CreateBucket through the SigV4 signer)",
+    mkBucket.ok || mkBucket.status === 409,
+    `status ${mkBucket.status}`,
+  );
+
   // --- a REAL mp4 round-trips through the s3 driver into MinIO ---
   const scratch = "/tmp/smoke-render.mp4";
   execSync(

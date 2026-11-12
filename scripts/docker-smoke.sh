@@ -61,30 +61,34 @@ for pair in \
   docker tag "$1" "$2"
 done
 
-# --- MinIO as a HOST process (dl.min.io — MinIO's own CDN, Hub-free) ---
-echo "[smoke] downloading MinIO + mc from dl.min.io"
-curl -fsSLo /tmp/minio https://dl.min.io/server/minio/release/linux-amd64/minio
-curl -fsSLo /tmp/mc https://dl.min.io/client/mc/release/linux-amd64/mc
-chmod +x /tmp/minio /tmp/mc
-rm -rf /tmp/minio-data && mkdir -p /tmp/minio-data
-MINIO_ROOT_USER="$MINIO_ROOT_USER" MINIO_ROOT_PASSWORD="$MINIO_ROOT_PASSWORD" \
-  /tmp/minio server /tmp/minio-data --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 \
-  >/tmp/minio.log 2>&1 &
+# --- object store as a HOST process (Hub-free; dl.min.io is 410 Gone —
+# MinIO retired the community binaries, so the S3-compatible store here is
+# SeaweedFS, pinned to release 3.96 from GitHub releases). The containers
+# talk S3 to it over host.docker.internal:9000; the bucket is created
+# INSIDE the walk (phase 1) through the production SigV4 signer itself.
+echo "[smoke] downloading SeaweedFS 3.96 (S3-compatible store) from GitHub releases"
+curl -fsSLo /tmp/weed.tar.gz "https://github.com/seaweedfs/seaweedfs/releases/download/3.96/linux_amd64.tar.gz"
+tar xzf /tmp/weed.tar.gz -C /tmp weed
+rm -rf /tmp/seaweed-data && mkdir -p /tmp/seaweed-data
+cat > /tmp/seaweed-s3.json << EOF
+{ "identities": [ { "name": "anon", "actions": ["Read", "List"] }, { "name": "tubeforge", "credentials": [{ "accessKey": "$MINIO_ROOT_USER", "secretKey": "$MINIO_ROOT_PASSWORD" }], "actions": ["Read", "Write", "List", "Tagging", "Admin"] } ] }
+EOF
+/tmp/weed server -dir=/tmp/seaweed-data -ip=127.0.0.1 -master.port=9333 -volume.port=8080 \
+  -s3 -s3.port=9000 -s3.config=/tmp/seaweed-s3.json >/tmp/seaweed.log 2>&1 &
 MINIO_PID=$!
 
 MINIO_OK=false
-for i in $(seq 1 30); do
-  if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1; then MINIO_OK=true; break; fi
+for i in $(seq 1 45); do
+  # any HTTP response (even 403 for the anonymous root) proves the gateway lives
+  if curl -s -o /dev/null --max-time 2 http://127.0.0.1:9000/ ; then MINIO_OK=true; break; fi
   sleep 1
 done
 if [ "$MINIO_OK" != true ]; then
-  echo "[smoke] FAIL: the MinIO host process never became healthy"
-  tail -20 /tmp/minio.log || true
+  echo "[smoke] FAIL: the SeaweedFS S3 gateway never became healthy"
+  tail -20 /tmp/seaweed.log || true
   exit 1
 fi
-/tmp/mc alias set local http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
-/tmp/mc mb --ignore-existing local/tubeforge >/dev/null
-echo "[smoke] MinIO healthy — bucket ready (host process, :9000)"
+echo "[smoke] SeaweedFS S3 gateway healthy (host process, :9000)"
 
 # --- build + boot the topology ---
 echo "[smoke] building + booting the production topology (postgres + web + worker → MinIO)"
