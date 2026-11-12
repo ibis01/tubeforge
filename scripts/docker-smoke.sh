@@ -73,7 +73,13 @@ rm -rf /tmp/seaweed-data && mkdir -p /tmp/seaweed-data
 cat > /tmp/seaweed-s3.json << EOF
 { "identities": [ { "name": "anon", "actions": ["Read", "List"] }, { "name": "tubeforge", "credentials": [{ "accessKey": "$MINIO_ROOT_USER", "secretKey": "$MINIO_ROOT_PASSWORD" }], "actions": ["Read", "Write", "List", "Tagging", "Admin"] } ] }
 EOF
-/tmp/weed server -dir=/tmp/seaweed-data -ip=127.0.0.1 -master.port=9333 -volume.port=8080 \
+# -ip.bind=0.0.0.0 is NOT optional: -ip=127.0.0.1 alone binds the S3 gateway
+# to host loopback, and the containers reach the store over host.docker.internal
+# (the docker bridge gateway IP) — run 43304280372 died in phase 1 exactly
+# there ("fetch failed" on the put/get round-trip after five green topology
+# assertions). The master keeps advertising 127.0.0.1 to itself; the S3 port
+# must answer on every interface.
+/tmp/weed server -dir=/tmp/seaweed-data -ip=127.0.0.1 -ip.bind=0.0.0.0 -master.port=9333 -volume.port=8080 \
   -s3 -s3.port=9000 -s3.config=/tmp/seaweed-s3.json >/tmp/seaweed.log 2>&1 &
 MINIO_PID=$!
 
