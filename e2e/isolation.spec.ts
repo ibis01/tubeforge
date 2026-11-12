@@ -143,16 +143,24 @@ test.describe.serial("cross-tenant isolation (Stage 2 completion gate)", () => {
   });
 
   test("settings are per user: B's writes never leak into A's preferences", async ({ request }) => {
-    // B writes a distinctive preference value (flat body: key → value).
+    // B writes a distinctive per-user preference. The unified settings API
+    // (multi-provider commit) replaced the old flat key→value store with
+    // scoped writes: scope "zai" persists B's own zai.* rows. The surface
+    // changed; the isolation law did not — B's write must never surface in
+    // A's settings.
     const put = await request.put("/api/settings", {
       headers: { cookie: b.cookie },
-      data: { "music.volume": "0.9" },
+      data: { scope: "zai", baseUrl: "https://isolation-probe-b.invalid" },
     });
     expect(put.status()).toBeLessThan(300);
 
     const resA = await request.get("/api/settings", { headers: { cookie: a.cookie } });
-    const dA = (await resA.json()) as { settings: Record<string, string> };
-    expect(dA.settings["music.volume"], "A keeps the default (B's 0.9 must not leak)").not.toBe("0.9");
+    expect(resA.status()).toBe(200);
+    const dA = (await resA.json()) as { zai?: { baseUrl?: string } };
+    expect(
+      dA.zai?.baseUrl,
+      "A keeps the default gateway (B's probe URL must not leak)",
+    ).not.toBe("https://isolation-probe-b.invalid");
   });
 
   test("jobs history is scoped: A sees no B jobs and vice versa", async ({ request }) => {
