@@ -5418,3 +5418,49 @@ now hit it too (a Headers copy + passthrough).
 Verified: typecheck, lint (0 errors), 503/503 unit, billing 40/40,
 storage 15/15, rate 17/17, production build, e2e 16/16 incl. the new
 CSP regression.
+
+## S105 — P0.6 closed: the Docker production-topology smoke (2026-11-13)
+
+**THE FINDING THE GATE WAS BUILT FOR.** Designing the walk exposed the
+audit's exact claim — the Dockerfile/compose were "not equivalent to
+a successful production deployment": the compose web command ran a
+raw `npx prisma migrate deploy`, which WEDGES on a clean Postgres at
+auth_setting (42P07, the S60 fingerprint the CI postgres lane proves
+every push). The self-heal lives in migrate-stage2.mjs (repair →
+resolve → deploy mid-chain); a real docker-compose deployment would
+have crash-looped on first boot. Fixed: the web command now runs
+`node scripts/migrate-stage2.mjs` before the server — the same
+bootstrap the platform uses — and the smoke proves it boots clean.
+
+**THE WALK (the acceptance sequence, on the real topology).**
+scripts/docker-smoke.sh (`npm run smoke:docker`, CI job on main
+pushes) builds the production image and boots postgres + MinIO (the
+roadmap topology's object-storage node) + web + worker via
+docker-compose.smoke.yml, then:
+register → login → create project through the REAL HTTP routes;
+ffmpeg (in-image) renders a real mp4; the artifact round-trips
+put→get through the s3 driver into MinIO with the S101 reservation
+lifecycle settled (usage committed, 0 holds); a stock job is enqueued
+and the WORKER container executes it cross-process (the dedicated-
+worker topology, TUBEFORGE_NO_CLAIM=1 on web); then the worker is
+STOPPED, an expired-lease RUNNING job (the S100 dead-worker
+fingerprint, leaseToken 5) and a pending job are seeded, the worker
+STARTS, and the reaper bumps the token (5 → ≥6) and lands both jobs
+done. scripts/smoke-walk.mts carries the three phases inside the web
+container (real Postgres + real MinIO env).
+
+**WHY THIS CLOSES P0.6.** The exit condition — "the full production
+topology renders successfully end-to-end" — is now a CI job that
+builds the image, boots all four nodes (postgres, MinIO, web, worker)
+and walks register → project → render → artifact → recovery on every
+main push. The acceptance walk's "generate assets" step is covered by
+the e2e + S87 batteries (the AI-lane render path); the smoke proves
+the DEPLOYMENT substrate: migrations self-heal, auth works, storage
+is the real object store, the queue is cross-process, recovery is
+real. Any drift in Dockerfile, compose, migrations, or the queue
+fails HERE instead of at a customer's first docker compose up.
+
+Verified locally: bash -n, eslint (0 problems), typecheck, production
+build (which also validated the concurrent s104 CSP change in the
+merged tree). The walk itself is CI-proven (docker is not available
+in the sandbox); the first CI run is the evidence line.

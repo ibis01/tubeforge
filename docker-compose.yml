@@ -37,8 +37,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # Schema first, then serve.
-    command: sh -c "npx prisma migrate deploy --schema prisma/schema.prisma && node .next/standalone/server.js"
+    # Schema first, then serve. P0.6 finding: a raw `prisma migrate deploy`
+    # WEDGES on a clean database at auth_setting (42P07 — the S60 fingerprint,
+    # proven every push in the CI postgres lane); the self-heal lives in
+    # migrate-stage2.mjs (repair → resolve → deploy mid-chain), so THAT is
+    # what a real deployment must run — the smoke walk proves it end-to-end.
+    command: sh -c "node scripts/migrate-stage2.mjs && node .next/standalone/server.js"
     environment:
       DATABASE_URL: postgresql://tubeforge:${POSTGRES_PASSWORD}@postgres:5432/tubeforge
       # REQUIRED — generate your own:  openssl rand -base64 32

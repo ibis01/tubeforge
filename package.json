@@ -34,6 +34,7 @@
     "test:storage": "node --import tsx scripts/test-storage.mts",
     "test:rate": "node --import tsx scripts/test-rate-limit.mts",
     "test:drill": "node --import tsx scripts/restore-drill.mts",
+    "smoke:docker": "bash scripts/docker-smoke.sh",
     "alert:probe": "node --import tsx scripts/alert-probe.mts",
     "verify:clone": "node --import tsx scripts/test-clean-clone.mts"
   },

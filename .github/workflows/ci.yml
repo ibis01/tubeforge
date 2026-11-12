@@ -372,6 +372,25 @@ jobs:
       - name: Clean-clone verifier (fresh clone → npm ci → boot probe → determinism)
         run: node --import tsx scripts/test-clean-clone.mts
 
+  # S104 — the P0.6 Docker production smoke. The roadmap's exit condition:
+  # "the full production topology renders successfully end-to-end". The
+  # docker-smoke walk builds the production image, boots postgres + MinIO +
+  # web + worker, and walks register → login → create project → ffmpeg
+  # render → MinIO artifact round-trip (the S101 lifecycle) → cross-process
+  # job execution → worker-restart recovery (the S100 reap, token bumped).
+  # Runs on main pushes only (the build costs ~10 min; PR runs get the rest
+  # of the gate).
+  docker-smoke:
+    name: Docker production smoke (P0.6)
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build + boot the topology and walk it (scripts/docker-smoke.sh)
+        run: bash scripts/docker-smoke.sh
+
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-24.04
