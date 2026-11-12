@@ -1,5 +1,11 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // Ship BOTH engine platforms: the Docker build's prisma generate runs in
+  // node:20-bookworm-slim and the RUNTIME stage (and production) needs
+  // debian-openssl-3.0.x — a client generated for the build stage's detected
+  // pair crashes at startup with "could not locate the Query Engine" (the
+  // P0.6 docker smoke caught exactly that). "native" keeps local dev fast.
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {
