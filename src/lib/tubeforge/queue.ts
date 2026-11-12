@@ -18,11 +18,15 @@
 // The QueueDriver seam (claim/complete/fail) stays one interface wide so a
 // BullMQ driver can replace the SQL when infrastructure is provisioned.
 //
-// Known limitation (documented, not hidden): there is no cross-process
-// heartbeat, so a "running" row from a process that died WITHOUT a restart
-// on the same box is only reclaimed when some process next boots (boot
-// recovery). Multi-instance HA needs the BullMQ driver or heartbeats —
-// Stage 3 part 2.
+// S100 / P0.2 — the claim is now a RENEWABLE LEASE with a FENCING TOKEN
+// (docs/production-readiness.md, gate P0.2): every claim stamps leaseToken
+// (monotonic per job) + leaseExpiresAt; the executing process renews at
+// TTL/3; any process may reap expired leases back to pending — bumping the
+// token; and EVERY terminal write is conditional on the current token, so a
+// worker that lost its lease physically cannot overwrite the newer claimant
+// — its results are discarded. Cross-process recovery no longer depends on
+// same-host pid checks (those remain only as the boot-recovery shortcut for
+// pre-lease legacy rows).
 
 import { rawDatabase, db } from "./tenant-db";
 import { withCtx, withCtxNull, type TenantCtx } from "./tenant";
@@ -30,6 +34,7 @@ import { errorText } from "@/lib/tubeforge/redact";
 import { log } from "./log";
 import { JobCancelledError, requestCancel, runWithCancelKey } from "./cancel";
 import type { JobKind } from "./jobs";
+import type { Prisma } from "@prisma/client";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -74,6 +79,16 @@ const MAX_ATTEMPTS_BY_KIND: Partial<Record<JobKind, number>> = {
   continuity: 1,
 };
 const DEFAULT_MAX_ATTEMPTS = 2;
+
+/**
+ * S100 / P0.2 — the lease. A claim is a LEASE, not ownership: the executor
+ * must renew it (every LEASE_RENEW_MS = TTL/3) or any process may reap the
+ * row once the deadline passes, bump the fencing token, and re-run the job.
+ * A missed renewal must NOT lose the lease — renewal sits strictly inside
+ * the TTL with three chances before expiry at the default cadence.
+ */
+export const LEASE_TTL_MS = Number(process.env.TUBEFORGE_LEASE_TTL_MS ?? 90_000);
+export const LEASE_RENEW_MS = Math.max(5_000, Math.floor(LEASE_TTL_MS / 3));
 
 // ---------------------------------------------------------------------------
 // State (globalThis so Next.js HMR reloads keep sharing it)
@@ -256,6 +271,116 @@ function backoffMs(attempts: number): number {
   return Math.min(exp, BACKOFF_CAP_MS) + Math.floor(Math.random() * 2_000);
 }
 
+// ---------------------------------------------------------------------------
+// Claim + lease (S100 / P0.2)
+
+export interface ClaimResult {
+  claimed: boolean;
+  /** The fencing token stamped by THIS claim (0 when not claimed). */
+  leaseToken: number;
+}
+
+/**
+ * The atomic claim primitive: flips a pending row to running and stamps a
+ * fresh MONOTONIC fencing token + lease deadline. Exported for the lease
+ * battery (test-queue phase C) — tickQueue is the only in-app caller.
+ * Returns claimed=false when another worker holds the row (live lease).
+ */
+export async function claimJob(jobId: string, workerId: string): Promise<ClaimResult> {
+  const claimed = await withCtxNull(() =>
+    rawDatabase.job.updateMany({
+      where: { id: jobId, status: "pending" },
+      data: {
+        status: "running",
+        claimedBy: workerId,
+        claimedAt: new Date(),
+        startedAt: new Date(),
+        attempts: { increment: 1 },
+        leaseToken: { increment: 1 },
+        leaseExpiresAt: new Date(Date.now() + LEASE_TTL_MS),
+      },
+    })
+  );
+  if (claimed.count !== 1) return { claimed: false, leaseToken: 0 };
+  // Read back the token THIS claim stamped (updateMany doesn't return the
+  // row). If another claimant snuck in between the two statements — only
+  // possible after our lease was reaped — claimedBy won't be ours.
+  const row = await withCtxNull(() =>
+    rawDatabase.job.findUnique({ where: { id: jobId }, select: { leaseToken: true, claimedBy: true } })
+  );
+  if (!row || row.claimedBy !== workerId) return { claimed: false, leaseToken: 0 };
+  return { claimed: true, leaseToken: row.leaseToken };
+}
+
+/**
+ * Extend the lease for the CURRENT token. False = lost: another claimant or
+ * reap holds a newer token and this worker must stop writing. Throws on
+ * transient DB errors — a failed renewal must not be confused with a lost
+ * lease (the caller retries next interval; the lease still stands).
+ */
+export async function renewLease(jobId: string, leaseToken: number): Promise<boolean> {
+  const renewed = await withCtxNull(() =>
+    rawDatabase.job.updateMany({
+      where: { id: jobId, leaseToken, status: "running" },
+      data: { leaseExpiresAt: new Date(Date.now() + LEASE_TTL_MS) },
+    })
+  );
+  return renewed.count === 1;
+}
+
+/**
+ * Expired-lease recovery (S100 / P0.2) — the cross-process story the old
+ * module header documented as its known limitation: any "running" row whose
+ * lease expired AND whose kind this process can re-execute (a registered
+ * handler — the durable resume path) is flipped back to pending and its
+ * fencing token BUMPED, which instantly blinds the previous claimant's
+ * writes. NULL-lease legacy rows never match (SQL NULL is not lt now) —
+ * they keep the boot-recovery contract. Safe to run from every process;
+ * scoped to handler kinds so non-resumable rows keep their honest
+ * "interrupted" degradation instead of becoming unrunnable pending rows.
+ */
+export async function reapExpiredLeases(): Promise<number> {
+  const kinds = handlerKinds();
+  if (!kinds.length) return 0;
+  const reaped = await withCtxNull(() =>
+    rawDatabase.job.updateMany({
+      where: {
+        status: "running",
+        leaseExpiresAt: { lt: new Date() },
+        kind: { in: kinds },
+      },
+      data: {
+        status: "pending",
+        claimedBy: null,
+        claimedAt: null,
+        leaseExpiresAt: null,
+        leaseToken: { increment: 1 },
+        nextRunAt: new Date(),
+        error: "Lease expired — reclaimed for another attempt.",
+      },
+    })
+  );
+  if (reaped.count > 0) log.warn("reaped expired job leases", { count: reaped.count });
+  return reaped.count;
+}
+
+/**
+ * The fencing write (S100 / P0.2): terminal job state lands ONLY when the
+ * caller still holds the CURRENT lease token. Returns false when fenced —
+ * a stale worker must treat its results as discarded and surface nothing
+ * (the newer claimant owns the row and will report its own outcome).
+ */
+export async function writeOutcomeIfLeased(
+  jobId: string,
+  leaseToken: number,
+  data: Prisma.JobUpdateManyMutationInput
+): Promise<boolean> {
+  const written = await withCtxNull(() =>
+    rawDatabase.job.updateMany({ where: { id: jobId, leaseToken }, data })
+  );
+  return written.count === 1;
+}
+
 /**
  * One claim pass. Claimable set depends on role:
  *   web    — jobs this process created (closure present) + handler kinds
@@ -265,6 +390,10 @@ export async function tickQueue(): Promise<void> {
   if (state.ticking || state.noClaim) return;
   state.ticking = true;
   try {
+    // S100 — expired-lease recovery first: stale running rows return to
+    // pending so the claim scan below can hand them to a live process.
+    await reapExpiredLeases().catch(() => {});
+
     const now = new Date();
     const closureIds = [...state.closures.keys()];
     const kinds = handlerKinds();
@@ -296,11 +425,12 @@ export async function tickQueue(): Promise<void> {
       const hasHandler = handlers.has(kind);
       if (!hasClosure && !hasHandler) continue; // another process's closure job
 
-      // Cancelled while queued — never start it.
+      // Cancelled while queued — never start it. Status-guarded (no lease
+      // exists on a pending row).
       if (candidate.cancelRequested) {
         await withCtxNull(() =>
-          rawDatabase.job.update({
-            where: { id: candidate.id },
+          rawDatabase.job.updateMany({
+            where: { id: candidate.id, status: "pending" },
             data: { status: "cancelled", endedAt: new Date(), error: "Cancelled before starting" },
           })
         ).catch(() => {});
@@ -317,27 +447,17 @@ export async function tickQueue(): Promise<void> {
         if (running >= MAX_HEAVY_PER_ORG) continue; // stays pending — retried next tick
       }
 
-      // Atomic claim — updateMany only hits when STILL pending (another
-      // process may have claimed between the find and now).
-      const claimed = await withCtxNull(() =>
-        rawDatabase.job.updateMany({
-          where: { id: candidate.id, status: "pending" },
-          data: {
-            status: "running",
-            claimedBy: state.workerId,
-            claimedAt: new Date(),
-            startedAt: new Date(),
-            attempts: { increment: 1 },
-          },
-        })
-      );
-      if (claimed.count !== 1) continue;
+      // Atomic claim (S100: a lease, not ownership) — the claim primitive
+      // only hits when STILL pending and stamps a fresh monotonic fencing
+      // token + lease deadline.
+      const claim = await claimJob(candidate.id, state.workerId).catch(() => ({ claimed: false, leaseToken: 0 }));
+      if (!claim.claimed) continue;
 
       // Detached execution — the tick keeps claiming; jobs run concurrently
       // (bounded by MAX_ACTIVE_PER_PROCESS, incremented below before detach
       // so the loop can't oversubscribe in the await window).
       state.active += 1;
-      void executeClaimed(candidate.id, kind, candidate.entityId, candidate.organizationId, candidate.userId, candidate.payload ?? null)
+      void executeClaimed(candidate.id, kind, candidate.entityId, candidate.organizationId, candidate.userId, candidate.payload ?? null, claim.leaseToken)
         .finally(() => {
           state.active -= 1;
         });
@@ -360,7 +480,9 @@ async function executeClaimed(
   entityId: string,
   organizationId: string,
   userId: string | null,
-  payloadRaw: string | null
+  payloadRaw: string | null,
+  /** The fencing token stamped by the claim that started this run (S100). */
+  leaseToken: number
 ): Promise<void> {
   emitClaimed(jobId, kind, entityId);
 
@@ -368,17 +490,22 @@ async function executeClaimed(
   const handler = handlers.get(kind) ?? null;
   if (!closure && !handler) {
     // Claimed but unrunnable (closure evaporated, no handler) — interrupt
-    // honestly instead of leaving a forever-running row.
-    await withCtxNull(() =>
-      rawDatabase.job.update({
-        where: { id: jobId },
+    // honestly instead of leaving a forever-running row. FENCED write
+    // (S100): only if this run still holds the current lease token.
+    const fenced = await withCtxNull(() =>
+      rawDatabase.job.updateMany({
+        where: { id: jobId, leaseToken },
         data: {
           status: "interrupted",
           endedAt: new Date(),
           error: "Server restarted while this job was queued — run the stage again.",
         },
       })
-    ).catch(() => {});
+    ).catch(() => ({ count: 0 }));
+    if (fenced.count !== 1) {
+      log.warn("stale executor fenced — interrupted outcome discarded", { jobId, kind, leaseToken });
+      return;
+    }
     emitFinished(jobId, kind, entityId, "interrupted", "Server restarted while this job was queued — run the stage again.");
     return;
   }
@@ -396,6 +523,27 @@ async function executeClaimed(
       .catch(() => {});
   }, 2_000);
   state.cancelWatchers.set(jobId, watcher);
+
+  // S100 — the lease renewer, every LEASE_RENEW_MS (TTL/3). A FAILED
+  // renewal is authoritative (count 0 after a successful query): someone
+  // else owns the row now — cancel the body at its next cancel point and
+  // let the fenced terminal write discard this run. A THROWN (transient
+  // DB) error keeps the lease — the next interval retries; a single missed
+  // renew must not lose the lease (three chances before expiry).
+  const renewer = setInterval(() => {
+    void renewLease(jobId, leaseToken)
+      .then((alive) => {
+        if (!alive) {
+          log.warn("job lease lost — a newer claimant owns this row; discarding results", {
+            jobId,
+            kind,
+            leaseToken,
+          });
+          requestCancel(jobKey);
+        }
+      })
+      .catch(() => {});
+  }, LEASE_RENEW_MS);
 
   let outcome: "done" | "cancelled" | "retry" | "failed" = "done";
   let errorMessage: string | null = null;
@@ -433,6 +581,7 @@ async function executeClaimed(
     }
   } finally {
     clearInterval(watcher);
+    clearInterval(renewer);
     state.cancelWatchers.delete(jobId);
   }
 
@@ -448,19 +597,26 @@ async function executeClaimed(
 
   const now = new Date();
   try {
-    await withCtxNull(() =>
-      rawDatabase.job.update({
-        where: { id: jobId },
-        data:
-          outcome === "done"
-            ? { status: "done", endedAt: now, progress: 1, error: null }
-            : outcome === "cancelled"
-              ? { status: "cancelled", endedAt: now, error: errorMessage }
-              : outcome === "retry"
-                ? { status: "pending", endedAt: null, claimedBy: null, claimedAt: null, nextRunAt: new Date(Date.now() + backoffMs(attempts)), error: errorMessage }
-                : { status: "failed", endedAt: now, error: errorMessage },
-      })
+    // S100 — the FENCED terminal write: the outcome lands ONLY if this run
+    // still holds the current lease token. A stale worker (lease reaped or
+    // re-claimed mid-run) affects ZERO rows — its results are discarded
+    // and nothing is emitted, because the newer claimant owns the row and
+    // will report its own outcome.
+    const fenced = await writeOutcomeIfLeased(
+      jobId,
+      leaseToken,
+      outcome === "done"
+        ? { status: "done", endedAt: now, progress: 1, error: null }
+        : outcome === "cancelled"
+          ? { status: "cancelled", endedAt: now, error: errorMessage }
+          : outcome === "retry"
+            ? { status: "pending", endedAt: null, claimedBy: null, claimedAt: null, leaseExpiresAt: null, nextRunAt: new Date(Date.now() + backoffMs(attempts)), error: errorMessage }
+            : { status: "failed", endedAt: now, error: errorMessage },
     );
+    if (!fenced) {
+      log.warn("stale executor fenced — outcome discarded", { jobId, kind, leaseToken, outcome });
+      return;
+    }
   } catch (err) {
     log.error("queue failed to persist job outcome", { jobId, kind, err });
   }
@@ -521,7 +677,14 @@ export async function reenqueueIfHandlerKind(jobId: string, kind: string): Promi
   const updated = await withCtxNull(() =>
     rawDatabase.job.updateMany({
       where: { id: jobId, status: "running" },
-      data: { status: "pending", claimedBy: null, claimedAt: null, nextRunAt: new Date() },
+      data: {
+        status: "pending",
+        claimedBy: null,
+        claimedAt: null,
+        leaseExpiresAt: null,
+        leaseToken: { increment: 1 }, // S100 — blind the dead claimant's writes
+        nextRunAt: new Date(),
+      },
     })
   ).catch(() => ({ count: 0 }));
   return updated.count === 1;
@@ -537,6 +700,7 @@ export function queueStats() {
     handlerKinds: handlerKinds(),
     noClaim: state.noClaim,
     caps: { perProcess: MAX_ACTIVE_PER_PROCESS, heavyPerOrg: MAX_HEAVY_PER_ORG },
+    lease: { ttlMs: LEASE_TTL_MS, renewMs: LEASE_RENEW_MS }, // S100
   };
 }
 

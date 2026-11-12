@@ -11795,6 +11795,75 @@ await test("S99 the verifier's own contract: forbidden list, the .gitkeep allowa
   ok(v.includes("delete freshEnv.DATABASE_URL"), "the verifier strips an injected DATABASE_URL — the fresh-clone story has none");
 });
 
+// ---------- S100 — P0.2 production-readiness: queue leases + fencing ----------
+//
+// docs/production-readiness.md P0.2: renewable lease expiration, monotonic
+// fencing tokens, conditional completion, expired-claim recovery. The REAL
+// concurrent-worker + stale-worker battery lives in test-queue.mts phase C
+// (it needs the DB); these pins hold the config law, the fencing law in the
+// source, and the schema/migration reality.
+
+await test("S100 lease config law: the renewal cadence sits strictly inside the TTL", async () => {
+  const q = await import("../src/lib/tubeforge/queue");
+  ok(Number.isFinite(q.LEASE_TTL_MS) && q.LEASE_TTL_MS > 0, "TTL is a sane positive number");
+  ok(
+    q.LEASE_TTL_MS >= 30_000,
+    `the TTL is long enough for real renders (ffmpeg stages take minutes) — got ${q.LEASE_TTL_MS}ms`,
+  );
+  ok(
+    q.LEASE_RENEW_MS >= 5_000 && q.LEASE_RENEW_MS < q.LEASE_TTL_MS,
+    `renewal (every ${q.LEASE_RENEW_MS}ms) sits strictly inside the TTL (${q.LEASE_TTL_MS}ms) — a missed renew must not lose the lease`,
+  );
+});
+
+await test("S100 THE FENCING LAW: every Job write in queue.ts is conditional — no unconditional terminal writes survive", () => {
+  const src = fs.readFileSync("src/lib/tubeforge/queue.ts", "utf8");
+  ok(
+    !/\bjob\.update\(\{/.test(src),
+    "queue.ts performs ZERO plain job.update writes — terminal state goes through updateMany guarded by leaseToken or status",
+  );
+  const tokenRefs = (src.match(/leaseToken/g) ?? []).length;
+  ok(
+    tokenRefs >= 8,
+    `the fencing token threads through claim/renew/reap/fence/recovery (${tokenRefs} occurrences)`,
+  );
+  ok(
+    src.includes("leaseExpiresAt: { lt: new Date() }"),
+    "the reap scan matches EXPIRED leases only (lt: now) — a live lease is never stolen",
+  );
+  ok(
+    src.includes("kind: { in: kinds }"),
+    "the reap scope is handler kinds only — non-resumable rows keep the boot-recovery interrupted contract",
+  );
+  ok(
+    src.includes("leaseToken: { increment: 1 }"),
+    "every claim AND reap bumps the token (monotonic per job)",
+  );
+  ok(
+    src.includes("renewLease(jobId, leaseToken)") && src.includes("writeOutcomeIfLeased("),
+    "the executor renews its lease and writes its outcome through the fence",
+  );
+});
+
+await test("S100 the lease columns are real schema, backed by a migration in the chain", () => {
+  const pg = fs.readFileSync("prisma/schema.prisma", "utf8");
+  ok(/leaseToken\s+Int\s+@default\(0\)/.test(pg), "Job.leaseToken (the fencing token) is in the postgres schema");
+  ok(/leaseExpiresAt\s+DateTime\?/.test(pg), "Job.leaseExpiresAt (the lease deadline) is in the postgres schema");
+  ok(pg.includes("@@index([status, leaseExpiresAt])"), "the reap scan has its index");
+  // The S99 sync law already forces the sqlite mirror to match byte-for-byte.
+  const dirs = fs
+    .readdirSync("prisma/migrations", { withFileTypes: true })
+    .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+    .map((d) => d.name);
+  const leaseMigration = dirs.find((d) => d.includes("job_leases"));
+  ok(!!leaseMigration, `the lease migration is in the postgres chain (${leaseMigration ?? "missing"})`);
+  const sql = fs.readFileSync(`prisma/migrations/${leaseMigration}/migration.sql`, "utf8");
+  ok(
+    /ADD COLUMN "leaseToken"/.test(sql) && /ADD COLUMN "leaseExpiresAt"/.test(sql),
+    "the migration adds both lease columns",
+  );
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

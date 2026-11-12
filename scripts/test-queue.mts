@@ -198,6 +198,144 @@ async function phaseA(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Phase C — S100 / P0.2: leases + fencing (concurrent-worker + stale-worker
+// battery). Runs BEFORE phase B (whose finally disconnects the shared client)
+// and function-level, against the REAL database: claimJob/renewLease/
+// reapExpiredLeases/writeOutcomeIfLeased are the primitives the tick and the
+// executor use — exercising them directly IS the two-worker simulation.
+// setClaiming(false) already ran at the end of phase A, so this process
+// cannot race the probe rows.
+// ---------------------------------------------------------------------------
+async function phaseC(): Promise<void> {
+  console.log("◆ S100 / P0.2 — leases + fencing (concurrent-worker + stale-worker battery)");
+  const { claimJob, renewLease, reapExpiredLeases, writeOutcomeIfLeased, LEASE_TTL_MS } = await import(
+    "../src/lib/tubeforge/queue"
+  );
+
+  const run = `l${Date.now().toString(36)}`;
+  const org = await db.organization.create({
+    data: { name: `Lease Probe ${run}`, slug: `lease-probe-${run}` },
+  });
+
+  try {
+    ok(LEASE_TTL_MS >= 30_000, `the lease TTL is long enough for real renders (${LEASE_TTL_MS}ms)`);
+
+    const job = await db.job.create({
+      data: {
+        organizationId: org.id,
+        kind: "stock", // handler-registered — inside the reap scope
+        entityId: "lease-probe-entity",
+        status: "pending",
+        maxAttempts: 5,
+      },
+    });
+
+    // 1. Worker A claims — the row is LEASED with a monotonic fencing token.
+    const a = await claimJob(job.id, "workerA:1:x");
+    ok(a.claimed, "worker A claims the pending job");
+    ok(a.leaseToken >= 1, `the claim stamps a monotonic fencing token (token=${a.leaseToken})`);
+    const row1 = await db.job.findUnique({
+      where: { id: job.id },
+      select: { leaseExpiresAt: true, claimedBy: true, attempts: true },
+    });
+    ok(row1?.claimedBy === "workerA:1:x", "the claim stamps the claimant");
+    ok(
+      row1?.leaseExpiresAt !== null && row1 !== null && (row1.leaseExpiresAt as Date).getTime() > Date.now(),
+      "the lease expires in the future (TTL honored)"
+    );
+    ok(row1?.attempts === 1, `the claim counted an attempt (attempts=${row1?.attempts})`);
+
+    // 2. THE CONCURRENT-WORKER LAW: worker B cannot claim a LIVE lease.
+    const b = await claimJob(job.id, "workerB:1:x");
+    ok(!b.claimed, "worker B cannot claim a LIVE lease (0 rows affected)");
+
+    // 3. Renewal extends the deadline for the current token only.
+    const deadlineBefore = (row1?.leaseExpiresAt as Date).getTime();
+    await sleep(20);
+    ok(await renewLease(job.id, a.leaseToken), "renewLease extends the CURRENT token's lease");
+    ok(!(await renewLease(job.id, 999)), "renewLease refuses a FOREIGN token");
+    const row2 = await db.job.findUnique({ where: { id: job.id }, select: { leaseExpiresAt: true } });
+    ok(
+      (row2?.leaseExpiresAt as Date).getTime() > deadlineBefore,
+      "the deadline moved forward after renewal"
+    );
+
+    // 4. Worker A "dies" (the lease stops being renewed) — force it past,
+    //    then reap. The reap is scoped to handler kinds: a non-handler row
+    //    must be untouched (boot recovery owns that story).
+    await db.job.update({ where: { id: job.id }, data: { leaseExpiresAt: new Date(Date.now() - 1_000) } });
+    const stranger = await db.job.create({
+      data: {
+        organizationId: org.id,
+        kind: "legacy-probe", // NOT handler-registered
+        entityId: "lease-probe-entity",
+        status: "running",
+        claimedBy: "web:4194304:deadbeef",
+        claimedAt: new Date(Date.now() - 3_600_000),
+        leaseExpiresAt: new Date(Date.now() - 1_000),
+        startedAt: new Date(Date.now() - 3_600_000),
+        attempts: 1,
+      },
+    });
+    const reaped = await reapExpiredLeases();
+    ok(reaped >= 1, `the reap pass reclaimed expired handler-kind leases (${reaped})`);
+    const row3 = await db.job.findUnique({ where: { id: job.id } });
+    ok(row3?.status === "pending", `expired lease reaped → pending (got "${row3?.status}")`);
+    ok(row3?.claimedBy === null, "the reap clears the dead claimant");
+    ok(
+      row3?.leaseToken === a.leaseToken + 1,
+      `the reap BUMPED the fencing token (${a.leaseToken} → ${row3?.leaseToken}) — the stale worker is now write-blind`
+    );
+    const strangerRow = await db.job.findUnique({ where: { id: stranger.id }, select: { status: true } });
+    ok(
+      strangerRow?.status === "running",
+      "a NON-handler kind is not reaped — boot recovery owns that row (the honest interrupted path)"
+    );
+
+    // 5. THE STALE-WORKER FENCE — the heart of P0.2. Worker B claims the
+    //    reaped row; worker A's in-flight completion must hit 0 rows.
+    const b2 = await claimJob(job.id, "workerB:2:x");
+    ok(
+      b2.claimed && b2.leaseToken > a.leaseToken,
+      `worker B claims the reaped row with a NEWER token (${b2.leaseToken})`
+    );
+    const fenced = await writeOutcomeIfLeased(job.id, a.leaseToken, {
+      status: "done",
+      endedAt: new Date(),
+      progress: 1,
+      error: null,
+    });
+    ok(!fenced, "the STALE worker's completion is FENCED (0 rows affected)");
+    const row4 = await db.job.findUnique({
+      where: { id: job.id },
+      select: { status: true, claimedBy: true },
+    });
+    ok(
+      row4?.status === "running" && row4?.claimedBy === "workerB:2:x",
+      `the row still belongs to worker B — the stale write did NOT land (status=${row4?.status}, claimedBy=${row4?.claimedBy})`
+    );
+    const won = await writeOutcomeIfLeased(job.id, b2.leaseToken, {
+      status: "done",
+      endedAt: new Date(),
+      progress: 1,
+      error: null,
+    });
+    ok(won, "the CURRENT token holder completes");
+    const row5 = await db.job.findUnique({ where: { id: job.id }, select: { status: true } });
+    ok(row5?.status === "done", "the job lands done — exactly ONE worker's write wins");
+
+    // 6. Attempts counted both claim cycles (the reap itself adds none).
+    const row6 = await db.job.findUnique({ where: { id: job.id }, select: { attempts: true } });
+    ok(row6 !== null && row6.attempts >= 2, `attempts counted both claim cycles (attempts=${row6?.attempts})`);
+
+    await db.job.delete({ where: { id: stranger.id } });
+  } finally {
+    await db.organization.delete({ where: { id: org.id } }).catch(() => {});
+  }
+  console.log("");
+}
+
+// ---------------------------------------------------------------------------
 // Phase B — worker process: restart recovery
 // ---------------------------------------------------------------------------
 async function phaseB(): Promise<void> {
@@ -451,6 +589,7 @@ async function phaseB(): Promise<void> {
 
 async function main() {
   await phaseA();
+  await phaseC();
   await phaseB();
 }
 

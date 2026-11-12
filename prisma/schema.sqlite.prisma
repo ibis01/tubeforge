@@ -675,6 +675,14 @@ model Job {
   nextRunAt       DateTime     @default(now()) // earliest claim time (retry backoff)
   claimedBy       String? // "<role>:<pid>:<bootTs>" of the executing process
   claimedAt       DateTime?
+  // S100 / P0.2 — renewable lease + fencing token. leaseToken is MONOTONIC
+  // per job (bumped on every claim and every expired-lease reap); only the
+  // holder of the CURRENT token may write the row's terminal state, so a
+  // stale worker's completion affects 0 rows (the fencing law).
+  // leaseExpiresAt is the lease deadline; the executor renews it at TTL/3
+  // and any process may reap expired leases back to pending.
+  leaseToken      Int          @default(0)
+  leaseExpiresAt  DateTime?
   // Stage 3 close-out — JSON-encoded request options (render mode, scene
   // instruction, voiceover source pointer, …). Write-once at enqueue, parsed
   // by the kind's crash-recovery handler so a restarted process can re-run
@@ -694,6 +702,7 @@ model Job {
   @@index([status])
   @@index([startedAt])
   @@index([status, nextRunAt]) // Stage 3 queue claim scan
+  @@index([status, leaseExpiresAt]) // S100 expired-lease reap scan
 }
 
 // Stage 3 (T-3.7) — per-organization storage byte counter backing storage.ts

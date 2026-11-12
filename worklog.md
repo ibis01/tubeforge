@@ -5144,3 +5144,60 @@ Verified locally: typecheck, lint (0 errors), 493/493 unit, billing
 40/40, verify:clone 21/21 assertions, production build. CI adds the
 clean-clone job (no ffmpeg, no services — two npm cis on the warm
 cache) on every push.
+
+## S100 — P0.2 closed: queue leases + fencing tokens (2026-11-13)
+
+**THE HOLE.** The Stage-3 queue claimed rows atomically but owned them
+FOREVER: terminal writes were plain job.update (an old worker could
+overwrite a newer claimant), and recovery relied on same-host pid
+checks — fine for one box, wrong for distributed workers. The module
+header said so out loud: "Multi-instance HA needs the BullMQ driver or
+heartbeats — Stage 3 part 2."
+
+**THE DESIGN (docs/production-readiness.md P0.2).** Every claim is now
+a renewable LEASE with a monotonic FENCING TOKEN:
+- claimJob (the atomic primitive, extracted + exported for the
+  battery): WHERE status=pending → stamps claimedBy + leaseToken
+  INCREMENT + leaseExpiresAt = now + TTL (TUBEFORGE_LEASE_TTL_MS,
+  default 90s), then reads the token back (updateMany returns no row;
+  a stolen-between read is detected via claimedBy).
+- renewLease: WHERE leaseToken = mine AND status=running → extends the
+  deadline. The executor renews every TTL/3; a failed renewal is
+  AUTHORITATIVE (count 0) — cancel the body at its next cancel point
+  and let the fence discard the run; a THROWN (transient DB) error is
+  NOT authoritative — next interval retries, one missed renew never
+  loses the lease.
+- writeOutcomeIfLeased: EVERY terminal write (done/cancelled/failed/
+  retry/interrupted) is conditional on the current token. A stale
+  worker affects ZERO rows and emits nothing — the newer claimant owns
+  the row and reports its own outcome.
+- reapExpiredLeases: any running row whose lease expired AND whose kind
+  has a registered handler flips back to pending WITH A TOKEN BUMP —
+  instantly blinding the dead claimant. Scoped to handler kinds so
+  non-resumable rows keep the honest boot-recovery interrupted path.
+  NULL leases (pre-lease legacy rows) never match the scan — the two
+  recovery paths compose. Runs at the head of every tick on every
+  process.
+- reenqueueIfHandlerKind (boot recovery) also bumps the token now.
+
+**THE EVIDENCE (the P0.2 exit condition).** test-queue.mts phase C is
+the two-worker battery against the real DB: A claims (token 1) → B
+cannot claim a live lease → renewal extends for the current token only
+(a foreign token is refused) → A "dies" (lease forced past) → reap
+flips to pending and bumps the token (1→2) → B claims (token 3) → A's
+completion hits 0 rows (FENCED) → B's completion lands → exactly ONE
+worker's write wins; a non-handler expired row is untouched. Phase B
+(the real worker restart) passes unchanged under the lease regime.
+Suite 493 → 496 unit pins (config law, the source-level fencing law —
+ZERO plain job.update writes survive in queue.ts — and the schema +
+migration reality).
+
+**COST.** One migration (20261113150000_s100_job_leases: two columns +
+one index on both dialects), a lease-renew write every 30s per running
+job, and a reap scan per tick (indexed, handler-scoped). The gate
+earned its keep immediately: the stale-write fence caught a wrong
+expectation in the battery itself (post-claim status is running, not
+pending) before it could become a false PASS.
+
+Verified: typecheck, lint (0 errors), 496/496 unit, queue suite 64✓
+incl. the lease battery, billing 40/40, production build.
