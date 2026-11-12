@@ -78,6 +78,7 @@ import {
   PROVIDERS_BY_CAPABILITY,
   CHAT_PROVIDERS,
   CAPABILITY_META,
+  imageTestFreeLane,
   type CapabilityId,
 } from "@/lib/tubeforge/providers/registry";
 
@@ -1056,24 +1057,31 @@ export function SettingsView() {
                   const top = scored[0];
                   const mine = scored.find((s) => s.provider === row.provider);
                   const pct = (n: number) => Math.round(n * 100);
-                  const bits = `quality ${pct(top.factors.quality)} · reliability ${pct(
-                    top.factors.reliability,
-                  )} · ${top.reasons[0] ?? ""}`;
+                  // S98 — the factors are ATTRIBUTED. The old line printed the
+                  // top pick's factors right after "yours N/100", so a user on
+                  // together read zai's quality/cost numbers as their own.
+                  const bitsOf = (s: (typeof scored)[number]) =>
+                    `quality ${pct(s.factors.quality)} · reliability ${pct(
+                      s.factors.reliability,
+                    )} · ${s.reasons[0] ?? ""}`;
                   return (
                     <p className="text-[11px] leading-relaxed text-muted-foreground">
                       <Sparkles className="inline h-3 w-3 mr-1 text-primary align-[-2px]" />
                       {top.provider === row.provider ? (
                         <>
                           Your pick is the top score —{" "}
-                          <b className="text-foreground">{top.score}/100</b> (
-                          {bits})
+                          <b className="text-foreground">{top.score}/100</b> ({
+                            bitsOf(top)
+                          }
+                          )
                         </>
                       ) : (
                         <>
                           Top pick:{" "}
                           <b className="text-foreground">{top.label}</b>{" "}
-                          {top.score}
-                          /100 — yours {mine?.score ?? "?"}/100 ({bits})
+                          {top.score}/100 ({bitsOf(top)}) — yours{" "}
+                          <b className="text-foreground">{mine?.score ?? "?"}/100</b>
+                          {mine ? ` (${bitsOf(mine)})` : ""}
                         </>
                       )}
                     </p>
@@ -1233,6 +1241,7 @@ export function SettingsView() {
                             <button
                               key={m.id}
                               type="button"
+                              aria-label={m.hint ? `${m.id} — ${m.hint}` : m.id}
                               onClick={() =>
                                 setProv((f) => ({
                                   ...f,
@@ -1251,6 +1260,30 @@ export function SettingsView() {
                           ))}
                         </div>
                       )}
+                      {(() => {
+                        // S98 — the hint IS the decision (FREE vs paid vs
+                        // premium), and it used to live only in a hover
+                        // title — invisible on touch. Show the selected (or
+                        // default) model's hint as a caption; a custom id
+                        // says so instead of staying silent.
+                        const modelId = row.model.trim();
+                        const sel = modelId
+                          ? active.models.find((m) => m.id === modelId)
+                          : active.models[0];
+                        if (modelId && !sel)
+                          return (
+                            <p className="text-[10px] text-muted-foreground pt-0.5">
+                              custom model id — not from the catalog
+                            </p>
+                          );
+                        if (!sel) return null;
+                        return (
+                          <p className="text-[10px] text-muted-foreground pt-0.5">
+                            <span className="text-foreground/80">{sel.id}</span>
+                            {sel.hint ? ` — ${sel.hint}` : ""}
+                          </p>
+                        );
+                      })()}
                       {cap === "chat" && (
                         <div className="space-y-1.5 pt-1">
                           <Label className="text-[11px]">
@@ -1310,7 +1343,7 @@ export function SettingsView() {
                     }}
                     className="border-white/15 bg-white/6 hover:bg-white/10 h-7 text-[11px]"
                     title={
-                      cap === "image" && row.provider !== "pollinations"
+                      cap === "image" && !imageTestFreeLane(row.provider, row.model)
                         ? "Generates a small real image — may cost a few cents"
                         : cap === "video"
                           ? "Generates a short video clip — may take up to a minute"
@@ -1332,7 +1365,9 @@ export function SettingsView() {
                         : cap === "image"
                           ? row.provider === "pollinations"
                             ? "generates one image — free, no key"
-                            : "generates one small image (real cost)"
+                            : imageTestFreeLane(row.provider, row.model)
+                              ? "generates one image — free tier, no cost"
+                              : "generates one small image (real cost)"
                           : "generates a short video clip (takes 30s+)"}
                   </span>
                 </div>

@@ -11634,6 +11634,61 @@ await test("S96 together: no key, 429 cool-down, and image-less JSON all throw h
   );
 });
 
+// ---------- S98 — the provider-row honesty pass (settings AI section) ----------
+//
+// A live browser audit of the settings AI Providers section found three
+// honesty gaps, all in the row a user leans on to pick a provider:
+//   1. the score line printed the TOP pick's factors right after "yours
+//      N/100" — a user on together read zai's quality/cost numbers as
+//      their own (UI fix, e2e-pinned);
+//   2. model hints (FREE vs paid vs premium — the whole decision) lived
+//      only in hover titles, invisible on touch (UI fix, e2e-pinned);
+//   3. the image TEST demanded a paid-test confirm on together's $0 Free
+//      lane, and the Test hint said "(real cost)" — fixed here at the
+//      predicate level, shared by the route gate and the UI hint so the
+//      two can never drift.
+
+await test("S98 imageTestFreeLane: the free lanes skip the paid-test confirm, everything else confirms", async () => {
+  // NOTE: the predicate lives in registry.ts (client-safe). It must NOT live
+  // in providers/image.ts — settings-view imports it, and the adapter module
+  // pulls zai-client.ts (server-only SDK) into the browser bundle; the
+  // production build caught exactly that when it first shipped there.
+  const { imageTestFreeLane } = await import("../src/lib/tubeforge/providers/registry.ts");
+  // pollinations — keyless, always free (watermarked, but $0).
+  eq(imageTestFreeLane("pollinations", ""), true, "pollinations + blank model: free");
+  eq(imageTestFreeLane("pollinations", "flux"), true, "pollinations + flux: free");
+  // together — the Free lane is $0; a BLANK model resolves to the registry
+  // default, which IS black-forest-labs/FLUX.1-schnell-Free.
+  eq(imageTestFreeLane("together", ""), true, "together + blank: the registry default is the Free model");
+  eq(
+    imageTestFreeLane("together", "black-forest-labs/FLUX.1-schnell-Free"),
+    true,
+    "together + FLUX.1-schnell-Free: the $0 lane",
+  );
+  eq(
+    imageTestFreeLane("together", "BLACK-FOREST-LABS/FLUX.1-SCHNELL-FREE"),
+    true,
+    "case-insensitive: any casing of the Free id is still free",
+  );
+  // together — the paid lanes MUST keep the confirm (the safety direction).
+  eq(
+    imageTestFreeLane("together", "black-forest-labs/FLUX.1-schnell"),
+    false,
+    "together + paid schnell: ~$0.004/image — confirm stays",
+  );
+  eq(
+    imageTestFreeLane("together", "black-forest-labs/FLUX.1.1-pro"),
+    false,
+    "together + FLUX.1.1-pro: ~$0.04/image — confirm stays",
+  );
+  eq(imageTestFreeLane("together", "  "), true, "whitespace-only model trims to blank → the Free default");
+  // every other keyed provider — never assumed free (the S95 law).
+  eq(imageTestFreeLane("openai", "gpt-image-1"), false, "openai: real cost, confirm");
+  eq(imageTestFreeLane("fal", "fal-ai/flux/dev"), false, "fal: real cost, confirm");
+  eq(imageTestFreeLane("zai", ""), false, "zai rides the gateway but is not exempt from confirm — only the two documented free lanes are");
+  eq(imageTestFreeLane("", ""), false, "no provider: no exemption");
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

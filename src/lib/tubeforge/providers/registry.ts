@@ -458,3 +458,25 @@ export const OPENAI_VOICES = [
   { id: "nova", label: "Nova — bright, energetic", classic: true },
   { id: "shimmer", label: "Shimmer — warm, friendly", classic: true },
 ] as const;
+
+/** S98 — does an image TEST dispatch on this provider/model cost $0?
+ *  Pollinations: keyless, always the free (watermarked) lane. Together: the
+ *  -Free model — and a BLANK model, which resolves to the registry default,
+ *  FLUX.1-schnell-Free — is $0. Every other provider/model may bill, so the
+ *  paid-test confirm stays. Shared by the settings test route (whether to
+ *  demand confirmCost) and the settings UI (the hint under the Test button);
+ *  one predicate so the two can never drift.
+ *
+ *  Lives HERE, not in the image adapter: settings-view is a client component
+ *  and importing from image.ts would drag zai-client.ts (the server-only
+ *  z-ai-web-dev-sdk) into the browser bundle — the production build caught
+ *  exactly that when the predicate first shipped in the adapter module.
+ *  registry.ts is already client-safe (the view imports it for the selects). */
+export function imageTestFreeLane(provider: string, model: string): boolean {
+  if (provider === "pollinations") return true;
+  if (provider === "together") {
+    const m = model.trim();
+    return m === "" || /free/i.test(m);
+  }
+  return false;
+}

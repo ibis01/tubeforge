@@ -5029,3 +5029,54 @@ file modes 100755→100644 — cosmetic, npm doesn't care, left as-is.
 
 Verified: typecheck, lint (eslint 10, 0 errors), 488/488 unit,
 billing 40/40, production build. Suite count unchanged.
+
+## S98 — the provider-row honesty pass: a live browser audit of the AI Providers section (2026-11-12)
+
+**THE METHOD.** Booted the dev server, registered a fresh owner, and
+walked every view (dashboard, create wizard 5 steps, library tabs,
+cast, world, voice, calendar, channels, radar, analytics, settings)
+with an accessibility-tree snapshot at desktop + 390px. The shell is
+sound — responsive sidebar, working ⌘K palette, honest empty states.
+The real gaps were all in ONE place: the AI Providers row, the surface
+a user leans on to pick a provider.
+
+**1. THE BORROWED-FACTORS BUG.** When your pick wasn't the top pick,
+the score line read "Top pick: Z.ai CogView 88/100 — yours 73/100
+(quality 82 · reliability 90 · no per-call billing…)" — and the
+parenthetical after "yours" was the TOP PICK's factors, not yours. A
+user on together read zai's quality and cost basis as their own.
+Fixed: both factor sets render, attributed — top's after the top
+score, yours after "yours" (together now shows its own quality 84 and
+the "cost unknown, never assumed free" line). E2E-pinned.
+
+**2. HOVER-ONLY MODEL HINTS.** The model quick-pick chips carried
+their hint (FREE vs paid vs premium — the whole decision) only in a
+hover title. On touch devices: invisible. The three together chips
+were near-identical 10px ids where the differences that matter
+($0 vs $0.004 vs $0.04) were unreadable. Fixed: the selected (or
+default) model's hint renders as a caption under the chips —
+"black-forest-labs/FLUX.1-schnell-Free — FREE — no watermark, ~10
+images/min" is now plain text; chips got aria-labels with the hint
+for screen readers; a custom typed id says "custom model id — not
+from the catalog" instead of staying silent. E2E-pinned.
+
+**3. THE LYING TEST HINT.** The image Test button said "(real cost)"
+and demanded a paid-test confirm even on together's $0 Free lane.
+Fixed with a shared predicate imageTestFreeLane(provider, model) —
+pollinations (keyless) and together's -Free model (blank model =
+the registry default, which IS Free) skip the confirm; every paid
+lane keeps it; zai keeps it too (gateway generations cost real
+money). ONE predicate lives in registry.ts, used by both the route
+gate and the UI hint so they can never drift. 14 unit pins.
+
+**THE GATE EARNED ITS KEEP.** The predicate first shipped in
+providers/image.ts — and the production build caught it: importing
+it into settings-view (a client component) dragged zai-client.ts
+(server-only SDK) into the browser bundle. Moved to registry.ts
+(client-safe, already imported by the view); the lesson is pinned in
+the unit suite's comment. Also: playwright 1.65 (the S97 bump)
+needed its chromium v1254 binary installed locally — expected.
+
+Suite count 488 → 489 unit; premium-ux 7 → 8 e2e. Verified:
+typecheck, lint (0 errors), 489/489 unit, billing 40/40, premium-ux
+8/8, mobile-sweep 4/4, production build green.

@@ -274,3 +274,52 @@ test.describe("Stage 4b premium UX", () => {
     await expect(page.getByText("Niche pulse")).toBeHidden();
   });
 });
+
+// S98 — the provider-row honesty pass. A live browser audit of the AI
+// Providers section found three gaps, all pinned here:
+//   • the score line attributed the TOP pick's factors to "yours"
+//   • model hints (FREE vs paid) lived only in hover titles — dead on touch
+//   • the image test hint said "(real cost)" on together's $0 Free lane
+test.describe("S98 settings provider row honesty", () => {
+  test("artwork row: attributed factors, visible model hints, free-lane test hint", async ({ page, request }) => {
+    const cookie = await register(request);
+    await page.context().addCookies([
+      { name: "tf_session", value: cookie.split("=")[1], url: "http://localhost:3000" },
+    ]);
+    await page.goto("/");
+    await page.waitForSelector("nav[aria-label='Main navigation']");
+    await page.getByRole("navigation", { name: "Main navigation" }).getByText("Settings").click();
+    await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
+    await page.getByRole("heading", { name: "AI Providers" }).scrollIntoViewIfNeeded();
+
+    // The Artwork capability row — the nearest rounded card around the label.
+    const artworkRow = page
+      .getByText("Thumbnails, storyboard scenes, portraits")
+      .locator("xpath=ancestor::div[contains(@class,'rounded-xl')][1]");
+
+    // Switch the provider to Together AI (the S96 free lane).
+    await artworkRow.getByRole("combobox").click();
+    await page.getByRole("option", { name: "Together AI (FLUX.1-schnell)" }).click();
+
+    // 1. The score line must attribute YOUR factors after "yours" —
+    //    together's own quality prior (0.84 → "quality 84"), not the top
+    //    pick zai's 82.
+    await expect(artworkRow.getByText(/yours \d+\/100 \(quality 84/)).toBeVisible();
+
+    // 2. The selected model's hint renders as a caption — the FREE/no
+    //    watermark story is visible without hovering anything.
+    await expect(artworkRow.getByText(/black-forest-labs\/FLUX\.1-schnell-Free — FREE/)).toBeVisible();
+    await expect(artworkRow.getByText(/NO watermark/).first()).toBeVisible();
+
+    // 3. The test hint tells the truth about the $0 lane.
+    await expect(artworkRow.getByText("generates one image — free tier, no cost")).toBeVisible();
+
+    // The paid chip flips both: its aria-label carries the hint (touch/a11y)
+    // and the caption + test hint switch to the paid story.
+    await artworkRow.getByRole("button", { name: /FLUX\.1-schnell — paid/ }).click();
+    // The caption (id — hint); the provider NOTE also mentions the price, so
+    // anchor on the caption's "id — hint" shape to stay strict-mode-safe.
+    await expect(artworkRow.getByText(/FLUX\.1-schnell — paid — ~\$0\.004/)).toBeVisible();
+    await expect(artworkRow.getByText("generates one small image (real cost)")).toBeVisible();
+  });
+});

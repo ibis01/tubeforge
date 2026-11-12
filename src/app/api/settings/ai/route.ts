@@ -38,6 +38,7 @@ import {
   ttsSynthesize,
 } from "@/lib/tubeforge/providers/tts";
 import { imageEdit, imageGenerate } from "@/lib/tubeforge/providers/image";
+import { imageTestFreeLane } from "@/lib/tubeforge/providers/registry";
 import { errorText } from "@/lib/tubeforge/redact";
 import { imageToVideo } from "@/lib/tubeforge/providers/video";
 
@@ -290,8 +291,12 @@ export async function POST(req: NextRequest) {
       }
       case "image":
       case "imageEdit": {
-        const isPollinations = provider === "pollinations";
-        if (!isPollinations && !body.confirmCost) {
+        // S98 — the free lanes skip the paid-test confirm: pollinations
+        // (keyless) and together's -Free model (blank model resolves to the
+        // registry default, which IS the Free one). The predicate lives in
+        // the adapter module so the UI hint and this gate can never drift.
+        const imageTestModel = String(body.model ?? "").trim();
+        if (!imageTestFreeLane(provider, imageTestModel) && !body.confirmCost) {
           return NextResponse.json({
             ok: false,
             needsConfirm: true,
