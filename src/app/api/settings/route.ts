@@ -1,7 +1,13 @@
 // Settings → AI Providers: per-capability provider configuration.
 //
 //   GET  → current config (keys masked) + the provider registry
-//   PUT  → save the acting user's shared credentials OR one capability's provider
+//          + the flat public preference map ({settings}) that the
+//          content-defaults / music / voice consumers read
+//   PUT  → flat body: allow-listed preferences (the legacy contract —
+//          settings-view's "Save All", music-controls, voice-view) and/or
+//          shared credentials (per-user zai.* rows)
+//          scope "zai" → shared credentials only
+//          capability → that capability's provider config
 //   POST → test a capability end-to-end with optional unsaved overrides
 
 import { NextRequest, NextResponse } from "next/server";
@@ -12,7 +18,15 @@ import {
   syncZaiConfigFile,
   ZAI_SETTING_KEYS,
 } from "@/lib/tubeforge/providers/config";
-import { setUserSettings } from "@/lib/tubeforge/settings";
+import {
+  deleteUserSetting,
+  getUserSettings,
+  setUserSettings,
+} from "@/lib/tubeforge/settings";
+import {
+  DEFAULT_SETTINGS,
+  publicSettingsMap,
+} from "@/lib/tubeforge/settings-public";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import {
   getCapability,
@@ -43,6 +57,16 @@ import { imageToVideo } from "@/lib/tubeforge/providers/video";
 
 const CAPABILITIES: CapabilityId[] = ["chat", "tts", "image", "video"];
 
+/** Stored preference rows restricted to the public allow-list (defaults merged).
+ * The multi-provider rewrite (a2eabd8) dropped this read path; five UI
+ * consumers (settings-view, create-view, voice-view, music-controls,
+ * settings-music) still read GET {settings} — restored here. */
+async function readPublicSettings(): Promise<Record<string, string>> {
+  const stored = await getUserSettings(Object.keys(DEFAULT_SETTINGS));
+  const rows = [...stored.entries()].map(([key, value]) => ({ key, value }));
+  return publicSettingsMap(rows);
+}
+
 /** 1x1 transparent PNG — enough bytes to exercise a vision/edit wire call. */
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -61,6 +85,7 @@ export async function GET(req: NextRequest) {
   const legacy = await readLegacyZai();
 
   return NextResponse.json({
+    settings: await readPublicSettings(),
     zai: {
       provider: legacy.provider || "zai",
       baseUrl: legacy.baseUrl || DEFAULT_ZAI_BASE_URL,
@@ -87,30 +112,74 @@ export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
 
-    // ---- Scope 1: shared credentials (per-user zai.* preference rows) ----
+    // ---- Scope 1: flat body — allow-listed preferences + the legacy
+    //      shared-credential seam (per-user zai.* preference rows).
+    //      a2eabd8 kept only the credential half; every flat UI writer
+    //      ("Save All" content defaults, music.*, defaultVoice) silently
+    //      no-opped — the nightly s7 probe caught it (music off never
+    //      landed, so the audition never refused). Both halves restored. ----
     if (body.scope === "zai" || (!body.scope && !body.capability)) {
-      const updates: Record<string, string> = {};
+      const credUpdates: Record<string, string> = {};
+      const prefUpdates: Record<string, string> = {};
+      const allowList = new Set(Object.keys(DEFAULT_SETTINGS));
 
-      const provider = String(body.provider ?? "zai").trim();
-      if (provider) updates["zai.provider"] = provider;
+      // Preference keys: the public allow-list decides (no secret ever
+      // rides this path). Booleans stringify; blanks skip; music.trackId
+      // null/"" explicitly CLEARS the manual default (the old law).
+      for (const [key, raw] of Object.entries(body)) {
+        if (
+          key === "scope" ||
+          key === "provider" ||
+          key === "baseUrl" ||
+          key === "apiKey"
+        )
+          continue;
+        if (!allowList.has(key)) continue;
+        if (key === "music.trackId" && (raw === null || raw === "")) {
+          await deleteUserSetting(key);
+          continue;
+        }
+        const value =
+          typeof raw === "boolean" ? String(raw) : String(raw ?? "").trim();
+        if (!value) continue;
+        prefUpdates[key] = value;
+      }
 
-      const baseUrl = String(body.baseUrl ?? "").trim();
-      if (baseUrl) updates[ZAI_SETTING_KEYS.baseUrl] = baseUrl;
+      // Credential keys (the Settings UI's own credential save goes
+      // through /api/settings/ai; this seam serves flat legacy clients
+      // and the isolation probe).
+      const hasCredKeys =
+        body.provider !== undefined ||
+        body.baseUrl !== undefined ||
+        body.apiKey !== undefined;
+      if (body.scope === "zai" || hasCredKeys) {
+        const provider = String(body.provider ?? "zai").trim();
+        if (provider) credUpdates["zai.provider"] = provider;
 
-      const apiKey = String(body.apiKey ?? "").trim();
-      if (apiKey) updates[ZAI_SETTING_KEYS.apiKey] = apiKey;
+        const baseUrl = String(body.baseUrl ?? "").trim();
+        if (baseUrl) credUpdates[ZAI_SETTING_KEYS.baseUrl] = baseUrl;
 
-      if (Object.keys(updates).length === 0) {
+        const apiKey = String(body.apiKey ?? "").trim();
+        if (apiKey) credUpdates[ZAI_SETTING_KEYS.apiKey] = apiKey;
+      }
+
+      if (Object.keys(credUpdates).length === 0 && Object.keys(prefUpdates).length === 0) {
         return NextResponse.json({ error: "Nothing to save" }, { status: 400 });
       }
 
-      await setUserSettings(updates);
-      await syncZaiConfigFile();
-      resetZAIClient();
-      invalidateZaiClients();
+      if (Object.keys(credUpdates).length > 0) {
+        await setUserSettings(credUpdates);
+        await syncZaiConfigFile();
+        resetZAIClient();
+        invalidateZaiClients();
+      }
+      if (Object.keys(prefUpdates).length > 0) {
+        await setUserSettings(prefUpdates);
+      }
 
       const legacy = await readLegacyZai();
       return NextResponse.json({
+        settings: await readPublicSettings(),
         zai: {
           provider: legacy.provider || "zai",
           baseUrl: legacy.baseUrl || DEFAULT_ZAI_BASE_URL,

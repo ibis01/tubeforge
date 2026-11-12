@@ -4857,3 +4857,34 @@ and the 22-page PDF rebuilt (download/TubeForge_Maintenance_Handbook
 .pdf; merge_final.py gained render_cover.js for the Playwright cover).
 
 Green at 2e62e5a: all six jobs, run 43193109971.
+
+## CI receipt #2 — the nightly probe caught what CI could not (2026-11-12)
+
+The docs push (de1126e) went red on Lint — render_cover.js used
+require() (@typescript-eslint/no-require-imports); rewritten as
+render_cover.mjs. But the real find was the NIGHTLY: the 10:02
+battery failed s7, "Settings music off + no doc pick → the audition
+refuses (silence, not the drone)" — and that one is NOT a stale pin.
+
+The a2eabd8 settings rewrite kept only the credential half of the
+flat PUT and dropped {settings} from GET entirely. Five UI consumers
+still speak the old contract: settings-view ("Save All" PUTs the
+flat form and reads d.settings), create-view (default niche/tone/
+length), voice-view (defaultVoice), music-controls (music.*/sfx.*),
+settings-music (sfx.enabled). Symptom: every flat write returned 200
+with a success toast while persisting NOTHING — the whole content-
+defaults / music / voice preference subsystem was silently unsavable,
+and every reader got undefined. The push-gated suites missed it
+because the isolation spec was (correctly) updated to the new shape;
+only the nightly's 17-probe battery against the production server
+still spoke the old wire contract from the client's side.
+
+Fix: both halves restored side by side — GET returns the allow-listed
+{settings} map alongside the provider config; flat PUT splits the
+body into credential keys (the legacy zai seam, scope "zai" or
+provider/baseUrl/apiKey present) and allow-listed preference keys
+(booleans stringify, blanks skip, music.trackId null/"" deletes),
+writing each only when non-empty, "Nothing to save" only when both
+are. The capability and scope-"zai" paths are untouched. Verified:
+typecheck, lint, 471/471 unit, and the s7 probe green against a live
+dev server (the audition refuses again — the write lands).
