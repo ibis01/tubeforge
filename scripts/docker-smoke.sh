@@ -111,6 +111,22 @@ if [ "$WEB_OK" != true ]; then
 fi
 echo "[smoke] web healthy"
 
+# The acceptance walk's HTTP leg — through the REAL routes on the REAL
+# topology (fresh database: open registration, no legacy claim gate).
+echo "[smoke] HTTP walk: register → login → create project"
+curl -fsS -X POST http://localhost:3000/api/auth/register \
+  -H 'content-type: application/json' \
+  -d '{"name":"Smoke Operator","email":"smoke@example.com","password":"smoke-pass-123"}' >/dev/null
+echo "[smoke]   registered smoke@example.com"
+curl -fsS -c /tmp/smoke-cookies.txt -X POST http://localhost:3000/api/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"email":"smoke@example.com","password":"smoke-pass-123"}' >/dev/null
+echo "[smoke]   logged in (session cookie captured)"
+curl -fsS -b /tmp/smoke-cookies.txt -X POST http://localhost:3000/api/videos \
+  -H 'content-type: application/json' \
+  -d '{"topic":"Docker smoke","niche":"smoke","format":"classic"}' >/dev/null
+echo "[smoke]   created the project through POST /api/videos"
+
 echo "[smoke] phase 1 — topology reality: migrations, columns, MinIO round-trip, cross-process job"
 "${COMPOSE[@]}" exec -T web node --import tsx scripts/smoke-walk.mts --phase 1
 
