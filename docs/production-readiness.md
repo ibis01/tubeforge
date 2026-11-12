@@ -41,8 +41,8 @@ not features that attract them.
 | Stage | Deliverable                                | Exit condition                                                                                                                                              | Status |
 | ----- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ |
 | P0.1  | Prisma + clean-clone CI                    | A fresh clone installs, bootstraps, and generates both dialect clients deterministically — without hidden local state                                        | **S99** — `scripts/test-clean-clone.mts` + CI `clean-clone` job + unit pins |
-| P0.2  | Queue leases + fencing                     | Renewable lease expiration, monotonic fencing tokens, conditional completion with the current token, expired-claim recovery; concurrent-worker and stale-worker tests pass | OPEN |
-| P0.3  | Storage reservations                       | Durable reservations with atomic accounting, expiry, and release-on-failure; concurrent uploads cannot exceed quota                                          | OPEN |
+| P0.2  | Queue leases + fencing                     | Renewable lease expiration, monotonic fencing tokens, conditional completion with the current token, expired-claim recovery; concurrent-worker and stale-worker tests pass | **S100** — renewable leases + monotonic `leaseToken`, fenced terminal writes, reap-with-token-bump (`test:queue` phase C) |
+| P0.3  | Storage reservations                       | Durable reservations with atomic accounting, expiry, and release-on-failure; concurrent uploads cannot exceed quota                                          | **S101** — serialized admission + durable `StorageReservation` holds + expiry sweep + release-on-failure (`test:storage`) |
 | P0.4  | Shared rate limiting + proxy trust         | Multi-instance limits hold (key-value backend); trusted-proxy chain design; spoofing tests pass                                                              | OPEN |
 | P0.5  | CSP + SVG security                         | Security regression suite passes; production CSP drops `unsafe-inline`/`unsafe-eval`                                                                          | OPEN |
 | P0.6  | Docker production smoke                    | The full production topology renders successfully end-to-end (see the target topology below)                                                                  | OPEN |
@@ -101,3 +101,5 @@ recovery.
 | Stage | Commit | CI evidence                          | Receipt        |
 | ----- | ------ | ------------------------------------ | -------------- |
 | P0.1  | S99    | push-gate run recorded in worklog.md | worklog.md §S99 |
+| P0.2  | S100   | CI run 43282465637 (success)         | worklog.md §S100 |
+| P0.3  | S101   | push-gate run recorded in worklog.md | worklog.md §S101 |

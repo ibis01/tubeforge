@@ -28,9 +28,10 @@
     "test:coverage": "node scripts/test-coverage.mjs",
     "worker": "node --import tsx scripts/worker.mts",
     "worker:daemon": "python3 scripts/daemonize.py scripts/worker-daemon.log npm run worker",
-    "check": "npm run typecheck && npm run lint && npm run test && npm run test:billing",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run test:billing && npm run test:storage",
     "test:e2e": "playwright test",
     "test:billing": "node --import tsx scripts/test-billing.mts",
+    "test:storage": "node --import tsx scripts/test-storage.mts",
     "verify:clone": "node --import tsx scripts/test-clean-clone.mts"
   },
   "dependencies": {

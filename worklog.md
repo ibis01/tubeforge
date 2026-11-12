@@ -5201,3 +5201,54 @@ pending) before it could become a false PASS.
 
 Verified: typecheck, lint (0 errors), 496/496 unit, queue suite 64✓
 incl. the lease battery, billing 40/40, production build.
+
+## S101 — P0.3 closed: storage quota admission is atomic — durable holds, expiry, release-on-failure (2026-11-13)
+
+**THE GAP (the audit's exact finding).** put()/putFromPath() ran
+read-check-write-write: assertQuota read the StorageUsage counter, the
+object was written, bumpUsage moved the counter AFTER the bytes
+landed. Two concurrent uploads both passed the check and both bumped —
+the org cap was advisory, not enforced.
+
+**THE FIX (the S32 spend-admission pattern, imported wholesale).**
+Admission is now ONE transaction per upload: read the committed
+counter, SUM the org's live holds, check the ceiling, insert THIS
+upload's StorageReservation hold — Serializable on Postgres (with the
+P2034 conflict-retry loop, spend.ts's admitWithConflictRetry law) and
+default on SQLite (single-writer). The DB serializes the racers: the
+loser sees the winner's hold and is refused with the honest
+StorageQuotaError. Counter semantics: StorageUsage.bytes counts
+COMMITTED bytes only; a hold is the durable record of in-flight bytes.
+
+**THE LIFECYCLE.** put(): admit (hold inserted) → write the object →
+commit(actual) settles the REAL delta (actual − replaces) into the
+counter and deletes the hold in one transaction; the write failing
+releases the hold (release-on-failure). A process that crashes between
+admission and settle leaves the hold behind, and the expiry sweep
+drops it — a hold never moved the committed counter, so dropping one
+frees exactly the bytes it reserved, never lies about stored state
+(accepted drift: an object written but never settled undercounts until
+overwritten — the sweep errs toward freeing quota, not stranding it).
+TTL is TUBEFORGE_STORAGE_RESERVATION_TTL_MS (default 1h); the sweep
+runs lazily from the queue tick (~1/min per process, indexed scan,
+dynamic import to avoid a load cycle).
+
+**THE EVIDENCE (the P0.3 exit condition).** scripts/test-storage.mts
+(npm run test:storage, joined the check job + chain) — 15 assertions:
+the concurrent gate (Promise.allSettled race: exactly ONE of two
+over-quota admissions wins, the loser throws StorageQuotaError),
+release-frees-quota, commit settles ACTUAL not estimate + drops the
+hold, the real put() path stores/overwrites with delta accounting, an
+in-flight hold consumes quota until the sweep drops it (counter
+untouched), a blocked write releases its hold and moves no bytes, and
+the system lane burns no quota. Suite count unchanged (496 unit);
+storage battery is its own suite. pg-ci-verify gained S100+S101
+column-reality probes (findMany projects EVERY scalar — count() would
+not catch a failed migration; the P2022 guard class from the S60
+incident). Migration 20261113160000_s101_storage_reservations (table +
+two indexes + FK cascade) on the Postgres chain; SQLite mirror
+regenerated via the S99 sync law (the clean-clone gate re-proved the
+fresh-clone boot with the new table: 21/21).
+
+Verified: typecheck, lint (0 errors), 496/496 unit, billing 40/40,
+storage 15/15, verify:clone 21/21, production build.

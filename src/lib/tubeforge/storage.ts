@@ -15,10 +15,14 @@
 //                     URL so the client downloads straight from the CDN/edge,
 //                     which closes D-23/D-24 the ROADMAP way.
 //
-// Quotas (ROADMAP "Storage quotas"): every non-system put() passes through
-// assertQuota(), which keeps a per-organization byte counter in StorageUsage —
-// O(1) on both drivers. `system: true` marks platform assets (music library
-// seed, bundled fonts) that must not burn user quota.
+// Quotas (ROADMAP "Storage quotas"): every non-system put() passes through an
+// ATOMIC quota admission (S101 / P0.3) — the ceiling check and a durable
+// in-flight hold (StorageReservation row) land in ONE serializable
+// transaction, so two concurrent uploads can never both pass, and a crash
+// mid-upload leaves a hold the expiry sweep reclaims. The per-organization
+// byte counter lives in StorageUsage — O(1) on both drivers. `system: true`
+// marks platform assets (music library seed, bundled fonts) that must not
+// burn user quota.
 //
 // ffmpeg constraint: encoders need seekable file PATHS, not streams. Render
 // pipelines therefore write to a scratch dir and finish with putFromPath();
@@ -26,13 +30,14 @@
 // use withLocalFile()/materialize() — a zero-copy passthrough on local, a
 // content-hash-cached download on s3.
 
-import { createHash, createHmac } from "crypto";
+import { createHash, createHmac, randomUUID } from "crypto";
 import fs from "fs";
 import fsp from "fs/promises";
 import os from "os";
 import path from "path";
 import { Readable } from "stream";
 import { rawDatabase as rawDb } from "./tenant-db";
+import { Prisma } from "@prisma/client";
 import { currentCtx } from "./tenant";
 import { log } from "./log";
 
@@ -299,21 +304,161 @@ export async function usageBytes(orgId: string): Promise<number> {
   return currentUsage(orgId);
 }
 
-async function assertQuota(orgId: string, incomingBytes: number, replacesBytes: number): Promise<void> {
-  const quota = storageQuotaBytes();
-  if (quota <= 0) return;
-  const used = await currentUsage(orgId);
-  if (used - replacesBytes + incomingBytes > quota) {
-    throw new StorageQuotaError(orgId, used, quota);
-  }
-}
-
 async function bumpUsage(orgId: string, delta: number): Promise<void> {
   await rawDb.storageUsage.upsert({
     where: { organizationId: orgId },
     update: { bytes: { increment: delta } },
     create: { organizationId: orgId, bytes: BigInt(Math.max(0, delta)) },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Reservations (S101 / P0.3 — atomic quota admission with durable holds)
+//
+// The old flow was read-check-write-write: assertQuota read the counter, the
+// object was written, bumpUsage moved the counter AFTER the bytes landed —
+// two concurrent uploads could both pass the check and exceed the org cap.
+// Admission is now ONE serializable transaction (Serializable on Postgres;
+// SQLite is single-writer — the S32 spend-admission pattern): read the
+// committed counter, sum the org's live holds, check the ceiling, insert
+// THIS upload's hold. The DB serializes the racers — the loser sees the
+// winner's hold and is refused.
+//
+// Counter semantics: StorageUsage.bytes counts COMMITTED bytes only. A hold
+// is the durable record of in-flight bytes: a process that dies between
+// admission and settle leaves the hold behind, and sweepExpiredStorage
+// Reservations() drops it — a hold never moved the committed counter, so
+// dropping one always frees exactly the bytes it reserved. Settle (the
+// object landed) deletes the hold and moves the REAL delta (actual -
+// replaces) into the counter, atomically with the hold's removal.
+
+function reservationTtlMs(): number {
+  const v = Number(process.env.TUBEFORGE_STORAGE_RESERVATION_TTL_MS ?? "");
+  return Number.isFinite(v) && v > 0 ? v : 60 * 60_000;
+}
+
+export interface StoragePutReservation {
+  /** The upload failed — drop the hold (quota freed). Idempotent. */
+  release(): Promise<void>;
+  /** The object landed — settle the REAL byte delta and drop the hold. */
+  commit(actualBytes: number): Promise<void>;
+}
+
+/** Serializable on Postgres with P2034 conflict retry; default on SQLite. */
+async function storageAdmissionTx<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+  const serializable = !`${process.env.DATABASE_URL ?? ""}`.startsWith("file:");
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await rawDb.$transaction(fn, serializable ? { isolationLevel: "Serializable" } : undefined);
+    } catch (err) {
+      // P2034 — the transaction conflict Serializable exists to produce.
+      // Retry against the winner's committed rows (spend.ts's
+      // admitWithConflictRetry law).
+      if ((err as { code?: string })?.code === "P2034" && attempt < 4) {
+        await new Promise((r) => setTimeout(r, 25 * attempt));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+/**
+ * Atomically admit `incomingBytes` for an org (accounting for `replacesBytes`
+ * freed by an overwrite) and return the hold that settles or releases it.
+ * Throws StorageQuotaError when the ceiling would be crossed — concurrently
+ * SAFE: the check and the hold are one serialized transaction.
+ */
+export async function reserveStorageBytes(
+  organizationId: string,
+  key: string,
+  incomingBytes: number,
+  replacesBytes: number,
+  ttlMs: number = reservationTtlMs(),
+): Promise<StoragePutReservation> {
+  const quota = storageQuotaBytes();
+
+  // Quota disabled — no admission gate, but the counter still tracks real bytes.
+  if (quota <= 0) {
+    return {
+      release: async () => {},
+      commit: async (actual) => {
+        if (actual - replacesBytes !== 0) await bumpUsage(organizationId, actual - replacesBytes);
+      },
+    };
+  }
+
+  const holdId = `stor-${randomUUID()}`;
+  await storageAdmissionTx(async (tx) => {
+    // Write FIRST: ensure the counter row exists (an org's FIRST upload has
+    // none). On SQLite this takes the database write lock at transaction
+    // open, so concurrent admissions serialize HERE — the loser's reads see
+    // the winner's hold. On Postgres the Serializable snapshot does the
+    // same job; the upsert also guarantees the counter row the settle path
+    // increments actually exists.
+    await tx.storageUsage.upsert({
+      where: { organizationId },
+      update: {},
+      create: { organizationId, bytes: 0 },
+    });
+    const [usage, holds] = await Promise.all([
+      tx.storageUsage.findUnique({ where: { organizationId } }),
+      tx.storageReservation.aggregate({
+        _sum: { bytes: true },
+        where: { organizationId, expiresAt: { gt: new Date() } }, // LIVE holds only
+      }),
+    ]);
+    const committed = usage ? Number(usage.bytes) : 0;
+    const inFlight = holds._sum.bytes ? Number(holds._sum.bytes) : 0;
+    if (committed + inFlight - replacesBytes + Math.max(0, incomingBytes) > quota) {
+      throw new StorageQuotaError(organizationId, committed + inFlight, quota);
+    }
+    await tx.storageReservation.create({
+      data: {
+        id: holdId,
+        organizationId,
+        key,
+        bytes: BigInt(Math.max(0, incomingBytes)),
+        expiresAt: new Date(Date.now() + ttlMs),
+      },
+    });
+  });
+
+  return {
+    release: async () => {
+      await rawDb.storageReservation.deleteMany({ where: { id: holdId } });
+    },
+    commit: async (actual) => {
+      // Settle atomically: the hold comes off and the REAL delta lands in
+      // the counter in one transaction (a crash cannot split them).
+      const delta = actual - replacesBytes;
+      await storageAdmissionTx(async (tx) => {
+        await tx.storageReservation.deleteMany({ where: { id: holdId } });
+        if (delta !== 0) {
+          await tx.storageUsage.upsert({
+            where: { organizationId },
+            update: { bytes: { increment: delta } },
+            create: { organizationId, bytes: BigInt(Math.max(0, delta)) },
+          });
+        }
+      });
+    },
+  };
+}
+
+/** Drop every expired hold (crashed uploaders' TTL passed). Holds never
+ *  moved the committed counter, so dropping is pure quota reclaim. */
+export async function sweepExpiredStorageReservations(): Promise<number> {
+  const rows = await rawDb.storageReservation.findMany({
+    where: { expiresAt: { lt: new Date() } },
+    select: { id: true },
+    take: 200,
+  });
+  for (const r of rows) {
+    await rawDb.storageReservation.deleteMany({ where: { id: r.id } }).catch(() => {});
+  }
+  if (rows.length) log.info("storage: expired reservations swept (quota freed)", { count: rows.length });
+  return rows.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -324,31 +469,36 @@ export async function put(key: string, data: Buffer | Uint8Array, opts: PutOptio
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
   const kind = storageDriverKind();
 
-  // quota — system assets skip; otherwise attribute to the acting org
-  let orgId: string | null = null;
-  let replaces = 0;
+  // quota — system assets skip; otherwise attribute to the acting org.
+  // S101: admission is ATOMIC (ceiling check + durable hold in one
+  // serialized transaction) and the hold settles at the REAL byte count
+  // after the object lands; a failed upload releases its hold.
+  let reservation: StoragePutReservation | null = null;
   if (!opts.system) {
     const ctx = currentCtx();
     if (ctx) {
-      orgId = ctx.organizationId;
       const prior = await stat(k);
-      if (prior) replaces = prior.size;
-      await assertQuota(orgId, buf.length, replaces);
+      reservation = await reserveStorageBytes(ctx.organizationId, k, buf.length, prior ? prior.size : 0);
     }
   }
 
-  if (kind === "s3") {
-    const cfg = s3Config();
-    if (!cfg) throw new Error("storage: s3 driver selected but TUBEFORGE_S3_* env is incomplete");
-    const res = await s3Fetch("PUT", k, cfg, buf);
-    if (!res.ok) throw new Error(`storage: PUT "${k}" → ${res.status} ${await res.text().catch(() => "")}`);
-  } else {
-    const dest = localPathForKey(k);
-    await ensureDirFor(dest);
-    await fsp.writeFile(dest, buf);
+  try {
+    if (kind === "s3") {
+      const cfg = s3Config();
+      if (!cfg) throw new Error("storage: s3 driver selected but TUBEFORGE_S3_* env is incomplete");
+      const res = await s3Fetch("PUT", k, cfg, buf);
+      if (!res.ok) throw new Error(`storage: PUT "${k}" → ${res.status} ${await res.text().catch(() => "")}`);
+    } else {
+      const dest = localPathForKey(k);
+      await ensureDirFor(dest);
+      await fsp.writeFile(dest, buf);
+    }
+  } catch (err) {
+    await reservation?.release().catch(() => {}); // the failed upload frees its hold
+    throw err;
   }
 
-  if (orgId && buf.length !== replaces) await bumpUsage(orgId, buf.length - replaces);
+  await reservation?.commit(buf.length);
 }
 
 /**
@@ -360,45 +510,49 @@ export async function putFromPath(key: string, localFile: string, opts: PutOptio
   const k = normalizeKey(key);
   const size = (await fsp.stat(localFile)).size;
 
-  let orgId: string | null = null;
-  let replaces = 0;
+  // S101 — the same atomic admission as put(): hold first, write second,
+  // settle the real size third; the write failing releases the hold.
+  let reservation: StoragePutReservation | null = null;
   if (!opts.system) {
     const ctx = currentCtx();
     if (ctx) {
-      orgId = ctx.organizationId;
       const prior = await stat(k);
-      if (prior) replaces = prior.size;
-      await assertQuota(orgId, size, replaces);
+      reservation = await reserveStorageBytes(ctx.organizationId, k, size, prior ? prior.size : 0);
     }
   }
 
-  if (storageDriverKind() === "s3") {
-    const cfg = s3Config();
-    if (!cfg) throw new Error("storage: s3 driver selected but TUBEFORGE_S3_* env is incomplete");
-    const buf = await fsp.readFile(localFile);
-    const res = await s3Fetch("PUT", k, cfg, buf);
-    if (!res.ok) throw new Error(`storage: PUT "${k}" → ${res.status}`);
-    // The scratch copy STAYS: downstream pipeline steps (QC probe, Short
-    // cutting, ffmpeg re-reads) hit the local cache instead of re-fetching
-    // from the bucket. Scratch lifetime is a deployment concern (tmp cleaner
-    // or TUBEFORGE_SCRATCH_ROOT on a scratch volume).
-  } else {
-    const dest = localPathForKey(k);
-    if (path.resolve(localFile) === path.resolve(dest)) {
-      // artifact already written straight into the uploads layout (ffmpeg
-      // wrote final.mp4 into videoDir) — nothing to move, only account it.
+  try {
+    if (storageDriverKind() === "s3") {
+      const cfg = s3Config();
+      if (!cfg) throw new Error("storage: s3 driver selected but TUBEFORGE_S3_* env is incomplete");
+      const buf = await fsp.readFile(localFile);
+      const res = await s3Fetch("PUT", k, cfg, buf);
+      if (!res.ok) throw new Error(`storage: PUT "${k}" → ${res.status}`);
+      // The scratch copy STAYS: downstream pipeline steps (QC probe, Short
+      // cutting, ffmpeg re-reads) hit the local cache instead of re-fetching
+      // from the bucket. Scratch lifetime is a deployment concern (tmp cleaner
+      // or TUBEFORGE_SCRATCH_ROOT on a scratch volume).
     } else {
-      await ensureDirFor(dest);
-      if (path.dirname(localFile) === path.dirname(dest)) {
-        await fsp.rename(localFile, dest);
+      const dest = localPathForKey(k);
+      if (path.resolve(localFile) === path.resolve(dest)) {
+        // artifact already written straight into the uploads layout (ffmpeg
+        // wrote final.mp4 into videoDir) — nothing to move, only account it.
       } else {
-        await fsp.copyFile(localFile, dest);
-        await fsp.rm(localFile, { force: true });
+        await ensureDirFor(dest);
+        if (path.dirname(localFile) === path.dirname(dest)) {
+          await fsp.rename(localFile, dest);
+        } else {
+          await fsp.copyFile(localFile, dest);
+          await fsp.rm(localFile, { force: true });
+        }
       }
     }
+  } catch (err) {
+    await reservation?.release().catch(() => {}); // the failed upload frees its hold
+    throw err;
   }
 
-  if (orgId && size !== replaces) await bumpUsage(orgId, size - replaces);
+  await reservation?.commit(size);
 }
 
 export async function get(key: string): Promise<Buffer> {

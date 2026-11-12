@@ -159,6 +159,12 @@ jobs:
       - name: Billing integrity suite (self-seeding, money path)
         run: npm run test:billing
 
+      # S101 — the P0.3 storage reservation battery (concurrent uploads
+      # cannot exceed quota): the admission transaction, hold accounting,
+      # commit/release/expiry laws, against the same bootstrapped DB.
+      - name: Storage reservation battery (P0.3)
+        run: npm run test:storage
+
   build:
     name: Production build
     runs-on: ubuntu-24.04

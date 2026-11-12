@@ -158,6 +158,15 @@ try {
     readBack.length === 1 && readBack[0].id === video.id
   );
 
+  // ---------- 6. column-reality probes (the P2022 guard, S100/S101) ----------
+  // findMany projects EVERY scalar column: a migration that failed to deploy
+  // (leaseToken/leaseExpiresAt, StorageReservation) 500s the queue and the
+  // upload routes. count() would not catch it — projection does.
+  await db.job.findMany({ take: 1 });
+  check("Job probe — leaseToken/leaseExpiresAt present (S100 migration deployed)");
+  await db.storageReservation.findMany({ take: 1 });
+  check("StorageReservation probe — S101 migration deployed");
+
   // ---------- cleanup (probe rows; the DB itself is disposable) ----------
   await db.video.delete({ where: { id: video.id } });
   await db.usageRecord.deleteMany({ where: { userId: user.id } });

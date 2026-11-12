@@ -381,6 +381,9 @@ export async function writeOutcomeIfLeased(
   return written.count === 1;
 }
 
+/** S101 — tick counter gating the lazy expired-storage-hold sweep (~1/min). */
+let storageSweepTick = 0;
+
 /**
  * One claim pass. Claimable set depends on role:
  *   web    — jobs this process created (closure present) + handler kinds
@@ -393,6 +396,16 @@ export async function tickQueue(): Promise<void> {
     // S100 — expired-lease recovery first: stale running rows return to
     // pending so the claim scan below can hand them to a live process.
     await reapExpiredLeases().catch(() => {});
+
+    // S101 — expired storage holds release quota lazily: an indexed scan
+    // that is a no-op the overwhelming majority of ticks. One minute per
+    // process keeps the amortized cost at zero; the dynamic import avoids
+    // a load-time cycle (storage.ts sits below the queue in the graph).
+    if (++storageSweepTick % 60 === 0) {
+      void import("./storage")
+        .then((m) => m.sweepExpiredStorageReservations())
+        .catch(() => {});
+    }
 
     const now = new Date();
     const closureIds = [...state.closures.keys()];

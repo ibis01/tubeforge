@@ -81,6 +81,8 @@ model Organization {
   usageRecords     UsageRecord[]
   // S32 — the $5 door's durable reservation rows.
   spendReservations SpendReservation[]
+  // S101 / P0.3 — durable in-flight storage holds (atomic quota admission).
+  storageReservations StorageReservation[]
   appearances      CharacterAppearance[]
   locations        Location[]
   props            Prop[]
@@ -713,6 +715,27 @@ model StorageUsage {
   bytes          BigInt       @default(0)
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+// S101 / P0.3 — durable in-flight storage holds. The quota decision and the
+// counter now happen in ONE serializable admission transaction; the hold row
+// is what makes an admission survive a crash: a process that dies between
+// admission and settle leaves the hold behind, and the expiry sweep drops
+// it (a hold never moved the committed counter, so dropping one always
+// frees exactly the bytes it reserved — never lies about stored state).
+// Settle (the object landed) deletes the hold and moves the real delta
+// (actual - replaces) into StorageUsage.
+model StorageReservation {
+  id             String       @id @default(cuid())
+  organizationId String
+  key            String // object key the hold protects (audit trail)
+  bytes          BigInt // reserved size estimate
+  createdAt      DateTime     @default(now())
+  expiresAt      DateTime // sweep deadline (TUBEFORGE_STORAGE_RESERVATION_TTL_MS)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId]) // the admission's in-flight SUM scan
+  @@index([expiresAt]) // the expiry sweep scan
 }
 
 // Stage 3 (T-3.8) — per-user, per-capability AI cost tracking. Written by the
