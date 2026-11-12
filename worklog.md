@@ -4985,3 +4985,47 @@ requiresKey=false, but its registry note now SAYS the watermark word
 and points at the alternative — pinned, so nobody re-hides it.
 
 Suite count 481 → 488. Verified: typecheck, 488/488 unit.
+
+## S97 — the Dependabot triage: five merged, two tombstoned, one blocked by tooling (2026-11-12)
+
+**THE SAFE GROUP (4 merges, all branch-CI green).** #5 checkout v4→v7,
+#4 setup-node v4→v7, #3 gitleaks v2→v3, #12 the npm minor-patch group
+(next 16.4.5, react-query 5.107.1, playwright 1.65, zustand 5.1,
+undici 8.12.4, eslint-config-next 16.4.5, @reactuses/core 6.6.1).
+#3's only red (Money-path coverage) was a c8 ENOENT flake — the log
+shows the suite itself reported ok, then the reporter failed to
+scandir coverage/tmp; a one-line gitleaks bump cannot move coverage,
+and the same job was green on every sibling PR and on main.
+
+**ESLINT 10 (#9, merged after LOCAL verification).** The law: a major
+is merged only behind a local run, never on hope. Peer ranges allow
+it (eslint-config-next ">=9.0.0", ts-eslint "^8.57.0 || ^9 || ^10"),
+the flat config loads, and the result is byte-identical to the
+baseline: 0 errors, the same 20 pre-existing any-warnings.
+
+**THE TOMBSTONE LAW EXTENDS TO DEAD DEPENDENCIES (#8, #7 closed).**
+framer-motion 12→14 was a bump to a package with ZERO imports in src/
+— the whiteboard audit already called it dead. react-day-picker 9→10
+was dead by transitivity: its only consumer, the shadcn scaffold
+ui/calendar.tsx, is itself imported nowhere (calendar-view builds its
+own grid from Card/Button/Badge primitives). Bumping majors on
+unimported code is pure liability — a v10 with breaking props would
+sit there, untested by every gate, waiting to break the first build
+that imports it. Both dependencies REMOVED; the dead component
+deleted with them; no rdp CSS orphans left behind. The audit's
+"cleanup candidate for a dependency-hygiene stage" is now done.
+
+**TYPESCRIPT 7 (#10, left open — blocked by tooling, not by us).**
+The local experiment: tsc --noEmit passes clean in 1.2 SECONDS (the
+Go-port speedup is real) across the whole codebase — but typed
+linting dies at config load with "Error: typescript-eslint does not
+support TS 7.0", which is exactly where the PR's own red
+"Typecheck · Lint · Unit" job stopped. npm install needs 8 ERESOLVE
+peer overrides to even stage it. The PR stays open; it becomes
+mergeable the day the eslint toolchain ships TS 7 support.
+
+Also noted: Dependabot's merges flipped package.json/package-lock.json
+file modes 100755→100644 — cosmetic, npm doesn't care, left as-is.
+
+Verified: typecheck, lint (eslint 10, 0 errors), 488/488 unit,
+billing 40/40, production build. Suite count unchanged.
