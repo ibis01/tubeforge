@@ -151,9 +151,9 @@ async function main(): Promise<void> {
     db.organization.findFirst({ select: { id: true, slug: true } }),
   );
   check(
-    "a real query returns structured rows",
-    probeOrg !== null && typeof probeOrg?.id === "string" && typeof probeOrg?.slug === "string",
-    probeOrg ? `org ${probeOrg.id}` : "(no orgs — empty database is still a valid restore)",
+    "a real query executes against the restored schema",
+    probeOrg === null || (typeof probeOrg?.id === "string" && typeof probeOrg?.slug === "string"),
+    probeOrg ? `org ${probeOrg.id}` : "empty database — findFirst returns null cleanly (a valid restore)",
   );
 
   await withClient(casualty, (db) => db.job.findMany({ take: 1 }));
