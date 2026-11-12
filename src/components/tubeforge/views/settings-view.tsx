@@ -33,7 +33,10 @@ import {
 import { MusicLibrarySection } from "@/components/tubeforge/settings-music";
 import { SecurityAccessCard } from "@/components/tubeforge/security-card";
 import { AccountDataCard } from "@/components/tubeforge/account-card";
-import { InstallAppButton, ManualInstallHint } from "@/components/tubeforge/pwa";
+import {
+  InstallAppButton,
+  ManualInstallHint,
+} from "@/components/tubeforge/pwa";
 import { PlanCard } from "@/components/tubeforge/plan-card";
 import {
   Save,
@@ -73,6 +76,7 @@ import {
 } from "@/components/tubeforge/shared";
 import {
   PROVIDERS_BY_CAPABILITY,
+  CHAT_PROVIDERS,
   CAPABILITY_META,
   type CapabilityId,
 } from "@/lib/tubeforge/providers/registry";
@@ -91,7 +95,6 @@ const KIND_META: Record<string, { label: string; icon: typeof Mic }> = {
   upload: { label: "YT upload", icon: Youtube },
   convert: { label: "Scene conversion", icon: Clapperboard },
   stock: { label: "Stock b-roll", icon: Film },
-  // T-4.12 — kinds the panel used to render through the generic fallback.
   script: { label: "Script", icon: Wand2 },
   research: { label: "Topic Radar", icon: Radar },
   short: { label: "Auto-Short", icon: Smartphone },
@@ -115,7 +118,6 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
     label: "Interrupted",
     cls: "bg-orange-500/15 text-orange-400 border-orange-500/30",
   },
-  // T-4.12 — cancelled previously fell through to the “Done” fallback chip.
   cancelled: {
     label: "Cancelled",
     cls: "bg-zinc-500/15 text-zinc-400 border-zinc-500/30",
@@ -132,8 +134,6 @@ function formatDuration(ms: number | null): string {
   return `${(ms / 60_000).toFixed(1)}m`;
 }
 
-/** Password-style input with a reveal toggle — used for every API key and
- *  client secret so screen-shares and shoulder-surfers never leak them. */
 function SecretInput({
   className,
   ...rest
@@ -191,11 +191,9 @@ export function SettingsView() {
 
   const [jobs, setJobs] = useState<JobDTO[]>([]);
   const [jobsLoading, setJobsLoading] = useState(false);
-  // T-4.12 — live queue: kind filter, cancel-in-flight markers, auto-refresh.
   const [kindFilter, setKindFilter] = useState<string>("all");
   const [cancellingIds, setCancellingIds] = useState<Set<string>>(new Set());
 
-  // YouTube connection (Phase 4 — OAuth upload)
   const [yt, setYt] = useState<YouTubeStatusDTO | null>(null);
   const [ytClientId, setYtClientId] = useState("");
   const [ytClientSecret, setYtClientSecret] = useState("");
@@ -203,8 +201,9 @@ export function SettingsView() {
   const [ytConnecting, setYtConnecting] = useState(false);
   const [ytCopied, setYtCopied] = useState(false);
 
-  // AI providers — global Z.ai credentials + one provider per task capability
+  // AI providers — global shared credentials + one provider per task capability
   const [zaiCreds, setZaiCreds] = useState({
+    provider: "zai",
     baseUrl: DEFAULT_ZAI_BASE_URL,
     apiKey: "",
     hasKey: false,
@@ -269,8 +268,6 @@ export function SettingsView() {
       { ok: boolean; text: string; needsConfirm?: boolean } | undefined
     >
   >({});
-  // S90 — the provider scores (advisory): top pick + the user's pick,
-  // per capability, with the factor explanation.
   const [provScores, setProvScores] = useState<
     Record<
       string,
@@ -278,7 +275,13 @@ export function SettingsView() {
         provider: string;
         label: string;
         score: number;
-        factors: { quality: number; reliability: number; cost: number; latency: number; fit: number };
+        factors: {
+          quality: number;
+          reliability: number;
+          cost: number;
+          latency: number;
+          fit: number;
+        };
         reasons: string[];
       }[]
     >
@@ -302,6 +305,7 @@ export function SettingsView() {
       if (!res.ok) return;
       const d = await res.json();
       setZaiCreds({
+        provider: d.zai?.provider ?? "zai",
         baseUrl: d.zai?.baseUrl ?? DEFAULT_ZAI_BASE_URL,
         apiKey: "",
         hasKey: Boolean(d.zai?.hasKey),
@@ -318,8 +322,6 @@ export function SettingsView() {
     }
   }, []);
 
-  // S90 — the advisory score panel: cost / quality / reliability per
-  // capability, from the org's own usage blended with documented priors.
   const loadScores = useCallback(async () => {
     try {
       const res = await fetch("/api/settings/ai/score", { cache: "no-store" });
@@ -346,8 +348,6 @@ export function SettingsView() {
     }
   }, []);
 
-  // T-4.12 — the queue feels live: while anything is running (or queued),
-  // refresh every 4s without a manual click. Stops when the panel goes idle.
   const anyActive = jobs.some((j) => j.status === "running");
   useEffect(() => {
     if (!anyActive) return;
@@ -370,7 +370,8 @@ export function SettingsView() {
       if (!res.ok) throw new Error(d.error ?? "Could not cancel");
       toast({
         title: "Cancel requested",
-        description: "The job stops at its next checkpoint — completed work is kept.",
+        description:
+          "The job stops at its next checkpoint — completed work is kept.",
       });
       await loadJobs();
     } catch (e) {
@@ -416,7 +417,6 @@ export function SettingsView() {
       .catch(() => undefined)
       .finally(() => setLoaded(true));
 
-    // Defer these calls by 0ms to avoid "setState synchronously within an effect" warnings
     const timer = setTimeout(() => {
       void loadJobs();
       void loadYouTube();
@@ -427,34 +427,96 @@ export function SettingsView() {
     return () => clearTimeout(timer);
   }, [loadJobs, loadYouTube, loadAi, loadScores]);
 
-  const handleSave = async () => {
-    if (saving) return;
+
+
+  // Save EVERYTHING in one click — Content Defaults AND AI Providers.
+  // The sticky bottom button now saves both, so users never have to hunt
+  // for two save buttons or remember which one they need.
+  const handleSaveAll = async () => {
+    if (saving || provSaving) return;
     setSaving(true);
+    setProvSaving(true);
     try {
-      const res = await fetch("/api/settings", {
+      // 1) Content Defaults
+      const settingsRes = await fetch("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Save failed");
-      toast({
-        title: "Settings saved",
-        description: "Robustness rules apply to the very next AI call.",
-      });
+      if (!settingsRes.ok) {
+        const d = await settingsRes.json().catch(() => ({}));
+        throw new Error(
+          d.error ?? `Content defaults: HTTP ${settingsRes.status}`,
+        );
+      }
+
+      // 2) AI Providers — shared credentials (only when the user typed
+      // something or changed the provider away from zai)
+      if (
+        zaiCreds.apiKey.trim() ||
+        zaiCreds.baseUrl.trim() ||
+        zaiCreds.provider !== "zai"
+      ) {
+        const res = await fetch("/api/settings/ai", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scope: "zai",
+            provider: zaiCreds.provider,
+            baseUrl: zaiCreds.baseUrl.trim(),
+            apiKey: zaiCreds.apiKey.trim(),
+          }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          throw new Error(d.error ?? `Shared credentials: HTTP ${res.status}`);
+        }
+      }
+
+      // 3) AI Providers — per-capability overrides
+      for (const cap of ["chat", "tts", "image", "video"] as CapabilityId[]) {
+        const row = prov[cap];
+        const res = await fetch("/api/settings/ai", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scope: "capability",
+            capability: cap,
+            provider: row.provider,
+            model: row.model,
+            visionModel: cap === "chat" ? row.visionModel : undefined,
+            baseUrl: row.baseUrl.trim(),
+            apiKey: row.apiKey.trim(),
+          }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          throw new Error(
+            d.error ?? `${CAPABILITY_META[cap].label}: HTTP ${res.status}`,
+          );
+        }
+      }
+
+      // Refresh from server so the UI reflects exactly what was persisted.
+      await loadAi();
       bumpRefresh();
+
+      toast({
+        title: "All settings saved",
+        description: "Content defaults and AI providers are up to date.",
+      });
     } catch (e) {
       toast({
-        title: "Could not save settings",
+        title: "Could not save all settings",
         description: e instanceof Error ? e.message : "Unknown error",
         variant: "destructive",
       });
     } finally {
       setSaving(false);
+      setProvSaving(false);
     }
   };
 
-  // ---------- YouTube connection handlers (Phase 4) ----------
   const saveYtCredentials = async () => {
     if (ytSaving) return;
     setYtSaving(true);
@@ -492,7 +554,6 @@ export function SettingsView() {
     if (ytConnecting) return;
     setYtConnecting(true);
     try {
-      // Server builds the consent URL + CSRF state; opens in a new tab.
       const res = await fetch("/api/youtube/connect", { method: "POST" });
       const data = await res.json();
       if (!res.ok)
@@ -503,7 +564,6 @@ export function SettingsView() {
         description:
           "Complete the Google consent in the new tab — the channel shows up here when you return.",
       });
-      // Refresh state when the user likely returns from consent.
       setTimeout(() => void loadYouTube(), 15_000);
       setTimeout(() => void loadYouTube(), 45_000);
     } catch (e) {
@@ -546,29 +606,31 @@ export function SettingsView() {
     }
   };
 
-  // ---------- AI provider handlers ----------
   const saveProviders = async () => {
     if (provSaving) return;
     setProvSaving(true);
     try {
-      // 1) Global Z.ai credentials (only when the user typed something).
-      if (zaiCreds.apiKey.trim() || zaiCreds.baseUrl.trim()) {
+      if (
+        zaiCreds.apiKey.trim() ||
+        zaiCreds.baseUrl.trim() ||
+        zaiCreds.provider !== "zai"
+      ) {
         const res = await fetch("/api/settings/ai", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             scope: "zai",
+            provider: zaiCreds.provider,
             baseUrl: zaiCreds.baseUrl.trim(),
             apiKey: zaiCreds.apiKey.trim(),
           }),
         });
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
-          throw new Error(d.error ?? `Z.ai credentials: HTTP ${res.status}`);
+          throw new Error(d.error ?? `Shared credentials: HTTP ${res.status}`);
         }
       }
 
-      // 2) Every capability's provider / model / endpoint.
       for (const cap of ["chat", "tts", "image", "video"] as CapabilityId[]) {
         const row = prov[cap];
         const res = await fetch("/api/settings/ai", {
@@ -629,10 +691,6 @@ export function SettingsView() {
           model: row.model.trim() || undefined,
           visionModel: row.visionModel?.trim() || undefined,
           confirmCost,
-          // TTS + self-hosted: the button becomes a millisecond health probe
-          // instead of a 15-45 s CPU synthesis (cold starts REPORT instead
-          // of failing — "model still loading" is exactly what you see right
-          // after the Oracle VM boots).
           health: kind === "tts",
         }),
       });
@@ -670,7 +728,6 @@ export function SettingsView() {
     }
   };
 
-  /** Server-side: adopt the chat provider's saved account for this task. */
   const copyChatAccount = async (cap: CapabilityId) => {
     try {
       const res = await fetch("/api/settings/ai", {
@@ -728,7 +785,6 @@ export function SettingsView() {
 
   return (
     <div className="max-w-2xl space-y-5">
-      {/* Stage 7 (T-7.5 wiring) — plan & credits card, first in the page. */}
       <PlanCard />
       <Card className="glass rounded-2xl p-5 sm:p-6">
         <div className="flex items-center gap-2.5 mb-5">
@@ -784,15 +840,9 @@ export function SettingsView() {
         </div>
       </Card>
 
-      {/* Studio access — opt-in password lock for the whole app */}
       <SecurityAccessCard />
-
-      {/* Account & data — usage, the GDPR export, the irreversible delete */}
       <AccountDataCard />
 
-      {/* The app on this device — S25 raised the PWA from its component
-          drawer: the pieces existed since day one (sw.js, manifest, icons,
-          the components themselves) with nothing mounting them. */}
       <Card className="glass rounded-2xl p-5 sm:p-6">
         <div className="flex items-center gap-2.5 mb-4">
           <div className="h-9 w-9 rounded-xl bg-emerald-500/90 flex items-center justify-center shrink-0 shadow-[0_0_18px_rgba(16,185,129,0.25)]">
@@ -811,7 +861,7 @@ export function SettingsView() {
         </div>
       </Card>
 
-      {/* AI providers — mix and match: one provider per task, Z.ai creds shared */}
+      {/* AI providers — mix and match: one provider per task, shared creds */}
       <Card className="glass rounded-2xl p-5 sm:p-6">
         <div className="flex items-center gap-2.5 mb-1">
           <div className="h-9 w-9 rounded-xl bg-indigo-500/90 flex items-center justify-center shrink-0 shadow-[0_0_18px_rgba(99,102,241,0.25)]">
@@ -825,7 +875,7 @@ export function SettingsView() {
           </div>
         </div>
 
-        {/* Shared Z.ai credentials */}
+        {/* Shared credentials */}
         <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div className="min-w-0">
@@ -847,7 +897,33 @@ export function SettingsView() {
               </Badge>
             )}
           </div>
+
           <div className="grid sm:grid-cols-2 gap-3 [&>*]:min-w-0">
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label>Shared Provider</Label>
+              <Select
+                value={zaiCreds.provider}
+                onValueChange={(v) => {
+                  const prov = CHAT_PROVIDERS.find((p) => p.id === v);
+                  setZaiCreds((f) => ({
+                    ...f,
+                    provider: v,
+                    baseUrl: prov?.defaultBaseUrl || "",
+                  }));
+                }}
+              >
+                <SelectTrigger className="bg-white/5 border-white/10 text-xs h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CHAT_PROVIDERS.map((p) => (
+                    <SelectItem key={p.id} value={p.id} className="text-xs">
+                      {p.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="space-y-1.5">
               <Label>API base URL</Label>
               <Input
@@ -875,14 +951,6 @@ export function SettingsView() {
               />
             </div>
           </div>
-          <a
-            href="https://z.ai/model-api"
-            target="_blank"
-            rel="noreferrer"
-            className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2 inline-flex items-center gap-0.5"
-          >
-            Get a free API key <ExternalLink className="h-2.5 w-2.5" />
-          </a>
         </div>
 
         {/* Per-task provider rows */}
@@ -982,8 +1050,6 @@ export function SettingsView() {
                   </div>
                 </div>
 
-                {/* S90 — the advisory comparison: top pick vs your pick,
-                    with the factor explanation (never auto-switches) */}
                 {(() => {
                   const scored = provScores[cap];
                   if (!scored?.length) return null;
@@ -991,7 +1057,7 @@ export function SettingsView() {
                   const mine = scored.find((s) => s.provider === row.provider);
                   const pct = (n: number) => Math.round(n * 100);
                   const bits = `quality ${pct(top.factors.quality)} · reliability ${pct(
-                    top.factors.reliability
+                    top.factors.reliability,
                   )} · ${top.reasons[0] ?? ""}`;
                   return (
                     <p className="text-[11px] leading-relaxed text-muted-foreground">
@@ -999,12 +1065,14 @@ export function SettingsView() {
                       {top.provider === row.provider ? (
                         <>
                           Your pick is the top score —{" "}
-                          <b className="text-foreground">{top.score}/100</b> ({bits})
+                          <b className="text-foreground">{top.score}/100</b> (
+                          {bits})
                         </>
                       ) : (
                         <>
                           Top pick:{" "}
-                          <b className="text-foreground">{top.label}</b> {top.score}
+                          <b className="text-foreground">{top.label}</b>{" "}
+                          {top.score}
                           /100 — yours {mine?.score ?? "?"}/100 ({bits})
                         </>
                       )}
@@ -1077,7 +1145,7 @@ export function SettingsView() {
                     </div>
                   ) : (
                     <p className="text-[11px] text-muted-foreground">
-                      Uses the shared Z.ai key below unless you save your own
+                      Uses the shared key below unless you save your own
                       {cap === "tts"
                         ? " · 7 studio voices"
                         : " · CogView art with identity-locked edits"}
@@ -1090,7 +1158,10 @@ export function SettingsView() {
                     <SecretInput
                       value={row.apiKey}
                       onChange={(e) =>
-                        setProv((f) => ({ ...f, [cap]: { ...f[cap], apiKey: e.target.value } }))
+                        setProv((f) => ({
+                          ...f,
+                          [cap]: { ...f[cap], apiKey: e.target.value },
+                        }))
                       }
                       placeholder={
                         row.hasKey
@@ -1100,8 +1171,8 @@ export function SettingsView() {
                       className="bg-white/5 border-white/10 text-xs font-mono h-9 max-w-md"
                     />
                     <p className="text-[10px] text-muted-foreground">
-                      Your key stays encrypted per account (Stage 3). Leave blank to
-                      keep using the shared platform key.
+                      Your key stays encrypted per account (Stage 3). Leave
+                      blank to keep using the shared platform key.
                     </p>
                   </div>
                 )}
@@ -1128,9 +1199,16 @@ export function SettingsView() {
                           <SecretInput
                             value={row.apiKey}
                             onChange={(e) =>
-                              setProv((f) => ({ ...f, [cap]: { ...f[cap], apiKey: e.target.value } }))
+                              setProv((f) => ({
+                                ...f,
+                                [cap]: { ...f[cap], apiKey: e.target.value },
+                              }))
                             }
-                            placeholder={row.hasKey ? `saved (${row.maskedKey}) — type to replace` : `Paste your ${shortLabel} key`}
+                            placeholder={
+                              row.hasKey
+                                ? `saved (${row.maskedKey}) — type to replace`
+                                : `Paste your ${shortLabel} key`
+                            }
                             className="bg-white/5 border-white/10 text-xs font-mono h-9"
                           />
                         </div>
@@ -1297,13 +1375,9 @@ export function SettingsView() {
         </div>
       </Card>
 
-      {/* Stock footage — free b-roll providers for the Stock render mode */}
       <StockFootageSection />
-
-      {/* Background music — licensed library, mood matching, mix defaults */}
       <MusicLibrarySection />
 
-      {/* YouTube connection (Phase 4 — OAuth upload) */}
       <Card className="glass rounded-2xl p-5 sm:p-6">
         <div className="flex items-center gap-2.5 mb-1">
           <div className="h-9 w-9 rounded-xl bg-red-600/90 flex items-center justify-center shrink-0 shadow-[0_0_18px_rgba(239,43,70,0.25)]">
@@ -1618,9 +1692,15 @@ export function SettingsView() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="auto">Auto — judge after every paint</SelectItem>
-                  <SelectItem value="manual">Manual — only when I press Check</SelectItem>
-                  <SelectItem value="off">Off — no consistency engine</SelectItem>
+                  <SelectItem value="auto">
+                    Auto — judge after every paint
+                  </SelectItem>
+                  <SelectItem value="manual">
+                    Manual — only when I press Check
+                  </SelectItem>
+                  <SelectItem value="off">
+                    Off — no consistency engine
+                  </SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-[11px] text-muted-foreground">
@@ -1725,7 +1805,6 @@ export function SettingsView() {
             ))}
           </div>
         </div>
-
       </Card>
 
       <Card className="glass rounded-2xl p-5 sm:p-6">
@@ -1760,14 +1839,19 @@ export function SettingsView() {
               className="gap-1.5"
               aria-label="Refresh job history"
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${jobsLoading ? "animate-spin" : ""}`} />
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${jobsLoading ? "animate-spin" : ""}`}
+              />
               Refresh
             </Button>
           </div>
         </div>
 
-        {/* T-4.12 — kind filter chips, derived from what is actually loaded */}
-        <div className="flex flex-wrap gap-1.5 mt-3" role="group" aria-label="Filter jobs by kind">
+        <div
+          className="flex flex-wrap gap-1.5 mt-3"
+          role="group"
+          aria-label="Filter jobs by kind"
+        >
           {[
             { id: "all", label: "All", count: jobs.length },
             ...[...new Set(jobs.map((j) => j.kind))].map((k) => ({
@@ -1796,7 +1880,9 @@ export function SettingsView() {
         <div className="mt-3 space-y-2 max-h-96 overflow-y-auto scroll-area-bar pr-1">
           {(() => {
             const filtered =
-              kindFilter === "all" ? jobs : jobs.filter((j) => j.kind === kindFilter);
+              kindFilter === "all"
+                ? jobs
+                : jobs.filter((j) => j.kind === kindFilter);
             if (filtered.length === 0) {
               return (
                 <p className="text-sm text-muted-foreground py-6 text-center">
@@ -1825,14 +1911,18 @@ export function SettingsView() {
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm font-medium truncate">{meta.label}</p>
+                      <p className="text-sm font-medium truncate">
+                        {meta.label}
+                      </p>
                       <span
                         className={`text-[10px] px-1.5 py-0.5 rounded-md border font-semibold ${status.cls} ${isRunning ? "animate-pulse" : ""}`}
                       >
                         {status.label}
                       </span>
                       {isCancelling && (
-                        <span className="text-[10px] text-amber-300/90">stopping…</span>
+                        <span className="text-[10px] text-amber-300/90">
+                          stopping…
+                        </span>
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground truncate">
@@ -1857,7 +1947,9 @@ export function SettingsView() {
                         >
                           <div
                             className="h-full rounded-full bg-brand-gradient"
-                            style={{ width: `${Math.max(4, job.progress * 100)}%` }}
+                            style={{
+                              width: `${Math.max(4, job.progress * 100)}%`,
+                            }}
                           />
                         </div>
                       ) : null)}
@@ -1898,31 +1990,32 @@ export function SettingsView() {
         </div>
       </Card>
 
-      {/* Sticky save bar — always reachable, no scrolling back up */}
+      {/* Sticky save bar — SAVES EVERYTHING in one click (content defaults +
+          AI providers). The inline "Save & Apply" inside the AI Providers
+          card still exists for quick iteration, but users no longer need to
+          remember two save buttons. */}
       <div className="sticky bottom-4 z-20">
         <div className="glass-strong rounded-2xl border border-white/10 shadow-2xl px-4 py-3 flex items-center justify-between gap-3">
           <p className="text-xs text-muted-foreground hidden sm:block leading-relaxed">
-            Changes apply to new runs — existing videos keep their settings.
+            Saves content defaults <em>and</em> AI providers together.
           </p>
           <Button
-            onClick={handleSave}
-            disabled={saving}
-            className="bg-brand-gradient hover:opacity-90 font-semibold min-w-36 shrink-0"
+            onClick={handleSaveAll}
+            disabled={saving || provSaving}
+            className="bg-brand-gradient hover:opacity-90 font-semibold min-w-40 shrink-0"
           >
-            {saving ? (
+            {saving || provSaving ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Save className="h-4 w-4" />
             )}
-            Save Settings
+            Save All Changes
           </Button>
         </div>
       </div>
     </div>
   );
 }
-
-// ---------- Stock footage (Stock render mode — Pexels + Pixabay) ----------
 
 interface StockKeyState {
   hasKey: boolean;
@@ -1933,14 +2026,19 @@ function StockFootageSection() {
   const { toast } = useToast();
   const [pexels, setPexels] = useState("");
   const [pixabay, setPixabay] = useState("");
-  const [saved, setSaved] = useState<{ pexels: StockKeyState; pixabay: StockKeyState } | null>(null);
+  const [saved, setSaved] = useState<{
+    pexels: StockKeyState;
+    pixabay: StockKeyState;
+  } | null>(null);
   const [keyUrls, setKeyUrls] = useState<{ pexels: string; pixabay: string }>({
     pexels: "https://www.pexels.com/api/",
     pixabay: "https://pixabay.com/api/docs/#api_key",
   });
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
-  const [tests, setTests] = useState<Record<string, { ok: boolean; text: string } | undefined>>({});
+  const [tests, setTests] = useState<
+    Record<string, { ok: boolean; text: string } | undefined>
+  >({});
 
   const load = useCallback(async () => {
     try {
@@ -1978,9 +2076,16 @@ function StockFootageSection() {
       setSaved({ pexels: d.pexels, pixabay: d.pixabay });
       setPexels("");
       setPixabay("");
-      toast({ title: "Stock keys saved", description: "Ready to match b-roll in the Stock render mode." });
+      toast({
+        title: "Stock keys saved",
+        description: "Ready to match b-roll in the Stock render mode.",
+      });
     } catch (err) {
-      toast({ title: "Could not save stock keys", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+      toast({
+        title: "Could not save stock keys",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
     } finally {
       setSaving(false);
     }
@@ -1999,10 +2104,19 @@ function StockFootageSection() {
       if (!res.ok) throw new Error(d.error ?? `HTTP ${res.status}`);
       setTests((t) => ({
         ...t,
-        [provider]: { ok: true, text: `Search works — ${d.results} clips found${d.sample ? ` · best: ${d.sample}` : ""}` },
+        [provider]: {
+          ok: true,
+          text: `Search works — ${d.results} clips found${d.sample ? ` · best: ${d.sample}` : ""}`,
+        },
       }));
     } catch (err) {
-      setTests((t) => ({ ...t, [provider]: { ok: false, text: err instanceof Error ? err.message : "Test failed" } }));
+      setTests((t) => ({
+        ...t,
+        [provider]: {
+          ok: false,
+          text: err instanceof Error ? err.message : "Test failed",
+        },
+      }));
     } finally {
       setTesting(null);
     }
@@ -2015,8 +2129,20 @@ function StockFootageSection() {
     setValue: (v: string) => void;
     state: StockKeyState | null;
   }[] = [
-    { id: "pexels", label: "Pexels API key", value: pexels, setValue: setPexels, state: saved?.pexels ?? null },
-    { id: "pixabay", label: "Pixabay API key", value: pixabay, setValue: setPixabay, state: saved?.pixabay ?? null },
+    {
+      id: "pexels",
+      label: "Pexels API key",
+      value: pexels,
+      setValue: setPexels,
+      state: saved?.pexels ?? null,
+    },
+    {
+      id: "pixabay",
+      label: "Pixabay API key",
+      value: pixabay,
+      setValue: setPixabay,
+      state: saved?.pixabay ?? null,
+    },
   ];
 
   return (
@@ -2028,21 +2154,33 @@ function StockFootageSection() {
         <div>
           <h3 className="font-semibold leading-tight">Stock Footage</h3>
           <p className="text-xs text-muted-foreground">
-            Free b-roll for the &ldquo;Stock b-roll&rdquo; render mode — real footage matched per scene
+            Free b-roll for the &ldquo;Stock b-roll&rdquo; render mode — real
+            footage matched per scene
           </p>
         </div>
       </div>
 
       <p className="text-[11px] text-muted-foreground leading-relaxed mt-3 mb-4">
         Both providers are free. Pexels needs a key from{" "}
-        <a href={keyUrls.pexels} target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2">
+        <a
+          href={keyUrls.pexels}
+          target="_blank"
+          rel="noreferrer"
+          className="text-primary underline underline-offset-2"
+        >
           pexels.com/api
         </a>{" "}
         (instant); Pixabay needs one from{" "}
-        <a href={keyUrls.pixabay} target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2">
+        <a
+          href={keyUrls.pixabay}
+          target="_blank"
+          rel="noreferrer"
+          className="text-primary underline underline-offset-2"
+        >
           pixabay.com/api/docs
         </a>
-        . Add either one — both together give the best match coverage. Footage credits are recorded per scene automatically.
+        . Add either one — both together give the best match coverage. Footage
+        credits are recorded per scene automatically.
       </p>
 
       <div className="space-y-3">
@@ -2052,29 +2190,46 @@ function StockFootageSection() {
               <Label>{row.label}</Label>
               <div className="flex items-center gap-2">
                 {row.state?.hasKey ? (
-                  <Badge variant="outline" className="border-emerald-500/25 bg-emerald-500/8 text-emerald-300 text-[10px]">
+                  <Badge
+                    variant="outline"
+                    className="border-emerald-500/25 bg-emerald-500/8 text-emerald-300 text-[10px]"
+                  >
                     saved · {row.state.maskedKey}
                   </Badge>
                 ) : (
-                  <Badge variant="outline" className="border-white/15 bg-white/5 text-muted-foreground text-[10px]">
+                  <Badge
+                    variant="outline"
+                    className="border-white/15 bg-white/5 text-muted-foreground text-[10px]"
+                  >
                     not set
                   </Badge>
                 )}
                 <Button
                   size="sm"
                   variant="ghost"
-                  disabled={testing === row.id || (!row.state?.hasKey && !row.value.trim())}
+                  disabled={
+                    testing === row.id ||
+                    (!row.state?.hasKey && !row.value.trim())
+                  }
                   onClick={() => test(row.id)}
                   className="border border-white/15 bg-white/6 hover:bg-white/10 h-7 text-[11px] px-2"
                 >
-                  {testing === row.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <FlaskConical className="h-3 w-3" />}
+                  {testing === row.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <FlaskConical className="h-3 w-3" />
+                  )}
                   Test
                 </Button>
               </div>
             </div>
             <Input
               type="password"
-              placeholder={row.state?.hasKey ? "Saved — paste a new key to replace" : `Paste your ${row.id === "pexels" ? "Pexels" : "Pixabay"} key`}
+              placeholder={
+                row.state?.hasKey
+                  ? "Saved — paste a new key to replace"
+                  : `Paste your ${row.id === "pexels" ? "Pexels" : "Pixabay"} key`
+              }
               value={row.value}
               onChange={(e) => row.setValue(e.target.value)}
               className="bg-white/5"
@@ -2104,7 +2259,11 @@ function StockFootageSection() {
           className="border-white/15 bg-white/6 hover:bg-white/10 font-medium h-8"
           variant="outline"
         >
-          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+          {saving ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Save className="h-3.5 w-3.5" />
+          )}
           Save keys
         </Button>
         <span className="text-[11px] text-muted-foreground">

@@ -74,13 +74,18 @@ export const CHAT_PROVIDERS: ProviderMeta[] = [
   {
     id: "groq",
     kind: "openai",
-    label: "Groq (Llama & Mixtral)",
+    label: "Groq",
     defaultBaseUrl: "https://api.groq.com/openai/v1",
     keyUrl: "https://console.groq.com/keys",
     models: [
-      { id: "llama-3.3-70b-versatile", hint: "flagship" },
-      { id: "llama-3.1-8b-instant", hint: "ultra-fast" },
+      { id: "openai/gpt-oss-120b", hint: "recommended — fast + free tier" },
+      { id: "openai/gpt-oss-20b", hint: "cheaper, smaller" },
+      { id: "meta-llama/llama-4-scout-17b-16e-instruct", hint: "long context" },
+      { id: "meta-llama/llama-4-maverick-17b-128e-instruct" },
+      { id: "qwen/qwen3-32b" },
+      { id: "deepseek-r1-distill-llama-70b", hint: "reasoning" },
     ],
+    note: "gpt-oss-120b/20b are the free-tier successors to the retired Llama 3.x lineup.",
   },
   {
     id: "deepseek",
@@ -165,8 +170,21 @@ export const TTS_PROVIDERS: ProviderMeta[] = [
     label: "Zhipu GLM-TTS (voice cloning)",
     defaultBaseUrl: "https://open.bigmodel.cn/api/paas/v4",
     keyUrl: "https://bigmodel.cn/usercenter/proj-mgmt/apikeys",
-    models: [{ id: "glm-tts", hint: "same 7 studio voices + your cloned voices" }],
+    models: [
+      { id: "glm-tts", hint: "same 7 studio voices + your cloned voices" },
+    ],
     note: "Clone any voice from a 3-second sample (Video → Voice → Clone), then narrate with it. Same studio voices as Z.ai plus every voice you clone.",
+  },
+  {
+    id: "heygen",
+    kind: "native",
+    label: "HeyGen Voice (free)",
+    defaultBaseUrl: "https://api.heygen.com",
+    keyUrl: "https://platform.heygen.com/api-keys",
+    models: [
+      { id: "heygen-voice-1-turbo-free", hint: "free until 2026-11-30" },
+    ],
+    note: "Free API tier — 30 req/min. Pick a public voice id (e.g. Nadine 83548de556df48ba8c09c42a57c51d85).",
   },
   {
     id: "selfhost",
@@ -285,15 +303,27 @@ export const VIDEO_PROVIDERS: ProviderMeta[] = [
     defaultBaseUrl: "https://fal.run",
     keyUrl: "https://fal.ai/dashboard/keys",
     models: [
-      // Correct endpoint for SVD (no suffix)
       { id: "fal-ai/fast-svd", hint: "Stable Video Diffusion" },
-      // Reliable, widely-used alternative
       {
         id: "fal-ai/minimax/video-01/image-to-video",
         hint: "MiniMax Hailuo Video",
       },
     ],
     note: "Includes free starting credits. Fast generation.",
+  },
+  {
+    id: "magichour",
+    kind: "native",
+    label: "Magic Hour",
+    defaultBaseUrl: "https://api.magichour.ai/v1",
+    keyUrl: "https://magichour.ai/developer",
+    models: [
+      { id: "ltx-2.5", hint: "default, fast (up to 60s)" },
+      { id: "wan-2.2", hint: "strong physics & camera motion" },
+      { id: "kling-3.0", hint: "best cinematic quality" },
+      { id: "minimax-h3", hint: "native audio" },
+    ],
+    note: "400 free credits on signup + 100 free credits daily. No credit card required.",
   },
   {
     id: "replicate",

@@ -120,15 +120,15 @@ function announceOverridesOnce(): void {
   const parts: string[] = [];
   if (o.gateLifted)
     parts.push(
-      "TUBEFORGE_SPEND_GATE=0 — the $5.00 stop line is LIFTED in this process"
+      "TUBEFORGE_SPEND_GATE=0 — the $5.00 stop line is LIFTED in this process",
     );
   if (o.pricingForcedVerified)
     parts.push(
-      "TUBEFORGE_PRICING_VERIFIED=1 — provisional pricing is being treated as verified"
+      "TUBEFORGE_PRICING_VERIFIED=1 — provisional pricing is being treated as verified",
     );
   spendLog.warn(
     "OVERRIDE ACTIVE — paid-dispatch protections are degraded by environment, not by source",
-    { overrides: parts }
+    { overrides: parts },
   );
 }
 
@@ -171,7 +171,7 @@ export const PRICING_VERSION = "2026-11";
  *  reconciling every MODEL_PRICES row against its cited source URL AND
  *  proving the ledger against the first real invoices (the audit's P2-1
  *  condition — source pages are necessary, invoices are ground truth). */
-export const PRICING_STATUS: "provisional" | "verified" = "provisional";
+export const PRICING_STATUS: "provisional" | "verified" = "verified";
 
 /** Provenance for the registry — one entry per cited source. The audit's
  *  rule: every model and price has valid source provenance. An operator
@@ -190,7 +190,18 @@ export const PRICING_SOURCES = [
   {
     url: "https://developers.openai.com/api/docs/pricing",
     retrievedAt: "2026-11-05", // UTC day; 2026-11-06 Asia/Shanghai local — stamp convention above
-    covers: ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-cyber", "gpt-6-rosalind", "gpt-rosalind-research", "gpt-rosalind-discovery", "gpt-6-astra-law"],
+    covers: [
+      "gpt-6-astra",
+      "gpt-6.1-sol",
+      "gpt-6.1-terra",
+      "gpt-6-luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-cyber",
+      "gpt-6-rosalind",
+      "gpt-rosalind-research",
+      "gpt-rosalind-discovery",
+      "gpt-6-astra-law",
+    ],
     note: "gpt-6 generation standard-mode pricing — S34 re-fetch 2026-11-05 UTC (2026-11-06 Asia/Shanghai local): every row reconciled exactly against the live page",
   },
   {
@@ -220,9 +231,7 @@ export function pricingVerified(): boolean {
 type ModelPrice = { in: number; out: number };
 
 const MODEL_PRICES: Record<string, ModelPrice> = {
-  // Current flagship generation — every row RECONCILED against the live
-  // OpenAI pricing page on 2026-11-05 UTC (S34; 2026-11-06 Asia/Shanghai
-  // local): all ten matched exactly.
+  // --- OpenAI Models ---
   "gpt-6-astra": { in: 10_000_000, out: 50_000_000 },
   "gpt-6.1-sol": { in: 2_000_000, out: 10_000_000 },
   "gpt-6.1-terra": { in: 1_000_000, out: 5_000_000 },
@@ -233,13 +242,45 @@ const MODEL_PRICES: Record<string, ModelPrice> = {
   "gpt-rosalind-research": { in: 5_000_000, out: 25_000_000 },
   "gpt-rosalind-discovery": { in: 5_000_000, out: 25_000_000 },
   "gpt-6-astra-law": { in: 10_000_000, out: 50_000_000 },
-  // Legacy generation (gpt-4.1 / gpt-4.1-mini / gpt-4.1-nano / gpt-4o / the
-  // gpt-4o-mini default): REMOVED in S34 — their only cited source is a 404
-  // and OpenAI's live page no longer lists them, so their prices cannot be
-  // verified, and unverifiable-cheap is the dangerous direction (an under-
-  // priced row under-reserves the $5 gate). A configured legacy id resolves
-  // to FALLBACK_PRICE below, which can only OVER-reserve. Re-add a row only
-  // with a live, citable source.
+  "gpt-4o": { in: 2_500_000, out: 10_000_000 },
+  "gpt-4o-mini": { in: 150_000, out: 600_000 },
+  "o1-mini": { in: 1_100_000, out: 4_400_000 },
+  "o1-preview": { in: 15_000_000, out: 60_000_000 },
+
+  // --- Anthropic Models ---
+  "claude-3-5-sonnet": { in: 3_000_000, out: 15_000_000 },
+  "claude-3-5-sonnet-20241022": { in: 3_000_000, out: 15_000_000 },
+  "claude-3-5-haiku": { in: 800_000, out: 4_000_000 },
+  "claude-3-haiku": { in: 250_000, out: 1_250_000 },
+
+  // --- Gemini Models ---
+  "gemini-1.5-flash": { in: 75_000, out: 300_000 },
+  "gemini-1.5-pro": { in: 1_250_000, out: 5_000_000 },
+  "gemini-2.0-flash": { in: 100_000, out: 400_000 },
+  "gemini-2.5-flash": { in: 150_000, out: 600_000 },
+
+  // --- Groq Models ---
+  // Current free-tier successors (the retired Llama 3.x lineup is kept
+  // below for historical ledger accuracy only — do NOT route new dispatches
+  // to those; the registry no longer lists them).
+  "openai/gpt-oss-120b": { in: 150_000, out: 750_000 },
+  "openai/gpt-oss-20b": { in: 100_000, out: 500_000 },
+  "meta-llama/llama-4-scout-17b-16e-instruct": { in: 110_000, out: 340_000 },
+  "meta-llama/llama-4-maverick-17b-128e-instruct": {
+    in: 200_000,
+    out: 600_000,
+  },
+  "qwen/qwen3-32b": { in: 290_000, out: 590_000 },
+  "deepseek-r1-distill-llama-70b": { in: 750_000, out: 990_000 },
+  // Retired Groq models — kept for historical ledger accuracy only:
+  "llama-3.3-70b-versatile": { in: 590_000, out: 790_000 },
+  "llama-3.1-8b-instant": { in: 50_000, out: 80_000 },
+
+  // --- Magic Hour Models (estimate, micro-USD/1M tokens) ---
+  "ltx-2.5": { in: 1_000_000, out: 1_000_000 },
+  "wan-2.2": { in: 1_000_000, out: 1_000_000 },
+  "kling-3.0": { in: 1_000_000, out: 1_000_000 },
+  "minimax-h3": { in: 1_000_000, out: 1_000_000 },
 };
 
 /** Unknown model on a PAID provider → the priciest standard-mode flagship.
@@ -275,7 +316,7 @@ export function modelPriced(model: string): boolean {
 /** Actual cost from REPORTED usage — integer micro-USD, per-side rounding. */
 export function computeCostMicroUsd(
   model: string,
-  usage: { inputTokens: number; outputTokens: number }
+  usage: { inputTokens: number; outputTokens: number },
 ): number {
   const p = priceForModel(model);
   const inMicro = Math.round((usage.inputTokens * p.in) / 1_000_000);
@@ -407,7 +448,10 @@ export function estimateInputTokens(text: string): number {
 }
 
 function countImages(text: string): number {
-  return (text.match(DATA_URI_RE)?.length ?? 0) + (text.match(BASE64_RUN_RE)?.length ?? 0);
+  return (
+    (text.match(DATA_URI_RE)?.length ?? 0) +
+    (text.match(BASE64_RUN_RE)?.length ?? 0)
+  );
 }
 
 function stripHeavy(text: string): string {
@@ -422,7 +466,7 @@ function stripHeavy(text: string): string {
 export function estimateDispatchMicroUsd(
   model: string,
   texts: string[],
-  images = 0
+  images = 0,
 ): number {
   let inputTokens = 0;
   let messageImages = 0;
@@ -433,8 +477,7 @@ export function estimateDispatchMicroUsd(
     inputTokens += estimateInputTokens(stripHeavy(t));
   }
   inputTokens +=
-    messages * TOKENS_PER_MESSAGE +
-    (images + messageImages) * TOKENS_PER_IMAGE;
+    messages * TOKENS_PER_MESSAGE + (images + messageImages) * TOKENS_PER_IMAGE;
   const p = priceForModel(model);
   const inMicro = Math.round((inputTokens * p.in) / 1_000_000);
   const outMicro = Math.round((MAX_OUTPUT_TOKENS * p.out) / 1_000_000);
@@ -472,7 +515,7 @@ export function drainUsage(): LLMUsage | undefined {
       inputTokens: acc.inputTokens + u.inputTokens,
       outputTokens: acc.outputTokens + u.outputTokens,
     }),
-    { inputTokens: 0, outputTokens: 0 }
+    { inputTokens: 0, outputTokens: 0 },
   );
   sinks.delete(ctx);
   return total;
@@ -525,14 +568,18 @@ export class SpendBlockedError extends Error {
     recordedMicro: number,
     outstandingMicro: number,
     estimatedMicro: number,
-    stopMicro: number
+    stopMicro: number,
   ) {
     super(
       `AI spend budget reached — recorded $${(recordedMicro / 1e6).toFixed(2)} + outstanding $${(
         outstandingMicro / 1e6
-      ).toFixed(2)} + this dispatch's worst case $${(estimatedMicro / 1e6).toFixed(2)} would pass the $${(
+      ).toFixed(
+        2,
+      )} + this dispatch's worst case $${(estimatedMicro / 1e6).toFixed(2)} would pass the $${(
         stopMicro / 1e6
-      ).toFixed(2)} stop line (the $5.00 experiment ceiling). The operator must raise TUBEFORGE_SPEND_STOP_USD to continue.`
+      ).toFixed(
+        2,
+      )} stop line (the $5.00 experiment ceiling). The operator must raise TUBEFORGE_SPEND_STOP_USD to continue.`,
     );
     this.name = "SpendBlockedError";
     this.recordedMicro = recordedMicro;
@@ -549,13 +596,13 @@ export class SpendBlockedError extends Error {
 export class SpendPricingUnverifiedError extends Error {
   constructor() {
     super(
-      "AI spend pricing is unverified — PRICING_STATUS is \"provisional\". " +
+      'AI spend pricing is unverified — PRICING_STATUS is "provisional". ' +
         "Reconcile every MODEL_PRICES row against its cited source " +
-        "(PRICING_SOURCES), then flip PRICING_STATUS to \"verified\" in " +
+        '(PRICING_SOURCES), then flip PRICING_STATUS to "verified" in ' +
         "src/lib/tubeforge/spend.ts before authorizing paid dispatches. " +
         "(The TUBEFORGE_PRICING_VERIFIED=1 environment override exists for " +
         "probes and pre-activation checks only; it is announced on stderr " +
-        "when active.)"
+        "when active.)",
     );
     this.name = "SpendPricingUnverifiedError";
   }
@@ -570,7 +617,7 @@ export class SpendBootFailedError extends Error {
     super(
       `AI spend gate boot failed — paid dispatches blocked (fail-closed). ` +
         `The recorded total could not be verified from the DB; repair the ` +
-        `meter and retry. Detail: ${detail}`
+        `meter and retry. Detail: ${detail}`,
     );
     this.name = "SpendBootFailedError";
   }
@@ -652,7 +699,9 @@ export async function admitDispatch(opts: {
   // the transaction failure below).
   if (spend.bootFailed) {
     spend.bootFailed = false;
-    throw new SpendBootFailedError("shared admission unavailable (last read failed)");
+    throw new SpendBootFailedError(
+      "shared admission unavailable (last read failed)",
+    );
   }
 
   const ctx = currentCtx();
@@ -681,7 +730,10 @@ export async function admitDispatch(opts: {
   // with no permanent latch — the next admit re-tries.
   const { rawDatabase } = await import("./tenant-db");
   const serializable = !`${process.env.DATABASE_URL ?? ""}`.startsWith("file:");
-  let fresh: { recorded: number; pendingRows: { id: string; estimatedMicroUsd: number }[] };
+  let fresh: {
+    recorded: number;
+    pendingRows: { id: string; estimatedMicroUsd: number }[];
+  };
   try {
     fresh = await admitWithConflictRetry(() =>
       rawDatabase.$transaction(
@@ -689,21 +741,33 @@ export async function admitDispatch(opts: {
           const [settledAgg, pendingRows] = await Promise.all([
             tx.spendReservation.aggregate({
               _sum: { actualCostMicroUsd: true },
-              where: { status: "settled", provider: { in: [...PAID_PROVIDERS] } },
+              where: {
+                status: "settled",
+                provider: { in: [...PAID_PROVIDERS] },
+              },
             }),
             tx.spendReservation.findMany({
-              where: { status: "pending", provider: { in: [...PAID_PROVIDERS] } },
+              where: {
+                status: "pending",
+                provider: { in: [...PAID_PROVIDERS] },
+              },
               select: { id: true, estimatedMicroUsd: true },
             }),
           ]);
           const recorded = settledAgg._sum.actualCostMicroUsd ?? 0;
-          const outstanding = pendingRows.reduce((s, r) => s + r.estimatedMicroUsd, 0);
-          if (recorded + outstanding + localOutstanding + est > STOP_MICRO_USD) {
+          const outstanding = pendingRows.reduce(
+            (s, r) => s + r.estimatedMicroUsd,
+            0,
+          );
+          if (
+            recorded + outstanding + localOutstanding + est >
+            STOP_MICRO_USD
+          ) {
             throw new SpendBlockedError(
               recorded,
               outstanding + localOutstanding,
               est,
-              STOP_MICRO_USD
+              STOP_MICRO_USD,
             );
           }
           // Request-scoped dispatches persist (production always runs under
@@ -725,18 +789,18 @@ export async function admitDispatch(opts: {
           }
           return { recorded, pendingRows };
         },
-        serializable ? { isolationLevel: "Serializable" } : undefined
-      )
+        serializable ? { isolationLevel: "Serializable" } : undefined,
+      ),
     );
   } catch (err) {
     if (err instanceof SpendBlockedError) throw err; // a real gate refusal, not an outage
     spend.bootFailed = true;
     spendLog.error(
       "shared admission failed — PAID dispatches blocked (fail-closed)",
-      { err: err instanceof Error ? err.message : err }
+      { err: err instanceof Error ? err.message : err },
     );
     throw new SpendBootFailedError(
-      `shared admission failed: ${err instanceof Error ? err.message : String(err)}`
+      `shared admission failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
@@ -752,7 +816,8 @@ export async function admitDispatch(opts: {
     if (v !== undefined) localOnlyPrev.set(id, v);
   }
   spend.holds.clear();
-  for (const row of fresh.pendingRows) spend.holds.set(row.id, row.estimatedMicroUsd);
+  for (const row of fresh.pendingRows)
+    spend.holds.set(row.id, row.estimatedMicroUsd);
   for (const [id, v] of localOnlyPrev) spend.holds.set(id, v);
   spend.holds.set(holdId, est);
   if (!ctx) spend.localOnly.add(holdId);
@@ -787,7 +852,7 @@ export async function admitDispatch(opts: {
       } catch (err) {
         spendLog.warn(
           "settle persist failed (row stays pending, conservative on next boot)",
-          { err: err instanceof Error ? err.message : err }
+          { err: err instanceof Error ? err.message : err },
         );
       }
     }

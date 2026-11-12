@@ -1,20 +1,14 @@
 // Settings → AI Providers: per-capability provider configuration.
 //
 //   GET  → current config (keys masked) + the provider registry
-//   PUT  → save the acting user's Z.ai credentials OR one capability's provider
+//   PUT  → save the acting user's shared credentials OR one capability's provider
 //   POST → test a capability end-to-end with optional unsaved overrides
-//
-// The API key is never returned in full — only masked. Capability keys are
-// per-user secrets (ProviderCredential, encrypted at rest); the Z.ai SDK
-// gateway stays a platform-level credential materialized from the acting
-// user's legacy zai.* preference rows (see providers/config.ts).
 
 import { NextRequest, NextResponse } from "next/server";
 import { resetZAIClient } from "@/lib/tubeforge/ai";
 import { invalidateZaiClients } from "@/lib/tubeforge/zai-client";
 import { createZaiForTest } from "@/lib/tubeforge/zai-config";
 import {
-  readZaiCredentials,
   syncZaiConfigFile,
   ZAI_SETTING_KEYS,
 } from "@/lib/tubeforge/providers/config";
@@ -25,6 +19,7 @@ import {
   saveCapability,
   publicCapability,
   maskKey,
+  readLegacyZai,
   type CapabilityConfig,
 } from "@/lib/tubeforge/providers/settings";
 import {
@@ -38,7 +33,10 @@ import {
 } from "@/lib/tubeforge/types";
 import { chatComplete } from "@/lib/tubeforge/providers/chat";
 import { visionComplete } from "@/lib/tubeforge/providers/vision";
-import { probeSelfhostHealth, ttsSynthesize } from "@/lib/tubeforge/providers/tts";
+import {
+  probeSelfhostHealth,
+  ttsSynthesize,
+} from "@/lib/tubeforge/providers/tts";
 import { imageEdit, imageGenerate } from "@/lib/tubeforge/providers/image";
 import { errorText } from "@/lib/tubeforge/redact";
 import { imageToVideo } from "@/lib/tubeforge/providers/video";
@@ -51,20 +49,25 @@ const TINY_PNG_BASE64 =
 
 export async function GET(req: NextRequest) {
   const auth = await requireUser(req);
-  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  if (!auth.ok)
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
   auth.enter(); // tenant scope: handler + spawned job closures
 
   const caps: Record<string, ReturnType<typeof publicCapability>> = {};
   for (const cap of CAPABILITIES) {
     caps[cap] = publicCapability(await getCapability(cap));
   }
-  const zai = await readZaiCredentials();
+
+  // READ FROM DATABASE (readLegacyZai), NOT THE FILE SYSTEM (readZaiCredentials)
+  const legacy = await readLegacyZai();
+
   return NextResponse.json({
     zai: {
-      baseUrl: zai.baseUrl || DEFAULT_ZAI_BASE_URL,
-      baseUrlSaved: Boolean(zai.baseUrl),
-      hasKey: Boolean(zai.apiKey),
-      maskedKey: maskKey(zai.apiKey),
+      provider: legacy.provider || "zai",
+      baseUrl: legacy.baseUrl || DEFAULT_ZAI_BASE_URL,
+      baseUrlSaved: Boolean(legacy.baseUrl),
+      hasKey: Boolean(legacy.apiKey),
+      maskedKey: maskKey(legacy.apiKey),
     },
     capabilities: caps,
     meta: CAPABILITY_META,
@@ -78,33 +81,42 @@ export async function GET(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   const auth = await requireUser(req);
-  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  if (!auth.ok)
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
   auth.enter(); // tenant scope: handler + spawned job closures
 
   try {
     const body = await req.json();
 
-    // ---- Scope 1: legacy Z.ai credentials (per-user zai.* preference rows) ----
+    // ---- Scope 1: shared credentials (per-user zai.* preference rows) ----
     if (body.scope === "zai" || (!body.scope && !body.capability)) {
       const updates: Record<string, string> = {};
+
+      const provider = String(body.provider ?? "zai").trim();
+      if (provider) updates["zai.provider"] = provider;
+
       const baseUrl = String(body.baseUrl ?? "").trim();
       if (baseUrl) updates[ZAI_SETTING_KEYS.baseUrl] = baseUrl;
+
       const apiKey = String(body.apiKey ?? "").trim();
       if (apiKey) updates[ZAI_SETTING_KEYS.apiKey] = apiKey;
+
       if (Object.keys(updates).length === 0) {
         return NextResponse.json({ error: "Nothing to save" }, { status: 400 });
       }
+
       await setUserSettings(updates);
       await syncZaiConfigFile();
       resetZAIClient();
-    invalidateZaiClients();
       invalidateZaiClients();
-      const zai = await readZaiCredentials();
+
+      const legacy = await readLegacyZai();
       return NextResponse.json({
         zai: {
-          baseUrl: zai.baseUrl || DEFAULT_ZAI_BASE_URL,
-          hasKey: Boolean(zai.apiKey),
-          maskedKey: maskKey(zai.apiKey),
+          provider: legacy.provider || "zai",
+          baseUrl: legacy.baseUrl || DEFAULT_ZAI_BASE_URL,
+          hasKey: Boolean(legacy.apiKey),
+          maskedKey: maskKey(legacy.apiKey),
         },
       });
     }
@@ -169,7 +181,8 @@ export async function PUT(req: NextRequest) {
 /** Test a capability end-to-end. Overrides are never saved. */
 export async function POST(req: NextRequest) {
   const auth = await requireUser(req);
-  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  if (!auth.ok)
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
   auth.enter(); // tenant scope: handler + spawned job closures
 
   let body: Record<string, string | boolean | undefined> = {};
@@ -247,11 +260,6 @@ export async function POST(req: NextRequest) {
         });
       }
       case "tts": {
-        // A self-hosted server gets a LIGHTWEIGHT health probe instead of a
-        // synthesis — a CPU Chatterbox box takes 15-45 s per call, and the
-        // /health endpoint already answers the question ("is it up, is the
-        // model loaded?") in milliseconds. Cold-start state is REPORTED, not
-        // failed — the exact situation right after the Oracle VM boots.
         if (body.health === true) {
           const cfg = await getCapability("tts", overrides);
           if (cfg.provider === "selfhost") {
@@ -259,7 +267,9 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({
               ok: probe.up,
               capability,
-              reply: probe.up ? `${probe.detail} · ${probe.latencyMs} ms` : probe.detail,
+              reply: probe.up
+                ? `${probe.detail} · ${probe.latencyMs} ms`
+                : probe.detail,
               ...(probe.up ? { health: probe.health } : {}),
               latencyMs: probe.latencyMs,
             });
@@ -280,8 +290,6 @@ export async function POST(req: NextRequest) {
       }
       case "image":
       case "imageEdit": {
-        // Pollinations is free — skip the cost-confirmation gate so the user
-        // can test it without the "may cost money" modal.
         const isPollinations = provider === "pollinations";
         if (!isPollinations && !body.confirmCost) {
           return NextResponse.json({
@@ -331,7 +339,6 @@ export async function POST(req: NextRequest) {
           latencyMs: Date.now() - started,
         });
       }
-      // ---------- ADDED VIDEO TEST ----------
       case "video": {
         const isFree = provider === "zai" || provider === "huggingface";
         if (!isFree && !body.confirmCost) {
@@ -357,7 +364,6 @@ export async function POST(req: NextRequest) {
           latencyMs: Date.now() - started,
         });
       }
-      // ---------------------------------------
       case "chat":
       default: {
         const raw = await chatComplete(
@@ -382,10 +388,11 @@ export async function POST(req: NextRequest) {
     }
   } catch (err) {
     const message = errorText(err, "Connection failed");
-    return NextResponse.json({ ok: false, error: message.slice(0, 400) }, { status: 200 });
+    return NextResponse.json(
+      { ok: false, error: message.slice(0, 400) },
+      { status: 200 },
+    );
   } finally {
-    // A test must never poison the live client: reset so the next real call
-    // re-syncs the config file from SAVED settings.
     resetZAIClient();
     invalidateZaiClients();
     await syncZaiConfigFile();

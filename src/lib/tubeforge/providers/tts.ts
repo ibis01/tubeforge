@@ -1,16 +1,21 @@
 // Voiceover adapter — text-to-speech per the tts capability setting.
 //
-//   zai    → bundled Z.ai SDK (7 studio voices, returns WAV)
-//   zhipu  → Zhipu GLM-TTS (open.bigmodel.cn): same 7 studio voices PLUS
-//            cloned voice ids created by voice-clone.ts (voice_clone_…)
-//   openai → POST {baseUrl}/audio/speech (tts-1 / tts-1-hd / gpt-4o-mini-tts,
-//            response_format "wav" so downstream WAV merging keeps working)
+//   zai     → bundled Z.ai SDK (7 studio voices, returns WAV)
+//   zhipu   → Zhipu GLM-TTS (open.bigmodel.cn): same 7 studio voices PLUS
+//             cloned voice ids created by voice-clone.ts (voice_clone_…)
+//   heygen  → HeyGen Voice (api.heygen.com/v3, free tier)
+//   openai  → POST {baseUrl}/audio/speech (tts-1 / tts-1-hd / gpt-4o-mini-tts,
+//             response_format "wav" so downstream WAV merging keeps working)
 //
 // Voices are sanitized to the provider's catalog so a video saved with a Z.ai
 // voice keeps working after switching to OpenAI (falls back to "alloy").
 
 import { zaiClientFor } from "../zai-client";
-import { getCapability, getProviderCredential, type CapabilityConfig } from "./settings";
+import {
+  getCapability,
+  getProviderCredential,
+  type CapabilityConfig,
+} from "./settings";
 import { providerMeta, OPENAI_VOICES, type ProviderId } from "./registry";
 import { VOICES } from "../types";
 import { joinUrl, providerFetch, ProviderHttpError } from "./http";
@@ -61,7 +66,10 @@ export function sanitizeVoice(
   voice: string,
   model = "",
 ): string {
-  if ((provider === "zhipu" || provider === "selfhost") && isClonedVoiceId(voice))
+  if (
+    (provider === "zhipu" || provider === "selfhost") &&
+    isClonedVoiceId(voice)
+  )
     return voice;
   const catalog = voiceCatalog(provider, model);
   return catalog.some((v) => v.id === voice) ? voice : catalog[0].id;
@@ -121,6 +129,9 @@ export async function ttsSynthesize(
   }
   if (config.provider === "selfhost") {
     return selfhostTts(request, config);
+  }
+  if (config.provider === "heygen") {
+    return heygenTts(request, config);
   }
   return zaiTts(request, config);
 }
@@ -192,6 +203,82 @@ async function zhipuTts(
   return buffer;
 }
 
+// ---------- HeyGen Voice (api.heygen.com/v3 — free tier) ----------
+
+/** HeyGen's public voice IDs are 32-char hex strings. Nadine is a widely
+ *  known English one that ships with the free tier; callers can override
+ *  via req.voice (which the UI would populate from a voice list). */
+const HEYGEN_DEFAULT_VOICE = "83548de556df48ba8c09c42a57c51d85";
+
+async function heygenTts(
+  req: TtsRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
+  const baseUrl = config.baseUrl?.trim() || "https://api.heygen.com";
+  const key = config.apiKey?.trim();
+  if (!key) {
+    throw new Error(
+      "HeyGen Voice needs an API key from platform.heygen.com/api-keys (Settings → AI Providers → Voiceover)",
+    );
+  }
+
+  // HeyGen's free model is `heygen-voice-1-turbo-free`; the voice id defaults
+  // to Nadine but honours a caller-supplied id when it looks like a HeyGen
+  // voice (32-char hex). Otherwise fall back to the well-known default so a
+  // Z.ai voice name like "jam" doesn't get sent to HeyGen as-is.
+  const model = config.model?.trim() || "heygen-voice-1-turbo-free";
+  const looksLikeHeyGenVoice = /^[a-f0-9]{32}$/i.test(req.voice ?? "");
+  const voiceId = looksLikeHeyGenVoice ? req.voice : HEYGEN_DEFAULT_VOICE;
+
+  const response = await providerFetch(
+    "HeyGen TTS",
+    joinUrl(baseUrl, "v3/models/audio/tts"),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": key,
+      },
+      body: JSON.stringify({
+        language: "en",
+        text: req.input,
+        voice_id: voiceId,
+        model,
+      }),
+    },
+  );
+
+  // Two possible response shapes:
+  //   1) Binary audio — the response body IS the WAV/MP3.
+  //   2) JSON envelope — { audio_url: "https://..." } or { data: { audio_url } }
+  // Handle both: sniff the content-type, then either follow the URL or
+  // buffer the binary directly.
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (contentType.includes("application/json")) {
+    const payload = (await response.json()) as Record<string, unknown>;
+    const nested = (payload.data as { audio_url?: string } | undefined)
+      ?.audio_url;
+    const url =
+      (payload.audio_url as string | undefined) ??
+      nested ??
+      (payload.url as string | undefined);
+    if (!url) {
+      throw new Error(
+        `HeyGen TTS returned JSON without audio_url — raw: ${JSON.stringify(payload).slice(0, 300)}`,
+      );
+    }
+    const audioRes = await providerFetch("HeyGen audio download", url, {});
+    const buffer = Buffer.from(new Uint8Array(await audioRes.arrayBuffer()));
+    if (buffer.length < 44) throw new Error("HeyGen TTS returned empty audio");
+    return buffer;
+  }
+
+  const buffer = Buffer.from(new Uint8Array(await response.arrayBuffer()));
+  if (buffer.length < 44) throw new Error("HeyGen TTS returned empty audio");
+  return buffer;
+}
+
 // ---------- Self-hosted (voice_server.py — Chatterbox on the user's PC) ----------
 
 async function selfhostTts(
@@ -201,13 +288,13 @@ async function selfhostTts(
   // The user's own server wins; the platform-shared voice server
   // (operator-configured env) is the fallback; the conventional local
   // default applies when the user explicitly picked this provider.
-  const ep =
-    selfhostEndpoint(config.baseUrl, config.apiKey) ??
-    {
-      baseUrl: providerMeta("tts", "selfhost")?.defaultBaseUrl || "http://localhost:8931",
-      apiKey: "",
-      shared: false,
-    };
+  const ep = selfhostEndpoint(config.baseUrl, config.apiKey) ?? {
+    baseUrl:
+      providerMeta("tts", "selfhost")?.defaultBaseUrl ||
+      "http://localhost:8931",
+    apiKey: "",
+    shared: false,
+  };
   const baseUrl = ep.baseUrl;
   const key = ep.apiKey;
 
@@ -259,7 +346,10 @@ async function selfhostTts(
           response = await callServer();
           break;
         } catch (retryErr) {
-          if (!(retryErr instanceof ProviderHttpError) || retryErr.status !== 503) {
+          if (
+            !(retryErr instanceof ProviderHttpError) ||
+            retryErr.status !== 503
+          ) {
             throw selfhostError(retryErr, baseUrl);
           }
         }
@@ -322,7 +412,9 @@ export function describeVoiceHealth(h: VoiceServerHealth): string {
           : "Voice server";
   const bits = [model];
   if (h.device) bits.push(h.device);
-  bits.push(h.warm ? "model loaded" : "model still loading — retry in a few minutes");
+  bits.push(
+    h.warm ? "model loaded" : "model still loading — retry in a few minutes",
+  );
   if (h.busy) bits.push("busy synthesizing");
   return bits.join(" · ");
 }
@@ -334,17 +426,25 @@ export function describeVoiceHealth(h: VoiceServerHealth): string {
  *  the operator's shared voice server when the user hasn't configured one. */
 export async function probeSelfhostHealth(
   overrides?: Partial<CapabilityConfig>,
-): Promise<{ up: boolean; detail: string; latencyMs: number; health?: VoiceServerHealth; shared: boolean }> {
+): Promise<{
+  up: boolean;
+  detail: string;
+  latencyMs: number;
+  health?: VoiceServerHealth;
+  shared: boolean;
+}> {
   const cfg = await getCapability("tts", overrides);
   if (cfg.provider !== "selfhost")
-    throw new Error("The health probe only applies to the self-hosted provider");
-  const ep =
-    selfhostEndpoint(cfg.baseUrl, cfg.apiKey) ??
-    {
-      baseUrl: providerMeta("tts", "selfhost")?.defaultBaseUrl || "http://localhost:8931",
-      apiKey: "",
-      shared: false,
-    };
+    throw new Error(
+      "The health probe only applies to the self-hosted provider",
+    );
+  const ep = selfhostEndpoint(cfg.baseUrl, cfg.apiKey) ?? {
+    baseUrl:
+      providerMeta("tts", "selfhost")?.defaultBaseUrl ||
+      "http://localhost:8931",
+    apiKey: "",
+    shared: false,
+  };
   const baseUrl = ep.baseUrl;
   const key = ep.apiKey;
   const started = Date.now();
@@ -387,7 +487,8 @@ async function openaiTts(
   const model = config.model?.trim() || "tts-1";
   const key = config.apiKey?.trim();
 
-  // FIX: Skip the API key check if the provider is local (like TTSFM) or explicitly requires no key
+  // Skip the API key check if the provider is local (like TTSFM) or
+  // explicitly requires no key.
   const isLocal =
     baseUrl.includes("localhost") || baseUrl.includes("127.0.0.1");
   const requiresKey = meta?.requiresKey !== false && !isLocal;
@@ -401,7 +502,6 @@ async function openaiTts(
   const voice = sanitizeVoice("openai", req.voice, model);
   const speed = Math.min(4, Math.max(0.25, req.speed || 1)); // OpenAI range
 
-  // FIX: Only send the Authorization header if we actually have a key
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };

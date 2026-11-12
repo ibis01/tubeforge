@@ -1,10 +1,12 @@
 // Video adapter — image-to-video generation.
 //   zai         → Z.ai SDK (CogVideoX i2v — zai-video-core.ts)
 //   fal         → POST {baseUrl}/fal-ai/...
-//   replicate   → POST {baseUrl}/predictions
+//   replicate   → POST {baseUrl}/models/{model}/predictions
 //   huggingface → POST {baseUrl}/models/{model}
 //   runway      → POST {baseUrl}/image_to_video
 //   luma        → POST {baseUrl}/generations
+//   magichour   → POST {baseUrl}/image-to-video (two-step: upload → generate),
+//                 poll GET {baseUrl}/video-projects/{id}
 
 import { zaiClientFor } from "../zai-client";
 import { getCapability, type CapabilityConfig } from "./settings";
@@ -35,6 +37,8 @@ export async function imageToVideo(
       return runwayVideo(req, config);
     case "luma":
       return lumaVideo(req, config);
+    case "magichour":
+      return magicHourVideo(req, config);
     case "zai":
     default:
       return zaiVideo(req, config);
@@ -43,16 +47,6 @@ export async function imageToVideo(
 
 // ---------- Z.ai (SDK) ----------
 
-/**
- * WIRING (audit follow-up, 2026-11-05 UTC): this was the stub that threw
- * "Z.ai video generation is currently handled in the pipeline, not here" —
- * so the settings Test button (and any imageToVideo caller with provider
- * "zai") could never exercise the default provider even though the render
- * pipeline's own i2v path has spoken to the SDK since Stage 4. The live
- * gateway probe (cogvideox-3, 5s 1080p, ~2.8 min → 4.9 MB h264) calibrated
- * the real call shape; the submit/poll/download logic lives in the tested
- * core (zai-video-core.ts) that render.ts's ensureSceneClip now shares.
- */
 async function zaiVideo(
   req: ImageToVideoRequest,
   config: CapabilityConfig,
@@ -99,14 +93,15 @@ async function falVideo(
 
 // ---------- Replicate ----------
 
-async function replicateVideo(req: ImageToVideoRequest, config: CapabilityConfig): Promise<Buffer> {
+async function replicateVideo(
+  req: ImageToVideoRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
   const baseUrl = config.baseUrl?.trim() || "https://api.replicate.com/v1";
   const model = config.model?.trim() || "minimax/video-01";
   const key = config.apiKey?.trim();
   if (!key) throw new Error("Replicate needs an API key");
 
-  // Use the model-scoped endpoint — no version hash needed.
-  // https://api.replicate.com/v1/models/{owner}/{name}/predictions
   const response = await providerFetch(
     "Replicate Video",
     joinUrl(baseUrl, `models/${model}/predictions`),
@@ -134,23 +129,25 @@ async function replicateVideo(req: ImageToVideoRequest, config: CapabilityConfig
     const poll = await providerFetch(
       "Replicate Poll",
       joinUrl(baseUrl, `predictions/${data.id}`),
-      {
-        headers: { Authorization: `Bearer ${key}` },
-      },
+      { headers: { Authorization: `Bearer ${key}` } },
     );
     const task = await poll.json();
 
     if (task.status === "succeeded") {
-      const outputUrl = Array.isArray(task.output) ? task.output[0] : task.output;
+      const outputUrl = Array.isArray(task.output)
+        ? task.output[0]
+        : task.output;
       if (!outputUrl) throw new Error("Replicate returned no output");
       const vidRes = await providerFetch("Replicate Download", outputUrl, {});
       return Buffer.from(new Uint8Array(await vidRes.arrayBuffer()));
     }
-    if (task.status === "failed") throw new Error(`Replicate failed: ${task.error}`);
+    if (task.status === "failed")
+      throw new Error(`Replicate failed: ${task.error}`);
   }
   throw new Error("Replicate timed out");
 }
-// ---------- Hugging Face (Free Tier) ----------
+
+// ---------- Hugging Face ----------
 
 async function huggingFaceVideo(
   req: ImageToVideoRequest,
@@ -162,13 +159,9 @@ async function huggingFaceVideo(
     config.model?.trim() || "stabilityai/stable-video-diffusion-img2vid-xt";
   const key = config.apiKey?.trim();
 
-  if (!key)
-    throw new Error(
-      "Hugging Face needs an API token (Settings → AI Providers)",
-    );
+  if (!key) throw new Error("Hugging Face needs an API token");
 
   const url = `${baseUrl}/models/${model}`;
-
   const imageBuffer = Buffer.from(req.imagePngBase64, "base64");
   const form = new FormData();
   form.append(
@@ -179,9 +172,7 @@ async function huggingFaceVideo(
 
   const response = await providerFetch("Hugging Face Video", url, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-    },
+    headers: { Authorization: `Bearer ${key}` },
     body: form,
   });
 
@@ -232,9 +223,7 @@ async function runwayVideo(
     const poll = await providerFetch(
       "Runway Poll",
       joinUrl(baseUrl, `tasks/${data.id}`),
-      {
-        headers: { Authorization: `Bearer ${key}` },
-      },
+      { headers: { Authorization: `Bearer ${key}` } },
     );
     const task = await poll.json();
 
@@ -293,9 +282,7 @@ async function lumaVideo(
     const poll = await providerFetch(
       "Luma Poll",
       joinUrl(baseUrl, `generations/${data.id}`),
-      {
-        headers: { Authorization: `Bearer ${key}` },
-      },
+      { headers: { Authorization: `Bearer ${key}` } },
     );
     const task = await poll.json();
 
@@ -313,4 +300,126 @@ async function lumaVideo(
       throw new Error(`Luma failed: ${task.failure_reason}`);
   }
   throw new Error("Luma timed out");
+}
+
+// ---------- Magic Hour (free tier) ----------
+//
+// Three-step flow:
+//  1. POST /v1/files/upload-urls     → { items: [{ upload_url, file_path }] }
+//  2. PUT  {upload_url}              → upload the PNG bytes
+//  3. POST /v1/image-to-video        → { id, credits_charged }
+//  4. GET  /v1/video-projects/{id}   → poll until status is complete/error
+//
+// The status endpoint is /video-projects/{id}, NOT /image-to-video/{id}.
+// That path mismatch was the "HTTP 404" the settings test was hitting.
+
+async function magicHourVideo(
+  req: ImageToVideoRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
+  const baseUrl = config.baseUrl?.trim() || "https://api.magichour.ai/v1";
+  const key = config.apiKey?.trim();
+  if (!key) throw new Error("Magic Hour needs an API key");
+
+  const model = config.model?.trim() || "wan-2.2";
+  const endSeconds = req.duration ?? 5;
+
+  // Step 1 — request an upload URL for a PNG image.
+  const uploadReq = await providerFetchJson<{
+    items: { upload_url: string; file_path: string }[];
+  }>("Magic Hour upload request", joinUrl(baseUrl, "files/upload-urls"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`,
+    },
+    body: JSON.stringify({
+      items: [{ type: "image", extension: "png" }],
+    }),
+  });
+
+  const uploadItem = uploadReq.items?.[0];
+  if (!uploadItem?.upload_url || !uploadItem?.file_path) {
+    throw new Error(
+      `Magic Hour upload-urls response missing upload_url/file_path: ${JSON.stringify(uploadReq).slice(0, 300)}`,
+    );
+  }
+
+  // Step 2 — PUT the raw image bytes to the presigned URL.
+  const imageBuffer = Buffer.from(req.imagePngBase64, "base64");
+  const uploadRes = await fetch(uploadItem.upload_url, {
+    method: "PUT",
+    body: new Uint8Array(imageBuffer),
+    headers: { "Content-Type": "image/png" },
+  });
+  if (!uploadRes.ok) {
+    throw new Error(
+      `Magic Hour image upload failed: HTTP ${uploadRes.status} ${uploadRes.statusText}`,
+    );
+  }
+
+  // Step 3 — submit the image-to-video job with the uploaded file_path.
+  const submitRes = await providerFetch(
+    "Magic Hour Video",
+    joinUrl(baseUrl, "image-to-video"),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        name: "TubeForge scene",
+        end_seconds: endSeconds,
+        model,
+        resolution: "480p",
+        style: { prompt: req.prompt },
+        assets: { image_file_path: uploadItem.file_path },
+      }),
+    },
+  );
+
+  const submitted = (await submitRes.json()) as {
+    id?: string;
+    status?: string;
+    error?: { message?: string };
+  };
+  if (!submitted.id) {
+    throw new Error(
+      `Magic Hour failed to start generation: ${JSON.stringify(submitted).slice(0, 300)}`,
+    );
+  }
+
+  // Step 4 — poll the video-project status endpoint (NOT /image-to-video/{id}).
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const pollRes = await providerFetch(
+      "Magic Hour Poll",
+      joinUrl(baseUrl, `video-projects/${submitted.id}`),
+      { headers: { Authorization: `Bearer ${key}` } },
+    );
+    const task = (await pollRes.json()) as {
+      status?: string;
+      downloads?: { url?: string }[];
+      error?: { message?: string };
+    };
+
+    if (task.status === "complete") {
+      const url = task.downloads?.[0]?.url;
+      if (!url) throw new Error("Magic Hour returned no download URL");
+      const vidRes = await providerFetch("Magic Hour Download", url, {});
+      return Buffer.from(new Uint8Array(await vidRes.arrayBuffer()));
+    }
+    if (
+      task.status === "error" ||
+      task.status === "failed" ||
+      task.status === "canceled"
+    ) {
+      throw new Error(
+        `Magic Hour failed: ${task.error?.message ?? task.status}`,
+      );
+    }
+    // queued / rendering → keep polling
+  }
+  throw new Error("Magic Hour timed out after 5 minutes");
 }

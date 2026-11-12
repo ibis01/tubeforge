@@ -412,7 +412,8 @@ model Video {
   // user's uploaded reference (scene map, pacing, transcript, treatment,
   // beat structure — the ABSTRACT characteristics the Director mirrors,
   // never the expression). The ninth JSON doc column; null = no reference
-  // analyzed. Versioned inside the doc (version 1).
+  // analyzed. Versioned inside the doc (version 1); a build that meets an
+  // unknown version reads it as absent and never overwrites it.
   referenceAnalysis String?
 
   // S94 — the 3D scene doc (the versioned Scene3D contract: camera orbit
