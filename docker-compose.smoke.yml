@@ -28,14 +28,20 @@ services:
       retries: 12
 
   minio-init:
-    image: minio/mc:latest
+    # The bucket creator. The old minio/mc image was REMOVED from Docker Hub
+    # (the first smoke run died on the pull) — the aws-cli image against the
+    # MinIO endpoint does the same job with zero auth ceremony.
+    image: amazon/aws-cli:latest
     depends_on:
       minio:
         condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_DEFAULT_REGION: us-east-1
     entrypoint: >
       /bin/sh -c "
-      mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} &&
-      mc mb --ignore-existing local/tubeforge &&
+      aws --endpoint-url http://minio:9000 s3api create-bucket --bucket tubeforge 2>/dev/null || true &&
       echo '[minio-init] bucket ready'"
 
   web:
