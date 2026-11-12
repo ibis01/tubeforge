@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    @page { size: 794px 1123px; margin: 0; }
+    :root {
+      --c-bg: #0a1628;        /* deep blue night sky */
+      --c-accent: #4da8da;    /* luminous bright blue */
+      --c-text: #e8f0f8;      /* cool white with blue tint */
+      --c-muted: #7a9bb8;     /* blue-gray */
+      --c-glow: #2d7ab3;      /* mid blue, gradient source */
+    }
+    html, body {
+      margin: 0; padding: 0;
+      width: 794px; height: 1123px;
+      background: var(--c-bg);
+      color: var(--c-text);
+      font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+    }
+    @media screen {
+      html { height: auto; display: flex; justify-content: center; min-height: 100vh; background: var(--c-bg); }
+      body { transform-origin: top center; scale: min(1, calc(100vw / 794), calc(100vh / 1123)); margin: 0 auto; box-shadow: 0 0 60px rgba(0,0,0,0.45); }
+    }
+    .cover {
+      width: 794px; height: 1123px; position: relative; box-sizing: border-box;
+      border: none; outline: none; box-shadow: none;
+    }
+    /* Layer 1 - background glow (clipped) */
+    .bg-layer {
+      position: absolute; inset: 0; overflow: hidden; z-index: 1;
+    }
+    .glow-a {
+      position: absolute; left: 0; top: 0; width: 560px; height: 560px;
+      background: radial-gradient(circle at 30% 30%, rgba(45, 122, 179, 0.08) 0%, rgba(45, 122, 179, 0.0) 70%);
+    }
+    .glow-b {
+      position: absolute; right: 0; bottom: 0; width: 640px; height: 640px;
+      background: radial-gradient(circle at 70% 70%, rgba(45, 122, 179, 0.07) 0%, rgba(45, 122, 179, 0.0) 70%);
+    }
+    /* Layer 2 - structure: luminous rectangular frame */
+    .frame {
+      position: absolute; z-index: 2;
+      left: 60px; right: 60px; top: 80px; bottom: 80px;
+      border: 2px solid var(--c-accent);
+    }
+    /* Layer 3 - content */
+    .content { position: absolute; inset: 0; z-index: 3; }
+    .kicker {
+      position: absolute; left: 112px; top: 138px;
+      font-size: 11pt; font-weight: 300;
+      color: var(--c-accent);
+      letter-spacing: 5px; text-transform: uppercase;
+      font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+    }
+    .hero {
+      position: absolute; left: 110px; top: 232px;
+      font-size: 50pt; font-weight: 900; line-height: 1.15;
+      font-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
+      color: var(--c-text);
+      text-shadow: 0 0 24px rgba(77, 168, 218, 0.25);
+      max-width: 560px;
+    }
+    .hero-sub {
+      position: absolute; left: 112px; top: 356px;
+      font-size: 17pt; font-weight: 400; line-height: 1.4;
+      font-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
+      color: var(--c-accent);
+      letter-spacing: 1.5px;
+    }
+    .summary {
+      position: absolute; left: 112px; top: 505px;
+      font-size: 15pt; font-weight: 300; line-height: 1.7;
+      color: var(--c-muted);
+      max-width: 520px;
+    }
+    .org {
+      position: absolute; left: 112px; top: 748px;
+      font-size: 18pt; font-weight: 500; color: var(--c-text);
+    }
+    .org-sub {
+      position: absolute; left: 112px; top: 790px;
+      font-size: 12pt; font-weight: 300; color: var(--c-muted);
+      letter-spacing: 0.5px;
+    }
+    .meta {
+      position: absolute; left: 112px; top: 968px;
+      font-size: 10pt; font-weight: 400; color: var(--c-muted);
+      letter-spacing: 3px; text-transform: uppercase;
+    }
+  </style>
+</head>
+<body>
+  <div class="cover">
+    <div class="bg-layer">
+      <div class="glow-a"></div>
+      <div class="glow-b"></div>
+    </div>
+    <div class="frame"></div>
+    <div class="content">
+      <div class="kicker">Maintenance Handbook &mdash; Engineering Operations</div>
+      <div class="hero">TubeForge</div>
+      <div class="hero-sub">Multi-Tenant AI Video Platform</div>
+      <div class="summary">
+        The consolidated maintenance reference for the TubeForge platform:
+        architecture, data model and migrations, the render pipeline and its
+        engines, the provider matrix, test batteries, CI/CD, and deployment
+        operations &mdash; every figure verified against the live repository.
+      </div>
+      <div class="org">ibis01/tubeforge</div>
+      <div class="org-sub">Next.js 16 &middot; Prisma &middot; PostgreSQL &middot; Playwright &middot; Fly.io</div>
+      <div class="meta">November 2026 &middot; Revision 42238f7 &middot; CI 6/6 &middot; 471/471 Unit Tests</div>
+    </div>
+  </div>
+</body>
+</html>
