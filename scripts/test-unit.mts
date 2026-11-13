@@ -7915,7 +7915,12 @@ await test("S65 budgets: the per-path command budget counts through the real gra
     svg: `<path id="p" d="M 0 0 L ${pairs(WB_PATH_COMMAND_BUDGET)}"/>`,
   });
   eq(over.paths, [], "an over-budget path is not drawable");
-  eq(over.rejected, [{ kind: "path", id: "p", reason: "path-commands" }], "the exclusion is surfaced");
+  // W3: the rejection now carries the exact numbers (detail) behind the reason.
+  eq(
+    over.rejected,
+    [{ kind: "path", id: "p", reason: "path-commands", detail: `${WB_PATH_COMMAND_BUDGET + 1} expanded commands > ${WB_PATH_COMMAND_BUDGET} budget` }],
+    "the exclusion is surfaced with the exact numbers"
+  );
 
   // Exactly at the wall: M + 511 implicit repeats = 512 commands passes.
   const at = extractAsset({
@@ -13497,6 +13502,194 @@ await test("W2: the seams and the one-source constants are wired (source pins)",
     llmSrc.includes('"beats"') && llmSrc.includes('import { splitSentences } from "./beat-plan";'),
     "the LLM planner emits beats in the same schema and shares THE sentence splitter"
   );
+});
+
+// ---------- suite: W3 — the stroke-authored asset validator ----------
+
+suiteStart("W3 asset validator — the stroke-authored law, gated (S120 §3)");
+
+const mkAsset = (id: string, svg: string, tags: string[] = [], meta: Record<string, unknown> = {}) =>
+  ({ id, viewBox: { w: 200, h: 200 }, tags, svg, ...meta }) as import("../src/lib/tubeforge/whiteboard/assets").WhiteboardAsset;
+
+await test("W3 teleport: a mid-path M fires, a degenerate path fires, every built-in rides one stroke", async () => {
+  const { checkTeleport } = await import("../src/lib/tubeforge/whiteboard/asset-validate");
+  const multi = checkTeleport({ id: "tp", d: "M 10 10 L 50 50 M 60 60 L 90 90" });
+  ok(!multi.ok, "multi-subpath (mid-path M) fires");
+  ok(/teleports the hand/.test(multi.reason ?? ""), "the reason names the teleport");
+  const degenerate = checkTeleport({ id: "dp", d: "M 10 10 M 20 20" });
+  ok(!degenerate.ok, "fewer than two drawable points fires");
+  const fine = checkTeleport({ id: "fp", d: "M 10 10 C 30 30, 50 10, 90 90" });
+  ok(fine.ok, "a single continuous stroke passes");
+  // Relative m counts too — the flattener normalizes both cases.
+  const rel = checkTeleport({ id: "rp", d: "M 10 10 L 20 20 m 10 10 L 40 40" });
+  ok(!rel.ok, "a relative m mid-path fires the same way");
+  const { ASSETS } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const { extractAsset } = await import("../src/lib/tubeforge/whiteboard/assets");
+  for (const a of ASSETS) {
+    for (const p of extractAsset(a).paths) {
+      ok(checkTeleport(p).ok, `built-in ${a.id}/${p.id} is one stroke`);
+    }
+  }
+});
+
+await test("W3 self-intersection: a bowtie fires, a T-touch passes, closed shapes close clean", async () => {
+  const { checkSelfIntersection } = await import("../src/lib/tubeforge/whiteboard/asset-validate");
+  const bowtie = checkSelfIntersection({ id: "bt", d: "M 20 20 L 80 80 L 80 20 L 20 80 Z" });
+  ok(!bowtie.ok, "a figure-8 bowtie fires");
+  ok(/crosses itself/.test(bowtie.reason ?? ""), "the reason names the crossing");
+  // A stroke legitimately ENDING on an earlier stroke (a T) is not a crossing.
+  const tee = checkSelfIntersection({ id: "tee", d: "M 0 0 L 100 0 L 50 50 L 50 0" });
+  ok(tee.ok, "an endpoint touch (T shape) passes");
+  // Every closed built-in shape closes onto its start without a false fire.
+  const heart = checkSelfIntersection({ id: "hm-outline", d: "M 100 62 C 74 26, 24 44, 24 94 C 24 136, 62 162, 100 184 C 138 162, 176 136, 176 94 C 176 44, 126 26, 100 62 Z" });
+  ok(heart.ok, "the heart outline (curve closure onto the start) passes");
+  const circle = checkSelfIntersection({ id: "circ", d: "M 30 100 A 70 70 0 1 0 170 100 A 70 70 0 1 0 30 100 Z" });
+  ok(circle.ok, "a two-arc circle passes");
+});
+
+await test("W3 caps: missing/zero width fires, bad linecap fires, pen groups hold one pen", async () => {
+  const { checkCaps, WB_STROKE_WIDTH_MAX } = await import("../src/lib/tubeforge/whiteboard/asset-validate");
+  const noWidth = checkCaps({ id: "p", d: "M 0 0 L 10 10", stroke: "#000" });
+  ok(!noWidth.ok, "stroke without stroke-width fires");
+  const zero = checkCaps({ id: "p", d: "M 0 0 L 10 10", stroke: "#000", strokeWidth: 0 });
+  ok(!zero.ok, "stroke-width 0 fires");
+  const huge = checkCaps({ id: "p", d: "M 0 0 L 10 10", stroke: "#000", strokeWidth: WB_STROKE_WIDTH_MAX + 1 });
+  ok(!huge.ok && /wall/.test(huge.reason ?? ""), "over-ceiling width names the wall");
+  const badCap = checkCaps({ id: "p", d: "M 0 0 L 10 10", stroke: "#000", strokeWidth: 4, linecap: "fancy" });
+  ok(!badCap.ok, "a linecap outside the vocabulary fires");
+  const clean = checkCaps({ id: "p", d: "M 0 0 L 10 10", stroke: "#000", strokeWidth: 4, linecap: "round" });
+  ok(clean.ok, "a sane pen passes");
+  const noStroke = checkCaps({ id: "p", d: "M 0 0 L 10 10", fill: "#e63946" });
+  ok(noStroke.ok, "a pure fill is not the caps check's business");
+  // Pen-group consistency: the reference pen (first declared member) wins.
+  const odd = checkCaps({ id: "b", d: "M 0 0 L 10 10", stroke: "#000", strokeWidth: 3 }, { strokeWidth: 6, linecap: "round" });
+  ok(!odd.ok && /pen group/.test(odd.reason ?? ""), "a width breaking its pen group fires");
+  const oddCap = checkCaps({ id: "b", d: "M 0 0 L 10 10", stroke: "#000", strokeWidth: 6, linecap: "butt" }, { strokeWidth: 6, linecap: "round" });
+  ok(!oddCap.ok, "a linecap breaking its pen group fires");
+  const mate = checkCaps({ id: "b", d: "M 0 0 L 10 10", stroke: "#000", strokeWidth: 6, linecap: "round" }, { strokeWidth: 6, linecap: "round" });
+  ok(mate.ok, "a conforming group member passes");
+});
+
+await test("W3 closed-direction: a retrace fires, every built-in closed shape winds", async () => {
+  const { checkClosedDirection } = await import("../src/lib/tubeforge/whiteboard/asset-validate");
+  const retrace = checkClosedDirection({ id: "rt", d: "M 20 100 L 100 100 L 20 100 Z" });
+  ok(!retrace.ok, "an out-and-back closed line (net area 0) fires");
+  ok(/winding/.test(retrace.reason ?? ""), "the reason names the winding");
+  const heart = checkClosedDirection({ id: "hm-outline", d: "M 100 62 C 74 26, 24 44, 24 94 C 24 136, 62 162, 100 184 C 138 162, 176 136, 176 94 C 176 44, 126 26, 100 62 Z" });
+  ok(heart.ok, "the heart's closed lobes wind");
+  const open = checkClosedDirection({ id: "op", d: "M 10 10 L 90 90" });
+  ok(open.ok, "open strokes are not the check's business");
+});
+
+await test("W3 fill-after-outline: a lead fill fires, the hand's fills are exempt, dual-role strokes pass", async () => {
+  const { checkFillAfterOutline } = await import("../src/lib/tubeforge/whiteboard/asset-validate");
+  const leadFill = mkAsset("lead", `<path id="ff" d="M 100 100 A 40 40 0 1 0 100.01 100" fill="#e63946"/><path id="oo" d="M 100 50 A 50 50 0 1 0 100.01 50" fill="none" stroke="#000" stroke-width="4"/>`);
+  const { extractAsset } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const bad = checkFillAfterOutline(leadFill, extractAsset(leadFill));
+  ok(bad.length === 1 && !bad[0].ok, "a solid fill before its outline fires");
+  ok(/before its boundary/.test(bad[0].reason ?? ""), "the reason reads like advice");
+  // The house dual-role pattern (stroke + fill-opacity="0" reveal) is fine.
+  const dual = mkAsset("dual", `<path id="hm-outline" d="M 100 62 C 74 26, 24 44, 24 94 C 24 136, 62 162, 100 184 C 138 162, 176 136, 176 94 C 176 44, 126 26, 100 62 Z" fill="#e63946" fill-opacity="0" stroke="#000" stroke-width="5"/>`);
+  ok(checkFillAfterOutline(dual, extractAsset(dual)).length === 0, "a stroke path that also carries a fill is not a lead fill");
+  // The hand leads its document by design — exempt.
+  const { ASSETS } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const hand = ASSETS.find((a) => a.id === "hand-marker");
+  ok(hand, "the hand asset is in the library");
+  if (hand) ok(checkFillAfterOutline(hand, extractAsset(hand)).length === 0, "the hand asset's leading fills are exempt");
+});
+
+await test("W3 orientation: a flipped arrow head fires, real arrows point, labels stay in the box", async () => {
+  const { checkOrientation } = await import("../src/lib/tubeforge/whiteboard/asset-validate");
+  const flipped = mkAsset("fl", `<path id="s" d="M 30 170 C 40 100, 90 60, 160 44" fill="none" stroke="#000" stroke-width="5" stroke-linecap="round"/><path id="h" d="M 8 148 L 34 163 L 18 188" fill="none" stroke="#000" stroke-width="5"/>`, ["arrow"]);
+  const { extractAsset } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const bad = checkOrientation(flipped, extractAsset(flipped));
+  ok(bad.length === 1 && !bad[0].ok, "a head at the tail fires");
+  ok(/flipped or detached/.test(bad[0].reason ?? ""), "the reason names the flip");
+  const { ASSETS } = await import("../src/lib/tubeforge/whiteboard/assets");
+  for (const id of ["arrow-curve", "arrow-return", "arrow-growth"]) {
+    const a = ASSETS.find((x) => x.id === id);
+    ok(a, `${id} present`);
+    if (a) ok(checkOrientation(a, extractAsset(a)).length === 0, `${id}'s head rides its tip`);
+  }
+  const outside = mkAsset("lbl", `<text id="t" x="-40" y="250" font-size="20">out</text>`, ["labels"]);
+  const badLabel = checkOrientation(outside, extractAsset(outside));
+  ok(badLabel.length === 1 && !badLabel[0].ok, "a label anchor outside the viewBox fires");
+  const labels = ASSETS.find((x) => x.id === "heart-labels");
+  if (labels) ok(checkOrientation(labels, extractAsset(labels)).length === 0, "heart-labels' anchors sit inside");
+});
+
+await test("W3 aggregate: all built-ins pass their own validator, byte-identical on rerun", async () => {
+  const { validateAsset } = await import("../src/lib/tubeforge/whiteboard/asset-validate");
+  const { ASSETS } = await import("../src/lib/tubeforge/whiteboard/assets");
+  for (const a of ASSETS) {
+    const r = validateAsset(a);
+    ok(r.ok, `built-in ${a.id} passes: ${r.findings.map((f) => f.reason).join(" · ")}`);
+    ok(r.assetId === a.id && Array.isArray(r.findings), "the report carries the asset id");
+  }
+  const spark = ASSETS.find((a) => a.id === "spark");
+  if (spark) {
+    const r1 = JSON.stringify(validateAsset(spark));
+    const r2 = JSON.stringify(validateAsset(spark));
+    eq(r1, r2, "determinism: same asset in → byte-identical report out");
+  }
+});
+
+await test("W3 loadLibrary: built-ins self-validate (a broken one throws), uploads warn-and-exclude without mutation", async () => {
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  eq(lib.warnings.length, 0, "the clean library loads with no warnings");
+  ok(lib.assets.size >= 26, `the extended starter pack is present (got ${lib.assets.size})`);
+  // A failing upload never registers; the reasons ride back; nothing mutates.
+  const badUpload = {
+    id: "up-broken",
+    viewBox: { w: 200, h: 200 },
+    tags: ["upload"],
+    svg: `<path id="tp" d="M 10 10 L 50 50 M 60 60 L 90 90" fill="none" stroke="#1d3557" stroke-width="6"/>`,
+  };
+  const warned = loadLibrary([badUpload]);
+  ok(!warned.assets.has("up-broken"), "the excluded upload is not in the asset map");
+  ok(!warned.libraryIndex.assetIds.has("up-broken"), "the excluded upload is not in the index");
+  eq(warned.warnings.length, 1, "exactly one warning");
+  eq(warned.warnings[0].assetId, "up-broken", "the warning names the upload");
+  ok(/teleports the hand/.test(warned.warnings[0].reasons.join(" ")), "the warning carries the validator's reason");
+  // A GOOD upload still registers beside the built-ins (the S69 merge law).
+  const goodUpload = {
+    id: "up-good",
+    viewBox: { w: 200, h: 200 },
+    tags: ["upload"],
+    svg: `<path id="gp" d="M 10 10 L 80 80" fill="none" stroke="#1d3557" stroke-width="6"/>`,
+  };
+  const merged = loadLibrary([goodUpload]);
+  ok(merged.assets.has("up-good") && merged.warnings.length === 0, "a clean upload registers with no warnings");
+});
+
+await test("W3 upload gate: stroke-authored geometry rejects with readable copy", async () => {
+  const { validateUploadedSvg } = await import("../src/lib/tubeforge/whiteboard/upload");
+  const teleportDoc = Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><path id="tp" d="M 10 10 L 50 50 M 60 60 L 90 90" fill="none" stroke="#1d3557" stroke-width="6"/></svg>`,
+    "utf8"
+  );
+  const v = validateUploadedSvg(teleportDoc, "broken.svg");
+  ok(!v.ok, "a teleporting upload refuses");
+  if (!v.ok) ok(/teleports the hand/.test(v.errors.join(" ")), "the copy names the teleport");
+  // The S69 happy path still passes end-to-end through the new gate.
+  const happy = Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><path id="s1" d="M 10 10 L 60 60" fill="none" stroke="#1d3557" stroke-width="6"/><path id="s2" d="M 40 10 C 60 30, 80 50, 100 90" fill="none"/><text id="cap" x="10" y="180" font-size="20">S69</text></svg>`,
+    "utf8"
+  );
+  const okV = validateUploadedSvg(happy, "Probe.svg");
+  ok(okV.ok, `the S69 happy path survives the W3 gate: ${okV.ok ? "" : okV.errors.join(" · ")}`);
+});
+
+await test("W3 extraction: the pen attributes ride along for the validator", async () => {
+  const { extractAsset } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const a = mkAsset("pen", `<path id="p1" d="M 0 0 L 10 10" fill="none" stroke="#1d3557" stroke-width="6" stroke-linecap="round"/><path id="p2" d="M 0 20 L 10 30" fill="#e63946"/>`);
+  const ex = extractAsset(a);
+  eq(ex.paths[0].strokeWidth, 6, "stroke-width extracted");
+  eq(ex.paths[0].linecap, "round", "linecap extracted");
+  eq(ex.paths[0].stroke, "#1d3557", "stroke extracted");
+  ok(ex.paths[1].stroke === undefined && ex.paths[1].fill === "#e63946", "a pure fill carries its fill, no stroke");
+  ok(ex.paths[0].d === "M 0 0 L 10 10", "path data unchanged");
 });
 
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);

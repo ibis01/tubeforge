@@ -19,6 +19,7 @@
 // every gate. Nothing here touches fs/DB/network — the unit suite pins it.
 import { countPathCommands, sanitizeSvg } from "./svg";
 import { extractAsset, WB_PATH_COMMAND_BUDGET, type WhiteboardAsset } from "./assets";
+import { validateAsset } from "./asset-validate";
 
 /** Gate 1 — the transport wall: 256 KB raw (design §7.1). */
 export const WB_UPLOAD_MAX_BYTES = 256 * 1024;
@@ -176,6 +177,14 @@ export function validateUploadedSvg(
       ok: false,
       errors: [`${commands} total path commands exceed the ${WB_UPLOAD_TOTAL_COMMAND_BUDGET}-command per-asset budget`],
     };
+
+  // W3 — the stroke-authored validator (the new gate): geometry the hand
+  // can actually ride. Runs LAST so budget-broken paths are named by the
+  // budget walls first; the findings' reasons are already readable.
+  const report = validateAsset(asset);
+  if (!report.ok) {
+    return { ok: false, errors: report.findings.map((f) => f.reason ?? "invalid stroke geometry") };
+  }
 
   return { ok: true, asset, paths: ex.paths.length, texts: ex.texts.length, commands };
 }

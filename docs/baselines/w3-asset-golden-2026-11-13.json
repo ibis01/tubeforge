@@ -1,0 +1,199 @@
+{
+  "stage": "W3",
+  "kind": "asset-golden-frames",
+  "canvas": {
+    "width": 960,
+    "height": 540,
+    "fps": 24,
+    "box": 320
+  },
+  "toolchain": {
+    "chromium": "chromium-1200, chromium-1254",
+    "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+    "playwright": "Version 1.65.0"
+  },
+  "assets": {
+    "arrow-curve": {
+      "sceneId": "golden-arrow-curve",
+      "frame": "f00075 @3.125s",
+      "sha256": "50dfbee0e94d58eb2dca24e12822bb61363b0aff93e8f3962ebfc1bd175e1cbf",
+      "paths": 2,
+      "durationMs": 3200
+    },
+    "arrow-growth": {
+      "sceneId": "golden-arrow-growth",
+      "frame": "f00104 @4.333s",
+      "sha256": "bdbc4bc3b612783c53f2bc37bd37eb442d01388a7d92529230a67d6f889a013f",
+      "paths": 4,
+      "durationMs": 4400
+    },
+    "arrow-return": {
+      "sceneId": "golden-arrow-return",
+      "frame": "f00075 @3.125s",
+      "sha256": "b8f68852d3737cf3a9a45d3eb548a2c984ab5d5326ede266ac0e1c49e7039024",
+      "paths": 2,
+      "durationMs": 3200
+    },
+    "atom": {
+      "sceneId": "golden-atom",
+      "frame": "f00089 @3.708s",
+      "sha256": "e173ca11cbe9df90ab472dbf7e2134936247c3f4c58abd1910798e061d21cfd6",
+      "paths": 3,
+      "durationMs": 3800
+    },
+    "bar-chart": {
+      "sceneId": "golden-bar-chart",
+      "frame": "f00132 @5.500s",
+      "sha256": "5cac59cb828414d96125420d7ff0b0758c0de706e48988f1941633e362ec243b",
+      "paths": 6,
+      "durationMs": 5600
+    },
+    "check-badge": {
+      "sceneId": "golden-check-badge",
+      "frame": "f00075 @3.125s",
+      "sha256": "2b6406f58aad8972ff970021964a24104c29c85c6f64c46476670b852b25455b",
+      "paths": 2,
+      "durationMs": 3200
+    },
+    "clock": {
+      "sceneId": "golden-clock",
+      "frame": "f00147 @6.125s",
+      "sha256": "a102be629e52411f017f43107fde7942f82476134fa3f6ac7a39666575c950ac",
+      "paths": 7,
+      "durationMs": 6200
+    },
+    "close-card": {
+      "sceneId": "golden-close-card",
+      "frame": "f00060 @2.500s",
+      "sha256": "545f03036be43c6c28d52bcf1fdcea2932335d9e5d7ab5c1b3012929dcbe2684",
+      "paths": 1,
+      "durationMs": 2600
+    },
+    "coin": {
+      "sceneId": "golden-coin",
+      "frame": "f00104 @4.333s",
+      "sha256": "78546c1b279509489d2de442c3f70b44f1dd666a5b6caaccc16162e8b6827180",
+      "paths": 4,
+      "durationMs": 4400
+    },
+    "ecg-pulse": {
+      "sceneId": "golden-ecg-pulse",
+      "frame": "f00060 @2.500s",
+      "sha256": "6ef60d501baaebd49ff316a49d4b0137182ca05c2e4785482014db92be72c486",
+      "paths": 1,
+      "durationMs": 2600
+    },
+    "flask": {
+      "sceneId": "golden-flask",
+      "frame": "f00089 @3.708s",
+      "sha256": "8372897c4a26cb35afdca7fc00fe504183f08344d06c4376def0f8f00d1673f2",
+      "paths": 3,
+      "durationMs": 3800
+    },
+    "flow-steps": {
+      "sceneId": "golden-flow-steps",
+      "frame": "f00147 @6.125s",
+      "sha256": "bb4f8f7663bd01664a860b9a0b039d50fc134f240fc871b50fd0b67d13cdf28f",
+      "paths": 7,
+      "durationMs": 6200
+    },
+    "gear": {
+      "sceneId": "golden-gear",
+      "frame": "f00190 @7.917s",
+      "sha256": "245f0baaca672be9dd02d994428399f7b2d89eb216934a4b02b42c108d82f0c0",
+      "paths": 10,
+      "durationMs": 8000
+    },
+    "globe": {
+      "sceneId": "golden-globe",
+      "frame": "f00118 @4.917s",
+      "sha256": "5fa0b94de4b01ab78a164ef6caf2beea1d08887e8f3da5adb51cbc1de219a91b",
+      "paths": 5,
+      "durationMs": 5000
+    },
+    "graduation-cap": {
+      "sceneId": "golden-graduation-cap",
+      "frame": "f00089 @3.708s",
+      "sha256": "ef24aff12d05016d67eee6ddc0d8b833eca81bdecb100ccb78c241b5d7f20beb",
+      "paths": 3,
+      "durationMs": 3800
+    },
+    "hand-marker": {
+      "sceneId": "golden-hand-marker",
+      "frame": "f00147 @6.125s",
+      "sha256": "5bc54212161b24558a8a0edaae9add54112cb56c2e3c78bf8b0a06b677ac8d6f",
+      "paths": 7,
+      "durationMs": 6200
+    },
+    "heart-labels": {
+      "sceneId": "golden-heart-labels",
+      "frame": "f00046 @1.917s",
+      "sha256": "bf7166bb171ad5d721eed016cedcf8345cbfc268bf1db0cfcba78ef83e215826",
+      "paths": 0,
+      "durationMs": 2000
+    },
+    "heart-main": {
+      "sceneId": "golden-heart-main",
+      "frame": "f00132 @5.500s",
+      "sha256": "b6d746eb6e1bd8274a64e4a7047bf5cef5cadaf1f7db39f3c0ca0621867b2151",
+      "paths": 6,
+      "durationMs": 5600
+    },
+    "lightbulb": {
+      "sceneId": "golden-lightbulb",
+      "frame": "f00118 @4.917s",
+      "sha256": "1e6c3b019e1f685d5000db0e62b046987600c7d6c6de3f8620e86cac2382523e",
+      "paths": 5,
+      "durationMs": 5000
+    },
+    "lungs": {
+      "sceneId": "golden-lungs",
+      "frame": "f00089 @3.708s",
+      "sha256": "acc9a3c5925795b3c8211d90b03783081e3b3e40811542ea1abc300323ea7d09",
+      "paths": 3,
+      "durationMs": 3800
+    },
+    "open-book": {
+      "sceneId": "golden-open-book",
+      "frame": "f00089 @3.708s",
+      "sha256": "1bdb1813b0e2157c64e4be1ead83c80a2b7b96756f58b7d39ad53ab6da544c3d",
+      "paths": 3,
+      "durationMs": 3800
+    },
+    "pie-chart": {
+      "sceneId": "golden-pie-chart",
+      "frame": "f00075 @3.125s",
+      "sha256": "0518125f5c1a148709c913d8ce455743c30a6114591282c277c278e2a2b6c880",
+      "paths": 2,
+      "durationMs": 3200
+    },
+    "rocket": {
+      "sceneId": "golden-rocket",
+      "frame": "f00118 @4.917s",
+      "sha256": "a813493021cc83e95548af50193068fbb2b8cbcfa91ee3e14a55b0a341004fbe",
+      "paths": 5,
+      "durationMs": 5000
+    },
+    "spark": {
+      "sceneId": "golden-spark",
+      "frame": "f00132 @5.500s",
+      "sha256": "6d552f42d420e3a0cf8a5467832215b52cb1effbbe90dd85c001c79656716325",
+      "paths": 6,
+      "durationMs": 5600
+    },
+    "target": {
+      "sceneId": "golden-target",
+      "frame": "f00089 @3.708s",
+      "sha256": "ee879f47216e8807582f547119e1828eca3479bb84806712a0617f356927d103",
+      "paths": 3,
+      "durationMs": 3800
+    },
+    "title-hero": {
+      "sceneId": "golden-title-hero",
+      "frame": "f00060 @2.500s",
+      "sha256": "e02ce705f0b0200881e71d860495d587ff702878282cf69eb736cc7748fe05c9",
+      "paths": 1,
+      "durationMs": 2600
+    }
+  }
+}

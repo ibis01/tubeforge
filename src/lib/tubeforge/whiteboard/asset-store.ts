@@ -105,6 +105,10 @@ export interface VideoLibrary {
    *  viewBox + sanitized svg (what the editor needs and the built-ins
    *  already ship in the bundle). */
   uploadedAssets: Map<string, WhiteboardAsset>;
+  /** W3: uploads the stroke-authored validator excluded at load
+   *  (warn-and-exclude — additive; consumers that never read it are
+   *  untouched, the studio may surface the reasons). */
+  warnings: { assetId: string; reasons: string[] }[];
 }
 
 /** Load a video's library: built-ins + its uploads, through the ONE merge
@@ -128,9 +132,11 @@ export async function loadVideoLibrary(videoId: string): Promise<VideoLibrary> {
       /* object gone — the row stays, the asset stops validating */
     }
   }
+  const lib = loadLibrary(list);
   return {
-    lib: loadLibrary(list),
+    lib,
     uploads,
     uploadedAssets: new Map(list.map((a) => [a.id, a])),
+    warnings: lib.warnings,
   };
 }
