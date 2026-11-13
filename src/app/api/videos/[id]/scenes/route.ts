@@ -6,10 +6,9 @@ import { CAMERAS, sanitizeSceneStyle } from "@/lib/tubeforge/types";
 import { parseTimeline, serializeTimeline, guardTimelineOverwrite } from "@/lib/tubeforge/timeline";
 import {
   commitSceneChanges,
-  invalidateNarrationArtifacts,
-  invalidateCaptionArtifacts,
   RevisionConflict,
 } from "@/lib/tubeforge/scene-revisions";
+import { planSceneInvalidation, sweepInvalidArtifacts } from "@/lib/tubeforge/scene-deps";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -168,36 +167,50 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   }
 
   // A narration change makes the spoken audio stale — drop voiceover +
-  // renders the same way the classic script edit does (T-4.4). S112: the
-  // sweeps + flag resets now live in the shared scene-revisions lib (the
-  // rollback lane enforces the same rules) and ride the SAME transaction
-  // as the revision write.
+  // renders the same way the classic script edit does (T-4.4). S113: the
+  // sweep is now driven by the DECLARATIVE dependency map (scene-deps.ts) —
+  // the field set names what changed, the map decides exactly which of this
+  // scene's artifacts and which video-level renders die. Same keys as the
+  // S112 regex sweep, one source of truth for every lane (PATCH, rollback,
+  // and Stage 3+'s preview staleness).
   let invalidated = false;
   const rowUpdate: Record<string, unknown> = {};
-  if (narrationChanged && video.hasVoiceover) {
-    invalidated = await invalidateNarrationArtifacts(id, index);
-    Object.assign(rowUpdate, {
-      hasVoiceover: false,
-      audioDuration: null,
-      voiceSource: "tts",
-      voiceLabel: null,
-      hasVideo: false,
-      hasShort: false,
-      shortDuration: null,
-      shortScene: null,
-    });
-  } else if (captionChanged && (video.hasVideo || video.hasShort)) {
-    // S43 — the burned subtitles no longer match, but the audio is current:
-    // drop ONLY the rendered artifacts (voiceover + per-scene WAVs survive,
-    // so the re-render re-mixes without re-TTS). The response reports
-    // `captionsEdited` so the client can say what to do next.
-    invalidated = await invalidateCaptionArtifacts(id);
-    Object.assign(rowUpdate, {
-      hasVideo: false,
-      hasShort: false,
-      shortDuration: null,
-      shortScene: null,
-    });
+  const changedFields: ("narration" | "caption")[] = [
+    ...(narrationChanged ? (["narration"] as const) : []),
+    ...(captionChanged ? (["caption"] as const) : []),
+  ];
+  if (changedFields.length > 0) {
+    const plan = planSceneInvalidation(id, index, changedFields);
+    const worthSweeping =
+      (narrationChanged && video.hasVoiceover) ||
+      (captionChanged && (video.hasVideo || video.hasShort));
+    if (worthSweeping) {
+      // S43 — a caption edit keeps all audio current: the map says only the
+      // video-level renders die (no re-TTS, cheap re-render). A narration
+      // edit additionally drops this scene's WAV + clip and the merged
+      // voiceover (the old read) — every OTHER scene's audio survives.
+      const { removed } = await sweepInvalidArtifacts(id, plan);
+      invalidated = removed.length > 0;
+    }
+    if (narrationChanged && video.hasVoiceover) {
+      Object.assign(rowUpdate, {
+        hasVoiceover: false,
+        audioDuration: null,
+        voiceSource: "tts",
+        voiceLabel: null,
+        hasVideo: false,
+        hasShort: false,
+        shortDuration: null,
+        shortScene: null,
+      });
+    } else if (captionChanged) {
+      Object.assign(rowUpdate, {
+        hasVideo: false,
+        hasShort: false,
+        shortDuration: null,
+        shortScene: null,
+      });
+    }
   }
 
   // S112 — one transaction: the row write (scenes + flags) + the immutable

@@ -59,6 +59,7 @@ import {
 } from "./music";
 import { qcForVideo, qcForPreview, type QcReport } from "./qc";
 import { commitSceneChanges } from "./scene-revisions";
+import { registerSceneArtifact } from "./scene-artifacts";
 import {
   resolveContentPolicy,
   runRestrictedVisualScan,
@@ -455,7 +456,11 @@ export async function runSceneJob(
       });
       await generateSceneImage({ videoId, scene, character: await castOptsFor(video) });
     }
-    await invalidateRenderedArtifacts(videoId, { slidePngs: true });
+    // S113 — scene-scoped invalidation: a one-scene art change kills ONLY
+    // this scene's clip (+ the video-level renders — the union), not every
+    // scene's. The render reuses cached clips (ensureSceneClip), so the
+    // other scenes' paid i2v generations survive.
+    await invalidateRenderedArtifacts(videoId, { slidePngs: true, sceneIndex });
     await db.video.update({
       where: { id: videoId },
       data: {
@@ -1542,8 +1547,10 @@ export async function runSlideJob(entityId: string): Promise<void> {
     const brand = await slideBrandFor(videoId, video.brandAccent, video.brandLogoOn);
     await renderSlidePngs(videoId, [{ scene, spec }], { force: true, brand });
 
-    // 4) The rendered video embeds the old slide — it is stale now.
-    await invalidateRenderedArtifacts(videoId);
+    // 4) The rendered video embeds the old slide — it is stale now. S113:
+    // scene-scoped — only THIS scene's clip (+ the video-level renders)
+    // dies; the other slides' clips survive.
+    await invalidateRenderedArtifacts(videoId, { sceneIndex });
     await db.video.update({
       where: { id: videoId },
       data: { hasVideo: false, videoDuration: null, error: null },
@@ -1745,8 +1752,21 @@ export async function runWhiteboardJob(
     await putFromPath(`${videoId}/final.mp4`, result.file);
     // Per-scene encodes (design §2.3) — Phase B's scene re-render swaps one
     // of these and concats; Phase A stores them so that path is honest.
+    // S113 — each encode registers as a scene artifact (type video, the
+    // whiteboard lane's provenance: the doc slice it was rendered from is
+    // the input of record). $0 local encodes — no cost attribution rides.
     for (let i = 0; i < result.scenes.length; i++) {
-      await putFromPath(`${videoId}/whiteboard/scene-${i + 1}.mp4`, result.scenes[i].file);
+      const key = `${videoId}/whiteboard/scene-${i + 1}.mp4`;
+      await putFromPath(key, result.scenes[i].file);
+      await registerSceneArtifact({
+        video,
+        sceneIndex: i + 1,
+        type: "video",
+        storageKey: key,
+        input: `whiteboard-encode|scene=${i + 1}|doc=${video.whiteboardProject ?? ""}`,
+        prompt: null,
+        bytes: null,
+      });
     }
 
     await db.video.update({

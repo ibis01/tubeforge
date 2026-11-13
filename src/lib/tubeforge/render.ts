@@ -24,6 +24,8 @@ import { zaiClientFor } from "./zai-client";
 import { zaiVideoViaClient } from "./providers/zai-video-core";
 import * as storage from "./storage";
 import { aiCall } from "./budget";
+import { db } from "./tenant-db";
+import { beginSceneArtifact, finalizeSceneArtifact } from "./scene-artifacts";
 import { log } from "./log";
 import { ensureSfx } from "./sfx";
 import { resolveSoundChoice, SFX_CATALOG, AMBIENCE_CATALOG } from "./studio-sound";
@@ -247,7 +249,7 @@ export interface RenderResult {
  */
 export async function invalidateRenderedArtifacts(
   videoId: string,
-  opts: { slidePngs?: boolean } = {}
+  opts: { slidePngs?: boolean; sceneIndex?: number } = {}
 ): Promise<void> {
   // S67 — whiteboard artifacts join the stale set: the per-scene encodes and
   // the scene previews die with everything else when the storyboard, the
@@ -256,9 +258,34 @@ export async function invalidateRenderedArtifacts(
   // the way slide-design edits do). The preview-<id> charset is the engine's
   // id law ([A-Za-z0-9_.-], storyboard.ts), so the pattern cannot miss a
   // legal id — and a hostile id can never reach this key space anyway.
-  const stalePattern = opts.slidePngs
-    ? /\/(final\.mp4|preview\.mp4|subtitles\.srt|scene-\d{2}\.mp4|slide-\d{2}\.png|whiteboard\/(scene-\d+\.mp4|preview-[A-Za-z0-9_.-]+\.mp4))$/
-    : /\/(final\.mp4|preview\.mp4|subtitles\.srt|scene-\d{2}\.mp4|whiteboard\/(scene-\d+\.mp4|preview-[A-Za-z0-9_.-]+\.mp4))$/;
+  //
+  // S113 — the over-invalidation fix (the S111 reconciliation's §8.3 cost
+  // bug): a SINGLE-scene change (art re-roll, AI edit, one-slide rescreenshot)
+  // passes sceneIndex, and then ONLY that scene's clip/encode dies alongside
+  // the video-level renders (the union — final/preview/srt always stale when
+  // any scene changed). Every OTHER scene's scene-NN.mp4 survives, and the
+  // render already reuses cached clips (ensureSceneClip) — so a one-scene
+  // fix no longer re-pays the whole video's clip generation.
+  // Video-level artifacts (the union — final/preview/srt always die when any
+  // scene changed; the whiteboard preview-<sceneId> files are keyed by the
+  // ENGINE's scene ids, unmappable from a numeric index, so they ride the
+  // video-level set — they are $0 local encodes, cheap to regenerate). The
+  // whole-project slide set rides too — EXCEPT in the scene-scoped case,
+  // where only the changed scene's own slide png is index-addressable (it
+  // joins the scene set below); the others' slides are still current.
+  const videoLevel =
+    "\\/(final\\.mp4|preview\\.mp4|subtitles\\.srt" +
+    (opts.slidePngs && opts.sceneIndex == null ? "|slide-\\d{2}\\.png" : "") +
+    "|whiteboard\\/preview-[A-Za-z0-9_.-]+\\.mp4)$";
+  // Scene-scoped clips/encodes: EVERY scene's (whole-project change), or
+  // exactly the changed one (sceneIndex set — the S113 fix).
+  const nn = opts.sceneIndex != null ? String(opts.sceneIndex).padStart(2, "0") : null;
+  const sceneClips =
+    nn != null
+      ? `/scene-${nn}\\.mp4$|/whiteboard/scene-${opts.sceneIndex}\\.mp4$` +
+        (opts.slidePngs ? `|/slide-${nn}\\.png$` : "")
+      : "/(scene-\\d{2}\\.mp4|whiteboard/scene-\\d+\\.mp4)$";
+  const stalePattern = new RegExp(`${videoLevel}|${sceneClips}`);
   const keys = await storage.list(videoId).catch(() => [] as string[]);
   const stale = keys.filter((k) => stalePattern.test(k));
   await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));
@@ -341,6 +368,23 @@ async function ensureSceneClip(
     await getVideoContentPolicy(videoId)
   ).prompt;
 
+  // S113 — provenance: the i2v clip is the most expensive per-scene
+  // artifact; its registration is what makes the over-invalidation fix's
+  // savings measurable (a surviving cached clip = a skipped paid call).
+  const clipVideo = await db.video.findUnique({
+    where: { id: videoId },
+    select: { id: true, organizationId: true, scenes: true },
+  });
+  const clipAttribution = clipVideo
+    ? await beginSceneArtifact({
+        video: clipVideo,
+        sceneIndex: scene.index,
+        type: "video",
+        storageKey: `${videoId}/scene-${String(scene.index).padStart(2, "0")}.mp4`,
+        prompt: motionPrompt,
+      })
+    : null;
+
   const zai = await zaiClientFor("video");
   const clip = await aiCall(
     "video",
@@ -368,8 +412,15 @@ async function ensureSceneClip(
       fs.writeFileSync(clipPath, buf);
       return clipPath;
     },
-    { attempts: 2, baseDelayMs: 8000 } // one retry — these are long calls
+    { attempts: 2, baseDelayMs: 8000 }, // one retry — these are long calls
+    clipAttribution ?? undefined
   );
+
+  await finalizeSceneArtifact(clipAttribution, {
+    input: `${motionPrompt}|image=${imageB64.length}b|model=${videoModel}`,
+    prompt: motionPrompt,
+    bytes: fs.existsSync(clipPath) ? fs.statSync(clipPath).size : null,
+  });
 
   return clip;
 }

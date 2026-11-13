@@ -49,6 +49,7 @@ export const ORG_SCOPED_MODELS = new Set(
     "location", // Stage 5 module C — World library (set continuity)
     "prop",
     "sceneRevision", // S112 — scene revision history (scene-level editing)
+    "sceneArtifact", // S113 — per-scene artifact provenance
   ].map((m) => m.toLowerCase())
 );
 

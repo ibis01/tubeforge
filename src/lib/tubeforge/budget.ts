@@ -23,6 +23,7 @@
 // protects upstream) — per-user queues arrive with Redis in Stage 3.
 
 import { currentCtx } from "./tenant";
+import type { CallAttribution } from "./scene-artifacts";
 import { getUserSettings } from "./settings";
 import type { CreditHold } from "./billing";
 import { log } from "./log";
@@ -265,7 +266,12 @@ export async function aiCall<T>(
   service: AiService,
   label: string,
   fn: () => Promise<T>,
-  retryOpts: { attempts?: number; baseDelayMs?: number } = {}
+  retryOpts: { attempts?: number; baseDelayMs?: number } = {},
+  /** S113 — the provenance bridge: what this call PRODUCED, when it was a
+   *  scene-scoped generation. Flows onto the UsageRecord row (videoId /
+   *  sceneIndex / artifactId) and accumulates cost onto the artifact row —
+   *  the reconciliation's §5.4 bridge instead of a parallel cost tracker. */
+  attribution?: CallAttribution
 ): Promise<T> {
   const release = await acquire(service);
   const startedAt = Date.now();
@@ -284,16 +290,16 @@ export async function aiCall<T>(
       // result duck as fallback. Written into the UsageRecord row below.
       const usage = drainUsage() ?? usageOf(result);
       if (hold.mode === "held")
-        await recordAiUsage(service, label, Date.now() - startedAt, true, retryOpts.attempts ?? 3, hold, usage);
-      else void recordAiUsage(service, label, Date.now() - startedAt, true, retryOpts.attempts ?? 3, hold, usage);
+        await recordAiUsage(service, label, Date.now() - startedAt, true, retryOpts.attempts ?? 3, hold, usage, attribution);
+      else void recordAiUsage(service, label, Date.now() - startedAt, true, retryOpts.attempts ?? 3, hold, usage, attribution);
       return result;
     } catch (err) {
       // A failed chain may still have partial reported usage (an attempt
       // that got a billed response before a later one threw) — record it.
       const usage = drainUsage();
       if (hold.mode === "held")
-        await recordAiUsage(service, label, Date.now() - startedAt, false, retryOpts.attempts ?? 3, hold, usage);
-      else void recordAiUsage(service, label, Date.now() - startedAt, false, retryOpts.attempts ?? 3, hold, usage);
+        await recordAiUsage(service, label, Date.now() - startedAt, false, retryOpts.attempts ?? 3, hold, usage, attribution);
+      else void recordAiUsage(service, label, Date.now() - startedAt, false, retryOpts.attempts ?? 3, hold, usage, attribution);
       throw err;
     }
   } finally {
@@ -351,7 +357,8 @@ async function recordAiUsage(
   ok: boolean,
   attempts: number,
   hold: CreditHold,
-  usage?: LLMUsage | null
+  usage?: LLMUsage | null,
+  attribution?: CallAttribution
 ): Promise<string | null> {
   const ctx = currentCtx();
   if (!ctx) return null; // platform path (boot recovery) — no user to attribute
@@ -392,8 +399,25 @@ async function recordAiUsage(
         inputTokens,
         outputTokens,
         costMicroUsd,
+        // S113 — the provenance bridge (plain columns, no FK: billing
+        // evidence survives video deletion by design).
+        videoId: attribution?.videoId ?? null,
+        sceneIndex: attribution?.sceneIndex ?? null,
+        artifactId: attribution?.artifactId ?? null,
       },
     });
+
+    // S113 — the cost side of the bridge: scene-scoped generations
+    // accumulate their real cost onto the artifact row (re-rolls sum).
+    // Best-effort, AFTER the row: metering must never break the call.
+    if (attribution?.artifactId && costMicroUsd > 0) {
+      try {
+        const artifacts = await import("./scene-artifacts");
+        await artifacts.accumulateArtifactCost(attribution.artifactId, costMicroUsd);
+      } catch {
+        // registry unavailable — the usage row still carries the linkage
+      }
+    }
 
     // Stage 7.2 (fix B) — HELD reservations settle here, deterministically:
     // ok=true reconciles the hold toward the actual cost (today the estimate

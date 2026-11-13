@@ -109,9 +109,24 @@ approved heads never superseded, and ALL ELEVEN scenes-column mutators
 retrofitted through one commit path (a source pin enforces it). New
 API surface: GET /scenes/[n]/revisions + POST /scenes/[n]/rollback.
 Exit criteria pinned by a new DB-backed battery (12 tests, in `check`).
-Stages 2–7 continue on the same order, riding the existing queue,
-storage, budget, and QC systems: no second timeline engine, no separate
-job queue, no parallel budget system.
+**Stage 2 landed as S113** — the declarative dependency map
+(scene-deps.ts: field → this scene's stale artifacts / video-level
+renders / merged-voice / boundary, with PATCH + rollback both enforcing
+it — the scattered if-branches became one pinned table), the
+SceneArtifact provenance registry (the full composed prompt — which S111
+found was discarded — the input hash, provider/model, the head revision,
+and accumulated cost through the UsageRecord bridge columns
+videoId/sceneIndex/artifactId; pending→ready lifecycle, idempotent on
+same inputs, supersede-on-new-input), registration at the four
+generation sites (scene image incl. instruction edits, per-scene TTS,
+i2v clips, whiteboard scene encodes), and **the §8.3 over-invalidation
+cost bug FIXED and measured**: a one-scene art change now kills exactly
+that scene's clip + the video-level renders — the other scenes' cached
+clips survive and the render reuses them (ensureSceneClip), so a
+one-scene fix no longer re-pays the whole video's paid clip generation.
+Battery now 18 tests. Stages 3–7 continue on the same order, riding the
+existing queue, storage, budget, and QC systems: no second timeline
+engine, no separate job queue, no parallel budget system.
 
 ## P0.1 spec — what the gate asserts
 
@@ -175,4 +190,5 @@ recovery.
 | P2 opening | S109 | the operator's explicit call (2026-11-13) against the fully-gated baseline at HEAD `8e76c6b` — the fresh review re-validated every gate on a clean checkout (npm ci, typecheck, lint, unit, billing, storage, rate, backup drill ~57 ms RTO, alert probe HEALTH 0, the CI-covered Docker smoke) and upgraded the assessment to "technically strong, approaching paid-beta readiness"; the entry queue above is the review's own ordering | worklog.md §S109 |
 | P2 queue item 2 | S110 | the staging kit: DEPLOYMENT §3 made executable — the provisioner (one command, fresh secrets every run, --dry-run verified), the HTTP drill harness (health/billing/pipeline suites, self-skipping when prerequisites are missing; proven live against a dev server: 2 PASS · 1 SKIP · 0 FAIL, the pipeline suite walking scenes → native scaffold → render job → final.mp4 4.29 MB through the authed route), the orchestrator (harness + k6 + the printed operator-step sequences), the runbook with the RC gate (§7). Provisioning itself awaits the operator's accounts | worklog.md §S110 |
 | Feature track Stage 0 | S111 | the read-only repository reconciliation of the operator's scene-level editing architecture (docs/design/scene-level-editing-reconciliation.md): capability map, the five requirements vs reality, three architectural surprises, two live defects found, the file-by-file Stage 1–7 plan | worklog.md §S111 |
+| Feature track Stage 2 | S113 | the dependency map + artifact provenance: scene-deps.ts (the declarative table, unit-pinned; PATCH /scenes + rollbackScene both sweep through it — the private regex copies are gone), SceneArtifact (prompt persisted, input hash, revision linkage, cost accumulated through the UsageRecord bridge), registration at the image/TTS/i2v/whiteboard sites, and the §8.3 over-invalidation fix measured by pin (one-scene art change: scenes 1+3's clips survive, scene 2's + the renders die); verified by the 18-test battery + 5 new unit pins + the full chain + build | worklog.md §S113 |
 | Feature track Stage 1 | S112 | the revision foundation: SceneRevision (append-only, unique (videoId, sceneId, version)), stable Scene.id, the union-slice snapshot, expectedSceneVersion optimistic concurrency (409 + current head), first-touch backfill, rollback-as-new-revision, approved-never-superseded, all eleven mutators converged through commitSceneChanges (source-pinned), GET /scenes/[n]/revisions + POST /scenes/[n]/rollback; verified by the new 12-test DB battery + 8 unit pins + the full check chain + production build. Two real bugs the new battery caught and fixed at the site: parseScenes dropped the minted id on read; the diff counted minted ids as content changes | worklog.md §S112 |

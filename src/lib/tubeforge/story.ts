@@ -21,6 +21,11 @@ import { ttsSynthesize } from "./providers/tts";
 import { imageEdit, imageGenerate, imageEditSupported } from "./providers/image";
 import * as storage from "./storage";
 import { db } from "./tenant-db";
+import {
+  beginSceneArtifact,
+  finalizeSceneArtifact,
+  type CallAttribution,
+} from "./scene-artifacts";
 import { log } from "./log";
 import { getApprovedAddendum, getApprovedAppearanceClause, getApprovedWorldClause, getApprovedLocationRefKey, pacingSpeedFactor } from "./director-plan";
 import {
@@ -824,6 +829,33 @@ export async function generateSceneImage(opts: {
   const imagePath = path.join(videoDir(opts.videoId), sceneImageFile(scene.index));
   const canEdit = await imageEditSupported();
 
+  // S113 — provenance: one pending artifact row per scene-image generation.
+  // Re-rolls (quality gate, dedupe) reuse the SAME row — their costs
+  // accumulate on it through the UsageRecord bridge, and the final input
+  // (prompt + seed + take counter) is stamped at finalize. Best-effort: a
+  // registry failure never blocks the paint.
+  let artAttribution: CallAttribution | null = null;
+  let artAttributionTried = false;
+  const artAttributionOf = async (): Promise<CallAttribution | null> => {
+    if (!artAttributionTried) {
+      artAttributionTried = true;
+      const video = await db.video.findUnique({
+        where: { id: opts.videoId },
+        select: { id: true, organizationId: true, scenes: true },
+      });
+      artAttribution = video
+        ? await beginSceneArtifact({
+            video,
+            sceneIndex: scene.index,
+            type: "image",
+            storageKey: `${opts.videoId}/${sceneImageFile(scene.index)}`,
+            prompt: artPrompt,
+          })
+        : null;
+    }
+    return artAttribution;
+  };
+
   // Identity pinning for text-to-image providers (Pollinations): a host scene
   // draws the character's pinned latent, a solo scene draws the video+scene
   // latent — deterministic takes that re-roll via seedVariant bumps. Edit-
@@ -853,7 +885,8 @@ export async function generateSceneImage(opts: {
             if (!b) throw new Error("Image edit returned no data");
             return b;
           }),
-        { attempts: 4, baseDelayMs: 5000 }
+        { attempts: 4, baseDelayMs: 5000 },
+        (await artAttributionOf()) ?? undefined
       ).catch(() => null);
     }
 
@@ -873,7 +906,8 @@ export async function generateSceneImage(opts: {
             if (!b) throw new Error("Image edit returned no data");
             return b;
           }),
-        { attempts: 4, baseDelayMs: 5000 }
+        { attempts: 4, baseDelayMs: 5000 },
+        (await artAttributionOf()) ?? undefined
       ).catch(() => null);
     }
 
@@ -890,7 +924,8 @@ export async function generateSceneImage(opts: {
             size: "1344x768",
             seed: seedOverride ?? seed,
           }),
-        { attempts: 4, baseDelayMs: 5000 }
+        { attempts: 4, baseDelayMs: 5000 },
+        (await artAttributionOf()) ?? undefined
       );
     }
 
@@ -972,6 +1007,15 @@ export async function generateSceneImage(opts: {
     );
   }
 
+  // S113 — finalize the provenance row: the final input (prompt + seed +
+  // take counter) and the landed bytes. The pending row existed since the
+  // first produce(); costs from every attempt already accumulated on it.
+  await finalizeSceneArtifact(await artAttributionOf(), {
+    input: `${artPrompt}|seed=${seed}|variant=${scene.seedVariant ?? 0}`,
+    prompt: artPrompt,
+    bytes: fs.existsSync(imagePath) ? fs.statSync(imagePath).size : null,
+  });
+
   return { fileBytes: fs.existsSync(imagePath) ? fs.statSync(imagePath).size : 0, artHash };
 }
 
@@ -1023,6 +1067,22 @@ export async function editSceneImage(opts: {
       { scene: scene.index, substituted: sanitizedEdit.substituted, matches: sanitizedEdit.matches.map((m) => m.entry) }
     );
   }
+  // S113 — provenance for the instruction-edit lane: the user's
+  // instruction IS the prompt of record.
+  const video = await db.video.findUnique({
+    where: { id: opts.videoId },
+    select: { id: true, organizationId: true, scenes: true },
+  });
+  const editAttribution = video
+    ? await beginSceneArtifact({
+        video,
+        sceneIndex: scene.index,
+        type: "image",
+        storageKey: `${opts.videoId}/${sceneImageFile(scene.index)}`,
+        prompt: sanitizedEdit.prompt,
+      })
+    : null;
+
   const buffer = await aiCall(
     "image",
     `scene ${scene.index} edit (instruction)`,
@@ -1038,12 +1098,18 @@ export async function editSceneImage(opts: {
         if (!b) throw new Error("Image edit returned no data");
         return b;
       }),
-    { attempts: 3, baseDelayMs: 5000 }
+    { attempts: 3, baseDelayMs: 5000 },
+    editAttribution ?? undefined
   );
 
   if (buffer.length < 1000) throw new Error(`Edited image for scene ${scene.index} is empty`);
   // Storage seam (T-3.7)
   await storage.put(`${opts.videoId}/${sceneImageFile(scene.index)}`, buffer);
+  await finalizeSceneArtifact(editAttribution, {
+    input: `${sanitizedEdit.prompt}|instruction=${instruction}`,
+    prompt: sanitizedEdit.prompt,
+    bytes: buffer.length,
+  });
   return { fileBytes: buffer.length };
 }
 
@@ -1178,6 +1244,8 @@ export async function generateSceneVoiceovers(opts: {
   const dir = videoDir(opts.videoId);
   const allBuffers: Buffer[] = [];
   const sceneDurations: number[] = [];
+  // S113 — one video-row read for the whole run's artifact registrations.
+  let voiceArtifactVideo: { id: string; organizationId: string; scenes: string | null } | null = null;
 
   for (const [i, scene] of opts.scenes.entries()) {
     // Resume semantics: a scene WAV already on disk is this scene's truth —
@@ -1209,6 +1277,24 @@ export async function generateSceneVoiceovers(opts: {
       Math.max(0.5, opts.speed * pacingSpeedFactor(opts.pacing?.get(scene.index) ?? "normal"))
     );
 
+    // S113 — provenance: one pending audio artifact per scene read; every
+    // chunk's cost accumulates on it through the bridge.
+    const videoRow =
+      voiceArtifactVideo ??
+      (voiceArtifactVideo = await db.video.findUnique({
+        where: { id: opts.videoId },
+        select: { id: true, organizationId: true, scenes: true },
+      }));
+    const voiceAttribution = videoRow
+      ? await beginSceneArtifact({
+          video: videoRow,
+          sceneIndex: scene.index,
+          type: "audio",
+          storageKey: `${opts.videoId}/${sceneWavFile(scene.index)}`,
+          prompt: scene.narration,
+        })
+      : null;
+
     const buffers: Buffer[] = [];
     for (const [j, chunk] of chunks.entries()) {
       if (j > 0) await sleep(2000); // pace chunks within a scene too
@@ -1216,7 +1302,8 @@ export async function generateSceneVoiceovers(opts: {
         "tts",
         `scene ${scene.index} tts (${chunk.length} chars)`,
         () => ttsSynthesize({ input: chunk, voice: opts.voice, speed }),
-        { attempts: 6, baseDelayMs: 8000 } // outlast rate-limit storms (≈16 min of patience)
+        { attempts: 6, baseDelayMs: 8000 }, // outlast rate-limit storms (≈16 min of patience)
+        voiceAttribution ?? undefined
       );
       if (buffer.length < 44) throw new Error(`Scene ${scene.index} TTS returned empty audio`);
       buffers.push(buffer);
@@ -1224,6 +1311,11 @@ export async function generateSceneVoiceovers(opts: {
 
     const merged = mergeWavs(buffers);
     fs.writeFileSync(wavPath, merged.buffer);
+    await finalizeSceneArtifact(voiceAttribution, {
+      input: `${scene.narration}|voice=${opts.voice}|speed=${speed}`,
+      prompt: scene.narration,
+      bytes: merged.buffer.length,
+    });
     allBuffers.push(merged.buffer);
     sceneDurations.push(merged.durationSec);
   }

@@ -8,9 +8,9 @@ live tree at HEAD `1379134`. No product code was changed by this stage.
 order ("start, don't stop"); the four §10 decision points resolved to their
 recommended defaults (keep all revision rows, GC only superseded artifacts;
 latest-approved-per-scene render; opt-in per-video spend ceiling; epochs for
-whole-script regens/converts). **Stage 1 landed as S112** — see
-docs/production-readiness.md's feature-track ledger row and worklog §S112.
-Stages 2–7 follow in order.* This
+whole-script regens/converts). **Stage 1 landed as S112 and Stage 2 as
+S113** — see docs/production-readiness.md's feature-track ledger rows
+and worklog §S112/§S113. Stages 3–7 follow in order.* This
 document is the explicit mapping the plan's Stage 0 exit demands: proposed
 design → existing code → precise gaps → file-by-file implementation plan.
 

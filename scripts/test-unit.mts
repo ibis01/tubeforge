@@ -2364,7 +2364,7 @@ await test("tenant-db: every org-scoped model matches the lowercased lookup", as
   const expected = [
     "channel", "character", "video", "activity", "researchsession",
     "scheduleslot", "videostat", "voiceprofile", "musictrack", "job", "membership",
-    "characterappearance", "location", "prop", "scenerevision",
+    "characterappearance", "location", "prop", "scenerevision", "sceneartifact",
   ];
   for (const m of expected) {
     ok(ORG_SCOPED_MODELS.has(m), `"${m}" is org-scoped`);
@@ -12262,6 +12262,112 @@ await test("scene-revisions: PATCH /scenes carries the optimistic-concurrency ga
   ok(
     src.includes("status: 409"),
     "a conflict returns 409 (the whiteboard precedent), never a silent overwrite",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// S113 — Scene-Level Editing & Repair, Stage 2: the declarative dependency
+// map + artifact provenance (pure-logic pins; the DB-backed lifecycle + the
+// measured over-invalidation fix live in scripts/test-scene-revisions.mts)
+// ---------------------------------------------------------------------------
+
+await test("scene-deps: the dependency table laws (narration/caption/visual/seedVariant)", async () => {
+  const { SCENE_DEPENDS } = await import("../src/lib/tubeforge/scene-deps.ts");
+  // A narration change stales this scene's WAV + clip, the merged read and
+  // every render — and implicates the boundary. It must NOT stale the art.
+  eq(
+    JSON.stringify(SCENE_DEPENDS.narration),
+    JSON.stringify({ scene: ["audio", "video"], videoRenders: true, mergedVoice: true, boundary: true }),
+    "narration rule"
+  );
+  // A caption change burns at final assembly only — no re-TTS, no re-art.
+  eq(
+    JSON.stringify(SCENE_DEPENDS.caption),
+    JSON.stringify({ scene: [], videoRenders: true, mergedVoice: false, boundary: false }),
+    "caption rule"
+  );
+  // A visual-prompt change deletes NOTHING (art regenerates on explicit
+  // re-roll; Stage 3 labels staleness via revisionVersion instead).
+  eq(
+    JSON.stringify(SCENE_DEPENDS.visual),
+    JSON.stringify({ scene: [], videoRenders: false, mergedVoice: false, boundary: false }),
+    "visual rule — a narration-style sweep must never kill art on a text edit"
+  );
+  // A take-counter bump is a new image at the same key.
+  eq(SCENE_DEPENDS.seedVariant.scene, ["image"], "seedVariant rule");
+});
+
+await test("scene-deps: planSceneInvalidation folds fields and names exact keys", async () => {
+  const { planSceneInvalidation } = await import("../src/lib/tubeforge/scene-deps.ts");
+  const plan = planSceneInvalidation("vid", 2, ["narration"]);
+  eq(
+    plan.sceneKeys,
+    ["vid/scene-02.wav", "vid/scene-02.mp4", "vid/whiteboard/scene-2.mp4"],
+    "narration plan: this scene's WAV + clip + wb encode, nothing else"
+  );
+  ok(plan.videoRenders, "renders are the union — stale");
+  ok(plan.mergedVoice, "the merged voiceover embeds the old read");
+  ok(plan.boundary, "narration length implicates the boundary (Stage 5 scope)");
+
+  const capPlan = planSceneInvalidation("vid", 2, ["caption"]);
+  eq(capPlan.sceneKeys, [], "caption plan: no scene-scoped artifact dies");
+  ok(capPlan.videoRenders, "caption plan: renders die");
+
+  const multi = planSceneInvalidation("vid", 5, ["caption", "visual"]);
+  eq(multi.sceneKeys, [], "caption+visual deletes nothing");
+  ok(multi.videoRenders, "caption still carries the renders flag through the fold");
+
+  const none = planSceneInvalidation("vid", 5, ["visual"]);
+  ok(!none.videoRenders && !none.mergedVoice && none.sceneKeys.length === 0, "visual alone sweeps nothing");
+});
+
+await test("scene-deps: the key vocabulary covers both lanes", async () => {
+  const { sceneArtifactKeys } = await import("../src/lib/tubeforge/scene-deps.ts");
+  eq(
+    sceneArtifactKeys("vid", 7, ["image", "audio", "video"]),
+    ["vid/scene-07.png", "vid/slide-07.png", "vid/scene-07.wav", "vid/scene-07.mp4", "vid/whiteboard/scene-7.mp4"],
+    "image/audio/video key sets, story + slides + whiteboard lanes"
+  );
+});
+
+await test("scene-artifacts: the cost bridge rides the metering layer (source pin)", async () => {
+  const budget = fs.readFileSync("src/lib/tubeforge/budget.ts", "utf8");
+  ok(
+    budget.includes("videoId: attribution?.videoId ?? null") &&
+      budget.includes("artifactId: attribution?.artifactId ?? null"),
+    "recordAiUsage writes the three bridge columns onto every UsageRecord"
+  );
+  ok(
+    budget.includes("accumulateArtifactCost(attribution.artifactId, costMicroUsd)"),
+    "a metered scene-scoped call accumulates its cost onto the artifact row"
+  );
+  const deps = fs.readFileSync("src/lib/tubeforge/scene-deps.ts", "utf8");
+  ok(
+    deps.includes("export const SCENE_DEPENDS"),
+    "the dependency table is the exported, declarative source of truth"
+  );
+  // The over-invalidation fix is wired at the two single-scene sites.
+  const jobs = fs.readFileSync("src/lib/tubeforge/video-jobs.ts", "utf8");
+  ok(
+    jobs.includes("{ slidePngs: true, sceneIndex }") && jobs.includes("{ sceneIndex })"),
+    "the scene job + the slide re-screenshot pass sceneIndex (the S113 fix)"
+  );
+  const render = fs.readFileSync("src/lib/tubeforge/render.ts", "utf8");
+  ok(
+    render.includes("opts: { slidePngs?: boolean; sceneIndex?: number }"),
+    "invalidateRenderedArtifacts accepts the scene scope"
+  );
+});
+
+await test("scene-revisions: rollback sweeps through the declarative map (source pin)", async () => {
+  const rev = fs.readFileSync("src/lib/tubeforge/scene-revisions.ts", "utf8");
+  ok(
+    rev.includes("planSceneInvalidation") && rev.includes("sweepInvalidArtifacts"),
+    "rollbackScene enforces the SAME dependency map PATCH /scenes does"
+  );
+  ok(
+    !rev.includes("NARRATION_STALE"),
+    "the private regex copies are gone — one vocabulary, not two"
   );
 });
 

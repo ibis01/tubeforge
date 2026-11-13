@@ -45,6 +45,15 @@ import {
   parseRevisionContent,
   type SceneRevisionContent,
 } from "../src/lib/tubeforge/scene-revisions";
+import {
+  beginSceneArtifact,
+  finalizeSceneArtifact,
+  registerSceneArtifact,
+  accumulateArtifactCost,
+} from "../src/lib/tubeforge/scene-artifacts";
+import { planSceneInvalidation, sweepInvalidArtifacts } from "../src/lib/tubeforge/scene-deps";
+import { invalidateRenderedArtifacts } from "../src/lib/tubeforge/render";
+import * as storage from "../src/lib/tubeforge/storage";
 import { must } from "../src/lib/tubeforge/must";
 import type { Scene } from "../src/lib/tubeforge/types";
 import type { AssembledTimeline, TimelineScene } from "../src/lib/tubeforge/timeline";
@@ -493,6 +502,192 @@ await test("a doc-side change records a revision carrying the docScene half", as
   // And the timeline column moved with it.
   const stored = await reload(v3.id);
   ok((stored.timeline ?? "").includes("\"endSec\":8"), "the doc was persisted in the same transaction");
+});
+
+suiteStart("S113 · artifact provenance");
+
+await test("register → ready, idempotent on the same input, superseded by a new one", async () => {
+  const v = await makeVideo([mkScene(1), mkScene(2)]);
+  const reg1 = await registerSceneArtifact({
+    video: v,
+    sceneIndex: 2,
+    type: "image",
+    storageKey: `${v.id}/scene-02.png`,
+    input: "prompt A|seed=1",
+    prompt: "prompt A",
+    bytes: 1234,
+  });
+  ok(reg1 !== null, "registered");
+  const row1 = await rawDb.sceneArtifact.findUnique({ where: { id: must("reg1", reg1).id } });
+  eq(row1?.status, "ready", "a direct registration lands ready");
+  eq(row1?.type, "image", "the proposal's artifact vocabulary");
+  ok((row1?.prompt ?? "").startsWith("prompt A"), "the FULL prompt is persisted (S111's discarded-prompt finding)");
+  ok(typeof row1?.inputHash === "string" && (row1?.inputHash ?? "").length === 64, "sha256 input hash");
+
+  // Same input at the same key: idempotent — the standing row returns.
+  const reg2 = await registerSceneArtifact({
+    video: v,
+    sceneIndex: 2,
+    type: "image",
+    storageKey: `${v.id}/scene-02.png`,
+    input: "prompt A|seed=1",
+    prompt: "prompt A",
+  });
+  eq(must("reg2", reg2).id, row1?.id, "same inputs → same row (crash-recovery re-runs are not duplicates)");
+
+  // A NEW input at the same key supersedes (history stays, staled).
+  const reg3 = await registerSceneArtifact({
+    video: v,
+    sceneIndex: 2,
+    type: "image",
+    storageKey: `${v.id}/scene-02.png`,
+    input: "prompt B|seed=2",
+    prompt: "prompt B",
+  });
+  ok(must("reg3", reg3).id !== row1?.id, "a new input is a new row");
+  const superseded = await rawDb.sceneArtifact.findUnique({ where: { id: must("row1 id", row1?.id) } });
+  eq(superseded?.status, "stale", "the prior row staled — never deleted");
+});
+
+await test("the pending→ready lifecycle accumulates re-roll costs through the bridge", async () => {
+  const v = await makeVideo([mkScene(1)]);
+  const attribution = await beginSceneArtifact({
+    video: v,
+    sceneIndex: 1,
+    type: "image",
+    storageKey: `${v.id}/scene-01.png`,
+    prompt: "the composed prompt",
+  });
+  ok(attribution !== null, "pending row begun");
+  const artId = must("artifact id", must("attribution", attribution).artifactId);
+  let row = await rawDb.sceneArtifact.findUnique({ where: { id: artId } });
+  eq(row?.status, "pending", "begun as pending");
+
+  // Two metered attempts (first-roll + quality-gate re-roll) accumulate.
+  await accumulateArtifactCost(artId, 1200);
+  await accumulateArtifactCost(artId, 800);
+  await finalizeSceneArtifact(attribution, {
+    input: "the composed prompt|seed=42|variant=1",
+    prompt: "the composed prompt",
+    bytes: 2048,
+  });
+  row = await rawDb.sceneArtifact.findUnique({ where: { id: artId } });
+  eq(row?.status, "ready", "finalized ready");
+  eq(row?.costMicroUsd, 2000, "re-roll costs SUM on the artifact (the bridge accumulates)");
+  eq(row?.bytes, 2048, "landed bytes recorded");
+});
+
+await test("scene artifacts resolve the stable sceneId + head revision", async () => {
+  const v = await makeVideo([mkScene(1)]);
+  // First touch: an edit mints the id + backfills v1 + lands v2.
+  const before = JSON.parse(must("scenes json", v.scenes)) as Scene[];
+  await commitSceneChanges({
+    video: v,
+    beforeScenes: before,
+    beforeDoc: null,
+    afterScenes: before.map((s) => (s.index === 1 ? { ...s, mood: "dusk" } : s)),
+    afterDoc: null,
+    kind: "edit",
+    origin: "test-provenance",
+  });
+  const after = await reload(v.id);
+  const reg = await registerSceneArtifact({
+    video: after,
+    sceneIndex: 1,
+    type: "audio",
+    storageKey: `${v.id}/scene-01.wav`,
+    input: "text|voice=jam|speed=1",
+    prompt: "text",
+  });
+  const row = await rawDb.sceneArtifact.findUnique({ where: { id: must("reg", reg).id } });
+  ok((row?.sceneId ?? "").length > 0, "the stable sceneId resolved");
+  eq(row?.revisionVersion, 2, "registered against the current head (Stage 3's stale check)");
+});
+
+suiteStart("S113 · the over-invalidation fix, measured");
+
+await test("a one-scene art change kills ONE clip + the renders — not every scene's", async () => {
+  const v = await makeVideo([mkScene(1), mkScene(2), mkScene(3)]);
+  // Seed the storage with the render's per-scene clips + the video-level set.
+  const seeded = [
+    `${v.id}/scene-01.mp4`,
+    `${v.id}/scene-02.mp4`,
+    `${v.id}/scene-03.mp4`,
+    `${v.id}/final.mp4`,
+    `${v.id}/preview.mp4`,
+    `${v.id}/subtitles.srt`,
+    `${v.id}/voiceover.wav`,
+    `${v.id}/scene-02.png`,
+  ];
+  for (const k of seeded) await storage.put(k, Buffer.from(`fixture:${k}`));
+
+  // THE OLD BEHAVIOR (measured baseline): whole-video invalidation after a
+  // one-scene art change — every scene's clip died (the §8.3 cost bug).
+  // THE FIX: sceneIndex scopes the sweep.
+  await invalidateRenderedArtifacts(v.id, { slidePngs: true, sceneIndex: 2 });
+
+  const survivors: string[] = [];
+  for (const k of seeded) if (await storage.exists(k)) survivors.push(k);
+  eq(
+    survivors,
+    [`${v.id}/scene-01.mp4`, `${v.id}/scene-03.mp4`, `${v.id}/voiceover.wav`, `${v.id}/scene-02.png`],
+    "scenes 1 + 3's clips SURVIVE (2 paid i2v generations skipped); the merged read + the art are untouched; the renders (the union) die"
+  );
+
+  for (const k of seeded) await storage.remove(k).catch(() => {});
+});
+
+await test("the declarative sweep matches PATCH's key sets and stales the registry", async () => {
+  const v = await makeVideo([mkScene(1), mkScene(2)]);
+  const seeded = [
+    `${v.id}/scene-02.wav`,
+    `${v.id}/scene-02.mp4`,
+    `${v.id}/scene-01.wav`,
+    `${v.id}/voiceover.wav`,
+    `${v.id}/voice-source.mp3`,
+    `${v.id}/final.mp4`,
+    `${v.id}/subtitles.srt`,
+  ];
+  for (const k of seeded) await storage.put(k, Buffer.from(`fixture:${k}`));
+  // A registered artifact at a swept key — the registry must mirror storage.
+  const reg = await registerSceneArtifact({
+    video: v,
+    sceneIndex: 2,
+    type: "audio",
+    storageKey: `${v.id}/scene-02.wav`,
+    input: "old narration|voice=jam",
+    prompt: "old narration",
+  });
+
+  const plan = planSceneInvalidation(v.id, 2, ["narration"]);
+  const { removed } = await sweepInvalidArtifacts(v.id, plan);
+  eq(
+    removed.sort(),
+    [`${v.id}/final.mp4`, `${v.id}/scene-02.mp4`, `${v.id}/scene-02.wav`, `${v.id}/subtitles.srt`, `${v.id}/voice-source.mp3`, `${v.id}/voiceover.wav`].sort(),
+    "narration sweep: the edited scene's WAV + clip, the merged read, the renders"
+  );
+  ok(await storage.exists(`${v.id}/scene-01.wav`), "every OTHER scene's audio survives — the surgical law");
+  const row = await rawDb.sceneArtifact.findUnique({ where: { id: must("reg", reg).id } });
+  eq(row?.status, "stale", "the registry row staled with its file");
+
+  for (const k of seeded) await storage.remove(k).catch(() => {});
+});
+
+await test("a caption sweep keeps ALL audio (no re-TTS) and the visual sweep deletes nothing", async () => {
+  const v = await makeVideo([mkScene(1), mkScene(2)]);
+  const seeded = [`${v.id}/scene-01.wav`, `${v.id}/scene-02.wav`, `${v.id}/final.mp4`, `${v.id}/subtitles.srt`];
+  for (const k of seeded) await storage.put(k, Buffer.from(`fixture:${k}`));
+
+  const capPlan = planSceneInvalidation(v.id, 2, ["caption"]);
+  const cap = await sweepInvalidArtifacts(v.id, capPlan);
+  eq(cap.removed.sort(), [`${v.id}/final.mp4`, `${v.id}/subtitles.srt`].sort(), "caption sweep: renders only");
+  ok(await storage.exists(`${v.id}/scene-02.wav`), "the edited scene's own read survives (captions never touch audio)");
+
+  const visPlan = planSceneInvalidation(v.id, 2, ["visual"]);
+  const vis = await sweepInvalidArtifacts(v.id, visPlan);
+  eq(vis.removed, [], "a visual-prompt edit deletes nothing (re-roll is explicit)");
+
+  for (const k of seeded) await storage.remove(k).catch(() => {});
 });
 
 // --- teardown ---------------------------------------------------------------

@@ -94,6 +94,8 @@ model Organization {
   props            Prop[]
   // S112 — scene revision history (Stage 1 of Scene-Level Editing & Repair).
   sceneRevisions   SceneRevision[]
+  // S113 — per-scene artifact provenance (Stage 2).
+  sceneArtifacts   SceneArtifact[]
 }
 
 // One user per organization row. Exactly one member holds role "owner" —
@@ -448,6 +450,9 @@ model Video {
   // revision history. Cascades with the video (history dies with its
   // project); rows are append-only by construction (see SceneRevision).
   sceneRevisions        SceneRevision[]
+  // S113 — Stage 2: per-scene artifact provenance (prompts, input hashes,
+  // costs). Cascades with the video.
+  sceneArtifacts        SceneArtifact[]
 
   @@index([organizationId])
   @@index([status])
@@ -524,6 +529,46 @@ model SceneRevision {
   @@index([videoId, sceneId, status])
   @@index([organizationId])
   @@index([videoId, changeKind]) // the epoch scan (fresh-id minting reads history)
+}
+
+// S113 — Scene-Level Editing & Repair, Stage 2: artifact provenance + the
+// declarative dependency map (docs/design/scene-level-editing-reconciliation.md
+// §9, Stage 2). One row per GENERATED scene artifact: the full composed
+// prompt (discarded at generation time before this table existed), the
+// input hash, provider/model, the revision the artifact was built from, and
+// — through the UsageRecord bridge — the accumulated cost of producing it
+// (re-rolls included). `status`: pending (registered before the paid call,
+// so attribution can link) | ready (landed) | failed | stale (swept by a
+// dependency-invalidating edit — the file is gone or superseded).
+// Kinds are the proposal's own vocabulary: image | video | audio | preview
+// (per-scene clip / whiteboard scene encode = video; Stage 3's scene preview
+// = preview). Unique on (videoId, storageKey, inputHash): same inputs at the
+// same key are the same artifact; a new input at the same key supersedes the
+// prior rows (status stale — history stays, the current one is addressable).
+model SceneArtifact {
+  id              String   @id @default(cuid())
+  organizationId  String
+  videoId         String
+  sceneId         String? // stable Scene.id when the video carries ids (legacy: null)
+  sceneIndex      Int // positional — the URL grammar
+  revisionVersion Int? // the head revision this was generated from (Stage 3's stale check)
+  type            String // image | video | audio | preview
+  storageKey      String // full key, "<videoId>/scene-02.png"
+  inputHash       String // sha256 of the generation inputs (prompt+seed / text+voice+speed / image+motion)
+  provider        String?
+  model           String?
+  prompt          String? // the FULL composed prompt at generation time
+  costMicroUsd    Int      @default(0) // accumulated by the UsageRecord bridge (attribution.artifactId)
+  status          String   @default("pending")
+  bytes           Int?
+  createdAt       DateTime @default(now())
+
+  video        Video        @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([videoId, storageKey, inputHash])
+  @@index([videoId, sceneIndex, type])
+  @@index([organizationId])
 }
 
 model Activity {
@@ -814,6 +859,15 @@ model UsageRecord {
   latencyMs      Int?
   ok             Boolean  @default(true)
   createdAt      DateTime @default(now())
+  // S113 — the provenance bridge (Scene-Level Editing, Stage 2): what this
+  // call PRODUCED, when it was a scene-scoped generation. Plain columns,
+  // deliberately NO foreign keys: usage rows are BILLING EVIDENCE and must
+  // survive video deletion (a deleted project's spend history stays
+  // answerable). artifactId points at a SceneArtifact row (which does
+  // cascade — the linkage goes silent, the evidence stays).
+  videoId    String?
+  sceneIndex Int?
+  artifactId String?
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)

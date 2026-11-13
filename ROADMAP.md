@@ -515,11 +515,13 @@ drills, the release-candidate tag — is recorded in
 `docs/production-readiness.md`. The first P2 feature track, scene-level
 editing & repair, is under construction on the operator's build order
 (2026-11-13, "start, don't stop"): Stage 0 (S111, the read-only
-reconciliation) and Stage 1 (S112, the revision foundation — immutable
+reconciliation), Stage 1 (S112, the revision foundation — immutable
 SceneRevision rows, stable scene ids, optimistic concurrency,
-rollback-as-new-revision, all eleven mutators converged) are landed;
-Stages 2–7 follow (provenance, scene preview, repair + cost
-authorization, scene QC, approved-only assembly, UX + hardening).
+rollback-as-new-revision, all eleven mutators converged) and Stage 2
+(S113, the declarative dependency map + artifact provenance + the
+measured over-invalidation fix) are landed; Stages 3–7 follow (scene
+preview, repair + cost authorization, scene QC, approved-only assembly,
+UX + hardening).
 
 Standing risks tracked in the worklog: Z.ai gateway outage (S63
 remeasurement and the LLM whiteboard planner gated on the one-probe

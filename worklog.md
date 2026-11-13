@@ -6040,3 +6040,120 @@ history stops but the deletion itself is not a revision (array-level
 state; the client undo covers it today); revisions and row writes are
 atomic together, but the pre-commit storage sweeps share PATCH's
 existing posture (files first, then the transaction).
+
+---
+
+## S113 — Scene-Level Editing & Repair, Stage 2: the dependency map + artifact provenance
+
+**THE STAGE'S EXIT CRITERION** (the proposal's own words): changing one
+scene does not invalidate unrelated assets. Two halves: the DECLARATIVE
+map that decides what stales, and the PROVENANCE registry that records
+what was produced — plus the fix of the cost bug the reconciliation
+called "measurable re-render cost on a 20-scene video for a one-scene
+fix" (§8.3).
+
+**THE DECLARATIVE MAP (src/lib/tubeforge/scene-deps.ts).** The proposal's
+requirement B — "narration → voice audio/captions/timing; transition →
+boundary; …" — was scattered if-branches: surgical in PATCH /scenes,
+wrong in blast radius at the storyboard job. Now ONE exported table,
+SCENE_DEPENDS, unit-pinned rule by rule:
+
+- narration → the scene's audio + clip, the merged voiceover, every
+  render, the boundary (Stage 5's recheck scope) — NEVER the art (the
+  proposal's "a narration change must not destroy approved visual
+  assets", enforced by the visual rule deleting nothing at all).
+- caption → renders only (burned at assembly; audio untouched — no
+  re-TTS, ever).
+- visual → NOTHING deletes (art regenerates on explicit re-roll;
+  Stage 3 labels staleness via revisionVersion instead).
+- seedVariant/mood/style/hostInScene/title → the image line;
+  camera/stock/sfx/focal/rehook + the doc-side mix/trim/window rules →
+  the clip line; doc transitions → boundary + renders (the blend lives
+  at final assembly — the neighbour's clip is NOT deleted; that is the
+  surgical boundary law).
+
+`planSceneInvalidation(videoId, sceneIndex, fields)` folds rules into an
+exact key plan; `sweepInvalidArtifacts` executes it (storage remove +
+registry stale-marking in lockstep). PATCH /scenes and rollbackScene
+BOTH sweep through the map now — the private regex copies in
+scene-revisions.ts are deleted (source-pinned: NARRATION_STALE is gone).
+
+**THE §8.3 COST BUG, FIXED AND MEASURED.** `invalidateRenderedArtifacts`
+gains `sceneIndex`: with it, ONLY that scene's clip/encode (+ its slide
+png when slidePngs) dies alongside the video-level renders (final/
+preview/srt — the union; the whiteboard preview-* files ride the
+video-level set: they are keyed by engine scene ids, unmappable from an
+index, and are $0 local encodes). Wired at the two single-scene sites
+(the storyboard scene job; the one-slide re-screenshot). The measured
+pin (in the battery): seed scene-01/02/03.mp4 + final + preview + srt +
+voiceover + art → one-scene art change → scenes 1+3's clips SURVIVE,
+scene 2's + the renders die, the read + art untouched. The render
+already reuses cached clips (ensureSceneClip), so every surviving clip
+is a skipped paid i2v generation — real money, not tidiness.
+
+**THE PROVENANCE REGISTRY (src/lib/tubeforge/scene-artifacts.ts +
+SceneArtifact).** S111's finding: "generation prompts are discarded;
+cost records are not linked to scenes or artifacts". Now: the FULL
+composed prompt (visual + topic-world + style + director addendum +
+appearance clauses — or the edit instruction, or the spoken text for
+TTS), the sha256 input hash, provider/model, the stable sceneId + the
+head revisionVersion it was generated from (Stage 3's stale check), and
+the ACCUMULATED cost (re-rolls sum). Lifecycle: pending (registered
+before the paid call, so attribution can link) → ready (final input +
+bytes) / failed (the cost record of a failed attempt) / stale (swept or
+superseded). Unique (videoId, storageKey, inputHash): same inputs at
+the same key are the same artifact (crash-recovery re-runs are not
+duplicate rows); a new input supersedes (history stays). Best-effort by
+design — a registry failure NEVER blocks a generation.
+
+**THE USAGE RECORD BRIDGE (the reconciliation's §5.4: bridge, don't
+duplicate).** UsageRecord gains videoId/sceneIndex/artifactId — PLAIN
+columns, deliberately NO foreign keys: usage rows are billing evidence
+and must survive video deletion. aiCall's new optional attribution
+parameter threads through recordAiUsage (every row can now answer "what
+video/scene/artifact did this spend produce") and accumulates cost onto
+the artifact row. The per-video spend index backs Stage 4's per-project
+ceiling admission.
+
+**REGISTRATION SITES.** Scene image generation (all three produce paths
+— host-likeness edit, location seed, plain generation — share ONE
+pending row per scene, so quality-gate + dedupe re-rolls accumulate);
+the instruction-edit lane (the user's instruction is the prompt of
+record); per-scene TTS (generateSceneVoiceovers — one pending row per
+scene, chunk costs accumulate, finalized with text+voice+speed); the
+i2v clip (ensureSceneClip — registered only when it actually generates,
+never on a cache hit); the whiteboard per-scene encodes (the doc is the
+input of record, $0 local). Tail, deliberately deferred: the studio
+re-read paths in clip-ops (split/voice-swap/pace re-reads) — their
+revisions are recorded (Stage 1), their artifact rows are a Stage 4+
+nice-to-have; user art uploads (no cost, no prompt).
+
+**SCHEMA.** SceneArtifact (org-scoped — the tenant list + the T-4.14
+pin extended again) + the three UsageRecord columns + the per-video
+spend index. Migration 20261116000000_s113_scene_artifacts (additive,
+no backfill) + the derived SQLite mirror (sync law).
+
+**TESTS.** The battery grows to 18: the three provenance lifecycle tests
+(idempotent + supersede; pending→ready with cost accumulation 1200+800
+= 2000; sceneId + revisionVersion resolution) and the three measured
+sweep tests (the over-invalidation fix; the narration sweep's exact key
+set + registry stale-marking + other scenes' audio surviving; caption
+keeps all audio, visual deletes nothing). 5 new unit pins (the table's
+four load-bearing rules verbatim; the plan fold + key vocabulary; the
+bridge source pin; the rollback-through-the-map source pin). The
+standalone strict typecheck caught a real strictness error in the new
+battery code (optional artifactId) — fixed with must() at the site; the
+standalone config now mirrors the app's noImplicitAny:false (no stricter
+than the app, per the house law).
+
+**VERIFIED:** typecheck; lint 0 problems; unit 516/516 (503 + 8 S112 +
+5 S113); billing 40/40; storage 12/12; rate 17/17; scene-revisions
+18/18; drill RTO 59ms; alert probe HEALTH 0; standalone strict typecheck
+of the battery; production build exit 0 (pre-existing warnings only,
+proven at HEAD in S112).
+
+**KNOWN LIMITS, deliberate:** Stage 3 owns the stale-labeling UX
+(artifact.revisionVersion ≠ head ⇒ stale, surfaced with the scene
+preview); boundary fields mark the recheck scope but the boundary check
+itself is Stage 5; the whiteboard preview-* files ride the video-level
+set on scene-scoped sweeps (index-unmappable, $0 to regenerate).

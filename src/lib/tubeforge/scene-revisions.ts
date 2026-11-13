@@ -50,7 +50,7 @@ import type { Scene } from "./types";
 import { parseScenes } from "./story";
 import type { AssembledTimeline, TimelineScene } from "./timeline";
 import { parseTimeline, serializeTimeline } from "./timeline";
-import * as storage from "./storage";
+import { planSceneInvalidation, sweepInvalidArtifacts } from "./scene-deps";
 
 // ---------- shapes ----------
 
@@ -537,32 +537,45 @@ export async function rollbackScene(input: {
       message: `Scene ${sceneIndex} is already at v${toVersion}'s content — nothing to restore`,
     };
 
-  // Staleness sweeps — the same rules PATCH /scenes applies, so a rollback
-  // can never leave newer artifacts claiming older content.
+  // Staleness sweeps — the DECLARATIVE dependency map (scene-deps.ts, S113):
+  // the same rules PATCH /scenes applies, so a rollback can never leave
+  // newer artifacts claiming older content.
   const narrationChanged = restored.narration !== scene.narration;
   const captionChanged = restored.caption !== scene.caption;
   let invalidated = false;
   const rowUpdate: Prisma.VideoUpdateInput = {};
-  if (narrationChanged && video.hasVoiceover) {
-    invalidated = await invalidateNarrationArtifacts(video.id, sceneIndex);
-    Object.assign(rowUpdate, {
-      hasVoiceover: false,
-      audioDuration: null,
-      voiceSource: "tts",
-      voiceLabel: null,
-      hasVideo: false,
-      hasShort: false,
-      shortDuration: null,
-      shortScene: null,
-    });
-  } else if (captionChanged && (video.hasVideo || video.hasShort)) {
-    invalidated = await invalidateCaptionArtifacts(video.id);
-    Object.assign(rowUpdate, {
-      hasVideo: false,
-      hasShort: false,
-      shortDuration: null,
-      shortScene: null,
-    });
+  const changedFields: ("narration" | "caption")[] = [
+    ...(narrationChanged ? (["narration"] as const) : []),
+    ...(captionChanged ? (["caption"] as const) : []),
+  ];
+  if (changedFields.length > 0) {
+    const plan = planSceneInvalidation(video.id, sceneIndex, changedFields);
+    if (
+      (narrationChanged && video.hasVoiceover) ||
+      (captionChanged && (video.hasVideo || video.hasShort))
+    ) {
+      const { removed } = await sweepInvalidArtifacts(video.id, plan);
+      invalidated = removed.length > 0;
+    }
+    if (narrationChanged && video.hasVoiceover) {
+      Object.assign(rowUpdate, {
+        hasVoiceover: false,
+        audioDuration: null,
+        voiceSource: "tts",
+        voiceLabel: null,
+        hasVideo: false,
+        hasShort: false,
+        shortDuration: null,
+        shortScene: null,
+      });
+    } else if (captionChanged) {
+      Object.assign(rowUpdate, {
+        hasVideo: false,
+        hasShort: false,
+        shortDuration: null,
+        shortScene: null,
+      });
+    }
   }
 
   const commit = await commitSceneChanges({
@@ -597,61 +610,4 @@ export async function rollbackScene(input: {
     captionChanged,
     invalidated,
   };
-}
-
-// ---------- artifact staleness sweeps (shared by PATCH + rollback) ----------
-// Moved verbatim from scenes/route.ts (S112) so the rollback lane enforces
-// the exact same rules. Stage 2's declarative dependency map replaces the
-// regex seams with per-artifact rows — until then these ARE the rules.
-
-/** Artifacts keyed off the OLD narration (Stage 4a, T-4.4 — same semantics
- *  as the script-edit PATCH): the spoken audio no longer matches the text,
- *  so the voiceover, renders, short and the EDITED scene's voice clip die.
- *  Scene art PNGs, stock clips, thumbnails — and every OTHER scene's WAV
- *  (its text did not change, its read is still current) — survive. */
-const NARRATION_STALE =
-  /\/(voiceover\.wav|voice-source\.\w+|final\.mp4|preview\.mp4|subtitles\.srt|short\.mp4|short-thumb\.png)$/;
-
-/** S43 — a caption edit bakes into the NEXT render: the burned subtitles are
- *  stale, but the voiceover/WAVs are untouched (captions never touch audio).
- *  Only rendered artifacts die; re-render is cheap (no re-TTS). */
-const CAPTION_STALE =
-  /\/(final\.mp4|preview\.mp4|subtitles\.srt|short\.mp4|short-thumb\.png)$/;
-
-/** The edited scene's own artifacts: its read (scene-XX.wav) and its render
- *  intermediate (scene-XX.mp4). Other scenes' files are NOT stale. */
-export function editedSceneStaleKeys(sceneIndex: number): string[] {
-  const nn = String(sceneIndex).padStart(2, "0");
-  return [`scene-${nn}.wav`, `scene-${nn}.mp4`];
-}
-
-/** Drop the narration-stale set for one scene edit. Returns whether
- *  anything was actually removed. */
-export async function invalidateNarrationArtifacts(
-  videoId: string,
-  sceneIndex: number
-): Promise<boolean> {
-  const perScene = new Set(editedSceneStaleKeys(sceneIndex));
-  try {
-    const keys = await storage.list(videoId);
-    const stale = keys.filter(
-      (k) => NARRATION_STALE.test(k) || perScene.has(k.split("/").pop() ?? "")
-    );
-    await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));
-    return stale.length > 0;
-  } catch {
-    return false; // prefix absent — nothing to invalidate
-  }
-}
-
-/** Drop the caption-stale set (renders only; all audio survives). */
-export async function invalidateCaptionArtifacts(videoId: string): Promise<boolean> {
-  try {
-    const keys = await storage.list(videoId);
-    const stale = keys.filter((k) => CAPTION_STALE.test(k));
-    await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));
-    return stale.length > 0;
-  } catch {
-    return false; // prefix absent — nothing to invalidate
-  }
 }
