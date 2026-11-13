@@ -544,6 +544,54 @@ export function parseConsistencyReport(json: string | null | undefined): Consist
 // ---------------------------------------------------------------------------
 // The VLM style pass — batched, fail-open (§5).
 
+// The images the style/appearance judges consume are full-resolution painted
+// PNGs (often 1024-1536px, ~1-2 MB each). A style batch inlines up to six of
+// them as base64 data URIs, so a single VLM request body could reach 6-12 MB
+// — over the request-body cap of most OpenAI-compatible endpoints and their
+// reverse proxies (the symptom: HTTP 413 "Request Entity Too Large" on EVERY
+// scene in the batch, regardless of content). A cohesion judge only needs
+// palette / medium / lighting / realism — a 768px JPEG preserves all of that
+// and shrinks each image to ~60-120 KB. Sharp is loaded lazily so routes
+// that never touch the VLM pay nothing; on ANY sharp failure the helper falls
+// back to the raw PNG so a scene that used to pass never hard-breaks.
+const VLM_IMAGE_MAX_EDGE = 768;
+const VLM_IMAGE_JPEG_QUALITY = 80;
+
+let sharpMod: typeof import("sharp")["default"] | null = null;
+async function loadSharp() {
+  sharpMod ??= (await import("sharp")).default;
+  return sharpMod;
+}
+
+/** One scene image, shrunk for the VLM, as an OpenAI-style image_url part. */
+export async function encodeSceneForVlm(buf: Buffer): Promise<{
+  type: "image_url";
+  image_url: { url: string };
+}> {
+  try {
+    const sharp = await loadSharp();
+    const jpg = await sharp(buf)
+      .resize({
+        width: VLM_IMAGE_MAX_EDGE,
+        height: VLM_IMAGE_MAX_EDGE,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .jpeg({ quality: VLM_IMAGE_JPEG_QUALITY })
+      .toBuffer();
+    return {
+      type: "image_url",
+      image_url: { url: `data:image/jpeg;base64,${jpg.toString("base64")}` },
+    };
+  } catch (err) {
+    vcLog.warn("scene image downscale failed — sending raw PNG", { err: errorText(err, "sharp") });
+    return {
+      type: "image_url",
+      image_url: { url: `data:image/png;base64,${buf.toString("base64")}` },
+    };
+  }
+}
+
 async function runStylePass(videoId: string, sceneIndexes: number[]): Promise<{
   byIndex: Map<number, DimensionScore>;
   unavailable: string[];
@@ -551,7 +599,10 @@ async function runStylePass(videoId: string, sceneIndexes: number[]): Promise<{
   const byIndex = new Map<number, DimensionScore>();
   const unavailable: string[] = [];
 
-  for (const batch of buildStyleBatches(sceneIndexes, 6)) {
+  // Batches of 4 (down from 6) cap the worst-case VLM body well under
+  // tight proxy limits — 4 downscaled JPEGs ≈ 340-600 KB vs the old 6-12 MB
+  // of raw PNGs that tripped HTTP 413 on every scene in the batch.
+  for (const batch of buildStyleBatches(sceneIndexes, 4)) {
     // Read the painted art; a scene whose bytes vanished between the stat
     // and the read drops out of THIS batch and is reported unavailable.
     const parts: unknown[] = [
@@ -572,10 +623,9 @@ async function runStylePass(videoId: string, sceneIndexes: number[]): Promise<{
       }
       batchPresent.push(index);
       parts.push({ type: "text", text: `Scene ${index}:` });
-      parts.push({
-        type: "image_url",
-        image_url: { url: `data:image/png;base64,${buf.toString("base64")}` },
-      });
+      // Downscaled JPEG (S77/§5 — the 413 fix): full-res PNGs made each
+      // 6-image batch ~6-12 MB and tripped the endpoint's body cap.
+      parts.push(await encodeSceneForVlm(buf));
     }
 
     // Cohesion is a COMPARISON — a single image has nothing to drift from.
@@ -648,6 +698,10 @@ async function runAppearancePass(
       .catch(() => null);
     if (!buf) continue;
 
+    // Downscaled JPEG (S77/§5 — the 413 fix): pre-encoded outside the
+    // dispatch arrow so the VLM call site stays a plain (non-async) closure.
+    const imagePart = await encodeSceneForVlm(buf);
+
     try {
       const raw = await aiCall("llm", "consistency appearance VLM", () =>
         llmVision({
@@ -658,10 +712,7 @@ async function runAppearancePass(
               content: [
                 { type: "text", text: `Logged look for this scene: ${target.look}` },
                 { type: "text", text: `Scene ${target.sceneIndex} generated image follows.` },
-                {
-                  type: "image_url",
-                  image_url: { url: `data:image/png;base64,${buf.toString("base64")}` },
-                },
+                imagePart,
               ],
             },
           ],
@@ -983,7 +1034,9 @@ export async function runTargetedRecheck(
   //    churn rows the repaint never touched.
   let styleDim: DimensionScore | undefined;
   let styleRan = false;
-  const batch = buildTargetBatch(painted, sceneIndex);
+  // Same 4-image cap as the full pass — the targeted recheck otherwise
+  // inherits the 6-image default and the same 413 exposure.
+  const batch = buildTargetBatch(painted, sceneIndex, 4);
   if (batch.length >= 2) {
     const pass = await runStylePass(videoId, batch);
     const dim = pass.byIndex.get(sceneIndex);
