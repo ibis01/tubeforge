@@ -9,7 +9,7 @@ standard + the content-policy visual scan under a restricted policy), and
 publishes to a connected YouTube channel — all inside a multi-user web
 application with metered AI spending and Stripe billing underneath.
 
-**Status:** S-series stage S113 (2026-11-13). The production loop is
+**Status:** S-series stage S114 (2026-11-13). The production loop is
 feature-complete, and the production-readiness arc (S99–S108) closed every
 reliability gate with CI evidence — clean-clone bootstrap, queue leases +
 fencing, atomic storage admission, shared rate limiting + trusted-proxy IP law,
@@ -17,7 +17,8 @@ nonce CSP, the Docker production-topology smoke (in-container whiteboard render
 included), measured restore drills, and zero avoidable warnings. **P2 opened on
 the operator's call (2026-11-13)**, and its first feature track — scene-level
 editing & repair — is under way (S111 reconciliation, S112 revision
-foundation, S113 dependency map + artifact provenance). The entry queue remains staging provisioning → launch drills →
+foundation, S113 dependency map + artifact provenance, S114 scene
+previews). The entry queue remains staging provisioning → launch drills →
 release candidate (see
 [`docs/production-readiness.md`](docs/production-readiness.md)). On top of the
 studio, the **Whiteboard Engine** (the native, $0-per-render creative mode —

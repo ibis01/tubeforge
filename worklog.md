@@ -6157,3 +6157,66 @@ proven at HEAD in S112).
 preview); boundary fields mark the recheck scope but the boundary check
 itself is Stage 5; the whiteboard preview-* files ride the video-level
 set on scene-scoped sweeps (index-unmappable, $0 to regenerate).
+
+---
+
+## S114 — Scene-Level Editing & Repair, Stage 3: the scene preview lane
+
+**THE EXIT CRITERION** (the proposal's own): preview generation does not
+trigger whole-project regeneration — and its risk-table twin, "stale
+preview → display the producing version".
+
+**THE LANE.** POST /api/videos/[id]/render gains `sceneIndex` (mutually
+exclusive with the `sceneLimit` prefix grammar — different requests, and
+the route says so). The render job branches to its own orchestrator,
+runScenePreviewJob: ONE scene through the SAME segment machinery
+(buildSegment, motion, caption burn, the delivery encode), landing
+`scene-preview-NN.mp4` — the story-lane twin of the whiteboard lane's
+per-scene preview (S67), which whiteboard videos keep using through
+their engine lane. renderVideo's new `scenePreview` option is naming +
+preview semantics only (no srt export); the caller narrows the scene
+list. Deliberately lighter than the full render, each cut documented at
+the lane: no music resolution (the preview checks the scene's look, not
+the project's score), no composition plan (every story-lane mode's
+visual kind is the mode's own; whiteboard routed away earlier), burned
+captions ON (checking the caption look is half the point), the row's
+aspect/fps. NO row flags, NO project QC, NO srt — "a scene preview is
+not a certified final video" is the lane's own law; the full battery
+still guards the render button.
+
+**PROVENANCE + STALENESS.** The preview registers as a type-preview
+SceneArtifact carrying the revision it was built from.
+`artifactStaleness(artifact, headVersion)` — pure, unit-pinned — labels
+current / stale / unknown (pre-tracking artifacts are honestly unknown,
+never guessed). A newer edit lands → the standing preview is labeled
+stale against the new head — pinned in the battery: the SAME row flips
+current → stale when the head moves, and the label is computed, not
+stored, so it can never drift.
+
+**THE SURFACE.** GET /api/videos/[id]/scenes/[n]/artifacts — the
+provenance feed (every artifact row: type, status, staleness,
+built-from revision, the FULL prompt, provider/model, accumulated cost,
+bytes, the stream URL for ready previews). The mp4 route's new
+`?variant=scene-preview&n=<index>` streams the file through the same
+authed, org-scoped path final/preview/short use (statScenePreviewFile).
+
+**THE PIN.** The battery's preview test is a REAL end-to-end render:
+three scenes' art (lavfi PNGs) + WAVs (sine), preview scene 2 in
+kenburns mode through actual ffmpeg → scene-preview-02.mp4 lands through
+the storage seam (>10 KB, real encode), and the assertion list is the
+exit criterion verbatim: every input fixture untouched; final.mp4,
+preview.mp4, subtitles.srt, the other scenes' clips, the OTHER scenes'
+previews all NOT created; the row's flags unflipped. 20/20 in the
+battery (18 + 2), 518/518 unit (516 + 2 new: the stale law + the
+wired-and-walled source pin — which caught its own first draft quoting a
+comment that wasn't there; the pin now anchors the lane's real words).
+
+**VERIFIED:** typecheck; lint 0 problems; unit 518/518; billing 40/40;
+storage 12/12; rate 17/17; scene-revisions 20/20 (incl. the real ffmpeg
+preview render); drill RTO 62ms; alert probe HEALTH 0; standalone strict
+typecheck of the battery; production build exit 0.
+
+**KNOWN LIMITS, deliberate:** the preview is single-scene — boundary
+handles (transition into the next scene) are Stage 5's boundary recheck,
+not the preview's job; the UI panel that surfaces previews + staleness
+is Stage 7.

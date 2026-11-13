@@ -3,7 +3,7 @@ import fs from "fs";
 import { Readable } from "stream";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
-import { statVideoFile } from "@/lib/tubeforge/render";
+import { statScenePreviewFile, statVideoFile } from "@/lib/tubeforge/render";
 import { statShortFile } from "@/lib/tubeforge/shorts";
 import { materialize, presign } from "@/lib/tubeforge/storage";
 
@@ -37,17 +37,27 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
   const variantParam = new URL(req.url).searchParams.get("variant");
+  // S114 — the scene-preview variant: ?variant=scene-preview&n=<index>
+  // streams one scene's preview (scene-preview-NN.mp4).
+  const scenePreviewN = Number(new URL(req.url).searchParams.get("n"));
   const variant =
     variantParam === "preview"
       ? ("preview" as const)
       : variantParam === "short"
         ? ("short" as const)
-        : ("final" as const);
+        : variantParam === "scene-preview"
+          ? ("scene-preview" as const)
+          : ("final" as const);
 
   const media =
     variant === "short"
       ? await statShortFile(id)
-      : await statVideoFile(id, variant);
+      : variant === "scene-preview"
+        ? await statScenePreviewFile(
+            id,
+            Number.isInteger(scenePreviewN) && scenePreviewN >= 1 ? scenePreviewN : NaN
+          )
+        : await statVideoFile(id, variant);
   if (!media)
     return NextResponse.json(
       {
@@ -56,7 +66,9 @@ export async function GET(req: NextRequest, ctx: Ctx) {
             ? "No preview rendered yet"
             : variant === "short"
               ? "No Short rendered yet"
-              : "No video rendered yet",
+              : variant === "scene-preview"
+                ? "No scene preview rendered yet (POST /api/videos/[id]/render with sceneIndex)"
+                : "No video rendered yet",
       },
       { status: 404 }
     );

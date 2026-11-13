@@ -245,6 +245,20 @@ export async function accumulateArtifactCost(
   }
 }
 
+/** S114 — the stale law, pure: an artifact is current iff it was built
+ *  from the scene's current head revision (and is ready). Anything else is
+ *  labeled stale — the UI shows the version it was built from, never a
+ *  silent mismatch. Videos predating revision tracking (revisionVersion
+ *  null) are honestly "unknown", not stale. */
+export function artifactStaleness(
+  artifact: { status: string; revisionVersion: number | null },
+  headVersion: number | null
+): "current" | "stale" | "unknown" {
+  if (artifact.status !== "ready") return "stale";
+  if (artifact.revisionVersion == null || headVersion == null) return "unknown";
+  return artifact.revisionVersion === headVersion ? "current" : "stale";
+}
+
 /** The provenance feed for one scene (the history panel's artifacts tab +
  *  Stage 3's stale check: artifact.revisionVersion ≠ current head). */
 export async function sceneArtifactsOf(

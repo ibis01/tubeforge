@@ -27,12 +27,16 @@
 //
 // Run: npm run test:scene-revisions   (needs the local SQLite DB; part of check)
 
+import fs from "node:fs";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 import type { Video } from "@prisma/client";
 
 const _root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+const execFileAsync = promisify(execFile);
 const rawDb = new PrismaClient();
 
 import {
@@ -54,6 +58,7 @@ import {
 import { planSceneInvalidation, sweepInvalidArtifacts } from "../src/lib/tubeforge/scene-deps";
 import { invalidateRenderedArtifacts } from "../src/lib/tubeforge/render";
 import * as storage from "../src/lib/tubeforge/storage";
+import { videoDir } from "../src/lib/tubeforge/ai";
 import { must } from "../src/lib/tubeforge/must";
 import type { Scene } from "../src/lib/tubeforge/types";
 import type { AssembledTimeline, TimelineScene } from "../src/lib/tubeforge/timeline";
@@ -688,6 +693,105 @@ await test("a caption sweep keeps ALL audio (no re-TTS) and the visual sweep del
   eq(vis.removed, [], "a visual-prompt edit deletes nothing (re-roll is explicit)");
 
   for (const k of seeded) await storage.remove(k).catch(() => {});
+});
+
+suiteStart("S114 \u00b7 the scene preview lane");
+
+await test("previewing scene 2 lands scene-preview-02.mp4 and touches NOTHING else", async () => {
+  const v = await makeVideo([mkScene(1), mkScene(2), mkScene(3)], { renderMode: "kenburns" });
+  const dir = videoDir(v.id);
+  fs.mkdirSync(dir, { recursive: true });
+  // Real fixtures: 1-frame color art + 1s sine WAVs for every scene, so the
+  // per-scene validation passes and the kenburns executor runs real ffmpeg.
+  const nn = (i: number) => String(i).padStart(2, "0");
+  for (const s of [1, 2, 3]) {
+    await execFileAsync("ffmpeg", [
+      "-hide_banner", "-nostats", "-y",
+      "-f", "lavfi", "-i", "color=c=steelblue:s=640x360:d=1",
+      "-frames:v", "1", path.join(dir, `scene-${nn(s)}.png`),
+    ], { timeout: 60_000 });
+    await execFileAsync("ffmpeg", [
+      "-hide_banner", "-nostats", "-y",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+      "-ar", "44100", "-ac", "1", path.join(dir, `scene-${nn(s)}.wav`),
+    ], { timeout: 60_000 });
+  }
+  const seededKeys = ["scene-01.png", "scene-02.png", "scene-03.png", "scene-01.wav", "scene-02.wav", "scene-03.wav"];
+
+  const { renderVideo } = await import("../src/lib/tubeforge/render");
+  const scenes = parseScenesOf(v);
+  const result = await renderVideo({
+    videoId: v.id,
+    scenes: [must("scene 2", scenes.find((s) => s.index === 2))],
+    mode: "kenburns",
+    burnSubtitles: true,
+    smartCaptions: true,
+    music: false,
+    scenePreview: { sceneIndex: 2 },
+    onProgress: () => {},
+  } as Parameters<typeof renderVideo>[0]);
+
+  eq(result.fileName, "scene-preview-02.mp4", "the output is the scene preview key");
+  ok(result.fileBytes > 10_000, "a real encoded mp4 landed");
+  ok(await storage.exists(`${v.id}/scene-preview-02.mp4`), "published through the storage seam");
+
+  // THE EXIT CRITERION: nothing else moved.
+  for (const k of seededKeys) ok(await storage.exists(`${v.id}/${k}`), `input fixture ${k} untouched`);
+  for (const k of ["final.mp4", "preview.mp4", "subtitles.srt", "scene-01.mp4", "scene-03.mp4", "scene-preview-01.mp4", "scene-preview-03.mp4"])
+    ok(!(await storage.exists(`${v.id}/${k}`)), `${k} was NOT created by a scene-2 preview`);
+  // And the row's flags are untouched (a preview is not a certified final).
+  const after = await reload(v.id);
+  ok(!after.hasVideo && !after.hasPreview, "no video-level flags flipped");
+
+  // Cleanup: fixtures + the preview + the render-tmp scratch.
+  fs.rmSync(dir, { recursive: true, force: true });
+  for (const k of [...seededKeys, "scene-preview-02.mp4"].map((f) => `${v.id}/${f}`))
+    await storage.remove(k).catch(() => {});
+});
+
+await test("the preview artifact registers with its built-from revision (stale labeling)", async () => {
+  const v = await makeVideo([mkScene(1)]);
+  const before = parseScenesOf(v);
+  // First touch: head becomes v2.
+  await commitSceneChanges({
+    video: v,
+    beforeScenes: before,
+    beforeDoc: null,
+    afterScenes: before.map((s) => ({ ...s, mood: "dusk" })),
+    afterDoc: null,
+    kind: "edit",
+    origin: "test-preview-stale",
+  });
+  const afterRow = await reload(v.id);
+  const sceneId = must("scene id", parseScenesOf(afterRow).find((s) => s.index === 1)?.id);
+  const head = must("head", await headRevision(v.id, sceneId));
+
+  // A preview built from the head: current.
+  const { registerSceneArtifact, artifactStaleness } = await import("../src/lib/tubeforge/scene-artifacts");
+  const current = await registerSceneArtifact({
+    video: afterRow, sceneIndex: 1, type: "preview",
+    storageKey: `${v.id}/scene-preview-01.mp4`, input: "look-v2", prompt: "v", bytes: 100,
+  });
+  const rowNow = await rawDb.sceneArtifact.findUnique({ where: { id: must("cur", current).id } });
+  eq(artifactStaleness({ status: rowNow?.status ?? "", revisionVersion: rowNow?.revisionVersion ?? null }, head.version), "current", "built from the head \u2192 current");
+
+  // A newer edit lands \u2192 the SAME preview row is now stale (labeled, not deleted).
+  await commitSceneChanges({
+    video: afterRow,
+    beforeScenes: parseScenesOf(afterRow),
+    beforeDoc: null,
+    afterScenes: parseScenesOf(afterRow).map((s) => ({ ...s, mood: "night" })),
+    afterDoc: null,
+    kind: "edit",
+    origin: "test-preview-stale-2",
+  });
+  const newHead = must("new head", await headRevision(v.id, sceneId));
+  eq(newHead.version, head.version + 1, "the head moved");
+  eq(
+    artifactStaleness({ status: rowNow?.status ?? "", revisionVersion: rowNow?.revisionVersion ?? null }, newHead.version),
+    "stale",
+    "the pre-edit preview is labeled stale against the new head \u2014 the risk table's display-the-version law"
+  );
 });
 
 // --- teardown ---------------------------------------------------------------

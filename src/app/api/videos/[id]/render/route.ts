@@ -193,6 +193,21 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       ? Math.min(sceneLimitRaw, scenes.length)
       : undefined;
 
+  // S114 — Scene-Level Editing, Stage 3: render ONE scene as
+  // scene-preview-NN.mp4 (the story-lane twin of the whiteboard lane's
+  // per-scene preview). Mutually exclusive with sceneLimit — the prefix
+  // grammar and the arbitrary-scene grammar are different requests.
+  const sceneIndexRaw = Number(body?.sceneIndex);
+  const sceneIndex =
+    Number.isInteger(sceneIndexRaw) && sceneIndexRaw >= 1 ? sceneIndexRaw : undefined;
+  if (sceneIndex != null && sceneLimit != null)
+    return NextResponse.json(
+      { error: "sceneIndex and sceneLimit are mutually exclusive — preview ONE scene or the first N" },
+      { status: 400 }
+    );
+  if (sceneIndex != null && !scenes.some((s) => s.index === sceneIndex))
+    return NextResponse.json({ error: `Scene ${sceneIndex} does not exist` }, { status: 404 });
+
   // Stage 6 (T-6.8) — per-render aspect + frame-rate overrides (optional).
   // When absent, the job falls back to the per-PROJECT defaults on the video
   // row (video.aspectRatio / video.frameRate); 30 fps + 16:9 otherwise.
@@ -231,6 +246,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     smartCaptions,
     music,
     sceneLimit,
+    sceneIndex,
     aspectRatio,
     frameRate,
     quality,
@@ -272,6 +288,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       accepted,
       generating: true,
       mode,
+      sceneIndex: sceneIndex ?? null,
       sceneLimit: sceneLimit ?? null,
       transition,
       music: resolved

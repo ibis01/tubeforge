@@ -164,6 +164,13 @@ export interface RenderOptions {
   /** Sound-effect cues on/off (Settings → Sound; default on). */
   sfx?: boolean;
   sceneLimit?: number; // render only the first N scenes (preview render)
+  /** S114 — Scene-Level Editing, Stage 3: render ONE scene (the caller
+   *  narrows `scenes`/`docScenes` to it) as scene-preview-NN.mp4 — the
+   *  story-lane twin of the whiteboard lane's preview-<sceneId>.mp4.
+   *  Naming + preview semantics only (no subtitles.srt export); the
+   *  caller owns everything else: no row flags, no project QC — a scene
+   *  preview is not a certified final (the proposal's law). */
+  scenePreview?: { sceneIndex: number };
   /** Smart Motion settings (null/undefined = defaults — Smart Motion on, 12%). */
   motion?: MotionSettings | null;
   /** Scene transitions (undefined = built-in default — crossfade 0.5s). */
@@ -218,7 +225,7 @@ export interface RenderOptions {
 }
 
 export interface RenderResult {
-  fileName: "final.mp4" | "preview.mp4";
+  fileName: string; // "final.mp4" | "preview.mp4" | "scene-preview-NN.mp4" (S114)
   durationSec: number;
   fileBytes: number;
   /** Frame geometry — "9:16" for keynote-slide renders, "1:1" for square
@@ -1389,6 +1396,19 @@ export async function readVideoFile(
  * The streaming route opens the file lazily per Range request; memory stays
  * constant instead of one full copy per concurrent viewer.
  */
+/** S114 — stat one scene's preview (the mp4 route's scene-preview variant). */
+export async function statScenePreviewFile(
+  videoId: string,
+  sceneIndex: number
+): Promise<{ key: string; size: number; fileName: string } | null> {
+  if (!Number.isInteger(sceneIndex) || sceneIndex < 1) return null;
+  const fileName = `scene-preview-${String(sceneIndex).padStart(2, "0")}.mp4`;
+  const key = `${videoId}/${fileName}`;
+  const s = await storage.stat(key);
+  if (!s) return null;
+  return { key, size: s.size, fileName };
+}
+
 export async function statVideoFile(
   videoId: string,
   variant: "final" | "preview"
@@ -1418,8 +1438,14 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       : opts.docScenes && opts.docScenes.length === scenes.length
         ? opts.docScenes
         : null;
-  const isPreview = Boolean(opts.sceneLimit && opts.sceneLimit < opts.scenes.length);
-  const outName = isPreview ? "preview.mp4" : "final.mp4";
+  const isPreview =
+    Boolean(opts.sceneLimit && opts.sceneLimit < opts.scenes.length) ||
+    Boolean(opts.scenePreview);
+  const outName = opts.scenePreview
+    ? `scene-preview-${String(opts.scenePreview.sceneIndex).padStart(2, "0")}.mp4`
+    : isPreview
+      ? "preview.mp4"
+      : "final.mp4";
 
   // S87 slice 2 — the per-scene visual kind from the composition plan
   // (schema-2 docs read the tracks projection; the job derives the plan).

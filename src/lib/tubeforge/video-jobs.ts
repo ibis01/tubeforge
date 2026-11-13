@@ -41,6 +41,7 @@ import {
   parseScenes,
 } from "./story";
 import type { Scene } from "./types";
+import type { Video } from "@prisma/client";
 import { ingestCustomAudio } from "./voice";
 import { deriveStatus } from "./status";
 import { runQualityGate } from "./quality";
@@ -527,6 +528,11 @@ export interface RenderJobOptions {
   smartCaptions?: boolean;
   music?: boolean;
   sceneLimit?: number;
+  /** S114 — Scene-Level Editing, Stage 3: render ONE scene as
+   *  scene-preview-NN.mp4 (mutually exclusive with sceneLimit; the route
+   *  refuses a body carrying both). The preview touches nothing else: no
+   *  other scene's artifacts, no final/preview, no row flags, no QC. */
+  sceneIndex?: number;
   /** Stage 6 (T-6.8) — per-render aspect override ("16:9"|"9:16"|"1:1").
    *  When unset, the job falls back to the video row's `aspectRatio`. */
   aspectRatio?: "16:9" | "9:16" | "1:1";
@@ -564,6 +570,98 @@ export function previewQcPatch(
 
 /** Render the final/preview MP4 (+ the QC battery — full scope on final
  * renders, scoped preview evidence on previews; see previewQcPatch). */
+/** S114 — the scene-preview job: render ONE scene through the same
+ *  segment machinery, land scene-preview-NN.mp4, register it as a preview
+ *  artifact carrying the revision it was built from (the stale check:
+ *  artifact.revisionVersion ≠ the scene's current head ⇒ labeled stale).
+ *  Deliberately lighter than the full render: no music resolution (the
+ *  preview checks the visual + timing look; the bed is a project-level
+ *  decision), no timeline composition plan (every story-lane mode's visual
+ *  kind is the mode's own — whiteboard videos routed to their engine lane
+ *  above, which has had per-scene previews since S67), burned captions ON
+ *  (checking the caption look is half the point), the row's aspect/fps.
+ *  NO row flags, NO project QC, NO srt export — and no other scene's
+ *  artifact is read-for-modification, let alone deleted. */
+async function runScenePreviewJob(
+  videoId: string,
+  video: Video,
+  scenes: Scene[],
+  sceneIndex: number,
+  opts: RenderJobOptions
+): Promise<void> {
+  const pos = scenes.findIndex((s) => s.index === sceneIndex);
+  if (pos < 0) throw new Error(`Scene ${sceneIndex} does not exist`);
+  const scene = scenes[pos];
+
+  const mode = ["animated", "stock", "slides"].includes(opts.mode ?? "")
+    ? (opts.mode as "animated" | "stock" | "slides")
+    : "kenburns";
+  const aspect: "16:9" | "9:16" | "1:1" =
+    mode === "slides"
+      ? "9:16"
+      : video.aspectRatio === "9:16" || video.aspectRatio === "1:1" || video.aspectRatio === "16:9"
+        ? video.aspectRatio
+        : "16:9";
+  const frameRate = video.frameRate === 24 || video.frameRate === 60 ? video.frameRate : 30;
+  // The doc's per-scene settings for THIS scene only (aligned by position).
+  const timeline = parseTimeline(video.timeline);
+  const docScenes =
+    timeline && timeline.scenes.length === scenes.length
+      ? docSceneSettings(timeline, scenes.length)?.slice(pos, pos + 1) ?? null
+      : null;
+
+  const result = await renderVideo({
+    videoId,
+    scenes: [scene],
+    mode,
+    character: null,
+    burnSubtitles: mode !== "slides",
+    smartCaptions: true,
+    music: false, // the preview checks the scene, not the score
+    sfx: await getSfxEnabled(),
+    scenePreview: { sceneIndex },
+    aspectRatio: aspect,
+    frameRate,
+    quality: opts.quality,
+    docScenes,
+    motion: sanitizeMotion({
+      mode: video.motionMode,
+      intensity: video.motionIntensity,
+      curve: video.motionCurve,
+      vary: video.motionVary,
+    }),
+    motionContext: { tone: video.tone, niche: video.niche },
+    topic: video.topic,
+    transition: resolveTransition(video, mode),
+    brand: null,
+    onProgress: (current, total, label) => {
+      if (isJobCancelled(videoId, "render")) throw new JobCancelledError();
+      setJobProgress(videoId, "render", current, total, label);
+    },
+  });
+
+  // The provenance row: type preview, built-from revision recorded so the
+  // stale check (revisionVersion ≠ head) can label it in the artifacts feed.
+  await registerSceneArtifact({
+    video,
+    sceneIndex,
+    type: "preview",
+    storageKey: `${videoId}/scene-preview-${String(sceneIndex).padStart(2, "0")}.mp4`,
+    input: `scene-preview|narration=${scene.narration}|visual=${scene.visual}|camera=${scene.camera}|mood=${scene.mood}|variant=${scene.seedVariant ?? 0}|mode=${mode}`,
+    prompt: scene.visual,
+    bytes: result.fileBytes,
+  });
+
+  await db.activity.create({
+    data: {
+      organizationId: video.organizationId,
+      videoId,
+      stage: "render",
+      message: `Scene ${sceneIndex} preview rendered (${result.durationSec.toFixed(1)}s, ${(result.fileBytes / 1024).toFixed(0)} KB) — the full render is untouched`,
+    },
+  });
+}
+
 export async function runRenderJob(
   videoId: string,
   opts: RenderJobOptions = {}
@@ -586,6 +684,14 @@ export async function runRenderJob(
   const scenes = parseScenes(video.scenes);
   if (scenes.length === 0)
     throw new Error("Video has no scenes — generate the scene script first");
+
+  // S114 — the scene-preview lane: ONE scene, the same segment machinery,
+  // scene-preview-NN.mp4. Nothing else moves — the preview is a LOOK at
+  // one scene, not a certified output (the proposal's law: "a scene preview
+  // is not a certified final video").
+  if (Number.isInteger(opts.sceneIndex) && (opts.sceneIndex as number) >= 1) {
+    return runScenePreviewJob(videoId, video, scenes, opts.sceneIndex as number, opts);
+  }
 
   // Same defaults the route applies to a missing body field, so a payload-less
   // crash resume renders what the user saw on the button they clicked.

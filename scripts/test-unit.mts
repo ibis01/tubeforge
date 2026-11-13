@@ -12371,6 +12371,51 @@ await test("scene-revisions: rollback sweeps through the declarative map (source
   );
 });
 
+// ---------------------------------------------------------------------------
+// S114 — Scene-Level Editing & Repair, Stage 3: the scene preview lane
+// ---------------------------------------------------------------------------
+
+await test("scene-artifacts: the stale law (current / stale / unknown)", async () => {
+  const { artifactStaleness } = await import("../src/lib/tubeforge/scene-artifacts.ts");
+  eq(artifactStaleness({ status: "ready", revisionVersion: 3 }, 3), "current", "built from the head");
+  eq(artifactStaleness({ status: "ready", revisionVersion: 2 }, 3), "stale", "built from a superseded revision — labeled, never silent");
+  eq(artifactStaleness({ status: "stale", revisionVersion: 3 }, 3), "stale", "a swept artifact is stale whatever its revision");
+  eq(artifactStaleness({ status: "ready", revisionVersion: null }, 3), "unknown", "pre-tracking artifact: honest unknown");
+  eq(artifactStaleness({ status: "ready", revisionVersion: 3 }, null), "unknown", "no head recorded: honest unknown");
+});
+
+await test("scene-preview: the lane is wired and walled (source pin)", async () => {
+  const render = fs.readFileSync("src/lib/tubeforge/render.ts", "utf8");
+  ok(
+    render.includes("scenePreview?: { sceneIndex: number }") &&
+      render.includes("scene-preview-${String(opts.scenePreview.sceneIndex).padStart(2, \"0\")}.mp4"),
+    "renderVideo names the output scene-preview-NN.mp4 under the preview semantics (no srt export)"
+  );
+  const jobs = fs.readFileSync("src/lib/tubeforge/video-jobs.ts", "utf8");
+  ok(
+    jobs.includes("return runScenePreviewJob(videoId, video, scenes, opts.sceneIndex as number, opts);"),
+    "the render job branches to the scene-preview lane on sceneIndex"
+  );
+  ok(
+    jobs.indexOf("async function runScenePreviewJob") < jobs.indexOf("export async function runRenderJob"),
+    "the preview lane is its own orchestrator — it cannot reach the full render's finalize/QC"
+  );
+  ok(
+    jobs.includes("not a certified output") && jobs.includes("NO row flags, NO project QC, NO srt export"),
+    "the proposal's law is stated at the lane: no project QC, no row flags"
+  );
+  const route = fs.readFileSync("src/app/api/videos/[id]/render/route.ts", "utf8");
+  ok(
+    route.includes("sceneIndex and sceneLimit are mutually exclusive"),
+    "the route refuses a body carrying both grammars"
+  );
+  const mp4 = fs.readFileSync("src/app/api/videos/[id]/mp4/route.ts", "utf8");
+  ok(
+    mp4.includes("scene-preview") && mp4.includes("statScenePreviewFile"),
+    "the mp4 route streams the scene-preview variant (authed, org-scoped)"
+  );
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
