@@ -718,7 +718,7 @@ await test("previewing scene 2 lands scene-preview-02.mp4 and touches NOTHING el
       "-ar", "44100", "-ac", "1", path.join(dir, `scene-${nn(s)}.wav`),
     ], { timeout: 60_000 });
   }
-  const seededKeys = ["scene-01.png", "scene-02.png", "scene-03.png", "scene-01.wav", "scene-02.wav", "scene-03.wav"];
+  const seededFiles = ["scene-01.png", "scene-02.png", "scene-03.png", "scene-01.wav", "scene-02.wav", "scene-03.wav"];
 
   const { renderVideo } = await import("../src/lib/tubeforge/render");
   const scenes = parseScenesOf(v);
@@ -738,7 +738,7 @@ await test("previewing scene 2 lands scene-preview-02.mp4 and touches NOTHING el
   ok(await storage.exists(`${v.id}/scene-preview-02.mp4`), "published through the storage seam");
 
   // THE EXIT CRITERION: nothing else moved.
-  for (const k of seededKeys) ok(await storage.exists(`${v.id}/${k}`), `input fixture ${k} untouched`);
+  for (const k of seededFiles) ok(await storage.exists(`${v.id}/${k}`), `input fixture ${k} untouched`);
   for (const k of ["final.mp4", "preview.mp4", "subtitles.srt", "scene-01.mp4", "scene-03.mp4", "scene-preview-01.mp4", "scene-preview-03.mp4"])
     ok(!(await storage.exists(`${v.id}/${k}`)), `${k} was NOT created by a scene-2 preview`);
   // And the row's flags are untouched (a preview is not a certified final).
@@ -747,7 +747,7 @@ await test("previewing scene 2 lands scene-preview-02.mp4 and touches NOTHING el
 
   // Cleanup: fixtures + the preview + the render-tmp scratch.
   fs.rmSync(dir, { recursive: true, force: true });
-  for (const k of [...seededKeys, "scene-preview-02.mp4"].map((f) => `${v.id}/${f}`))
+  for (const k of [...seededFiles, "scene-preview-02.mp4"].map((f) => `${v.id}/${f}`))
     await storage.remove(k).catch(() => {});
 });
 
@@ -977,7 +977,7 @@ await test("the recheck runs the scene battery on the standing preview and store
   });
   CLEANUP_USER_IDS.push(actor.id);
   const dir = await seedSceneMedia(v0, ["testsrc=s=640x360:d=1", "testsrc=s=640x360:d=1", "testsrc=s=640x360:d=1"]);
-  const seededKeys = [1, 2, 3].flatMap((i) => [`scene-${String(i).padStart(2, "0")}.png`, `scene-${String(i).padStart(2, "0")}.wav`]);
+  const seededFiles = [1, 2, 3].flatMap((i) => [`scene-${String(i).padStart(2, "0")}.png`, `scene-${String(i).padStart(2, "0")}.wav`]);
 
   // An aligned doc (windows + fade seams) + an edit on scene 2 → head v2.
   const withDoc = await rawDb.video.update({
@@ -1062,7 +1062,7 @@ await test("the recheck runs the scene battery on the standing preview and store
   eq(headAfter.content, contentBefore, "the annotation wrote the recheck column; the content is byte-identical");
 
   fs.rmSync(dir, { recursive: true, force: true });
-  for (const k of [...seededKeys, "scene-preview-02.mp4"].map((f) => `${v.id}/${f}`))
+  for (const k of [...seededFiles, "scene-preview-02.mp4"].map((f) => `${v.id}/${f}`))
     await storage.remove(k).catch(() => {});
 });
 
@@ -1073,7 +1073,7 @@ await test("the boundary lane renders the pair and the recheck measures the seam
   const v0 = await makeVideo([mkScene(1), mkScene(2), mkScene(3)], { renderMode: "kenburns" });
   // DIFFERENT art per scene, so the seam is a real visual change.
   const dir = await seedSceneMedia(v0, ["testsrc=s=640x360:d=1", "smptebars=s=640x360", "testsrc=s=640x360:d=1"]);
-  const seededKeys = [1, 2, 3].flatMap((i) => [`scene-${String(i).padStart(2, "0")}.png`, `scene-${String(i).padStart(2, "0")}.wav`]);
+  const seededFiles = [1, 2, 3].flatMap((i) => [`scene-${String(i).padStart(2, "0")}.png`, `scene-${String(i).padStart(2, "0")}.wav`]);
   const doc = docOf(parseScenesOf(v0));
   const v = await rawDb.video.update({
     where: { id: v0.id },
@@ -1103,7 +1103,7 @@ await test("the boundary lane renders the pair and the recheck measures the seam
   ok(await storage.exists(`${v.id}/scene-boundary-01.mp4`), "published through the storage seam");
   for (const k of ["final.mp4", "preview.mp4", "subtitles.srt", "scene-boundary-02.mp4", "scene-preview-01.mp4", "scene-preview-02.mp4"])
     ok(!(await storage.exists(`${v.id}/${k}`)), `${k} was NOT created by a boundary pair`);
-  for (const k of seededKeys) ok(await storage.exists(`${v.id}/${k}`), `input fixture ${k} untouched`);
+  for (const k of seededFiles) ok(await storage.exists(`${v.id}/${k}`), `input fixture ${k} untouched`);
   const row = await reload(v.id);
   ok(!row.hasVideo && !row.hasPreview, "no video-level flags flipped");
 
@@ -1126,7 +1126,7 @@ await test("the boundary lane renders the pair and the recheck measures the seam
   eq(freshness.status, "unmeasured", "no scene-1 preview standing — the report says so with the render command");
 
   fs.rmSync(dir, { recursive: true, force: true });
-  for (const k of [...seededKeys, "scene-boundary-01.mp4"].map((f) => `${v.id}/${f}`))
+  for (const k of [...seededFiles, "scene-boundary-01.mp4"].map((f) => `${v.id}/${f}`))
     await storage.remove(k).catch(() => {});
 });
 
@@ -1136,7 +1136,7 @@ await test("the approval gate: verdict-gated, idempotent, and the approved revis
   const { approvedRevision } = await import("../src/lib/tubeforge/scene-revisions.ts");
   const v0 = await makeVideo([mkScene(1)], { renderMode: "kenburns" });
   const dir = await seedSceneMedia(v0, ["testsrc=s=640x360:d=1"]);
-  const seededKeys = ["scene-01.png", "scene-01.wav"];
+  const seededFiles = ["scene-01.png", "scene-01.wav"];
   const approver = await rawDb.user.create({
     data: { email: `s116-approve-${MARK}@example.test`, passwordHash: "pbkdf2$1$s$h" },
   });
@@ -1228,7 +1228,7 @@ await test("the approval gate: verdict-gated, idempotent, and the approved revis
   ok(!failed.ok, "a failed verdict blocks approval");
 
   fs.rmSync(dir, { recursive: true, force: true });
-  for (const k of [...seededKeys, "scene-preview-01.mp4"].map((f) => `${v.id}/${f}`))
+  for (const k of [...seededFiles, "scene-preview-01.mp4"].map((f) => `${v.id}/${f}`))
     await storage.remove(k).catch(() => {});
 });
 
