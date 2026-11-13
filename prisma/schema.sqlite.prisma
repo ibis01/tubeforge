@@ -518,6 +518,13 @@ model WhiteboardAssetUpload {
 // superseded (a newer revision exists). An APPROVED head is never flipped
 // to superseded by a newer draft — the latest approved revision stays
 // addressable for render and rollback.
+//
+// recheck (S116) — the scene-scoped QC VERDICT, JSON SceneRecheckReport
+// (scene-qc.ts), stored as an ANNOTATION on the revision it judged: the
+// content column is never rewritten (law 1), but a revision may carry the
+// recheck's measured verdict. The verdict records the revisionVersion it
+// judged — a newer head makes it stale by comparison, never by mutation.
+// Kept TEXT per the house law (SQLite + Postgres behave identically).
 model SceneRevision {
   id             String   @id @default(cuid())
   organizationId String
@@ -529,6 +536,7 @@ model SceneRevision {
   changeKind     String   @default("edit") // edit | structural | epoch | rollback | backfill
   origin         String // the mutator that wrote it ("scenes-patch", "clip-split", "script-regen", …)
   content        String // JSON SceneRevisionContent — { scene, docScene } union slice
+  recheck        String? // S116 — JSON SceneRecheckReport (the verdict THIS revision was judged by)
   note           String?
   createdBy      String? // acting user; null = job body / legacy
   createdAt      DateTime @default(now())

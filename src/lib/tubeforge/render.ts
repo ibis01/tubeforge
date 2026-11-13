@@ -171,6 +171,14 @@ export interface RenderOptions {
    *  caller owns everything else: no row flags, no project QC — a scene
    *  preview is not a certified final (the proposal's law). */
   scenePreview?: { sceneIndex: number };
+  /** S116 — Scene-Level Editing, Stage 5: render a BOUNDARY PAIR (the
+   *  scenes the caller passes are exactly two — N and N+1) through the same
+   *  segment + transition machinery, landing scene-boundary-NN.mp4 (NN =
+   *  afterScene). The seam renders EXACTLY as the full render would cut it
+   *  (same durations fold, same per-boundary transition from the doc), so
+   *  the recheck's boundary lens can measure the join without a full
+   *  render. Preview semantics: no srt export, no row flags, no project QC. */
+  boundaryPreview?: { afterScene: number };
   /** Smart Motion settings (null/undefined = defaults — Smart Motion on, 12%). */
   motion?: MotionSettings | null;
   /** Scene transitions (undefined = built-in default — crossfade 0.5s). */
@@ -324,6 +332,39 @@ export async function probeDuration(file: string): Promise<number> {
   const d = Number(parsed.format?.duration ?? 0);
   if (!Number.isFinite(d) || d <= 0) throw new Error(`Could not probe duration of ${path.basename(file)}`);
   return d;
+}
+
+/**
+ * S116 — the ONE scene-duration fold, extracted from renderVideo's loop so
+ * the scene-scoped recheck (scene-qc.ts) can derive EXACTLY the durations a
+ * render used for a scene / a boundary pair — the seam expectation must be
+ * computed from the same math that placed the seam, or the boundary check
+ * judges a fabricated timeline (the S113 lesson: derive, never copy).
+ *
+ * `wavDuration` is the voiceover-derived base (the LEAD+TAIL / MIN_SEG
+ * floor is applied inside); `timelineDuration` is the doc's pick when the
+ * timeline aligns (NaN = no doc value); `docSpeed` compresses the narration
+ * floor when the doc plays the scene faster (values outside 0.5–2 or within
+ * 0.02 of 1 read as 1 — the docSpeedOf rule, now owned here). The laws,
+ * verbatim from T-6.10: a doc value may EXTEND a scene (up to 3× the
+ * narration) or trim its tail padding, but can NEVER shorten it below what
+ * its narration needs. Pure.
+ */
+export function resolveSceneDuration(
+  wavDuration: number,
+  timelineDuration: number,
+  docSpeed: number
+): number {
+  const d = Math.max(wavDuration + LEAD_SEC + TAIL_SEC, MIN_SEG_SEC);
+  const t = timelineDuration;
+  if (typeof t !== "number" || !Number.isFinite(t)) return d;
+  if (t < MIN_SEG_SEC) return d;
+  const sp =
+    typeof docSpeed === "number" && docSpeed >= 0.5 && docSpeed <= 2 && Math.abs(docSpeed - 1) > 0.02
+      ? docSpeed
+      : 1;
+  const narrationFloor = Math.max((d - TAIL_SEC) / sp + LEAD_SEC + 0.3, MIN_SEG_SEC);
+  return Math.min(Math.max(t, narrationFloor), d * 3);
 }
 
 // ---------- Ken Burns (Smart Motion) ----------
@@ -1409,6 +1450,21 @@ export async function statScenePreviewFile(
   return { key, size: s.size, fileName };
 }
 
+/** S116 — stat the boundary-pair render (scene-boundary-NN.mp4, NN = the
+ * scene the seam comes AFTER). Serves the mp4 route's
+ * ?variant=scene-boundary&n= lane — authed, org-scoped, same path family. */
+export async function statSceneBoundaryFile(
+  videoId: string,
+  afterScene: number
+): Promise<{ key: string; size: number; fileName: string } | null> {
+  if (!Number.isInteger(afterScene) || afterScene < 1) return null;
+  const fileName = `scene-boundary-${String(afterScene).padStart(2, "0")}.mp4`;
+  const key = `${videoId}/${fileName}`;
+  const s = await storage.stat(key);
+  if (!s) return null;
+  return { key, size: s.size, fileName };
+}
+
 export async function statVideoFile(
   videoId: string,
   variant: "final" | "preview"
@@ -1440,12 +1496,15 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
         : null;
   const isPreview =
     Boolean(opts.sceneLimit && opts.sceneLimit < opts.scenes.length) ||
-    Boolean(opts.scenePreview);
+    Boolean(opts.scenePreview) ||
+    Boolean(opts.boundaryPreview);
   const outName = opts.scenePreview
     ? `scene-preview-${String(opts.scenePreview.sceneIndex).padStart(2, "0")}.mp4`
-    : isPreview
-      ? "preview.mp4"
-      : "final.mp4";
+    : opts.boundaryPreview
+      ? `scene-boundary-${String(opts.boundaryPreview.afterScene).padStart(2, "0")}.mp4`
+      : isPreview
+        ? "preview.mp4"
+        : "final.mp4";
 
   // S87 slice 2 — the per-scene visual kind from the composition plan
   // (schema-2 docs read the tracks projection; the job derives the plan).
@@ -1505,9 +1564,6 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     const wavs = await Promise.all(
       scenes.map((s) => probeDuration(path.join(dir, sceneWavFile(s.index))))
     );
-    const wavDurations = wavs.map(
-      (d) => Math.max(d + LEAD_SEC + TAIL_SEC, MIN_SEG_SEC)
-    );
     // Stage 6 (T-6.10) — when the assembled timeline supplied per-scene
     // durations, override the voiceover-derived defaults. Only honor values
     // that align to the scene list AND sit inside a sane range. A timeline
@@ -1518,24 +1574,15 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
     // invented 111 s of pacing silenced the last 34 s of a 143 s narration).
     // The floor keeps narration + lead-in + a slim 0.3 s tail; the full
     // 0.85 s breathing tail may be trimmed by an editor.
+    //
+    // S116 — the fold itself now lives in ONE exported pure function
+    // (resolveSceneDuration above): the scene-scoped recheck derives the
+    // SAME durations a render used for a scene or a boundary pair from the
+    // same math that placed the seam, instead of a drifting copy.
     const timelineDurations = opts.sceneDurationsSec ?? [];
-    const docSpeedOf = (i: number) => {
-      const s = docScenes?.[i]?.speed;
-      return typeof s === "number" && s >= 0.5 && s <= 2 && Math.abs(s - 1) > 0.02 ? s : 1;
-    };
-    const durations = wavDurations.map((d, i) => {
-      const t = timelineDurations[i];
-      if (typeof t !== "number" || !Number.isFinite(t)) return d;
-      if (t < MIN_SEG_SEC) return d;
-      // Floor: the narration must always fit (wav minus most of its tail).
-      // S2 wave 2 — a doc playback rate COMPRESSES the read (atempo), so the
-      // floor shrinks by the same factor: a 2× scene may be half as long.
-      const sp = docSpeedOf(i);
-      const narrationFloor = Math.max((d - TAIL_SEC) / sp + LEAD_SEC + 0.3, MIN_SEG_SEC);
-      // Cap at 3× the measured narration so a stale timeline can't silently
-      // extend a scene to minutes of dead air.
-      return Math.min(Math.max(t, narrationFloor), d * 3);
-    });
+    const durations = wavs.map((rawWav, i) =>
+      resolveSceneDuration(rawWav, timelineDurations[i] ?? NaN, docScenes?.[i]?.speed ?? NaN)
+    );
     const segments = durations.map((d, i) => ({
       start: durations.slice(0, i).reduce((a, b) => a + b, 0),
       duration: d,

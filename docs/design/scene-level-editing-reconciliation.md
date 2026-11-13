@@ -8,9 +8,19 @@ live tree at HEAD `1379134`. No product code was changed by this stage.
 order ("start, don't stop"); the four §10 decision points resolved to their
 recommended defaults (keep all revision rows, GC only superseded artifacts;
 latest-approved-per-scene render; opt-in per-video spend ceiling; epochs for
-whole-script regens/converts). **Stages 1–4 landed as S112–S115** — see
+whole-script regens/converts). **Stages 1–5 landed as S112–S116** — see
 docs/production-readiness.md's feature-track ledger rows and worklog
-§S112–§S114. Stages 4–7 follow in order.* This
+§S112–§S116. Stages 6–7 follow in order. Stage 5's additions to the plan:
+the boundary-pair check is MEDIATED (a new render grammar
+`POST /render {boundaryAfter}` produces scene-boundary-NN.mp4 — the pair
+through the same segment + transition machinery — because the seam cannot
+be measured from a single scene's preview), and the scene-duration fold
+moved into ONE exported pure function (resolveSceneDuration) so the render
+loop and the seam expectation consume the same math. Approval resolves to
+the strict reading: a revision is approvable only when a recheck verdict
+that PASSED (every check AND every seam measured-and-passed — the
+never-silently-clean law at scene scope) exists for the HEAD'S OWN
+version.* This
 document is the explicit mapping the plan's Stage 0 exit demands: proposed
 design → existing code → precise gaps → file-by-file implementation plan.
 

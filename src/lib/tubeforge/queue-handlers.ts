@@ -59,6 +59,7 @@ import {
 import { runPortraitJob, runPosesJob } from "./character-jobs";
 import { runReferenceAnalysisJob } from "./reference-video";
 import { runScene3DJob } from "./scene3d";
+import { runSceneRecheckJob } from "./scene-qc";
 
 /** Renders become stale when the visual track changes (mirrors the stock route).
  *  Storage seam (T-3.7): final/preview die through the driver (s3-safe) —
@@ -268,6 +269,15 @@ function parseRenderPayload(payload: unknown): RenderJobOptions {
   if (typeof p.music === "boolean") out.music = p.music;
   if (typeof p.sceneLimit === "number" && Number.isInteger(p.sceneLimit) && p.sceneLimit >= 1)
     out.sceneLimit = p.sceneLimit;
+  // S114/S116 — the scene-scoped render grammars survive a crash resume: a
+  // scene-preview job that resumes WITHOUT its sceneIndex would re-render
+  // the FULL final (the S114 resume gap this line closes); a boundary-pair
+  // job without its boundaryAfter would do the same. The entityId is the
+  // plain videoId for render jobs, so the payload is the only carrier.
+  if (typeof p.sceneIndex === "number" && Number.isInteger(p.sceneIndex) && p.sceneIndex >= 1)
+    out.sceneIndex = p.sceneIndex;
+  if (typeof p.boundaryAfter === "number" && Number.isInteger(p.boundaryAfter) && p.boundaryAfter >= 1)
+    out.boundaryAfter = p.boundaryAfter;
   // Stage 6 (T-6.8) — per-render aspect + frame-rate overrides survive a
   // crash so the resumed render keeps the SAME geometry the user picked.
   if (p.aspectRatio === "16:9" || p.aspectRatio === "9:16" || p.aspectRatio === "1:1")
@@ -414,6 +424,13 @@ export function registerDefaultHandlers(): void {
   // three.js/SwiftShader chromium pipeline. Deterministic — a resumed run
   // re-renders the same clip the crashed one was building.
   registerJobHandler("scene3d", (videoId) => runScene3DJob(videoId));
+
+  // S116 — the scene-scoped QC re-check: the battery + boundary lens that
+  // gates approval. Bounded local ffmpeg work (plus the policy VLM scan
+  // when the content policy demands it — metered like every aiCall); the
+  // verdict is a fresh measurement of standing media, so a resume is
+  // idempotent by construction. Entity "<videoId>#scene<N>".
+  registerJobHandler("scene-recheck", (entityId) => runSceneRecheckJob(entityId));
 
   // Character stages — Stage 3 close-out
   registerJobHandler("portrait", (characterId) => runPortraitJob(characterId));

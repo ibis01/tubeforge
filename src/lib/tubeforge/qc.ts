@@ -91,6 +91,12 @@ function check(
   };
 }
 
+// S116 — the scene-scoped battery (scene-qc.ts) reuses these builders
+// instead of forking private copies (the S113 no-private-copies law, now
+// extended to the QC probe shell: one analyzePass, one ffprobe, one check
+// builder — scene scope re-slices the SAME probes, never re-implements them).
+export { check as qcCheck, analyzePass, ffprobeJson };
+
 export interface QcReport {
   passed: boolean;
   checkedAt: string;

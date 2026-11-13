@@ -6296,3 +6296,117 @@ ephemeral report JSON (their rewiring onto SceneRepair + the one-click
 UI is Stage 7); the repair's job lane runs the existing scene job
 (instruction-edit path) — a repair-specific orchestrator with
 boundary-aware recheck lands with Stage 5.
+
+## S116 — Scene-Level Editing & Repair, Stage 5: scene QC + boundary validation + the approval gate (2026-11-13)
+
+**EXIT CRITERION (the proposal's own): repaired scenes are checked before
+approval.** The check now exists, it is scene-scoped, its verdict is
+revision-tied, and approval is gated on it. Files: `scene-qc.ts` (new — the
+battery + the lens + the gate), `SceneRevision.recheck` (the verdict column,
+migration 20261118000000 + the SQLite mirror via the sync law),
+`POST /api/videos/[id]/scenes/[n]/recheck` (run + approve arms), the
+`{boundaryAfter}` render grammar, the "scene-recheck" job kind (crash-resumable
+through the registry), and the mp4 route's `scene-boundary` variant.
+
+**THE S79 DOCTRINE, generalized.** The targeted re-check re-judged ONE scene
+after a repaint because a repaint obsoleted exactly that scene's verdicts. The
+scene recheck applies the same scope honesty to the media battery: an edit to
+scene N obsoletes N's probes and its two seams' verdicts — every other scene's
+standing evidence is NOT re-judged (no double spend, no re-render of the world
+for a one-scene fix; the §8.3 cost law in QC form).
+
+**THE SCENE BATTERY (law 1 — never silently clean, at scene scope).** The
+whole-file battery's probe shell is now EXPORTED and reused, not forked (qc.ts
+exports `qcCheck` / `analyzePass` / `ffprobeJson`; the S113 no-private-copies
+law extended to the QC shell — source-pinned). On the standing scene preview
+(S114's lane): playable, black frames, frozen frames, aspect, the loudness
+family (LUFS / true peak / LRA, same windows + tolerances), dead air, static
+runs (the sampled scan; the plan-rhythm lens stays project-scope — it judges
+runs ACROSS scenes), flicker, stutter, duration vs the render's own fold, the
+captions check sliced to the scene's doc window — emitted only when a
+standing SRT exists (the whole-file battery's own "when an SRT ships
+alongside" precedent: an absent input is not a measurement that failed), and
+the S49 restricted-visual scan at scene scope under a restricted policy (the
+L1–L5 chain holds at scene scope; paid, policy-gated, human-clicked, never
+auto-chained). A `preview-freshness` check row enacts the
+display-the-producing-version law: a preview built from a superseded revision
+FAILS freshness; pre-tracking provenance reads honest "unknown"; no preview at
+all → one red row carrying the exact render command.
+
+**THE TIMING SPLIT (law 3 — the expectation mirrors its own media's
+inputs).** The scene preview's timing is WAV-derived (the S114 lane passes no
+sceneDurationsSec — narration is the scene's clock), so the duration
+expectation runs the SAME exported fold (`resolveSceneDuration`, extracted
+from renderVideo's loop — the render and the recheck consume one math,
+source-pinned) on the same WAV-only inputs. The doc's timing truth (trims,
+holds) is judged where it lives: at the seam, by the boundary lane, which
+DOES consume the doc's durations. Each expectation mirrors its own media's
+render inputs — never a blended fabrication of the two.
+
+**THE BOUNDARY LENS (law 4 — the seam law, unit-pinned with synthetic
+detections).** The seam cannot be measured from a single scene's preview, so
+Stage 5 MEDIATES it: a third render grammar `POST /render {boundaryAfter: N}`
+renders scenes N + N+1 through the same segment + transition machinery (the
+doc's durations + the seam's own transition — the incoming scene's
+transitionIn over the video default, the same read the stitcher does) as
+`scene-boundary-NN.mp4`: preview semantics (no flags, no QC, no srt, nothing
+outside the pair touched — battery-pinned with a real ffmpeg render), plus a
+provenance row and the mp4 route's `scene-boundary` variant. The recheck's
+`alignSeam` then holds the DETECTED cuts to the expectation derived through
+the same fold: a CUT seam MUST appear within tolerance (a swallowed seam
+fails, flagged missing); a BLEND seam has NO must-appear obligation (the
+T-55.2 evidence — a clean crossfade can score under the 0.40 scene
+threshold); detections inside the seam's window are explained; a stray inside
+the neighborhood (window ± 1.2s) but outside the explanation fails (the join
+landing off-time); detections deeper in either scene's interior belong to the
+full battery with its shot-join windows — the boundary lens owns the JOIN,
+which is what a scene edit changes. An unmeasured seam (no pair rendered)
+carries the exact command that would render it, and KEEPS THE REPORT RED.
+
+**THE VERDICT + THE GATE (laws 2 + 6).** The report (schema 1) records the
+`revisionVersion` it judged and lands on the head revision's `recheck` column
+— an ANNOTATION: content byte-identical (battery-pinned), a newer head makes
+the standing verdict stale BY COMPARISON (never by mutation). Approval
+(`approvalBlocker`, pure + unit-pinned, surfaced by the recheck route's GET)
+requires a PASSING verdict — every check AND every seam measured-and-passed —
+for the HEAD'S OWN version: no verdict → 409; a verdict for an older revision
+→ 409 (re-run); a failed verdict → 409 (with the flagged count). Approval
+writes status "approved" and NOTHING else; it is idempotent on an approved
+head; the approved revision survives newer drafts (the S112 law,
+battery-pinned end to end: a clean single-scene preview passes the whole
+battery → approve → a newer draft lands → the approved v2 stays addressable,
+the v3 head refuses until re-rechecked).
+
+**ALONG THE WAY:** the S114 crash-resume gap closed (parseRenderPayload
+dropped `sceneIndex` — a crashed scene-preview job resumed as a FULL render;
+`boundaryAfter` rides the same fix); the render-loop duration fold is now one
+exported pure function with its own unit pins (the 3× cap, the narration
+floor, the doc-speed compression); the resumable-kinds literal extended to
+25.
+
+**TESTS.** Battery 23→26 (a REAL-ffmpeg recheck pin — 13 probes measured on
+a real testsrc/sine preview, the verdict stored on the head with content
+byte-identical, both seams honestly unmeasured with the render command; a
+REAL boundary-pair render — the pair lands, nothing else moves, and the seam
+verdict is measured pass through the shared fold; the approval ladder — no
+verdict, passing verdict, idempotent re-approval, draft survival, stale
+verdict, failed verdict). Unit +7 pins (the seam math from the stitcher's own
+offsets; the seam law arms; the scene-sliced caption laws; the verdict law +
+the approval gate + the tolerant parse; seamsOfScene; the fold's laws + the
+one-implementation source pins; the battery-reuse source pin). The pins
+caught one real bug in the first draft — alignSeam double-applied the cut
+tolerance (the cut window IS the tolerance band); fixed at the site and
+re-pinned.
+
+**VERIFIED:** typecheck; standalone strict typecheck (scripts/tsconfig.s112);
+lint 0; unit 529/529; billing 40/40; storage 12/12; rate 17/17;
+scene-revisions 26/26; drill; alert probe; production build exit 0.
+
+**KNOWN LIMITS, deliberate:** multi-shot scenes' intra-scene flips are the
+full battery's verdict (with shot-join windows) — the boundary lens judges
+the join only, so a flip inside the seam neighborhood could read as a stray
+(the lens's scope law, documented at alignSeam); approving a middle scene of
+a long video needs both its boundary pairs rendered (the strict
+never-silently-clean reading — the UI's missing-media feed makes the ladder
+walkable); un-approval does not exist (rollback materializes old content as a
+new head, which carries its own recheck); the panel UI is Stage 7.

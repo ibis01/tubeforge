@@ -60,7 +60,8 @@ export type JobKind =
   | "qc" // Stage 6 — re-run the QC battery against the existing final.mp4
   | "whiteboard" // S67 — Whiteboard Engine full render / scene preview (E9 Phase A)
   | "reference" // S88 — Reference-video structural analysis (upload → scene map/pacing/transcript/treatment/structure)
-  | "scene3d"; // S94 — the 3D scene render (the scene3d doc → the orbit clip through the shared compositor)
+  | "scene3d" // S94 — the 3D scene render (the scene3d doc → the orbit clip through the shared compositor)
+  | "scene-recheck"; // S116 — scene-scoped QC re-check (entity "<videoId>#scene<N>"; the approval-gating verdict)
 
 export type JobStatus = "pending" | "running" | "done" | "failed" | "interrupted" | "cancelled";
 

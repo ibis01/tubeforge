@@ -3,7 +3,7 @@ import fs from "fs";
 import { Readable } from "stream";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
-import { statScenePreviewFile, statVideoFile } from "@/lib/tubeforge/render";
+import { statScenePreviewFile, statSceneBoundaryFile, statVideoFile } from "@/lib/tubeforge/render";
 import { statShortFile } from "@/lib/tubeforge/shorts";
 import { materialize, presign } from "@/lib/tubeforge/storage";
 
@@ -39,6 +39,8 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const variantParam = new URL(req.url).searchParams.get("variant");
   // S114 — the scene-preview variant: ?variant=scene-preview&n=<index>
   // streams one scene's preview (scene-preview-NN.mp4).
+  // S116 — the boundary-pair variant: ?variant=scene-boundary&n=<afterScene>
+  // streams the seam pair (scene-boundary-NN.mp4).
   const scenePreviewN = Number(new URL(req.url).searchParams.get("n"));
   const variant =
     variantParam === "preview"
@@ -47,7 +49,9 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         ? ("short" as const)
         : variantParam === "scene-preview"
           ? ("scene-preview" as const)
-          : ("final" as const);
+          : variantParam === "scene-boundary"
+            ? ("scene-boundary" as const)
+            : ("final" as const);
 
   const media =
     variant === "short"
@@ -57,7 +61,12 @@ export async function GET(req: NextRequest, ctx: Ctx) {
             id,
             Number.isInteger(scenePreviewN) && scenePreviewN >= 1 ? scenePreviewN : NaN
           )
-        : await statVideoFile(id, variant);
+        : variant === "scene-boundary"
+          ? await statSceneBoundaryFile(
+              id,
+              Number.isInteger(scenePreviewN) && scenePreviewN >= 1 ? scenePreviewN : NaN
+            )
+          : await statVideoFile(id, variant);
   if (!media)
     return NextResponse.json(
       {
@@ -68,7 +77,9 @@ export async function GET(req: NextRequest, ctx: Ctx) {
               ? "No Short rendered yet"
               : variant === "scene-preview"
                 ? "No scene preview rendered yet (POST /api/videos/[id]/render with sceneIndex)"
-                : "No video rendered yet",
+                : variant === "scene-boundary"
+                  ? "No boundary pair rendered yet (POST /api/videos/[id]/render with boundaryAfter)"
+                  : "No video rendered yet",
       },
       { status: 404 }
     );

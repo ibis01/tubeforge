@@ -59,6 +59,11 @@ export async function GET(req: NextRequest, ctx: Ctx) {
  * POST — render the final MP4 as a background job (202).
  * Body: { mode?: "kenburns" | "animated", subtitles?: boolean, music?: boolean,
  *         sceneLimit?: number }  — sceneLimit renders a preview (first N scenes).
+ *         { sceneIndex } — S114: one scene's preview (scene-preview-NN.mp4).
+ *         { boundaryAfter } — S116: the seam pair (scene-boundary-NN.mp4),
+ *                             the media the scene recheck's boundary lens
+ *                             measures. All three grammars are mutually
+ *                             exclusive.
  *
  * The job body is runRenderJob (video-jobs.ts) — the SAME function the durable
  * queue's crash-recovery handler runs, with the request options persisted on
@@ -234,6 +239,29 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (sceneIndex != null && !scenes.some((s) => s.index === sceneIndex))
     return NextResponse.json({ error: `Scene ${sceneIndex} does not exist` }, { status: 404 });
 
+  // S116 — Scene-Level Editing, Stage 5: render a BOUNDARY PAIR — scenes
+  // boundaryAfter + boundaryAfter+1 with their seam — as
+  // scene-boundary-NN.mp4, the media the scene recheck's boundary lens
+  // measures. Mutually exclusive with BOTH other scene-scoped grammars.
+  const boundaryAfterRaw = Number(body?.boundaryAfter);
+  const boundaryAfter =
+    Number.isInteger(boundaryAfterRaw) && boundaryAfterRaw >= 1 ? boundaryAfterRaw : undefined;
+  if (boundaryAfter != null && (sceneIndex != null || sceneLimit != null))
+    return NextResponse.json(
+      { error: "boundaryAfter is mutually exclusive with sceneIndex and sceneLimit — render the pair, one scene, or the first N" },
+      { status: 400 }
+    );
+  if (boundaryAfter != null) {
+    const last = scenes[scenes.length - 1]?.index ?? 0;
+    if (boundaryAfter >= last)
+      return NextResponse.json(
+        { error: `There is no scene after ${boundaryAfter} — the last scene's seam is ${last - 1}|${last}` },
+        { status: 404 }
+      );
+    if (!scenes.some((s) => s.index === boundaryAfter))
+      return NextResponse.json({ error: `Scene ${boundaryAfter} does not exist` }, { status: 404 });
+  }
+
   // Stage 6 (T-6.8) — per-render aspect + frame-rate overrides (optional).
   // When absent, the job falls back to the per-PROJECT defaults on the video
   // row (video.aspectRatio / video.frameRate); 30 fps + 16:9 otherwise.
@@ -273,6 +301,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     music,
     sceneLimit,
     sceneIndex,
+    boundaryAfter,
     aspectRatio,
     frameRate,
     quality,
@@ -324,6 +353,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       mode,
       sceneIndex: sceneIndex ?? null,
       sceneLimit: sceneLimit ?? null,
+      boundaryAfter: boundaryAfter ?? null,
       transition,
       music: resolved
         ? { track: resolved.track.name, why: resolved.why }

@@ -2277,10 +2277,11 @@ await test("queue: resumableKinds covers every kind the routes start", async () 
   // in review); every one must be resumable after a crash. Since the S33
   // contract fix, resumableKinds() is DERIVED from the handler registry, so
   // this test can no longer pass with a stale list — the literal below pins
-  // exhaustiveness: all 24 JobKind values are route-started AND
+  // exhaustiveness: all 25 JobKind values are route-started AND
   // handler-registered (director + continuity joined in Stage 5, upload in
   // Stage 6, whiteboard in S67, consistency in S77, reference in S88,
-  // scene3d in S94; the pre-fix copy listed only 18 and enshrined the drift).
+  // scene3d in S94, scene-recheck in S116; the pre-fix copy listed only 18
+  // and enshrined the drift).
   const { resumableKinds } = await import("../src/lib/tubeforge/queue-handlers.ts");
   const kinds = resumableKinds();
   const expected = [
@@ -2288,7 +2289,7 @@ await test("queue: resumableKinds covers every kind the routes start", async () 
     "render", "short", "convert", "verify", "comments", "thumbnail",
     "variants", "slide", "portrait", "poses", "qc", "upload",
     "director", "continuity", "whiteboard", "consistency", "reference",
-    "scene3d",
+    "scene3d", "scene-recheck",
   ];
   for (const k of expected) {
     ok(kinds.includes(k), `"${k}" is resumable`);
@@ -12487,6 +12488,194 @@ await test("s115: the idempotency + approval gates are wired (source pin)", asyn
   ok(
     schema.includes("spendCeilingMicro Int?") && schema.includes("idempotencyKey  String?  @unique"),
     "the opt-in ceiling + the unique idempotency key are schema law"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// S116 — Scene-Level Editing & Repair, Stage 5: scene QC + boundary
+// validation (pure pins; the DB-backed battery lives in test-scene-revisions)
+// ---------------------------------------------------------------------------
+
+await test("scene-qc: seamExpectation derives the seam from the stitcher's own math", async () => {
+  const { seamExpectation } = await import("../src/lib/tubeforge/scene-qc.ts");
+  // A CUT boundary between 10s + 8s: no blend debt, the seam sits at 10.0.
+  const cut = seamExpectation([10, 8], { style: "cut", durationSec: 0.5 }, 1);
+  eq(cut.boundaryTime, 10, "a cut seam sits at the cumulative duration (no blend debt)");
+  eq(cut.style, "cut", "style preserved");
+  eq(cut.durationSec, 0, "a cut carries no blend duration");
+  ok(cut.window[0] === 10 - 0.6 && cut.window[1] === 10 + 0.6, "the cut window is the tolerance band");
+  // A BLEND boundary: the 0.5s xfade shortens the timeline, seam at 9.5.
+  const blend = seamExpectation([10, 8], { style: "fade", durationSec: 0.5 }, 1);
+  eq(blend.boundaryTime, 9.5, "the blend debt shifts the seam earlier (transitionOffsetsMulti's own math)");
+  eq(blend.durationSec, 0.5, "the blend duration is recorded");
+  ok(blend.window[0] === 9.2 && blend.window[1] === 10.3, "the blend window spans the fade ± 0.3");
+});
+
+await test("scene-qc: alignSeam — the seam law (cut must appear, blend need not, strays fail)", async () => {
+  const { alignSeam, seamExpectation } = await import("../src/lib/tubeforge/scene-qc.ts");
+  const cut = seamExpectation([10, 8], { style: "cut", durationSec: 0.5 }, 1);
+  eq(alignSeam([10.0], cut).status, "pass", "a cut landing on the seam passes");
+  eq(alignSeam([9.7], cut).status, "pass", "within tolerance (0.6s) is the seam");
+  const missing = alignSeam([3.0, 14.0], cut);
+  eq(missing.status, "fail", "a cut that never lands in the pixels fails");
+  ok(missing.missing, "the failure is flagged as a MISSING cut");
+  const late = alignSeam([10.9], cut);
+  eq(late.status, "fail", "a cut landing 0.9s late (outside tol, inside the neighborhood) is a stray");
+  ok(late.unexpected.length === 1, "the stray is named");
+  ok(late.missing, "the honest dual flag: the expected position is empty AND a stray sits late");
+  // A detection deep inside scene B's interior is NOT this lens's verdict.
+  const interior = alignSeam([10.0, 15.5], cut);
+  eq(interior.status, "pass", "the boundary lens owns the JOIN — interior detections belong to the full battery");
+
+  const blend = seamExpectation([10, 8], { style: "fade", durationSec: 0.5 }, 1);
+  eq(alignSeam([], blend).status, "pass", "a clean crossfade may score under the scene threshold — absence is not a defect (the T-55.2 law)");
+  eq(alignSeam([9.8], blend).status, "pass", "a detection inside the blend window is explained");
+  eq(alignSeam([11.0], blend).status, "fail", "a stray inside the neighborhood but past the blend's explanation fails");
+  eq(alignSeam([12.5], blend).status, "pass", "a detection deep in scene B's interior is the full battery's verdict, not the seam's");
+});
+
+await test("scene-qc: checkSceneCues — the scene-sliced caption laws", async () => {
+  const { checkSceneCues } = await import("../src/lib/tubeforge/scene-qc.ts");
+  eq(
+    checkSceneCues([{ start: 10, end: 12 }, { start: 12, end: 14 }], [10, 20], true).status,
+    "pass",
+    "monotonic, non-overlapping, contained cues pass"
+  );
+  eq(
+    checkSceneCues([{ start: 10, end: 12 }, { start: 11.5, end: 14 }], [10, 20], true).status,
+    "fail",
+    "overlapping cues fail"
+  );
+  eq(
+    checkSceneCues([{ start: 8, end: 22 }], [10, 20], true).status,
+    "fail",
+    "a cue crossing both seams beyond the 1s grace fails"
+  );
+  eq(
+    checkSceneCues([{ start: 9.5, end: 11 }], [10, 20], true).status,
+    "pass",
+    "the 1s grace absorbs the boundary cue that just kisses the seam"
+  );
+  eq(
+    checkSceneCues([], [10, 20], true).status,
+    "fail",
+    "a narrated scene with no cues in its window fails"
+  );
+  eq(
+    checkSceneCues([], [10, 20], false).status,
+    "pass",
+    "no narration, no cues due"
+  );
+});
+
+await test("scene-qc: the verdict law + the approval gate", async () => {
+  const { recheckVerdictPassed, approvalBlocker, parseRecheckReport } = await import("../src/lib/tubeforge/scene-qc.ts");
+  const pass = { id: "x", label: "x", status: "pass", pass: true, value: "" };
+  const unmeasured = { id: "x", label: "x", status: "unmeasured", pass: false, value: "" };
+  ok(recheckVerdictPassed([pass], []), "all-pass with no seams is clean");
+  ok(!recheckVerdictPassed([pass], [{ afterScene: 1, status: "unmeasured", media: "none", value: "" }]), "an unmeasured seam keeps the report red (never silently clean)");
+  ok(!recheckVerdictPassed([], []), "an empty report never reads clean");
+
+  eq(approvalBlocker(null, null).ok, false, "no history, no approval");
+  const head = { version: 4, status: "draft" };
+  eq(approvalBlocker(head, null).reason, "no-verdict", "no verdict, no approval");
+  eq(
+    approvalBlocker(head, { schema: 1, scope: "scene", sceneIndex: 1, sceneId: "s1", revisionVersion: 3, builtFromPreview: null, checkedAt: "", passed: true, checks: [], seams: [] }).reason,
+    "stale-verdict",
+    "a verdict for an older revision is stale BY COMPARISON"
+  );
+  eq(
+    approvalBlocker(head, { schema: 1, scope: "scene", sceneIndex: 1, sceneId: "s1", revisionVersion: 4, builtFromPreview: null, checkedAt: "", passed: false, checks: [unmeasured], seams: [] }).reason,
+    "verdict-failed",
+    "a failed verdict blocks approval"
+  );
+  const okGate = approvalBlocker(head, { schema: 1, scope: "scene", sceneIndex: 1, sceneId: "s1", revisionVersion: 4, builtFromPreview: null, checkedAt: "", passed: true, checks: [pass], seams: [] });
+  ok(okGate.ok && !okGate.already, "a passing verdict for the head's own version opens the gate");
+  const already = approvalBlocker({ version: 4, status: "approved" }, null);
+  ok(already.ok && already.already, "approving an approved head is idempotent — no second write, no error");
+
+  ok(parseRecheckReport(null) === null, "null parses to null");
+  ok(parseRecheckReport("{not json") === null, "corrupt JSON parses to null (refuse, never guess)");
+  ok(parseRecheckReport(JSON.stringify({ schema: 2, scope: "scene", checks: [], seams: [] })) === null, "foreign schema parses to null");
+  const round = parseRecheckReport(
+    JSON.stringify({ schema: 1, scope: "scene", sceneIndex: 2, sceneId: "s2", revisionVersion: 5, builtFromPreview: { revisionVersion: 5, staleness: "current" }, checkedAt: "2026-11-18T00:00:00Z", passed: true, checks: [pass], seams: [{ afterScene: 1, status: "pass", media: "boundary-preview", value: "cut in place" }] })
+  );
+  ok(round !== null && round.passed && round.seams.length === 1, "a schema-1 report round-trips");
+});
+
+await test("scene-qc: seamsOfScene — which seams a scene owns", async () => {
+  const { seamsOfScene } = await import("../src/lib/tubeforge/scene-qc.ts");
+  eq(JSON.stringify(seamsOfScene(1, 3)), JSON.stringify([1]), "scene 1 of 3 owns only the seam after it");
+  eq(JSON.stringify(seamsOfScene(2, 3)), JSON.stringify([1, 2]), "a middle scene owns both seams");
+  eq(JSON.stringify(seamsOfScene(3, 3)), JSON.stringify([2]), "the last scene owns only the seam before it");
+  eq(JSON.stringify(seamsOfScene(1, 1)), JSON.stringify([]), "a single-scene video has no seams");
+});
+
+await test("scene-qc: resolveSceneDuration — the render's own fold, exported once (no private copies)", async () => {
+  const { resolveSceneDuration, LEAD_SEC, TAIL_SEC, MIN_SEG_SEC } = await import("../src/lib/tubeforge/render.ts");
+  // A 1s WAV: the base is 1 + 0.35 + 0.85 = 2.2 (above the 2.0 floor).
+  eq(resolveSceneDuration(1, Number.NaN, Number.NaN), 1 + LEAD_SEC + TAIL_SEC, "no doc value: WAV + lead + tail");
+  eq(resolveSceneDuration(0.1, Number.NaN, Number.NaN), MIN_SEG_SEC, "the MIN_SEG floor holds");
+  eq(resolveSceneDuration(1, 1.5, Number.NaN), 2.2, "a doc value under MIN_SEG is ignored");
+  eq(resolveSceneDuration(1, 10, Number.NaN), 2.2 * 3, "the 3× narration cap holds (a stale timeline cannot mint dead air)");
+  eq(resolveSceneDuration(1, 3, Number.NaN), 3, "a sane doc extension is honored");
+  // The narration floor: a doc value may trim the tail but never the words.
+  ok(
+    resolveSceneDuration(5, 3, Number.NaN) > 5 - TAIL_SEC,
+    "the fold never shortens below narration + lead + slim tail"
+  );
+  // The doc speed compresses the floor (a 2× scene may be half as long).
+  ok(
+    resolveSceneDuration(5, 2.7, 2) < resolveSceneDuration(5, 2.7, 1) ||
+      resolveSceneDuration(5, 2.7, 1) <= Math.max((5 + LEAD_SEC + TAIL_SEC) - TAIL_SEC + LEAD_SEC + 0.3, MIN_SEG_SEC),
+    "the speed factor participates in the floor"
+  );
+  // The fold is THE one implementation — the render loop calls it.
+  const render = fs.readFileSync("src/lib/tubeforge/render.ts", "utf8");
+  ok(
+    render.includes("resolveSceneDuration(rawWav, timelineDurations[i] ?? NaN, docScenes?.[i]?.speed ?? NaN)"),
+    "renderVideo's duration loop consumes the exported fold (the seam expectation and the render can never disagree)"
+  );
+  const sceneQc = fs.readFileSync("src/lib/tubeforge/scene-qc.ts", "utf8");
+  ok(
+    sceneQc.includes("resolveSceneDuration(") && !sceneQc.includes("LEAD_SEC + TAIL_SEC, MIN_SEG_SEC"),
+    "scene-qc derives expected durations through the shared fold, not a private copy"
+  );
+});
+
+await test("scene-qc: the battery reuses the whole-file probes (source pin)", async () => {
+  const sceneQc = fs.readFileSync("src/lib/tubeforge/scene-qc.ts", "utf8");
+  ok(
+    sceneQc.includes('from "./qc"') && sceneQc.includes("analyzePass") && sceneQc.includes("ffprobeJson") && sceneQc.includes("parseSrt"),
+    "the scene battery imports the battery's own probe shell (no private ffmpeg copies)"
+  );
+  ok(
+    !/"blackdetect/.test(sceneQc.split("// combined analysis pass")[0] ?? "") || !sceneQc.includes("execFileAsync"),
+    "scene-qc shells no ffmpeg of its own — the probes come from qc/render-qc/audiomix"
+  );
+  ok(
+    sceneQc.includes("export { check as qcCheck, analyzePass, ffprobeJson };") === false &&
+      fs.readFileSync("src/lib/tubeforge/qc.ts", "utf8").includes("export { check as qcCheck, analyzePass, ffprobeJson };"),
+    "qc.ts exports the builders exactly once, at the source of truth"
+  );
+  ok(
+    sceneQc.includes("approvalBlocker") && sceneQc.includes('data: { status: "approved" }'),
+    "the approve arm is a status flip — the gate + the write live in one module"
+  );
+  const route = fs.readFileSync("src/app/api/videos/[id]/scenes/[n]/recheck/route.ts", "utf8");
+  ok(
+    route.includes("approve: true") && route.includes("approvalBlocker"),
+    "the recheck route carries both arms: run (job) + approve (the gated flip)"
+  );
+  const handlers = fs.readFileSync("src/lib/tubeforge/queue-handlers.ts", "utf8");
+  ok(
+    handlers.includes('registerJobHandler("scene-recheck"') && handlers.includes("out.boundaryAfter = p.boundaryAfter"),
+    "the scene-recheck kind is crash-resumable and the boundaryAfter grammar survives a resume"
+  );
+  const schema = fs.readFileSync("prisma/schema.prisma", "utf8");
+  ok(
+    schema.includes("recheck        String?"),
+    "the verdict column is schema law (stored on the revision it judged)"
   );
 });
 

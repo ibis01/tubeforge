@@ -533,6 +533,13 @@ export interface RenderJobOptions {
    *  refuses a body carrying both). The preview touches nothing else: no
    *  other scene's artifacts, no final/preview, no row flags, no QC. */
   sceneIndex?: number;
+  /** S116 — Scene-Level Editing, Stage 5: render a BOUNDARY PAIR — scenes
+   *  boundaryAfter and boundaryAfter+1 with their seam — as
+   *  scene-boundary-NN.mp4, the media the recheck's boundary lens measures.
+   *  Mutually exclusive with sceneIndex and sceneLimit (the route refuses
+   *  combinations). Same preview semantics: no row flags, no QC, no srt —
+   *  and NOTHING outside the pair is read-for-modification. */
+  boundaryAfter?: number;
   /** Stage 6 (T-6.8) — per-render aspect override ("16:9"|"9:16"|"1:1").
    *  When unset, the job falls back to the video row's `aspectRatio`. */
   aspectRatio?: "16:9" | "9:16" | "1:1";
@@ -662,6 +669,106 @@ async function runScenePreviewJob(
   });
 }
 
+/** S116 — the boundary-pair job: scenes N and N+1 through the SAME segment +
+ *  transition machinery, landing scene-boundary-NN.mp4 — the media the
+ *  recheck's boundary lens measures. THE FAITHFULNESS LAW: the pair must
+ *  cut the seam EXACTLY as the full render would — the doc's per-scene
+ *  durations for the pair (the same slice rule the full render's
+ *  sceneDurationsSec consumption uses) and the seam's own transition (the
+ *  incoming scene's doc transitionIn over the video-level default, read by
+ *  renderVideo's own boundary loop). Preview semantics, each deliberate:
+ *  no music (the seam is a visual + timing question), burned captions ON
+ *  (a cue crossing the seam is exactly the defect the lens hunts), no row
+ *  flags, no project QC, no srt — and no scene outside the pair is
+ *  read-for-modification, let alone deleted. */
+async function runBoundaryPreviewJob(
+  videoId: string,
+  video: Video,
+  scenes: Scene[],
+  afterScene: number,
+  opts: RenderJobOptions
+): Promise<void> {
+  const pos = scenes.findIndex((s) => s.index === afterScene);
+  if (pos < 0 || pos + 1 >= scenes.length)
+    throw new Error(`Boundary after scene ${afterScene} does not exist (needs scenes ${afterScene} and ${afterScene + 1})`);
+  const pair = [scenes[pos], scenes[pos + 1]];
+
+  const mode = ["animated", "stock", "slides"].includes(opts.mode ?? "")
+    ? (opts.mode as "animated" | "stock" | "slides")
+    : "kenburns";
+  const aspect: "16:9" | "9:16" | "1:1" =
+    mode === "slides"
+      ? "9:16"
+      : video.aspectRatio === "9:16" || video.aspectRatio === "1:1" || video.aspectRatio === "16:9"
+        ? video.aspectRatio
+        : "16:9";
+  const frameRate = video.frameRate === 24 || video.frameRate === 60 ? video.frameRate : 30;
+  // The doc's settings + durations for the PAIR only (aligned by position —
+  // the same slice the scene-preview lane takes, extended to two). The
+  // durations ride sceneDurationsSec so the fold consumes the doc's picks
+  // exactly as the full render would.
+  const timeline = parseTimeline(video.timeline);
+  const docAligned = timeline != null && timeline.scenes.length === scenes.length;
+  const docScenes = docAligned ? docSceneSettings(timeline, scenes.length)?.slice(pos, pos + 2) ?? null : null;
+  const sceneDurationsSec = docAligned
+    ? pair.map((_, k) => timeline.scenes[pos + k]?.durationSec).map((d) =>
+        typeof d === "number" && Number.isFinite(d) && d > 0 ? d : Number.NaN
+      )
+    : undefined;
+
+  const result = await renderVideo({
+    videoId,
+    scenes: pair,
+    mode,
+    character: null,
+    burnSubtitles: mode !== "slides",
+    smartCaptions: true,
+    music: false, // the pair checks the seam, not the score
+    sfx: await getSfxEnabled(),
+    boundaryPreview: { afterScene },
+    aspectRatio: aspect,
+    frameRate,
+    quality: opts.quality,
+    docScenes,
+    sceneDurationsSec,
+    motion: sanitizeMotion({
+      mode: video.motionMode,
+      intensity: video.motionIntensity,
+      curve: video.motionCurve,
+      vary: video.motionVary,
+    }),
+    motionContext: { tone: video.tone, niche: video.niche },
+    topic: video.topic,
+    transition: resolveTransition(video, mode),
+    brand: null,
+    onProgress: (current, total, label) => {
+      if (isJobCancelled(videoId, "render")) throw new JobCancelledError();
+      setJobProgress(videoId, "render", current, total, label);
+    },
+  });
+
+  // The provenance row: type preview, the seam's own artifact (sceneIndex =
+  // the scene the seam comes after).
+  await registerSceneArtifact({
+    video,
+    sceneIndex: afterScene,
+    type: "preview",
+    storageKey: `${videoId}/scene-boundary-${String(afterScene).padStart(2, "0")}.mp4`,
+    input: `scene-boundary|after=${afterScene}|a=${pair[0].visual}|b=${pair[1].visual}|aVariant=${pair[0].seedVariant ?? 0}|bVariant=${pair[1].seedVariant ?? 0}|mode=${mode}`,
+    prompt: `${pair[0].visual} -> ${pair[1].visual}`,
+    bytes: result.fileBytes,
+  });
+
+  await db.activity.create({
+    data: {
+      organizationId: video.organizationId,
+      videoId,
+      stage: "render",
+      message: `Boundary ${afterScene}|${afterScene + 1} pair rendered (${result.durationSec.toFixed(1)}s, ${(result.fileBytes / 1024).toFixed(0)} KB) — the seam's media for the scene recheck; the full render is untouched`,
+    },
+  });
+}
+
 export async function runRenderJob(
   videoId: string,
   opts: RenderJobOptions = {}
@@ -691,6 +798,13 @@ export async function runRenderJob(
   // is not a certified final video").
   if (Number.isInteger(opts.sceneIndex) && (opts.sceneIndex as number) >= 1) {
     return runScenePreviewJob(videoId, video, scenes, opts.sceneIndex as number, opts);
+  }
+
+  // S116 — the boundary-pair lane: scenes N + N+1 with their seam, the
+  // media the scene recheck's boundary lens measures. Same law: nothing
+  // else moves, nothing is certified.
+  if (Number.isInteger(opts.boundaryAfter) && (opts.boundaryAfter as number) >= 1) {
+    return runBoundaryPreviewJob(videoId, video, scenes, opts.boundaryAfter as number, opts);
   }
 
   // Same defaults the route applies to a missing body field, so a payload-less

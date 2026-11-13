@@ -517,15 +517,17 @@ editing & repair, is under construction on the operator's build order
 (2026-11-13, "start, don't stop"): Stage 0 (S111, the read-only
 reconciliation), Stage 1 (S112, the revision foundation — immutable
 SceneRevision rows, stable scene ids, optimistic concurrency,
-rollback-as-new-revision, all eleven mutators converged) and Stage 2
+rollback-as-new-revision, all eleven mutators converged), Stage 2
 (S113, the declarative dependency map + artifact provenance + the
-measured over-invalidation fix) and Stage 3 (S114, the scene preview
+measured over-invalidation fix), Stage 3 (S114, the scene preview
 lane — scene-preview-NN.mp4 through the same segment machinery,
-nothing else touched, stale labeling against the head revision) are
-and Stage 4 (S115, the propose→approve repair
-ladder, per-project spend ceilings, and job idempotency keys — the
-double-bill killer) are landed; Stages 5–7 follow (scene QC +
-boundary validation, approved-only assembly, UX + hardening).
+nothing else touched, stale labeling against the head revision),
+Stage 4 (S115, the propose→approve repair ladder, per-project spend
+ceilings, and job idempotency keys — the double-bill killer), and
+Stage 5 (S116, the scene-scoped QC recheck + the boundary-pair render
+lane + the approval gate — a revision is approvable only on a passing
+verdict for the head's own version) are landed; Stages 6–7 follow
+(approved-only assembly, UX + hardening).
 
 Standing risks tracked in the worklog: Z.ai gateway outage (S63
 remeasurement and the LLM whiteboard planner gated on the one-probe

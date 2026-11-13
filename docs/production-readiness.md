@@ -150,10 +150,38 @@ honestly, conditionally per the S100 fencing law), Video.spendCeilingMicro
 (opt-in per project, enforced in the same admission window as the credit
 hold via cost-guard.ts: video-scoped spend + estimate ≤ ceiling, else
 402 with the numbers), and the render route joining both gates. Battery
-23/23 incl. the double-bill pin and the ladder. Stages 5–7 continue on
-the same order, riding the existing queue, storage, budget, and QC
-systems: no second timeline engine, no separate job queue, no parallel
-budget system.
+23/23 incl. the double-bill pin and the ladder. **Stage 5 landed as S116**
+— the scene QC + boundary validation + the approval gate: the
+scene-scoped recheck (POST /scenes/[n]/recheck — run arm enqueues a
+bounded "scene-recheck" job; approve arm is synchronous) re-runs the
+whole-file battery's probes on ONE scene's standing preview (the qc.ts
+builders exported and reused, never forked), slices the captions check
+to the scene's doc window when an SRT stands (the battery's own
+emit-only-when-present precedent), and runs the S49 restricted-visual
+scan at scene scope under a restricted policy. THE BOUNDARY LENS: a new
+render grammar POST /render {boundaryAfter: N} renders scenes N+N+1
+with their seam (scene-boundary-NN.mp4, the doc's durations through the
+ONE exported duration fold resolveSceneDuration — render loop and seam
+expectation consume the same math, pinned), and the recheck's
+alignSeam holds the detected cuts to it (a CUT seam must appear within
+tolerance, a BLEND seam has no must-appear obligation — the T-55.2 law
+— and strays in the seam's neighborhood fail; interior detections
+belong to the full battery). The verdict is stored ON the head revision
+(SceneRevision.recheck, an annotation — content byte-identical, pinned)
+and records the revisionVersion it judged; the approval gate
+(approvalBlocker, pure + pinned) requires a PASSING verdict for the
+HEAD'S OWN version: no verdict / a verdict for an older revision / a
+failed verdict all refuse (409), approval is a status flip only and
+idempotent, and an approved head survives newer drafts (the S112 law).
+Never-silently-clean holds at scene scope: unmeasured seams (no pair
+rendered — each carries the exact command that would render it) keep
+the report red. Battery now 26/26 (a real-ffmpeg recheck pin: 13 probes
+measured on a real preview, the annotation-immutability pin, a real
+boundary-pair render with the seam verdict measured through the shared
+fold, and the full approval-gate ladder). Stages 6–7 continue on the
+same order, riding the existing queue, storage, budget, and QC systems:
+no second timeline engine, no separate job queue, no parallel budget
+system.
 
 ## P0.1 spec — what the gate asserts
 
@@ -217,6 +245,7 @@ recovery.
 | P2 opening | S109 | the operator's explicit call (2026-11-13) against the fully-gated baseline at HEAD `8e76c6b` — the fresh review re-validated every gate on a clean checkout (npm ci, typecheck, lint, unit, billing, storage, rate, backup drill ~57 ms RTO, alert probe HEALTH 0, the CI-covered Docker smoke) and upgraded the assessment to "technically strong, approaching paid-beta readiness"; the entry queue above is the review's own ordering | worklog.md §S109 |
 | P2 queue item 2 | S110 | the staging kit: DEPLOYMENT §3 made executable — the provisioner (one command, fresh secrets every run, --dry-run verified), the HTTP drill harness (health/billing/pipeline suites, self-skipping when prerequisites are missing; proven live against a dev server: 2 PASS · 1 SKIP · 0 FAIL, the pipeline suite walking scenes → native scaffold → render job → final.mp4 4.29 MB through the authed route), the orchestrator (harness + k6 + the printed operator-step sequences), the runbook with the RC gate (§7). Provisioning itself awaits the operator's accounts | worklog.md §S110 |
 | Feature track Stage 0 | S111 | the read-only repository reconciliation of the operator's scene-level editing architecture (docs/design/scene-level-editing-reconciliation.md): capability map, the five requirements vs reality, three architectural surprises, two live defects found, the file-by-file Stage 1–7 plan | worklog.md §S111 |
+| Feature track Stage 5 | S116 | scene QC + boundary validation + the approval gate: the scene-scoped recheck (the whole-file battery's probes reused through exported builders — playable/black/frozen/aspect/loudness family/dead-air/static/flicker/stutter/duration via the shared fold/scene-sliced captions/S49 at scene scope), the boundary-pair render lane ({boundaryAfter} → scene-boundary-NN.mp4 through the doc's durations + seam transition) with alignSeam (cut must appear, blend need not, neighborhood strays fail), the verdict stored on the head revision (annotation; content byte-identical), and approval gated on a passing verdict for the head's own version (pure approvalBlocker; idempotent; approved survives drafts) | worklog.md §S116 |
 | Feature track Stage 4 | S115 | repair + cost authorization + idempotency: the propose→approve→reject ladder (estimate + affected assets stored before any spend; approving twice cannot spend twice), SceneRepair (the durable critic/VCE proposal form), Job.idempotencyKey (unique; done rows never re-enqueued — the double-bill killer, pinned; failed rows re-queue conditionally per the fencing law), the opt-in per-project spend ceiling enforced beside the credit hold (cost-guard.ts, 402 with the numbers), the render route gated + keyed | worklog.md §S115 |
 | Feature track Stage 3 | S114 | the scene preview lane: render {sceneIndex} → scene-preview-NN.mp4 through the same segment machinery (mutually exclusive with sceneLimit; the render job branches to its own orchestrator — no finalize, no QC, no flags), preview artifacts registered with built-from revision + the stale law (current/stale/unknown), GET /scenes/[n]/artifacts + the mp4 route's scene-preview variant; the preview pin is a real end-to-end ffmpeg render asserting nothing else moves | worklog.md §S114 |
 | Feature track Stage 2 | S113 | the dependency map + artifact provenance: scene-deps.ts (the declarative table, unit-pinned; PATCH /scenes + rollbackScene both sweep through it — the private regex copies are gone), SceneArtifact (prompt persisted, input hash, revision linkage, cost accumulated through the UsageRecord bridge), registration at the image/TTS/i2v/whiteboard sites, and the §8.3 over-invalidation fix measured by pin (one-scene art change: scenes 1+3's clips survive, scene 2's + the renders die); verified by the 18-test battery + 5 new unit pins + the full chain + build | worklog.md §S113 |
