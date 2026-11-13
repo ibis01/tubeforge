@@ -4,6 +4,22 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { ServiceWorkerRegister } from "@/components/tubeforge/pwa";
 
+// S104 CSP regression fix — the middleware stamps a FRESH per-request nonce
+// into the Content-Security-Policy it attaches to every document
+// (strict-dynamic; under strict-dynamic browsers IGNORE the 'self' fallback
+// for scripts). Next.js can only inject that nonce into its bootstrap
+// <script> tags when the document is rendered AT REQUEST TIME. The document
+// routes were statically prerendered at build: that HTML carries NONCE-LESS
+// scripts, so the browser refused every script — React never hydrated and
+// the "Warming up the forge…" splash sat on screen forever (reproduced
+// byte-identical on the standalone production build; hits every production
+// surface since the nonce CSP landed: Vercel previews, Docker, standalone —
+// the Docker smoke only curls APIs, so script execution was never exercised).
+// Forcing the document segment dynamic renders it per request, where the
+// nonce stamping engages. The shell is ~12 KB of HTML and all data flows
+// through client fetches, so only the meaningless static cache is given up.
+export const dynamic = "force-dynamic";
+
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
