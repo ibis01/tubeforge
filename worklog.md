@@ -6578,13 +6578,16 @@ CI-green push, the house law:
 - **S116** `22fd72c`: first run 43406903905 failed 4 jobs — two real
   (test-queue.mts's own hand-maintained kind literal beside the test-unit
   one; a gitleaks 8.24.3 generic-api-key FALSE POSITIVE on the battery's
-  `seededKeys, "scene-boundary-01.mp4"` cleanup loop — reproduced locally
-  with the exact binary, then killed at the root by renaming to
-  `seededFiles`), one shared (money-path runs the queue suite), one
-  transient (docker pull rate-limited before any project code ran).
-  Fix commit `822ae7d`: run 43408586179 — **all 8 green**. The gitleaks
-  lesson is now standing practice: pre-push `gitleaks git --log-opts`
-  on the local range (applied on every later push).
+  fixture-cleanup literal — the old seeded-KEY list paired the word
+  "seededKeys" with a quoted mp4 file name, which the heuristic read as a
+  key assignment; reproduced locally with the exact binary, then killed at
+  the root by renaming the list to seededFiles), one shared (money-path
+  runs the queue suite), one transient (docker pull rate-limited before
+  any project code ran). Fix commit `822ae7d`: run 43408586179 — **all 8
+  green**. The gitleaks lesson is now standing practice: pre-push
+  `gitleaks git --log-opts` on the local range (applied on every later
+  push — including this very note, whose first wording quoted the flagged
+  shape verbatim and tripped the same rule; the prose no longer does).
 - **S117** `de70bc8`: run on the sha — **all 8 green**.
 - **S118** `a1e820c`: 7/8 green; the E2E job failed exactly one assertion
   in the new spec — the spec expected 400 where the recheck route's honest
