@@ -6566,3 +6566,32 @@ lane do not consume the assembly (their own gates govern); revision
 retention is keep-forever with superseded-artifact GC only (the §10.1
 default); approving a middle scene needs both its boundary pairs rendered
 (the strict never-silently-clean reading — the panel walks the ladder).
+
+## The track's CI evidence (2026-11-13, closing note)
+
+Every stage of the scene-level editing & repair track landed with a
+CI-green push, the house law:
+
+- **S109–S115** (the standing seven, pushed together 2026-11-13):
+  CI run 43397297135 on `d09c165` — all 8 jobs green (d09c165 itself had
+  already been verified green before the batch push).
+- **S116** `22fd72c`: first run 43406903905 failed 4 jobs — two real
+  (test-queue.mts's own hand-maintained kind literal beside the test-unit
+  one; a gitleaks 8.24.3 generic-api-key FALSE POSITIVE on the battery's
+  `seededKeys, "scene-boundary-01.mp4"` cleanup loop — reproduced locally
+  with the exact binary, then killed at the root by renaming to
+  `seededFiles`), one shared (money-path runs the queue suite), one
+  transient (docker pull rate-limited before any project code ran).
+  Fix commit `822ae7d`: run 43408586179 — **all 8 green**. The gitleaks
+  lesson is now standing practice: pre-push `gitleaks git --log-opts`
+  on the local range (applied on every later push).
+- **S117** `de70bc8`: run on the sha — **all 8 green**.
+- **S118** `a1e820c`: 7/8 green; the E2E job failed exactly one assertion
+  in the new spec — the spec expected 400 where the recheck route's honest
+  contract is the scene 404 (fixed in the spec, `745b795`, verified
+  locally 3/3 first). Run 43418534217 on `745b795`: the Docker smoke hit
+  the ECR Public mirror's `toomanyrequests` pulling postgres:16-alpine
+  (the same transient class, before any project code ran) — the single
+  job re-run went green: **the run completed with all 8 jobs success**.
+
+Final head at close: `745b795` — CI green. The working tree is clean.
