@@ -129,7 +129,9 @@ test.describe("S118 — the scene trust layer's route contract", () => {
       headers: { cookie },
       data: {},
     });
-    expect(recheckRes.status(), "the recheck must refuse a sceneless story").toBe(400);
+    expect(recheckRes.status(), "the recheck must refuse a sceneless story").toBe(404);
+    const recheckBody = (await recheckRes.json()) as { error?: string };
+    expect(recheckBody.error ?? "").toContain("does not exist");
 
     const renderRes = await request.post(`/api/videos/${videoId}/render`, {
       headers: { cookie },
