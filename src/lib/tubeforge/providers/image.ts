@@ -576,7 +576,7 @@ async function pollinationsImage(
 
 // ---------- Together AI (FLUX.1-schnell; -Free is the $0 lane) ----------
 
-async function togetherImage(
+export async function togetherImage(
   req: ImageRequest,
   config: CapabilityConfig,
 ): Promise<Buffer> {

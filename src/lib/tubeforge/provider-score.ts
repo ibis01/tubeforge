@@ -92,6 +92,11 @@ const IMAGE_PRIORS: Record<string, ProviderPriors> = {
   stability: { quality: 0.8, latency: 0.74, fit: 0.7 },
   fal: { quality: 0.88, latency: 0.8, fit: 0.72 },
   replicate: { quality: 0.86, latency: 0.72, fit: 0.72 },
+  // S96 expansion — the free-tier image lanes (34db735). Priors are
+  // STARTING BELIEFS per the file header; the registry notes drove them.
+  cloudflare: { quality: 0.78, latency: 0.8, fit: 0.6 }, // Workers AI FLUX-schnell/SDXL; ~500 img/day free, no edits
+  huggingface: { quality: 0.8, latency: 0.7, fit: 0.58 }, // FLUX.1-dev/schnell + SDXL via Inference API; free tier, no edits
+  nvidia: { quality: 0.82, latency: 0.72, fit: 0.62 }, // FLUX.1-dev / flux.2-klein via NIM; 1,000 credits/month free, no edits
 };
 
 /** Video priors. */
@@ -102,6 +107,14 @@ const VIDEO_PRIORS: Record<string, ProviderPriors> = {
   replicate: { quality: 0.82, latency: 0.7, fit: 0.78 },
   runway: { quality: 0.9, latency: 0.74, fit: 0.82 },
   luma: { quality: 0.86, latency: 0.72, fit: 0.8 },
+  // S96 expansion — the free-tier video lanes (34db735). async polling
+  // providers trend lower latency prior; fit reflects i2v (no t2v) where
+  // the registry so notes.
+  agnes: { quality: 0.72, latency: 0.6, fit: 0.6 }, // completely free, 720P, async polling (the retry-503 lane)
+  nvidia: { quality: 0.8, latency: 0.66, fit: 0.68 }, // Wan2.2 NIM, OpenAI-compatible; 1,000 credits/month free
+  kling: { quality: 0.84, latency: 0.62, fit: 0.74 }, // kling-v1 image-to-video
+  hailuo: { quality: 0.82, latency: 0.64, fit: 0.72 }, // MiniMax-Hailuo 1080P/6s; 200 free credits on signup
+  ltxstudio: { quality: 0.78, latency: 0.74, fit: 0.7 }, // LTX-2.5; 8s clips, faster tier available
 };
 
 const PRIORS_BY_CAPABILITY: Record<CapabilityId, Record<string, ProviderPriors>> = {
