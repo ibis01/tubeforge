@@ -53,6 +53,53 @@ export function sceneDurationMs(scene: WhiteboardScene, voMs: number | null): nu
   return estimateNarrationMs(scene.narration);
 }
 
+// ---------------------------------------------------------------------------
+// W4 — word anchors (S120 §3 W4): the ASR/captions lane's per-word timing,
+// passed as an INPUT to the scheduler — never a doc field (the
+// compile-only law: the validator and the serializer never see it).
+// ---------------------------------------------------------------------------
+
+/** One word's spoken span. `index` is the word's position in the scene's
+ *  narration (0-based, the SAME tokenization the beat compiler's `words()`
+ *  uses) — the captions lane's contract, enforced by the envelope's
+ *  validation below. */
+export interface WordAnchor {
+  index: number;
+  startMs: number;
+  endMs: number;
+}
+
+export interface WordAnchors {
+  byWord: WordAnchor[];
+}
+
+/** Validate + collapse anchors to their envelope [firstStart, lastEnd].
+ *  Returns null when the anchors are absent or DEGENERATE (empty spans,
+ *  non-monotonic indexes, negative starts, an envelope past the scene
+ *  clock) — the caller then schedules exactly as if no anchors existed
+ *  (the tolerant-read law: misheard ASR degrades to the estimator, it
+ *  never corrupts the schedule). */
+export function anchorEnvelope(
+  anchors: WordAnchors | undefined,
+  durationMs = Number.POSITIVE_INFINITY
+): { startMs: number; endMs: number } | null {
+  if (!anchors || anchors.byWord.length === 0) return null;
+  const sorted = [...anchors.byWord].sort((a, b) => a.index - b.index);
+  let prevIndex = -1;
+  let startMs = Number.POSITIVE_INFINITY;
+  let endMs = Number.NEGATIVE_INFINITY;
+  for (const w of sorted) {
+    if (!Number.isFinite(w.startMs) || !Number.isFinite(w.endMs)) return null;
+    if (w.endMs < w.startMs) return null;
+    if (w.index <= prevIndex) return null; // duplicate or unordered indexes
+    prevIndex = w.index;
+    if (w.startMs < startMs) startMs = w.startMs;
+    if (w.endMs > endMs) endMs = w.endMs;
+  }
+  if (!(endMs > startMs) || startMs < 0 || endMs > durationMs) return null;
+  return { startMs: Math.round(startMs), endMs: Math.round(endMs) };
+}
+
 /**
  * Schedule a scene: fill in animation events for every drawable path and
  * text element the placements bring, in draw order, inside the narration
@@ -62,7 +109,8 @@ export function sceneDurationMs(scene: WhiteboardScene, voMs: number | null): nu
 export function scheduleScene(
   scene: WhiteboardScene,
   durationMs: number,
-  geometry: Map<string, AssetGeometry>
+  geometry: Map<string, AssetGeometry>,
+  anchors?: WordAnchors
 ): AnimationEvent[] {
   const events: AnimationEvent[] = [];
   const claimed = new Set<string>(); // "assetId::pathId" / "assetId::text:textId" / "assetId::color[:pathId]"
@@ -99,9 +147,16 @@ export function scheduleScene(
   }
   if (work.length === 0) return events;
 
-  // Budget: narration window minus lead-in/hold/gaps.
+  // Budget: the draw window minus lead-in/hold/gaps. W4: when word
+  // anchors are present AND sane, the draw fills the SPOKEN window
+  // [firstWord.start, lastWord.end] — the strokes land on the words that
+  // introduce them, and the hold extends to the scene clock's own edge.
+  // Absent/degenerate anchors → today's nominal window, byte-for-byte.
+  const spoken = anchorEnvelope(anchors, durationMs);
+  const winStart = spoken ? spoken.startMs : LEAD_IN_MS;
+  const winEnd = spoken ? spoken.endMs : durationMs - HOLD_END_MS;
   const gaps = PATH_GAP_MS * Math.max(0, work.length - 1);
-  const avail = Math.max(1200, durationMs - LEAD_IN_MS - HOLD_END_MS - gaps);
+  const avail = Math.max(1200, winEnd - winStart - gaps);
   const totalWeight = work.reduce((a, w) => a + w.weight, 0);
   // Raw durations: weight-shared ideals, snappiness-clamped; texts ride
   // their character-count model.
@@ -116,10 +171,11 @@ export function scheduleScene(
     return d;
   });
   // The fill law (the S64 QC receipts): scale uniformly so the draw span
-  // ENDS at durationMs − HOLD_END_MS — capped raw schedules finished 3–6s
+  // ENDS at the window's right edge (nominal: durationMs − HOLD_END_MS;
+  // W4: the last spoken word's end) — capped raw schedules finished 3–6s
   // early, and the static tails failed frozen-frames/static-shots.
   const f = rawSum > 0 ? Math.min(2.8, Math.max(0.5, avail / rawSum)) : 1;
-  let t = LEAD_IN_MS;
+  let t = winStart;
   work.forEach((w, i) => {
     const durationMs = Math.max(120, Math.round(raw[i] * f));
     if (w.kind === "path") {

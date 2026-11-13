@@ -13692,6 +13692,152 @@ await test("W3 extraction: the pen attributes ride along for the validator", asy
   ok(ex.paths[0].d === "M 0 0 L 10 10", "path data unchanged");
 });
 
+// ---------- suite: W4 slice 1 — word anchors are INPUTS, never a doc field ----------
+
+suiteStart("W4 slice 1 — word anchors: the schedule rides the spoken clock");
+
+await test("W4 anchorEnvelope: sane anchors collapse to their envelope, garbage degrades to null", async () => {
+  const { anchorEnvelope } = await import("../src/lib/tubeforge/whiteboard/timing");
+  eq(anchorEnvelope(undefined), null, "no anchors → null");
+  eq(anchorEnvelope({ byWord: [] }), null, "empty anchors → null");
+  const sane = { byWord: [
+    { index: 0, startMs: 500, endMs: 800 },
+    { index: 1, startMs: 900, endMs: 1200 },
+  ] };
+  eq(anchorEnvelope(sane), { startMs: 500, endMs: 1200 }, "the envelope spans first-start → last-end");
+  eq(
+    anchorEnvelope({ byWord: [sane.byWord[1], sane.byWord[0]] }),
+    { startMs: 500, endMs: 1200 },
+    "unordered indexes sort by index (the tolerant read)"
+  );
+  eq(anchorEnvelope({ byWord: [{ index: 0, startMs: 0, endMs: 0 }] }), null, "a zero span degrades");
+  eq(anchorEnvelope({ byWord: [{ index: 0, startMs: 800, endMs: 700 }] }), null, "endMs < startMs degrades");
+  eq(
+    anchorEnvelope({ byWord: [{ index: 0, startMs: 0, endMs: 100 }, { index: 0, startMs: 200, endMs: 300 }] }),
+    null,
+    "duplicate indexes degrade"
+  );
+  eq(anchorEnvelope(sane, 1000), null, "an envelope past the scene clock degrades (the hold cannot go negative)");
+  eq(anchorEnvelope({ byWord: [{ index: 0, startMs: -5, endMs: 100 }] }), null, "a negative start degrades");
+});
+
+await test("W4 scheduleScene: absent anchors are byte-for-byte today's fill law; degenerate anchors degrade identically", async () => {
+  const { scheduleScene, buildGeometry } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const geo = buildGeometry([{ id: "a1", paths: [{ id: "p1", d: "M 0 0 L 100 0" }, { id: "p2", d: "M 0 0 L 10 0" }] }]);
+  const plain = scheduleScene(WB_PLAIN, 10000, geo);
+  eq(JSON.stringify(scheduleScene(WB_PLAIN, 10000, geo, undefined)), JSON.stringify(plain), "explicit undefined = no anchors");
+  const degenerate = { byWord: [{ index: 0, startMs: 500, endMs: 12000 }] };
+  eq(
+    JSON.stringify(scheduleScene(WB_PLAIN, 10000, geo, degenerate)),
+    JSON.stringify(plain),
+    "an envelope past the clock degrades to the nominal window, byte-for-byte"
+  );
+});
+
+await test("W4 scheduleScene: with anchors the draw fills the SPOKEN window", async () => {
+  const { scheduleScene, buildGeometry } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const geo = buildGeometry([{ id: "a1", paths: [{ id: "p1", d: "M 0 0 L 100 0" }, { id: "p2", d: "M 0 0 L 10 0" }] }]);
+  const anchors = { byWord: Array.from({ length: 6 }, (_, i) => ({ index: i, startMs: 900 + i * 300, endMs: 900 + i * 300 + 220 })) };
+  const ev = scheduleScene(WB_PLAIN, 10000, geo, anchors);
+  eq(ev.length, 2, "both strokes scheduled");
+  eq(ev[0].startMs, 900, "the first stroke starts on the first spoken word");
+  const last = ev[ev.length - 1];
+  eq(last.startMs + last.durationMs, 900 + 5 * 300 + 220, "the fill law: draws end exactly at the last word's end");
+  const hold = 10000 - (900 + 5 * 300 + 220);
+  ok(hold > 4000, `the unspoken tail becomes hold (${hold}ms) — the final idea breathes`);
+  eq(JSON.stringify(scheduleScene(WB_PLAIN, 10000, geo, anchors)), JSON.stringify(ev), "deterministic with anchors");
+  // The gap arithmetic is untouched (ONE scheduler's numbers).
+  eq(ev[1].startMs - (ev[0].startMs + ev[0].durationMs), 130, "the pen-lift gap is the fill law's own");
+});
+
+await test("W4 planBeats: aligned anchors make each sentence's window its spoken span; a mismatch degrades byte-for-byte", async () => {
+  const { planBeats } = await import("../src/lib/tubeforge/whiteboard/beat-plan");
+  const { buildGeometry } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const scene: WhiteboardScene = {
+    id: "w4a",
+    narration: "The heart pumps blood. Money moves markets. The end stands alone.",
+    background: "#ffffff",
+    placements: [
+      { assetId: "heart-main", placement: { x: 0, y: 0, scale: 1, rotateDeg: 0 }, order: 0 },
+      { assetId: "coin", placement: { x: 400, y: 0, scale: 1, rotateDeg: 0 }, order: 1 },
+      { assetId: "close-card", placement: { x: 800, y: 0, scale: 1, rotateDeg: 0 }, order: 2 },
+    ],
+    animations: [],
+    camera: [],
+  };
+  const geo = buildGeometry([
+    { id: "heart-main", paths: [{ id: "p1", d: "M 0 0 L 10 0" }] },
+    { id: "coin", paths: [{ id: "p1", d: "M 0 0 L 10 0" }] },
+    { id: "close-card", paths: [{ id: "p1", d: "M 0 0 L 10 0" }] },
+  ]);
+  // 11 narration words; word i spans [500+400i, +300).
+  const anchors = { byWord: Array.from({ length: 11 }, (_, i) => ({ index: i, startMs: 500 + i * 400, endMs: 500 + i * 400 + 300 })) };
+  const beats = planBeats(scene, { durationMs: 12000, geometry: geo, anchors });
+  eq(beats.length, 3, "three sentences → three beats");
+  eq(beats[0].startMs, 500, "sentence 0 rides its first word's start");
+  eq(beats[0].endMs, 500 + 3 * 400 + 300, "sentence 0 ends on its last word's end");
+  eq(beats[1].startMs, 500 + 4 * 400, "sentence 1 starts on ITS first word");
+  eq(beats[1].endMs, 500 + 6 * 400 + 300, "sentence 1 ends on its last word");
+  eq(beats[2].startMs, 500 + 7 * 400, "sentence 2 starts on its first word");
+  eq(beats[2].endMs, 500 + 10 * 400 + 300, "sentence 2 ends on its last word");
+  // A count mismatch (misheard ASR) degrades to the W2 estimator.
+  const mismatch = { byWord: anchors.byWord.slice(0, 9) };
+  const fallback = planBeats(scene, { durationMs: 12000, geometry: geo });
+  const degraded = planBeats(scene, { durationMs: 12000, geometry: geo, anchors: mismatch });
+  eq(JSON.stringify(degraded), JSON.stringify(fallback), "mismatched anchors = byte-for-byte the proportional plan");
+  const none = planBeats(scene, { durationMs: 12000, geometry: geo });
+  eq(JSON.stringify(fallback), JSON.stringify(none), "no-anchor and explicit-undefined agree");
+});
+
+await test("W4 beatSceneEvents: anchors flow through the fallback AND the plan (one seam)", async () => {
+  const { beatSceneEvents } = await import("../src/lib/tubeforge/whiteboard/beat-plan");
+  const { buildGeometry } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const geo = buildGeometry([{ id: "a1", paths: [{ id: "p1", d: "M 0 0 L 100 0" }, { id: "p2", d: "M 0 0 L 10 0" }] }]);
+  // No sentences → the plan degenerates → the fill-law fallback, WITH anchors.
+  const noNarration: WhiteboardScene = { ...WB_PLAIN, narration: "" };
+  const anchors = { byWord: Array.from({ length: 4 }, (_, i) => ({ index: i, startMs: 700 + i * 200, endMs: 700 + i * 200 + 150 })) };
+  const ev = beatSceneEvents(noNarration, 9000, geo, undefined, anchors);
+  ok(ev.length >= 2, "the fallback scheduled the work");
+  eq(ev[0].startMs, 700, "the fallback's first stroke rides the first spoken word");
+  // The plan path: a real narration with anchors shifts the compiled strokes.
+  const scene: WhiteboardScene = {
+    ...WB_PLAIN,
+    narration: "The heart pumps blood.",
+  };
+  const planned = beatSceneEvents(scene, 9000, geo, undefined, anchors);
+  ok(planned.length >= 2, "the plan compiled");
+  const plannedStart = Math.min(...planned.map((e) => e.startMs));
+  eq(plannedStart, 700, "the compiled strokes land on the spoken window's start");
+});
+
+await test("W4 checkReadability: the pixel wall rejects scale-0.4 specks; zoom rescues; unknown text fails closed", async () => {
+  const { checkReadability, WB_TEXT_READABILITY_PX } = await import("../src/lib/tubeforge/whiteboard/text-draw");
+  const { ASSETS } = await import("../src/lib/tubeforge/whiteboard/assets");
+  ok(ASSETS.some((a) => a.id === "heart-labels"), "the label asset is in the library (its texts registered)");
+  const out = { width: 1920, sceneWidth: 1920 };
+  const fine = checkReadability({ assetId: "heart-labels", textId: "hl-ra", placementScale: 1 }, { zoom: 1 }, out);
+  ok(fine.ok, `22px at scale 1 passes (got ${fine.renderedPx}px)`);
+  eq(fine.renderedPx, 22, "the rendered height is the honest math");
+  const speck = checkReadability({ assetId: "heart-labels", textId: "hl-ra", placementScale: 0.4 }, { zoom: 1 }, out);
+  ok(!speck.ok, "a scale-0.4 placement (8.8px) fails the wall");
+  ok(speck.renderedPx < WB_TEXT_READABILITY_PX, "the report names the shortfall");
+  const rescued = checkReadability({ assetId: "heart-labels", textId: "hl-ra", placementScale: 0.4 }, { zoom: 2 }, out);
+  ok(rescued.ok, "the camera's zoom rescues the same placement (17.6px)");
+  const unknown = checkReadability({ assetId: "nope", textId: "missing", placementScale: 1 }, { zoom: 1 }, out);
+  ok(!unknown.ok, "an unregistered text fails CLOSED with a reason");
+  ok(/registry/.test(unknown.reason ?? ""), "the reason says why");
+  // Output scaling is part of the law: a half-width export halves the pixels.
+  const half = checkReadability({ assetId: "heart-labels", textId: "hl-ra", placementScale: 0.4 }, { zoom: 1 }, { width: 960, sceneWidth: 1920 });
+  ok(!half.ok && half.renderedPx === 4.4, "the output factor rides the math");
+});
+
+await test("W4 compile-only: the anchors never ride the doc contract", async () => {
+  const src = fs.readFileSync("src/lib/tubeforge/whiteboard/storyboard.ts", "utf8");
+  ok(!src.includes("WordAnchors") && !src.includes("byWord"), "the storyboard (validator + serializer) never sees the anchors");
+  const timingSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/timing.ts", "utf8");
+  ok(timingSrc.includes("export interface WordAnchors"), "the anchor contract lives with the scheduler (one source)");
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

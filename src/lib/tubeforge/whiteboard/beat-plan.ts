@@ -43,8 +43,10 @@ import {
   PATH_GAP_MS,
   TEXT_CHARS_BY_ID,
   TEXT_IDS_BY_ASSET,
+  anchorEnvelope,
   scheduleScene,
   type AssetGeometry,
+  type WordAnchors,
 } from "./timing";
 import { totalLength } from "./svg";
 import type { AnimationEvent, WhiteboardScene } from "./storyboard";
@@ -200,6 +202,12 @@ export interface PlanBeatsOptions {
    *  matcher to the cue table + the cards + deterministic grouping — the
    *  plan still compiles, just with less vocabulary. */
   assetTags?: ReadonlyMap<string, readonly string[]>;
+  /** W4: the captions lane's per-word spoken spans — an INPUT, never a
+   *  doc field. When the anchor count matches the narration's word
+   *  tokenization, each sentence's window IS its words' spoken span (the
+   *  strokes land on the clock the VO actually spoke); a mismatch
+   *  degrades to the word-proportional estimator byte-for-byte. */
+  anchors?: WordAnchors;
 }
 
 /** The exact claimed-key grammar the fill law uses (timing.ts:66-70). */
@@ -297,17 +305,53 @@ export function planBeats(
   }
   if (bySentence.size === 0) return [];
 
-  // Word-proportional windows across the draw span (the fill law's
-  // envelope: [LEAD_IN, duration − HOLD], floored — timing.ts:102).
-  const weights = sentences.map((s) => Math.max(words(s).length, MIN_BEAT_WORDS));
-  const totalWeight = weights.reduce((a, b) => a + b, 0);
-  const drawSpan = Math.max(MIN_DRAW_SPAN_MS, opts.durationMs - LEAD_IN_MS - HOLD_END_MS);
-  let t = LEAD_IN_MS;
-  const windows = weights.map((w) => {
-    const start = t;
-    t += (w / totalWeight) * drawSpan;
-    return { startMs: Math.round(start), endMs: Math.round(t) };
-  });
+  // W4 — the windows. Two sources, one law:
+  //   aligned anchors → each sentence's window is its words' spoken span
+  //   (the clock the VO actually spoke; the hold extends to the scene
+  //   clock's edge);
+  //   absent / mismatched / degenerate → the word-proportional estimator
+  //   across the fill law's envelope ([LEAD_IN, duration − HOLD]),
+  //   byte-for-byte the W2 behavior. Anchors are advisory inputs — a
+  //   misheard ASR pass degrades, it never corrupts the choreography.
+  const narrationWords = sentences.map((s) => words(s));
+  const flatWordCount = narrationWords.reduce((a, w) => a + w.length, 0);
+  const env = anchorEnvelope(opts.anchors, opts.durationMs);
+  const sortedWords =
+    opts.anchors && env ? [...opts.anchors.byWord].sort((a, b) => a.index - b.index) : null;
+  let windows: { startMs: number; endMs: number }[] | null = null;
+  if (sortedWords && sortedWords.length === flatWordCount) {
+    const candidate: { startMs: number; endMs: number }[] = [];
+    let off = 0;
+    let sane = true;
+    for (const toks of narrationWords) {
+      const first = sortedWords[off];
+      const last = sortedWords[off + toks.length - 1];
+      off += toks.length;
+      if (!first || !last || last.endMs <= first.startMs) {
+        sane = false;
+        break;
+      }
+      candidate.push({ startMs: Math.round(first.startMs), endMs: Math.round(last.endMs) });
+    }
+    // Windows must march forward (weird ASR spans never reorder the beats).
+    for (let i = 1; sane && i < candidate.length; i++) {
+      if (candidate[i].startMs < candidate[i - 1].endMs) sane = false;
+    }
+    if (sane) windows = candidate;
+  }
+  if (!windows) {
+    // Word-proportional windows across the draw span (the fill law's
+    // envelope: [LEAD_IN, duration − HOLD], floored — timing.ts:102).
+    const weights = sentences.map((s) => Math.max(words(s).length, MIN_BEAT_WORDS));
+    const totalWeight = weights.reduce((a, b) => a + b, 0);
+    const drawSpan = Math.max(MIN_DRAW_SPAN_MS, opts.durationMs - LEAD_IN_MS - HOLD_END_MS);
+    let t = LEAD_IN_MS;
+    windows = weights.map((w) => {
+      const start = t;
+      t += (w / totalWeight) * drawSpan;
+      return { startMs: Math.round(start), endMs: Math.round(t) };
+    });
+  }
 
   const beats: WhiteboardBeat[] = [];
   for (const [sentence, assetIds] of bySentence) {
@@ -424,11 +468,12 @@ export function beatSceneEvents(
   scene: WhiteboardScene,
   durationMs: number,
   geometry: Map<string, AssetGeometry>,
-  assetTags?: ReadonlyMap<string, readonly string[]>
+  assetTags?: ReadonlyMap<string, readonly string[]>,
+  anchors?: WordAnchors
 ): AnimationEvent[] {
-  const fallback = () => scheduleScene(scene, durationMs, geometry);
+  const fallback = () => scheduleScene(scene, durationMs, geometry, anchors);
   if (!(durationMs > 0)) return fallback();
-  const beats = planBeats(scene, { durationMs, geometry, assetTags });
+  const beats = planBeats(scene, { durationMs, geometry, assetTags, anchors });
   if (beats.length === 0) return fallback();
   const events = compileBeats(beats, scene, durationMs, geometry);
   // A usable plan always adds the unclaimed work; an empty list here is
