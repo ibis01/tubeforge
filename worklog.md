@@ -6479,3 +6479,90 @@ their own gate; the whiteboard lane has no scene revisions — its doc is
 the whiteboardProject); the manifest covers final.mp4 only; the UX for
 "your render used the approved content, your draft is waiting" is Stage
 7's panel (the data is all on the status surface already).
+
+## S118 — Scene-Level Editing & Repair, Stage 7: UX + production hardening — THE TRACK CLOSES (2026-11-13)
+
+**EXIT CRITERION (the proposal's own): end-to-end tests + docs.** Both
+landed, plus the two §8 defects the Stage 0 reconciliation found and every
+deferred tail the earlier stages named. The track (S111–S118) is complete.
+
+**§8.1 — THE DEAD UPLOAD ROUTE, CLOSED.** Both Scene Studio surfaces have
+POSTed to `/api/videos/[id]/storyboard/upload` since Stage 6, and
+`replaceSceneImage` (story.ts) sat beside them — but no route ever
+answered: the per-scene "upload your own art" button 404'd in the live
+tree. The route now answers the components' exact multipart contract
+(`scene` + `file`) and rides the SAME pipeline a re-roll does: sniff +
+HEIC decode, the cover-crop geometry, the storage seam, S113's
+scene-scoped invalidation (one scene's clip + the renders — never the
+wholesale delete), S113's deferred provenance registration (the
+manual-upload artifact row), the flags, the §8.2 audit row, and the S79
+preference-gated targeted consistency re-check (an upload IS a repaint).
+
+**§8.2 — THE UNAUDITED EDITS, CLOSED.** Scene text edits (PATCH /scenes)
+and timeline saves (PUT /assemble) were the two MOST human-facing
+mutations and the only unaudited ones. Both leave Activity rows now —
+PATCH names the revision it produced ("Scene 2 … edited → v3"), the
+assemble save names the reorder/edit shape.
+
+**THE VCE EMITTER REWIRE (S115's named tail).** Both Visual Consistency
+Engine write sites (the full pass + the targeted re-check) persist their
+per-scene proposals as durable SceneRepair rows — origin "vce", estimate
+from the admission's own table, affected-asset list attached, DEDUP-GUARDED
+(a standing open repair with the same instruction is never re-proposed;
+a CHANGED instruction is a new row — battery-pinned), best-effort (never
+fails the engine), lazily imported (scene-repairs pulls video-jobs which
+pulls visual-consistency — the cycle breaks at import time). The S86
+one-click lane's ephemeral JSON is now the approval inbox's feed. The
+critic's project-level actions stay ephemeral by design — SceneRepair is
+scene-scoped by schema; "re-run the voiceover" is a directive, not a
+scene repair (documented in the runbook).
+
+**THE OPERATOR SURFACE.** The Scene Trust Panel (scene-trust-panel.tsx)
+mounts in the Scene Studio: the revision chain with per-version status
+chips and restore buttons (rollback-as-new-revision, one click); the
+recheck verdict rendered check-by-check with the approval gate's honest
+refusal reasons (never hidden); the repair inbox with estimates and
+approve/reject; the seam verdicts with "Render the pair" buttons exactly
+where the media is missing; and the one-click scene preview. The
+production board gains the per-video cost + ceiling column ("$X on this
+video / $Y cap") — the "no per-video attribution" note the board carried
+since S91 is retired (S113's bridge + S115's ceiling made it first-class).
+
+**THE E2E + DOCS.** e2e/scene-editing.spec.ts pins the trust layer's HTTP
+contract (auth gates on all four scene routes; the format guards; the
+sceneless refusals — the pipeline spec's "never accept a half-built
+project" law, extended). docs/runbooks/scene-editing.md is the operator's
+manual: the model, the walk (edit → preview → re-check → approve → render
+→ ship), the gates table with the no-override rationale, the incident
+notes, and §5's twelve-scenario → pin mapping (the operator's QA table,
+each scenario pointing at the battery/e2e suite that pins it).
+ARCHITECTURE.md's reconciled-section gains the trust-layer block.
+
+**TESTS.** Battery 28→29 (the VCE persistence ladder: proposals persist
+with estimates, born proposed with zero spend, the dedup guard, the
+changed-instruction-is-new law) + 2 unit source pins (the upload route's
+full wiring; the audit rows + rewire + surfaces).
+
+**VERIFIED:** typecheck; standalone strict typecheck; lint 0; unit 534/534;
+billing 40/40; storage 12/12; rate 17/17; scene-revisions 29/29; drill;
+alert probe; production build exit 0; gitleaks clean on the push range.
+
+**THE TRACK, CLOSED:** S111 (reconciliation) → S112 (revisions) → S113
+(dependencies + provenance) → S114 (previews) → S115 (repairs + cost) →
+S116 (scene QC + approval) → S117 (approved assembly + manifest) → S118
+(UX + hardening). The operator's five requirements all have executable
+answers: versioning (append-only, conflict-gated), invalidation (the
+declarative map, surgical), provenance (prompts, hashes, costs, revisions),
+cost authorization (the ladder + the ceiling + idempotency), rollback
+(new revisions, never erasures) — and the exit criteria the proposal wrote
+for each stage are the tests that pin them. The layer rode the existing
+queue, storage, budget, and QC systems end to end: no second timeline
+engine, no separate job queue, no parallel budget, no separate publishing
+pipeline — §11's law, held.
+
+**KNOWN LIMITS, deliberate:** the critic's project-level proposals remain
+report JSON (not scene-scoped); the Short lane and the whiteboard engine
+lane do not consume the assembly (their own gates govern); revision
+retention is keep-forever with superseded-artifact GC only (the §10.1
+default); approving a middle scene needs both its boundary pairs rendered
+(the strict never-silently-clean reading — the panel walks the ladder).

@@ -864,6 +864,13 @@ export async function runConsistencyEngine(
     where: { id: videoId },
     data: { consistency: JSON.stringify(report), error: null },
   });
+  // S118 — the proposals persist as durable SceneRepair rows (origin
+  // "vce", dedup-guarded, best-effort): the one-click lane's ephemeral
+  // report JSON becomes the approval inbox's feed. Lazily imported —
+  // scene-repairs pulls video-jobs (the repair job), which pulls this
+  // module; the cycle is broken at import time and harmless at call time.
+  const { persistVceProposals } = await import("./scene-repairs");
+  await persistVceProposals(videoId, report.proposals).catch(() => {});
   await db.activity.create({
     data: {
       organizationId: video.organizationId,
@@ -1038,6 +1045,10 @@ export async function runTargetedRecheck(
     where: { id: videoId },
     data: { consistency: JSON.stringify(report), error: null },
   });
+  // S118 — the targeted re-check's proposals persist too (same law, same
+  // dedup guard): a repaint's fresh verdicts feed the approval inbox.
+  const { persistVceProposals } = await import("./scene-repairs");
+  await persistVceProposals(videoId, report.proposals).catch(() => {});
   await db.activity.create({
     data: {
       organizationId: video.organizationId,

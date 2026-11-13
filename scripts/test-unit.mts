@@ -12812,6 +12812,79 @@ await test("render-assembly: the assembly + manifest + gates are wired (source p
   );
 });
 
+// ---------------------------------------------------------------------------
+// S118 — Scene-Level Editing & Repair, Stage 7: UX + hardening (the §8
+// defect closures, the VCE→SceneRepair rewire, and the surfaces — source
+// pins; the VCE persistence ladder lives in the battery)
+// ---------------------------------------------------------------------------
+
+await test("s118: the §8.1 upload route is alive and rides the full pipeline (source pin)", async () => {
+  const route = fs.readFileSync("src/app/api/videos/[id]/storyboard/upload/route.ts", "utf8");
+  ok(
+    route.includes("replaceSceneImage(id, sceneIndex, upload)") &&
+      route.includes("await req.formData()"),
+    "the route answers the components' multipart contract through the existing replaceSceneImage"
+  );
+  ok(
+    route.includes("invalidateRenderedArtifacts(id, { slidePngs: true, sceneIndex })"),
+    "an upload is a one-scene art change — S113's scene-scoped invalidation, not the wholesale delete"
+  );
+  ok(
+    route.includes("registerSceneArtifact") && route.includes("manual-upload"),
+    "uploads register provenance (the S113 deferred tail, closed)"
+  );
+  ok(
+    route.includes("db.activity.create") && route.includes("art uploaded"),
+    "the upload leaves an audit row (the §8.2 law)"
+  );
+  ok(
+    route.includes('startJob(id, "consistency"'),
+    "the S79 preference-gated targeted re-check fires for uploads too (an upload IS a repaint)"
+  );
+});
+
+await test("s118: the §8.2 audit rows + the VCE persistence + the surfaces are wired (source pin)", async () => {
+  const scenes = fs.readFileSync("src/app/api/videos/[id]/scenes/route.ts", "utf8");
+  ok(
+    scenes.includes("db.activity") && scenes.includes("edited → v"),
+    "PATCH /scenes leaves an audit row naming the revision it produced"
+  );
+  const assemble = fs.readFileSync("src/app/api/videos/[id]/assemble/route.ts", "utf8");
+  ok(
+    assemble.includes("db.activity") && assemble.includes("Timeline saved"),
+    "PUT /assemble leaves an audit row"
+  );
+  const vce = fs.readFileSync("src/lib/tubeforge/visual-consistency.ts", "utf8");
+  const repairs = fs.readFileSync("src/lib/tubeforge/scene-repairs.ts", "utf8");
+  ok(
+    vce.includes('await import("./scene-repairs")') && vce.includes("persistVceProposals(videoId, report.proposals)"),
+    "both VCE write sites persist their proposals — lazily imported (scene-repairs pulls video-jobs; the cycle breaks at import time)"
+  );
+  ok(
+    repairs.includes("status: \"proposed\" }") && repairs.includes("if (standing) continue;"),
+    "the persistence is dedup-guarded — re-running the engine never spams the inbox"
+  );
+  const board = fs.readFileSync("src/app/api/videos/[id]/board/route.ts", "utf8");
+  const boardUi = fs.readFileSync("src/components/tubeforge/production-board.tsx", "utf8");
+  ok(
+    board.includes("videoSpendMicroUsd") && board.includes("ceilingMicroUsd"),
+    "the board serves the per-video spend + ceiling (the attribution note's tail, closed)"
+  );
+  ok(
+    boardUi.includes("on this video") && !boardUi.includes("attributionNote"),
+    "the board SHOWS the per-video cost; the stale 'no per-video attribution' note is gone"
+  );
+  const editor = fs.readFileSync("src/components/tubeforge/scene-editor.tsx", "utf8");
+  ok(
+    editor.includes("SceneTrustPanel") && fs.existsSync("src/components/tubeforge/scene-trust-panel.tsx"),
+    "the Scene Studio mounts the trust panel (revisions, recheck, approval, repairs, seams)"
+  );
+  ok(
+    fs.existsSync("e2e/scene-editing.spec.ts") && fs.existsSync("docs/runbooks/scene-editing.md"),
+    "the e2e contract spec and the operator runbook exist"
+  );
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

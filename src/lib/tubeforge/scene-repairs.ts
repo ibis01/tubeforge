@@ -230,6 +230,50 @@ export async function listSceneRepairs(videoId: string, sceneIndex: number) {
   });
 }
 
+/**
+ * S118 — the VCE emitter's persistence: the Visual Consistency Engine's
+ * per-scene repair proposals (ready instruction strings since S77) become
+ * DURABLE SceneRepair rows (origin "vce") with the estimate + affected
+ * assets attached — the S86 one-click lane's ephemeral report JSON becomes
+ * the approval inbox's feed (requirement D's ladder, end to end).
+ * DEDUP-GUARDED: a standing OPEN (proposed) repair with the same
+ * (sceneIndex, instruction) is not re-proposed — re-running the engine
+ * never spams the inbox. BEST-EFFORT: persistence never fails the engine.
+ */
+export async function persistVceProposals(
+  videoId: string,
+  proposals: Array<{ sceneIndex: number; dimension: string; instruction: string }>
+): Promise<number> {
+  let persisted = 0;
+  for (const p of proposals) {
+    try {
+      if (!Number.isInteger(p.sceneIndex) || p.sceneIndex < 1) continue;
+      if (typeof p.instruction !== "string" || p.instruction.trim().length < 3) continue;
+      const standing = await db.sceneRepair.findFirst({
+        where: { videoId, sceneIndex: p.sceneIndex, instruction: p.instruction, status: "proposed" },
+        select: { id: true },
+      });
+      if (standing) continue;
+      const video = await db.video.findUnique({ where: { id: videoId } });
+      if (!video || video.format !== "story") continue;
+      const result = await proposeSceneRepair({
+        video,
+        sceneIndex: p.sceneIndex,
+        instruction: p.instruction,
+        origin: "vce",
+        note: `VCE proposal (${p.dimension})`,
+      });
+      if (result.ok) persisted += 1;
+    } catch {
+      // best-effort by design
+    }
+  }
+  if (persisted > 0) {
+    repairLog.info("VCE proposals persisted as repairs", { videoId, persisted });
+  }
+  return persisted;
+}
+
 /** Mark a running repair completed/failed from the job lane (approve's
  * closure calls this when runSceneJob settles). The completed row records
  * targetVersion = the scene's head after the repair — the revision the

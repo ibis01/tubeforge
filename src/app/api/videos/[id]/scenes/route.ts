@@ -244,6 +244,26 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 
   const revision = commit.created[commit.created.length - 1];
 
+  // §8.2 (S118) — the audit law: scene text edits are among the MOST
+  // human-facing mutations; they leave a row like every job body does.
+  if (revision) {
+    await db.activity
+      .create({
+        data: {
+          organizationId: video.organizationId,
+          userId: auth.ctx.userId,
+          videoId: id,
+          stage: "scenes",
+          message:
+            `Scene ${index} "${scene.title}" edited → v${revision.version}` +
+            (changedFields.length > 0
+              ? ` (${changedFields.join("+")} changed${invalidated ? ", stale artifacts swept" : ""})`
+              : ""),
+        },
+      })
+      .catch(() => {});
+  }
+
   return NextResponse.json({
     scene: (await serializeScenes(id, commit.scenes)).find((s) => s.index === index) ?? null,
     invalidated,

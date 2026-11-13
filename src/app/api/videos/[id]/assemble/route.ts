@@ -206,7 +206,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
   // reorder path (sceneOrder → "structural"). Ids ride the row (reorder
   // preserves them; the render maps durations onto the row BY POSITION, so
   // the row moves with the doc — one commit, never two sources of truth).
-  await commitSceneChanges({
+  const commit = await commitSceneChanges({
     video,
     beforeScenes: parseScenes(video.scenes),
     beforeDoc: parseTimeline(video.timeline),
@@ -217,6 +217,23 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     userId: auth.ctx.userId,
     timeline: serializeTimeline(timeline),
   });
+
+  // §8.2 (S118) — the audit law: timeline saves are among the MOST
+  // human-facing mutations; they leave a row like every job body does.
+  await db.activity
+    .create({
+      data: {
+        organizationId: video.organizationId,
+        userId: auth.ctx.userId,
+        videoId: id,
+        stage: "timeline",
+        message:
+          body.sceneOrder
+            ? `Timeline reordered (${commit.created.length} scene${commit.created.length === 1 ? "" : "s"} moved)`
+            : `Timeline saved (${commit.created.length} scene${commit.created.length === 1 ? "" : "s"} changed)`,
+      },
+    })
+    .catch(() => {});
 
   return NextResponse.json({ timeline });
 }

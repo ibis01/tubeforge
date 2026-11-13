@@ -37,11 +37,11 @@ interface BoardData {
   checkpoints: BoardCheckpoint[];
   costs: {
     windowDays: number;
+    video: { spendMicroUsd: number; ceilingMicroUsd: number | null };
     totalMicroUsd: number;
     totalCalls: number;
     failedCalls: number;
     byLane: { capability: string; provider: string; calls: number; costMicroUsd: number }[];
-    attributionNote: string;
   };
   history: { id: string; stage: string; message: string; level: string; createdAt: string }[];
 }
@@ -167,10 +167,24 @@ export function ProductionBoard({ videoId }: { videoId: string }) {
             </span>
           ))}
         </div>
+        {data.costs.video.spendMicroUsd > 0 && (
+          <span
+            className="text-[10px] text-foreground/80"
+            title={
+              data.costs.video.ceilingMicroUsd != null
+                ? `This video's metered AI spend (the UsageRecord bridge), against its ${dollars(data.costs.video.ceilingMicroUsd)} ceiling`
+                : "This video's metered AI spend (the UsageRecord bridge). Set a ceiling per project in Settings to cap it."
+            }
+          >
+            {dollars(data.costs.video.spendMicroUsd)} on this video
+            {data.costs.video.ceilingMicroUsd != null &&
+              ` / ${dollars(data.costs.video.ceilingMicroUsd)} cap`}
+          </span>
+        )}
         {data.costs.totalCalls > 0 && (
           <span
             className="text-[10px] text-muted-foreground"
-            title={`${data.costs.totalCalls} AI calls, ${data.costs.failedCalls} failed · ${topLanes} · ${data.costs.attributionNote}`}
+            title={`${data.costs.totalCalls} AI calls, ${data.costs.failedCalls} failed · ${topLanes}`}
           >
             {dollars(data.costs.totalMicroUsd)} org AI spend · {data.costs.totalCalls} calls (
             {data.costs.windowDays}d)

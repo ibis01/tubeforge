@@ -1372,6 +1372,59 @@ await test("the manifest + the staleness ladder: a real render records its assem
     await storage.remove(k).catch(() => {});
 });
 
+suiteStart("S118 · the VCE proposal persistence + the hardening closures");
+
+await test("persistVceProposals: proposals become durable repairs with estimates, and the dedup guard holds", async () => {
+  const { persistVceProposals } = await import("../src/lib/tubeforge/scene-repairs.ts");
+  const { ESTIMATED_COST_MICRO } = await import("../src/lib/tubeforge/billing.ts");
+  const v = await makeVideo([mkScene(1), mkScene(2)], { renderMode: "kenburns" });
+
+  const proposals = [
+    { sceneIndex: 2, dimension: "style", instruction: "Repaint this scene to match the video's dominant look: warmer palette. Keep the composition and subject." },
+    { sceneIndex: 1, dimension: "identity", instruction: "Restore the host's facial structure to the anchor." },
+  ];
+  const first = await withCtx(
+    { userId: "user-fixture", organizationId: v.organizationId, role: "owner" },
+    () => persistVceProposals(v.id, proposals)
+  );
+  eq(first, 2, "both proposals persisted");
+
+  const rows = await rawDb.sceneRepair.findMany({ where: { videoId: v.id }, orderBy: { createdAt: "asc" } });
+  eq(rows.length, 2, "two durable repair rows");
+  eq(rows.every((r) => r.origin === "vce"), true, "origin vce");
+  eq(rows.every((r) => r.status === "proposed"), true, "born proposed — nothing spent");
+  eq(
+    rows.every((r) => r.estimateMicroUsd === ESTIMATED_COST_MICRO.image),
+    true,
+    "each carries the estimate from the admission's own table"
+  );
+  ok(
+    rows.some((r) => (r.note ?? "").includes("style")),
+    "the dimension rides the note"
+  );
+
+  // The dedup guard: persisting the SAME proposals again adds nothing.
+  const second = await withCtx(
+    { userId: "user-fixture", organizationId: v.organizationId, role: "owner" },
+    () => persistVceProposals(v.id, proposals)
+  );
+  eq(second, 0, "the dedup guard refuses to re-propose standing open repairs");
+  const after = await rawDb.sceneRepair.count({ where: { videoId: v.id } });
+  eq(after, 2, "still exactly two rows");
+
+  // A CHANGED instruction (the verdict moved) is a new proposal.
+  const evolved = await withCtx(
+    { userId: "user-fixture", organizationId: v.organizationId, role: "owner" },
+    () =>
+      persistVceProposals(v.id, [
+        { sceneIndex: 2, dimension: "style", instruction: "Repaint this scene to match the video's dominant look: cooler palette. Keep the composition and subject." },
+      ])
+  );
+  eq(evolved, 1, "a changed instruction is a NEW proposal");
+  const finalCount = await rawDb.sceneRepair.count({ where: { videoId: v.id } });
+  eq(finalCount, 3, "three rows — the inbox grows only on real change");
+});
+
 // --- teardown ---------------------------------------------------------------
 
 try {

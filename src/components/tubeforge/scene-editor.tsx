@@ -33,10 +33,12 @@ import {
   Presentation,
   RefreshCw,
   Save,
+  ShieldCheck,
   Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SCENE_ART_STYLES, type SceneDTO, type SlideDTO } from "@/lib/tubeforge/types";
+import { SceneTrustPanel } from "./scene-trust-panel";
 
 type Busy = "save" | "regen" | "edit" | "upload" | null;
 
@@ -796,6 +798,22 @@ export function SceneEditorDialog({
                 Replace scene art
               </Button>
             </div>
+          </div>
+
+          {/* S118 — the trust layer's surface: revisions, the recheck
+              verdict + approval, the repair inbox, and the seam/preview
+              renders (Stages 1–6, made visible). */}
+          <div className="space-y-1.5 rounded-xl border border-white/10 bg-white/3 p-3">
+            <div className="flex items-center gap-1.5">
+              <ShieldCheck className="h-3.5 w-3.5 text-primary" />
+              <Label className="text-xs">History, checks &amp; approval</Label>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              Every edit is an immutable revision. Re-check this scene (its preview,
+              its cues, its seams), approve the checked version to pin it into the
+              render, or restore an older one — restorations never erase history.
+            </p>
+            <SceneTrustPanel videoId={videoId} sceneIndex={scene.index} onUpdated={onUpdated} />
           </div>
         </div>
       </DialogContent>

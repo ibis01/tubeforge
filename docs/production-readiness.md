@@ -200,10 +200,30 @@ falls back to the v1 backfill, the approved revision wins, the restored
 content sits at the current position; the manifest pin: a REAL runRenderJob
 render assembles the baseline — the draft never leaks — records the
 manifest, fresh → approval stales it → cleared manifest reads unknown;
-plus 3 unit pins on the pure laws and the wiring). Stage 7 (UX +
-hardening) follows on the same order, riding the existing queue, storage,
-budget, and QC systems: no second timeline engine, no separate job queue,
-no parallel budget system.
+plus 3 unit pins on the pure laws and the wiring). **Stage 7 landed as
+S118 — the track is COMPLETE**: the §8.1 dead route closed (POST
+/storyboard/upload answers the components' multipart contract through
+replaceSceneImage, with S113's scene-scoped invalidation, provenance
+registration, the §8.2 audit row, and the S79 preference-gated targeted
+re-check — an upload IS a repaint); the §8.2 audit law closed (PATCH
+/scenes and PUT /assemble leave Activity rows naming their revisions);
+the VCE emitter rewire (both engine write sites persist their proposals
+as SceneRepair rows — origin "vce", estimate + affected assets attached,
+dedup-guarded so re-running the engine never spams the inbox, lazily
+imported to break the module cycle); the operator surface (the Scene
+Trust Panel in the Scene Studio: revisions with restore, the recheck
+verdict + approval with the blocker reasons shown, the repair inbox with
+estimates, the seam render buttons; the board's per-video cost + ceiling
+column — the "no per-video attribution" note retired); the e2e contract
+spec (e2e/scene-editing.spec.ts — auth gates, format guards, the
+sceneless refusals) and the operator runbook
+(docs/runbooks/scene-editing.md, with the twelve-scenario → pin mapping).
+Battery now 29/29 (the VCE persistence ladder: estimates attached, born
+proposed, dedup guard, changed-instruction-is-new) + 2 unit source pins.
+The track rode the existing queue, storage, budget, and QC systems end
+to end: no second timeline engine, no separate job queue, no parallel
+budget system, no separate publishing pipeline — exactly the
+reconciliation's §11 law.
 
 ## P0.1 spec — what the gate asserts
 
@@ -267,6 +287,7 @@ recovery.
 | P2 opening | S109 | the operator's explicit call (2026-11-13) against the fully-gated baseline at HEAD `8e76c6b` — the fresh review re-validated every gate on a clean checkout (npm ci, typecheck, lint, unit, billing, storage, rate, backup drill ~57 ms RTO, alert probe HEALTH 0, the CI-covered Docker smoke) and upgraded the assessment to "technically strong, approaching paid-beta readiness"; the entry queue above is the review's own ordering | worklog.md §S109 |
 | P2 queue item 2 | S110 | the staging kit: DEPLOYMENT §3 made executable — the provisioner (one command, fresh secrets every run, --dry-run verified), the HTTP drill harness (health/billing/pipeline suites, self-skipping when prerequisites are missing; proven live against a dev server: 2 PASS · 1 SKIP · 0 FAIL, the pipeline suite walking scenes → native scaffold → render job → final.mp4 4.29 MB through the authed route), the orchestrator (harness + k6 + the printed operator-step sequences), the runbook with the RC gate (§7). Provisioning itself awaits the operator's accounts | worklog.md §S110 |
 | Feature track Stage 0 | S111 | the read-only repository reconciliation of the operator's scene-level editing architecture (docs/design/scene-level-editing-reconciliation.md): capability map, the five requirements vs reality, three architectural surprises, two live defects found, the file-by-file Stage 1–7 plan | worklog.md §S111 |
+| Feature track Stage 7 (COMPLETE) | S118 | the track closes: the §8.1 dead upload route (multipart → replaceSceneImage → scene-scoped invalidation + provenance + audit + the S79 targeted re-check), the §8.2 audit rows on PATCH /scenes + PUT /assemble, the VCE→SceneRepair persistence (dedup-guarded, cycle-broken), the Scene Trust Panel (revisions/recheck/approval/repairs/seams in the Scene Studio), the board's per-video cost + ceiling column, the e2e contract spec, and the operator runbook with the twelve-scenario → pin mapping | worklog.md §S118 |
 | Feature track Stage 6 | S117 | final assembly from approved revisions + the render manifest: the full render consumes the latest APPROVED revision per scene (drafts never leak; nothing approved → the v1 baseline; no history → the row; the union slice restored at the current position), Video.renderManifest records the assembled revision set, renderStaleness compares it live (newer draft / new approval / scene-list change ⇒ stale with reasons; history + no manifest ⇒ unknown), and both ship gates (publish + export) refuse a stale or unprovable final with no override — staleness is a fact, not a judgment | worklog.md §S117 |
 | Feature track Stage 5 | S116 | scene QC + boundary validation + the approval gate: the scene-scoped recheck (the whole-file battery's probes reused through exported builders — playable/black/frozen/aspect/loudness family/dead-air/static/flicker/stutter/duration via the shared fold/scene-sliced captions/S49 at scene scope), the boundary-pair render lane ({boundaryAfter} → scene-boundary-NN.mp4 through the doc's durations + seam transition) with alignSeam (cut must appear, blend need not, neighborhood strays fail), the verdict stored on the head revision (annotation; content byte-identical), and approval gated on a passing verdict for the head's own version (pure approvalBlocker; idempotent; approved survives drafts) | worklog.md §S116 |
 | Feature track Stage 4 | S115 | repair + cost authorization + idempotency: the propose→approve→reject ladder (estimate + affected assets stored before any spend; approving twice cannot spend twice), SceneRepair (the durable critic/VCE proposal form), Job.idempotencyKey (unique; done rows never re-enqueued — the double-bill killer, pinned; failed rows re-queue conditionally per the fencing law), the opt-in per-project spend ceiling enforced beside the credit hold (cost-guard.ts, 402 with the numbers), the render route gated + keyed | worklog.md §S115 |

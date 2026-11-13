@@ -8,9 +8,8 @@ live tree at HEAD `1379134`. No product code was changed by this stage.
 order ("start, don't stop"); the four §10 decision points resolved to their
 recommended defaults (keep all revision rows, GC only superseded artifacts;
 latest-approved-per-scene render; opt-in per-video spend ceiling; epochs for
-whole-script regens/converts). **Stages 1–6 landed as S112–S117** — see
-docs/production-readiness.md's feature-track ledger rows and worklog
-§S112–§S117. Stage 7 follows. Stage 5's additions to the plan:
+whole-script regens/converts). **Stages 1–7 landed as S112–S118 — the track is COMPLETE.** Stage 5's
+additions to the plan:
 the boundary-pair check is MEDIATED (a new render grammar
 `POST /render {boundaryAfter}` produces scene-boundary-NN.mp4 — the pair
 through the same segment + transition machinery — because the seam cannot

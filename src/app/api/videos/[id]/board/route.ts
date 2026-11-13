@@ -10,6 +10,7 @@ import {
   deriveCheckpoints,
   type BoardInput,
 } from "@/lib/tubeforge/production-board";
+import { videoSpendMicroUsd } from "@/lib/tubeforge/cost-guard";
 
 /**
  * S91 (ROADMAP #10) — the living production board, I/O half. One composed
@@ -127,7 +128,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     criticVerdict: criticVerdictOf(criticRaw),
   });
 
-  // ---- costs: ORG-level context (per-video attribution is the recorded tail) ----
+  // ---- costs: the video's own spend (the S113 UsageRecord bridge closed
+  // the old "no per-video attribution" tail) + the org-level context ----
+  const videoMicro = await videoSpendMicroUsd(id);
   const since = new Date(Date.now() - COST_WINDOW_DAYS * 86_400_000);
   const usageRows = await db.usageRecord.findMany({
     where: { organizationId: auth.ctx.organizationId, createdAt: { gte: since } },
@@ -171,8 +174,13 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     costs: {
       scope: "organization",
       windowDays: COST_WINDOW_DAYS,
-      attributionNote:
-        "usage metering is organization-scoped today; per-video attribution is on the recorded tail",
+      // S118 — the per-video column the board always said it lacked: the
+      // UsageRecord bridge (S113) + the ceiling (S115) make the number
+      // first-class, with the ceiling's headroom when one is set.
+      video: {
+        spendMicroUsd: videoMicro,
+        ceilingMicroUsd: video.spendCeilingMicro ?? null,
+      },
       totalMicroUsd: totalMicro,
       totalCalls,
       failedCalls,

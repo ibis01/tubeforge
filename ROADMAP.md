@@ -526,10 +526,14 @@ Stage 4 (S115, the propose→approve repair ladder, per-project spend
 ceilings, and job idempotency keys — the double-bill killer), Stage 5
 (S116, the scene-scoped QC recheck + the boundary-pair render lane + the
 approval gate — a revision is approvable only on a passing verdict for
-the head's own version), and Stage 6 (S117, approved-only final assembly
-+ the render manifest + the staleness ship gate — drafts never leak into
-a final, and publish/export refuse a stale or unprovable one) are
-landed; Stage 7 follows (UX + hardening).
+the head's own version), Stage 6 (S117, approved-only final assembly +
+the render manifest + the staleness ship gate — drafts never leak into a
+final, and publish/export refuse a stale or unprovable one), and Stage 7
+(S118, UX + hardening — the §8.1/§8.2 defect closures, the VCE→SceneRepair
+persistence, the Scene Trust Panel, the board's per-video cost column,
+the e2e contract spec, and the operator runbook) are landed: **the
+feature track is COMPLETE** (S111–S118, 2026-11-13; runbook
+docs/runbooks/scene-editing.md).
 
 Standing risks tracked in the worklog: Z.ai gateway outage (S63
 remeasurement and the LLM whiteboard planner gated on the one-probe

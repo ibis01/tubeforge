@@ -183,6 +183,50 @@ the live tree at S75:
   safe push gates (askpass, plain URL, token never in args/disk —
   `scripts/tf-push.sh`).
 
+What the S75 reconciliation also could not know — the P2 scene-level
+editing & repair track (S111–S118, 2026-11-13), the trust layer over the
+pipeline's existing bones (no second timeline engine, no separate queue,
+no parallel budget — the reconciliation's §11 law, held):
+
+- **Scene revisions** (`scene-revisions.ts` + the `SceneRevision` table):
+  append-only immutable history per stable scene id, the UNION slice
+  (row scene + timeline-doc scene snapshot together), optimistic
+  concurrency twice (the polite 409 gate + the unique-index floor),
+  first-touch backfill, rollback-as-new-revision, approved-never-superseded.
+  All eleven scenes-column mutators converge through `commitSceneChanges`.
+- **The declarative dependency map + artifact provenance** (`scene-deps.ts`,
+  `scene-artifacts.ts` + the `SceneArtifact` table, the `UsageRecord`
+  bridge columns): narration → that scene's audio + renders, NEVER the art;
+  caption → renders only; visual → deletes nothing. One scene's art change
+  kills exactly that scene's clip (the §8.3 over-invalidation cost bug,
+  fixed and measured). Every generated artifact carries its full prompt,
+  input hash, provider/model, built-from revision, and accumulated cost.
+- **Scene previews + boundary pairs** (the `{sceneIndex}` / `{boundaryAfter}`
+  render grammars): one scene, or a seam pair, through the same segment +
+  transition machinery — preview semantics, nothing else moves.
+- **The scene QC recheck + the approval gate** (`scene-qc.ts`): the
+  whole-file battery's probes reused (exported builders, no forks) scoped
+  to a scene's standing preview, plus `alignSeam` — cut-alignment
+  generalized from the file to the seam (a cut must appear; a blend need
+  not; neighborhood strays fail). The verdict is revision-tied and stored
+  on the head; approval requires a passing verdict for the head's own
+  version.
+- **Approved-only assembly + the render manifest** (`render-assembly.ts`,
+  the `Video.renderManifest` column): finals consume the latest approved
+  revision per scene (drafts never leak; the v1 baseline when nothing is
+  approved); the manifest records the assembly and `renderStaleness`
+  compares it live — the export/publish ship gates refuse a stale or
+  unprovable final, with no override (staleness is a fact, not a judgment).
+- **The repair ladder's durable form** (`scene-repairs.ts` + the
+  `SceneRepair` table, `Job.idempotencyKey`): propose → approve → run with
+  estimates and affected-asset lists stored BEFORE any spend; the VCE's
+  proposals persist into the inbox (dedup-guarded); approving twice cannot
+  spend twice; the opt-in per-project spend ceiling rides the same
+  admission as the credit hold.
+- **The operator surface** (`scene-trust-panel.tsx` in the Scene Studio,
+  the board's per-video cost column, `docs/runbooks/scene-editing.md`):
+  history, checks, approval, repairs, and seams — visible.
+
 ---
 
 ## 2. Target architecture
