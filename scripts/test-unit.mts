@@ -12679,6 +12679,139 @@ await test("scene-qc: the battery reuses the whole-file probes (source pin)", as
   );
 });
 
+// ---------------------------------------------------------------------------
+// S117 — Scene-Level Editing & Repair, Stage 6: assembly from approved
+// revisions + the render manifest (pure pins; the DB-backed assembly,
+// manifest write, and staleness ladder live in the battery)
+// ---------------------------------------------------------------------------
+
+await test("render-assembly: parseRenderManifest — tolerant, schema 1 only", async () => {
+  const { parseRenderManifest } = await import("../src/lib/tubeforge/render-assembly.ts");
+  eq(parseRenderManifest(null), null, "null manifest (never rendered) parses to null");
+  eq(parseRenderManifest("{not json"), null, "corrupt JSON parses to null (refuse, never guess)");
+  eq(
+    parseRenderManifest(JSON.stringify({ schema: 2, entries: [] })),
+    null,
+    "foreign schema parses to null"
+  );
+  const round = parseRenderManifest(
+    JSON.stringify({
+      schema: 1,
+      renderedAt: "2026-11-19T00:00:00Z",
+      mode: "kenburns",
+      entries: [
+        { sceneIndex: 1, sceneId: null, source: "row", revisionVersion: null },
+        { sceneIndex: 2, sceneId: "s2", source: "approved", revisionVersion: 3 },
+      ],
+    })
+  );
+  ok(round !== null && round.entries.length === 2, "a schema-1 manifest round-trips");
+  eq(round?.entries[1].source, "approved", "the source label survives");
+  eq(round?.entries[1].revisionVersion, 3, "the version survives");
+});
+
+await test("render-assembly: compareManifest — the staleness law (pure)", async () => {
+  const { compareManifest } = await import("../src/lib/tubeforge/render-assembly.ts");
+  const manifest = (entries: unknown[]) =>
+    ({ schema: 1, renderedAt: "", mode: "kenburns", entries }) as Parameters<typeof compareManifest>[0];
+
+  // Identical sources → fresh.
+  const same = [
+    { sceneIndex: 1, sceneId: null, source: "row", revisionVersion: null },
+    { sceneIndex: 2, sceneId: "s2", source: "baseline", revisionVersion: 1 },
+  ];
+  ok(!compareManifest(manifest(same), same).stale, "identical sources are fresh");
+
+  // A newer draft moved the baseline → stale with the reason.
+  const drafted = compareManifest(
+    manifest(same),
+    same.map((e) => (e.sceneId === "s2" ? { ...e, revisionVersion: 3 } : e))
+  );
+  ok(drafted.stale && drafted.reasons.some((r) => r.includes("v1") && r.includes("v3")), "a newer draft stales the baseline");
+
+  // An approval promotes a version the final was not assembled from → stale.
+  const approved = compareManifest(
+    manifest(same),
+    same.map((e) => (e.sceneId === "s2" ? { ...e, source: "approved", revisionVersion: 3 } : e))
+  );
+  ok(approved.stale && approved.reasons.some((r) => r.includes("approved v3")), "a new approval stales the standing final");
+
+  // A scene GAINED history after a row-sourced render → stale (the edit
+  // minted an id; the manifest's null-id entry still matches by POSITION).
+  const gained = compareManifest(
+    manifest([{ sceneIndex: 2, sceneId: null, source: "row", revisionVersion: null }]),
+    [{ sceneIndex: 2, sceneId: "s2", source: "baseline", revisionVersion: 1 }]
+  );
+  ok(
+    gained.stale &&
+      !gained.reasons.some((r) => r.includes("no longer in the video")) &&
+      gained.reasons.some((r) => r.includes("row content") || r.includes("gained revision history")),
+    "the id-minting edit stales via the position match + the gained-history rule, never as 'vanished'"
+  );
+
+  // A manifest sceneId that vanished (an epoch renumbered the world) → stale.
+  const vanished = compareManifest(
+    manifest([{ sceneIndex: 1, sceneId: "s1", source: "baseline", revisionVersion: 1 }]),
+    [{ sceneIndex: 1, sceneId: "s9", source: "row", revisionVersion: null }]
+  );
+  ok(
+    vanished.stale && vanished.reasons.some((r) => r.includes("no longer in the video")),
+    "a vanished sceneId stales with the scene-list reason"
+  );
+
+  // A current row-sourced scene absent from the manifest is NOT stale by
+  // itself (row scenes have nothing to be stale against).
+  ok(
+    !compareManifest(
+      manifest([{ sceneIndex: 1, sceneId: null, source: "row", revisionVersion: null }]),
+      [
+        { sceneIndex: 1, sceneId: null, source: "row", revisionVersion: null },
+        { sceneIndex: 2, sceneId: null, source: "row", revisionVersion: null },
+      ]
+    ).stale,
+    "row content never stales a final by itself"
+  );
+});
+
+await test("render-assembly: the assembly + manifest + gates are wired (source pin)", async () => {
+  const jobs = fs.readFileSync("src/lib/tubeforge/video-jobs.ts", "utf8");
+  ok(
+    jobs.includes("const assembly = await resolveRenderAssembly(video);") &&
+      jobs.includes("scenes: renderScenes,") &&
+      jobs.includes("const renderScenes = isPreviewRender ? scenes : assembly.scenes;"),
+    "the full render consumes the assembly; previews keep the row (drafts are what previews are for)"
+  );
+  ok(
+    jobs.includes("renderManifest: JSON.stringify(manifestOf(assembly, mode))"),
+    "the landed final records its manifest on the row"
+  );
+  ok(
+    jobs.includes("isPreviewRender ? (video.timeline ?? null) : (assembly.timeline ?? null)"),
+    "finals read the assembly's timeline (the union slice's doc half); previews read the row's"
+  );
+  const publish = fs.readFileSync("src/app/api/videos/[id]/publish/route.ts", "utf8");
+  const exportRoute = fs.readFileSync("src/app/api/videos/[id]/export/route.ts", "utf8");
+  ok(
+    publish.includes("renderStaleness") && exportRoute.includes("renderStaleness"),
+    "both ship gates (publish + export) refuse a stale or unprovable final"
+  );
+  ok(
+    publish.includes("staleness is a fact about WHICH") &&
+      exportRoute.includes("No override here either"),
+    "the gates carry no override — staleness is not a judgment a human accepts"
+  );
+  const render = fs.readFileSync("src/app/api/videos/[id]/render/route.ts", "utf8");
+  ok(
+    render.includes("manifest: parseRenderManifest(video.renderManifest)") && render.includes("staleness,"),
+    "the render status surface exposes the manifest + the live staleness verdict"
+  );
+  const schema = fs.readFileSync("prisma/schema.prisma", "utf8");
+  ok(
+    schema.includes("renderManifest String?"),
+    "the manifest column is schema law"
+  );
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

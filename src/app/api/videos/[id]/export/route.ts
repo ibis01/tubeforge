@@ -12,6 +12,7 @@ import { docMusicPick } from "@/lib/tubeforge/studio-doc";
 import { parseTimeline } from "@/lib/tubeforge/timeline";
 import { getApprovedAudioMap } from "@/lib/tubeforge/director-plan";
 import { applyQcPolicy, parseQcReport, qcEnforcementMode, qcOverrideValid } from "@/lib/tubeforge/qc-policy";
+import { renderStaleness } from "@/lib/tubeforge/render-assembly";
 import * as storage from "@/lib/tubeforge/storage";
 
  type Ctx = { params: Promise<{ id: string }> };
@@ -56,6 +57,28 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       },
       { status: 409 }
     );
+  }
+
+  // S117 — the staleness gate, same shape: a final that cannot prove its
+  // assembly (or provably assembled from superseded content) never ships.
+  // No override here either — staleness is a fact about WHICH bytes ship,
+  // not a judgment a human can accept.
+  if (video.hasVideo) {
+    const staleness = await renderStaleness(video);
+    if (staleness.status !== "fresh") {
+      return NextResponse.json(
+        {
+          error:
+            staleness.status === "stale"
+              ? `Export on hold — the final is stale: ${staleness.reasons.slice(0, 3).join("; ")}. Re-render to assemble the current approved content.`
+              : staleness.reason,
+          blocked: true,
+          stale: true,
+          staleness,
+        },
+        { status: 409 }
+      );
+    }
   }
 
   // Stage 3 (T-3.6, closes D-24): media assets STREAM from disk through the

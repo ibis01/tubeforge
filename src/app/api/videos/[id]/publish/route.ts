@@ -24,6 +24,7 @@ import { runUploadJob, type PublishJobOptions } from "@/lib/tubeforge/video-jobs
 import { isConnected, getPublishDefaults } from "@/lib/tubeforge/youtube";
 import { parseJson, publishSchema, ApiValidationError } from "@/lib/tubeforge/validation";
 import { applyQcPolicy, parseQcReport, qcEnforcementMode, qcOverrideValid } from "@/lib/tubeforge/qc-policy";
+import { renderStaleness } from "@/lib/tubeforge/render-assembly";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -107,6 +108,28 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           : `Publish on hold — ${gate.blockers.length} blocking QC finding${gate.blockers.length === 1 ? "" : "s"}. Fix and re-run QC, or accept the findings (Export → Ship anyway) to publish.`,
         blocked: true,
         gate,
+      },
+      { status: 409 }
+    );
+
+  // S117 — the staleness gate: the final cannot ship from stale or
+  // unapproved content. The manifest proves what the render assembled;
+  // anything that moved since (a newer draft, a new approval, a scene-list
+  // change) — or a final that predates the manifest while the video carries
+  // revision history — holds the upload until a re-render. No override:
+  // unlike a QC finding a human may accept, staleness is a fact about WHICH
+  // bytes ship, not a judgment about them.
+  const staleness = await renderStaleness(video);
+  if (staleness.status !== "fresh")
+    return NextResponse.json(
+      {
+        error:
+          staleness.status === "stale"
+            ? `Publish on hold — the final is stale: ${staleness.reasons.slice(0, 3).join("; ")}. Re-render to assemble the current approved content.`
+            : staleness.reason,
+        blocked: true,
+        stale: true,
+        staleness,
       },
       { status: 409 }
     );

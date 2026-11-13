@@ -61,6 +61,7 @@ import {
 import { qcForVideo, qcForPreview, type QcReport } from "./qc";
 import { commitSceneChanges } from "./scene-revisions";
 import { registerSceneArtifact } from "./scene-artifacts";
+import { resolveRenderAssembly, manifestOf } from "./render-assembly";
 import {
   resolveContentPolicy,
   runRestrictedVisualScan,
@@ -823,6 +824,16 @@ export async function runRenderJob(
     Number.isInteger(opts.sceneLimit) && (opts.sceneLimit as number) >= 1
       ? Math.min(opts.sceneLimit as number, scenes.length)
       : undefined;
+
+  // S117 — THE ASSEMBLY: what a FINAL may consume per scene (the latest
+  // APPROVED revision; nothing approved → the v1 baseline; no history →
+  // the row). Draft edits never leak into a final. Scene previews and
+  // boundary pairs deliberately bypass the assembly — they are LOOKS at
+  // the working draft. `changed` false = the row verbatim (every
+  // never-edited video takes the fast path).
+  const assembly = await resolveRenderAssembly(video);
+  const isPreviewRender = sceneLimit != null && sceneLimit < scenes.length;
+  const renderScenes = isPreviewRender ? scenes : assembly.scenes;
   // Stage 6 (T-6.8) — per-render override > per-project default > 30.
   // Slides mode always renders 9:16 (keynote deck geometry); an explicit
   // 1:1 is honored only for non-slides modes.
@@ -869,7 +880,12 @@ export async function runRenderJob(
   if (Array.isArray(opts.sceneDurationsSec)) {
     sceneDurationsSec = opts.sceneDurationsSec;
   } else {
-    const timeline = parseTimeline(video.timeline);
+    // S117 — finals read the ASSEMBLY's timeline (revision doc-scenes
+    // swapped in — the union slice's doc half); previews read the row's
+    // (drafts are what previews are for).
+    const timeline = parseTimeline(
+      isPreviewRender ? (video.timeline ?? null) : (assembly.timeline ?? null)
+    );
     if (timeline && timeline.scenes.length === scenes.length) {
       timelinePlan = compositionPlan(timeline, scenes.length);
       if (timelinePlan) {
@@ -944,7 +960,7 @@ export async function runRenderJob(
   try {
     const result = await renderVideo({
       videoId,
-      scenes,
+      scenes: renderScenes,
       mode,
       character: rigCharacter ? { hasPortrait: rigCharacter.hasPortrait } : null,
       burnSubtitles: subtitles,
@@ -1052,6 +1068,11 @@ export async function runRenderJob(
           hasVideo: true,
           videoDuration: Math.round(result.durationSec * 10) / 10,
           qcReport: JSON.stringify(report),
+          // S117 — the manifest: the exact revision set this final was
+          // assembled from. renderStaleness compares it against the current
+          // assembly sources; the export/publish gates refuse a stale or
+          // unprovable final.
+          renderManifest: JSON.stringify(manifestOf(assembly, mode)),
           error: null,
         },
       });

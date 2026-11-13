@@ -437,6 +437,15 @@ model Video {
   // future Blender adapter's output). The tenth JSON doc column; null = no
   // 3D scene scaffolded. Versioned inside the doc (version 1).
   scene3d String?
+  // S117 — the RENDER MANIFEST: JSON RenderManifest (render-assembly.ts),
+  // the exact revision set final.mp4 was assembled from (per scene: the
+  // stable sceneId, the source — approved revision | v1 baseline | row —
+  // and the revisionVersion). Any newer revision or approval ⇒ the standing
+  // final is STALE by comparison; the export/publish ship gates refuse a
+  // stale or unprovable final (409). null = pre-S117 render (or none):
+  // provable only when no scene carries history. Kept TEXT per the house
+  // law (SQLite + Postgres behave identically).
+  renderManifest String?
 
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt

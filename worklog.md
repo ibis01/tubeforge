@@ -6410,3 +6410,72 @@ a long video needs both its boundary pairs rendered (the strict
 never-silently-clean reading — the UI's missing-media feed makes the ladder
 walkable); un-approval does not exist (rollback materializes old content as a
 new head, which carries its own recheck); the panel UI is Stage 7.
+
+## S117 — Scene-Level Editing & Repair, Stage 6: final assembly from approved revisions + the render manifest (2026-11-13)
+
+**EXIT CRITERION (the proposal's own): the final video cannot be published
+from stale or unapproved assets.** Both halves landed: the render only
+assembles approved content, and both ship gates refuse a final that cannot
+prove its assembly. Files: `render-assembly.ts` (new — the assembly + the
+manifest + the staleness law), `Video.renderManifest` (migration
+20261119000000 + the SQLite mirror via the sync law), the full-render
+integration in `runRenderJob`, the staleness gates on publish + export, and
+the render status surface.
+
+**THE ASSEMBLY (drafts never leak).** Per scene, a FINAL consumes: the
+latest APPROVED revision's content; nothing approved → the v1 BASELINE
+(the backfill for first-touch edits — the last pre-draft state; the
+genesis for epochs/structural mints — the state the mutator itself
+committed); no history → the row. The union slice restores BOTH halves at
+the CURRENT position (the rollback precedent: content moves, position is
+the timeline's) — the revision's docScene rides the assembly's timeline,
+so per-scene transitions/levels/captions/durations restore with the scene.
+Scene previews and boundary pairs deliberately BYPASS the assembly — they
+are looks at the working draft, exactly where drafts belong. The fast path
+(never-edited videos) skips the swap entirely (`changed` false).
+
+**THE MANIFEST (a comparison key, not a history).** The landed final
+records on the row exactly what it assembled — per scene: the stable
+sceneId, the source (approved | baseline | row), the revisionVersion.
+`renderStaleness` compares it LIVE against the current assembly sources
+(never stored — a stored flag could drift): a newer draft moved the
+baseline; a new approval changed the source (even without an edit — the
+operator asked for v2 in the final); a scene-list change (an epoch
+renumbered the world); a scene GAINED history after a row-sourced render
+(the id-minting edit matches by POSITION — the manifest's null-id entries
+never read as "vanished"). History + no manifest (a pre-S117 final) =
+UNKNOWN — unprovable, re-render; no history at all = fresh by construction
+(the row is the only truth).
+
+**THE SHIP GATES (no override).** Publish and export extend their existing
+QC 409 seam with the staleness gate: stale → 409 with the first three
+reasons; unknown → 409 with the re-render instruction. NO override — the
+deliberate distinction from QC findings (a human may accept a judgment
+about quality; staleness is a fact about WHICH bytes ship). The render
+status GET surfaces the manifest + the live verdict for the UI.
+
+**TESTS.** Battery 26→28: the assembly pin (a drafted scene falls back to
+the v1 backfill — the draft mood does NOT leak — the approved revision
+wins after the status flip, the restored content sits at the current
+position, the never-edited scene renders the row) and the manifest pin (a
+REAL runRenderJob render assembles the baseline for a drafted scene,
+records the manifest saying so, reads fresh → an approval STALES it with
+the "approved v2" reason → a cleared manifest with history reads unknown →
+a no-history video reads fresh). 3 unit pins (the tolerant manifest parse;
+compareManifest's staleness law — identical fresh, newer draft, new
+approval, gained-history via position, vanished sceneId, row-never-stales;
+the wired-and-walled source pin). The battery caught its own first draft's
+fixture using a fake userId — the render job's success-path Activity write
+carries the FK, so the whole render "failed" on the audit row; fixed with
+a real user fixture (the S115 precedent).
+
+**VERIFIED:** typecheck; standalone strict typecheck; lint 0; unit 532/532;
+billing 40/40; storage 12/12; rate 17/17; scene-revisions 28/28; drill;
+alert probe; production build exit 0.
+
+**KNOWN LIMITS, deliberate:** the Short lane and the whiteboard engine
+lane do not consume the assembly (shorts are a derivative artifact with
+their own gate; the whiteboard lane has no scene revisions — its doc is
+the whiteboardProject); the manifest covers final.mp4 only; the UX for
+"your render used the approved content, your draft is waiting" is Stage
+7's panel (the data is all on the status surface already).

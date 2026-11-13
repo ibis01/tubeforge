@@ -523,11 +523,13 @@ measured over-invalidation fix), Stage 3 (S114, the scene preview
 lane — scene-preview-NN.mp4 through the same segment machinery,
 nothing else touched, stale labeling against the head revision),
 Stage 4 (S115, the propose→approve repair ladder, per-project spend
-ceilings, and job idempotency keys — the double-bill killer), and
-Stage 5 (S116, the scene-scoped QC recheck + the boundary-pair render
-lane + the approval gate — a revision is approvable only on a passing
-verdict for the head's own version) are landed; Stages 6–7 follow
-(approved-only assembly, UX + hardening).
+ceilings, and job idempotency keys — the double-bill killer), Stage 5
+(S116, the scene-scoped QC recheck + the boundary-pair render lane + the
+approval gate — a revision is approvable only on a passing verdict for
+the head's own version), and Stage 6 (S117, approved-only final assembly
++ the render manifest + the staleness ship gate — drafts never leak into
+a final, and publish/export refuse a stale or unprovable one) are
+landed; Stage 7 follows (UX + hardening).
 
 Standing risks tracked in the worklog: Z.ai gateway outage (S63
 remeasurement and the LLM whiteboard planner gated on the one-probe

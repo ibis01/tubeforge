@@ -9,6 +9,7 @@ import { assertWithinVideoCeiling, CostCeilingExceededError } from "@/lib/tubefo
 const digestOf = (input: string) =>
   createHash("sha256").update(input, "utf8").digest("hex").slice(0, 16);
 import { runRenderJob, runWhiteboardJob, type RenderJobOptions } from "@/lib/tubeforge/video-jobs";
+import { renderStaleness, parseRenderManifest } from "@/lib/tubeforge/render-assembly";
 import { resolveMusicForVideo, isMusicEnabledForVideo, musicBedActive } from "@/lib/tubeforge/music";
 import { docMusicPick, resolveDeliveryQuality, resolveBurnSubtitles } from "@/lib/tubeforge/studio-doc";
 import { parseTimeline } from "@/lib/tubeforge/timeline";
@@ -40,6 +41,10 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   // from the lane that is actually running.
   const wb = video.renderMode === "whiteboard";
   const rendering = isJobRunning(id, "render") || (wb && isJobRunning(id, "whiteboard"));
+  // S117 — the manifest + the live staleness verdict (computed, never
+  // stored): what the standing final was assembled from, and whether the
+  // current approved content has moved on since.
+  const staleness = video.hasVideo ? await renderStaleness(video) : null;
   return NextResponse.json({
     rendering,
     mode: rendering ? video.renderMode : null,
@@ -48,6 +53,8 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       (wb ? jobProgress(id, "whiteboard") : null),
     hasVideo: video.hasVideo,
     videoDuration: video.videoDuration,
+    manifest: parseRenderManifest(video.renderManifest),
+    staleness,
     error:
       lastJobError(id, "render") ??
       (wb ? lastJobError(id, "whiteboard") : null) ??

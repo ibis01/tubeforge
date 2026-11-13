@@ -178,10 +178,32 @@ rendered — each carries the exact command that would render it) keep
 the report red. Battery now 26/26 (a real-ffmpeg recheck pin: 13 probes
 measured on a real preview, the annotation-immutability pin, a real
 boundary-pair render with the seam verdict measured through the shared
-fold, and the full approval-gate ladder). Stages 6–7 continue on the
-same order, riding the existing queue, storage, budget, and QC systems:
-no second timeline engine, no separate job queue, no parallel budget
-system.
+fold, and the full approval-gate ladder). **Stage 6 landed as S117** —
+final assembly from approved revisions + the render manifest: the full
+render consumes, per scene, the latest APPROVED revision (draft edits
+never leak into a final; nothing approved → the v1 baseline — the
+pre-draft state; no history → the row), with the union slice restored at
+the current position (the doc-half swap rides the assembly's timeline;
+previews and boundary pairs deliberately bypass the assembly — they are
+looks at the working draft). Video.renderManifest records the exact
+revision set the final was assembled from (per scene: sceneId, source,
+revisionVersion); renderStaleness compares it LIVE against the current
+assembly sources — any newer draft, any new approval (an approval changes
+the source even without an edit), any scene-list change ⇒ stale with
+reasons; history + no manifest ⇒ unknown (a pre-S117 final cannot prove
+its assembly — re-render). BOTH ship gates extend their existing 409
+seam: publish and export refuse a stale or unprovable final, with NO
+override — unlike a QC finding a human may accept, staleness is a fact
+about WHICH bytes ship. The render status surface exposes the manifest +
+the live verdict. Battery now 28/28 (the assembly pin: a drafted scene
+falls back to the v1 backfill, the approved revision wins, the restored
+content sits at the current position; the manifest pin: a REAL runRenderJob
+render assembles the baseline — the draft never leaks — records the
+manifest, fresh → approval stales it → cleared manifest reads unknown;
+plus 3 unit pins on the pure laws and the wiring). Stage 7 (UX +
+hardening) follows on the same order, riding the existing queue, storage,
+budget, and QC systems: no second timeline engine, no separate job queue,
+no parallel budget system.
 
 ## P0.1 spec — what the gate asserts
 
@@ -245,6 +267,7 @@ recovery.
 | P2 opening | S109 | the operator's explicit call (2026-11-13) against the fully-gated baseline at HEAD `8e76c6b` — the fresh review re-validated every gate on a clean checkout (npm ci, typecheck, lint, unit, billing, storage, rate, backup drill ~57 ms RTO, alert probe HEALTH 0, the CI-covered Docker smoke) and upgraded the assessment to "technically strong, approaching paid-beta readiness"; the entry queue above is the review's own ordering | worklog.md §S109 |
 | P2 queue item 2 | S110 | the staging kit: DEPLOYMENT §3 made executable — the provisioner (one command, fresh secrets every run, --dry-run verified), the HTTP drill harness (health/billing/pipeline suites, self-skipping when prerequisites are missing; proven live against a dev server: 2 PASS · 1 SKIP · 0 FAIL, the pipeline suite walking scenes → native scaffold → render job → final.mp4 4.29 MB through the authed route), the orchestrator (harness + k6 + the printed operator-step sequences), the runbook with the RC gate (§7). Provisioning itself awaits the operator's accounts | worklog.md §S110 |
 | Feature track Stage 0 | S111 | the read-only repository reconciliation of the operator's scene-level editing architecture (docs/design/scene-level-editing-reconciliation.md): capability map, the five requirements vs reality, three architectural surprises, two live defects found, the file-by-file Stage 1–7 plan | worklog.md §S111 |
+| Feature track Stage 6 | S117 | final assembly from approved revisions + the render manifest: the full render consumes the latest APPROVED revision per scene (drafts never leak; nothing approved → the v1 baseline; no history → the row; the union slice restored at the current position), Video.renderManifest records the assembled revision set, renderStaleness compares it live (newer draft / new approval / scene-list change ⇒ stale with reasons; history + no manifest ⇒ unknown), and both ship gates (publish + export) refuse a stale or unprovable final with no override — staleness is a fact, not a judgment | worklog.md §S117 |
 | Feature track Stage 5 | S116 | scene QC + boundary validation + the approval gate: the scene-scoped recheck (the whole-file battery's probes reused through exported builders — playable/black/frozen/aspect/loudness family/dead-air/static/flicker/stutter/duration via the shared fold/scene-sliced captions/S49 at scene scope), the boundary-pair render lane ({boundaryAfter} → scene-boundary-NN.mp4 through the doc's durations + seam transition) with alignSeam (cut must appear, blend need not, neighborhood strays fail), the verdict stored on the head revision (annotation; content byte-identical), and approval gated on a passing verdict for the head's own version (pure approvalBlocker; idempotent; approved survives drafts) | worklog.md §S116 |
 | Feature track Stage 4 | S115 | repair + cost authorization + idempotency: the propose→approve→reject ladder (estimate + affected assets stored before any spend; approving twice cannot spend twice), SceneRepair (the durable critic/VCE proposal form), Job.idempotencyKey (unique; done rows never re-enqueued — the double-bill killer, pinned; failed rows re-queue conditionally per the fencing law), the opt-in per-project spend ceiling enforced beside the credit hold (cost-guard.ts, 402 with the numbers), the render route gated + keyed | worklog.md §S115 |
 | Feature track Stage 3 | S114 | the scene preview lane: render {sceneIndex} → scene-preview-NN.mp4 through the same segment machinery (mutually exclusive with sceneLimit; the render job branches to its own orchestrator — no finalize, no QC, no flags), preview artifacts registered with built-from revision + the stale law (current/stale/unknown), GET /scenes/[n]/artifacts + the mp4 route's scene-preview variant; the preview pin is a real end-to-end ffmpeg render asserting nothing else moves | worklog.md §S114 |

@@ -1232,6 +1232,146 @@ await test("the approval gate: verdict-gated, idempotent, and the approved revis
     await storage.remove(k).catch(() => {});
 });
 
+suiteStart("S117 · assembly from approved revisions + the render manifest");
+
+await test("the assembly: drafts never leak — baseline fallback, approved wins, the union slice at the current position", async () => {
+  const { resolveRenderAssembly } = await import("../src/lib/tubeforge/render-assembly.ts");
+  const { serializeTimeline } = await import("../src/lib/tubeforge/timeline.ts");
+  const v0 = await makeVideo([mkScene(1), mkScene(2)], { renderMode: "kenburns" });
+  const doc = docOf(parseScenesOf(v0));
+  const v = await rawDb.video.update({
+    where: { id: v0.id },
+    data: { timeline: serializeTimeline(doc) },
+  });
+
+  // Scene 2 edited (a DRAFT): the assembly must fall back to the v1
+  // backfill — the PRE-edit state. A draft never leaks into a final.
+  await commitSceneChanges({
+    video: v,
+    beforeScenes: parseScenesOf(v),
+    beforeDoc: doc,
+    afterScenes: parseScenesOf(v).map((s) => (s.index === 2 ? { ...s, mood: "stormy night" } : s)),
+    afterDoc: doc,
+    kind: "edit",
+    origin: "test-s117-assembly",
+  });
+  const rowAfterEdit = await reload(v.id);
+  const sceneId2 = sceneIdOf(rowAfterEdit, 2);
+  const withDraft = await withCtx(
+    { userId: "user-fixture", organizationId: v.organizationId, role: "owner" },
+    () => resolveRenderAssembly(rowAfterEdit)
+  );
+  ok(withDraft.changed, "the assembly swapped revision content in");
+  eq(withDraft.entries.length, 2, "one entry per scene");
+  eq(
+    JSON.stringify(withDraft.entries[0]),
+    JSON.stringify({ sceneIndex: 1, sceneId: sceneIdOf(rowAfterEdit, 1), source: "row", revisionVersion: null }),
+    "scene 1 (never edited) renders the row"
+  );
+  const e2 = withDraft.entries[1];
+  ok(
+    e2.sceneId === sceneId2 && e2.source === "baseline" && e2.revisionVersion === 1,
+    "the drafted scene falls back to the v1 baseline (the backfill)"
+  );
+  eq(withDraft.scenes[1].mood, "golden hour", "the DRAFT mood does NOT leak — the pre-edit content renders");
+  eq(withDraft.scenes[1].index, 2, "the restored content sits at the CURRENT position");
+
+  // Approve the draft (the S116 ladder's status flip) → the assembly
+  // consumes the APPROVED revision's content.
+  const head2 = must("head", await headRevision(v.id, sceneId2));
+  await rawDb.sceneRevision.update({ where: { id: head2.id }, data: { status: "approved" } });
+  const withApproved = await withCtx(
+    { userId: "user-fixture", organizationId: v.organizationId, role: "owner" },
+    () => resolveRenderAssembly(rowAfterEdit)
+  );
+  ok(
+    withApproved.entries[1].source === "approved" && withApproved.entries[1].revisionVersion === head2.version,
+    "the approved revision wins the assembly"
+  );
+  eq(withApproved.scenes[1].mood, "stormy night", "the approved content renders now");
+});
+
+await test("the manifest + the staleness ladder: a real render records its assembly; movement stales it", async () => {
+  const { runRenderJob } = await import("../src/lib/tubeforge/video-jobs.ts");
+  const { renderStaleness, parseRenderManifest } = await import("../src/lib/tubeforge/render-assembly.ts");
+  const { serializeTimeline } = await import("../src/lib/tubeforge/timeline.ts");
+  const v0 = await makeVideo([mkScene(1), mkScene(2)], {
+    renderMode: "kenburns",
+    hasStoryboard: true,
+    hasVoiceover: true,
+  });
+  const dir = await seedSceneMedia(v0, ["testsrc=s=640x360:d=1", "smptebars=s=640x360"]);
+  const doc = docOf(parseScenesOf(v0));
+  await rawDb.video.update({
+    where: { id: v0.id },
+    data: { timeline: serializeTimeline(doc) },
+  });
+  // A REAL user row — the render job's Activity writes carry the userId FK
+  // (the S115 fixture precedent; a fake id fails the FK and the job's own
+  // success-path audit write would fail the whole render).
+  const operator = await rawDb.user.create({
+    data: { email: `s117-render-${MARK}@example.test`, passwordHash: "pbkdf2$1$s$h" },
+  });
+  CLEANUP_USER_IDS.push(operator.id);
+  const ctx = { userId: operator.id, organizationId: v0.organizationId, role: "owner" };
+
+  // A draft on scene 2 BEFORE the render: the final must assemble the v1
+  // baseline, and the manifest must say so.
+  const rowBefore = await reload(v0.id);
+  await commitSceneChanges({
+    video: rowBefore,
+    beforeScenes: parseScenesOf(rowBefore),
+    beforeDoc: doc,
+    afterScenes: parseScenesOf(rowBefore).map((s) => (s.index === 2 ? { ...s, mood: "stormy night" } : s)),
+    afterDoc: doc,
+    kind: "edit",
+    origin: "test-s117-render",
+  });
+
+  await withCtx(ctx, () => runRenderJob(v0.id, { mode: "kenburns", music: false }));
+  const rendered = await reload(v0.id);
+  ok(rendered.hasVideo, "the final landed");
+  ok(await storage.exists(`${v0.id}/final.mp4`), "final.mp4 through the storage seam");
+  const manifest = parseRenderManifest(rendered.renderManifest);
+  ok(manifest !== null && manifest.entries.length === 2, "the manifest records the assembly");
+  eq(manifest?.entries[0].source, "row", "scene 1 rendered from the row");
+  ok(
+    manifest?.entries[1].source === "baseline" && manifest?.entries[1].revisionVersion === 1,
+    "scene 2 rendered from the v1 baseline — the draft NEVER leaked into the final"
+  );
+
+  // Nothing moved since the render → fresh.
+  const fresh = await withCtx(ctx, () => renderStaleness(rendered));
+  eq(fresh.status, "fresh", "the manifest still matches the current assembly sources");
+
+  // Approve the draft → the current source moves to approved v2 → STALE.
+  const sceneId2 = sceneIdOf(rendered, 2);
+  const head2 = must("head v2", await headRevision(v0.id, sceneId2));
+  await rawDb.sceneRevision.update({ where: { id: head2.id }, data: { status: "approved" } });
+  const staled = await withCtx(ctx, async () => renderStaleness(await reload(v0.id)));
+  ok(
+    staled.status === "stale" &&
+      (staled as { reasons?: string[] }).reasons?.some((r) => r.includes("approved v2")),
+    "the approval stales the standing final (the operator asked for v2 in it)"
+  );
+
+  // No manifest while history stands → UNKNOWN (a pre-S117 final cannot
+  // prove its assembly).
+  await rawDb.video.update({ where: { id: v0.id }, data: { renderManifest: null } });
+  const unknown = await withCtx(ctx, async () => renderStaleness(await reload(v0.id)));
+  eq(unknown.status, "unknown", "history + no manifest = unprovable, never fresh");
+
+  // And a video with NO history at all is fresh by construction (the row is
+  // the only truth — nothing to be stale against).
+  const noHistory = await makeVideo([mkScene(1)]);
+  const noHistoryVerdict = await withCtx(ctx, () => renderStaleness(noHistory));
+  eq(noHistoryVerdict.status, "fresh", "no history, no manifest: the row is the only truth — fresh");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  for (const k of ["scene-01.png", "scene-01.wav", "scene-02.png", "scene-02.wav", "final.mp4", "subtitles.srt", "preview.mp4"].map((f) => `${v0.id}/${f}`))
+    await storage.remove(k).catch(() => {});
+});
+
 // --- teardown ---------------------------------------------------------------
 
 try {
