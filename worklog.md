@@ -5831,3 +5831,87 @@ build, and the live drill runs above. Staging provisioning itself
 awaits the operator's accounts (runbook §1); the drills then run
 unmodified — the same harness, a different BASE URL.
 
+## S111 — Stage 0 of scene-level editing & repair: the read-only repository reconciliation (2026-11-13)
+
+**THE OPERATOR'S ARCHITECTURE.** The operator delivered the
+scene-level editing & repair proposal — five operations (edit /
+preview / repair / recheck / render), five architectural requirements
+(scene versioning, dependency invalidation, artifact provenance, cost
+authorization, rollback), a risk table, a data model, an API design,
+QA requirements, and a Stage 0–7 sequence — with the explicit next
+step: "a read-only repository reconciliation: verify which of these
+capabilities already exist, identify the precise gaps, and produce a
+file-by-file implementation plan before changing code." This stage is
+that reconciliation; NO product code changed.
+
+**THE METHOD.** Full Prisma schema review (34 models) + three
+parallel code explorations: (A) the scene representation & editing
+surface, (B) the pipeline infrastructure (queue / budget / storage /
+QC / render assembly), (C) the existing repair / preview / approval /
+rollback capabilities. The deliverable is
+docs/design/scene-level-editing-reconciliation.md — every claim
+file-referenced, the load-bearing ones spot-verified at HEAD.
+
+**THE HEADLINE FINDINGS.**
+The proposal's foundation is REAL and better than it knows: surgical
+scene edits with surgical invalidation already exist
+(PATCH /api/videos/[id]/scenes — six fields, artifact deletion scoped
+to the edited scene), per-scene art regeneration exists (storyboard
+re-roll / AI-edit with seedVariant take counters), repair PROPOSALS
+already exist in two engines (the S84 critic and the S77 VCE, both
+propose-never-auto-edit, fired by human click through the S86
+one-click lane), one scene-scoped QC precedent exists (the S79
+targeted consistency re-check), and the whiteboard lane already
+stores per-scene encodes explicitly reserved for a future
+single-scene swap. What is ENTIRELY missing is the trust layer:
+scene versioning (Video.scenes is a last-write-wins JSON blob written
+by ELEVEN distinct paths), optimistic concurrency on that blob,
+artifact provenance (generation prompts are discarded at compose time;
+UsageRecord cost rows float free of scenes and artifacts), job
+idempotency keys (createPendingJob is a bare insert; the only dedup
+is a racy check-then-insert), user-facing cost approval, per-project
+spend ceilings, per-scene approval state, server-side rollback, and
+any partial re-render (a single scene's visual edit today deletes
+EVERY scene's rendered clips — the proposal's core complaint, live in
+code at video-jobs.ts:445).
+
+**THE ARCHITECTURAL SURPRISES the plan must absorb** (§5 of the
+reconciliation): (1) scene identity is POSITIONAL and unstable —
+split/delete/reorder re-number scenes, so a permanent scene id must
+be minted in Stage 1 (backfill s<N>); (2) scene content spans TWO
+documents (scenes JSON + the timeline doc; three in whiteboard
+mode) — a scene revision must snapshot the union slice or rollback
+restores half a scene; (3) the eleven mutators converge in Stage 1
+only via a structural-EPOCH split (interactive edits get per-scene
+revisions; whole-script regens and convert get epoch revisions); (4)
+SceneArtifact bridges UsageRecord (add linkage columns, persist the
+prompt) rather than duplicating cost tracking; (5) SceneRepair is the
+durable form of what the critic and VCE already emit as ephemeral
+report JSON.
+
+**DEFECTS FOUND (fix regardless of the track):** the per-scene
+art-upload button is DEAD — two live components POST
+/api/videos/[id]/storyboard/upload but the route does not exist
+(replaceSceneImage, its intended handler, does); scene text edits and
+timeline saves are the ONLY unaudited mutations (no Activity row);
+the over-invalidation is a measurable cost bug TODAY (one-scene
+repaint re-pays the whole video's render).
+
+**THE PLAN.** Stages 1–7 mapped file-by-file with the proposal's own
+exit criteria restated as tests (§9), the API reconciled to house
+conventions (org-scoped /api/videos/[id]/... — the flat /scenes/:id
+does not fit the tenancy model; the whiteboard scene-preview route is
+the precedent for {sceneIndex}), the QA requirements mapped to live
+systems (all twelve scenarios land; four are already pinned), and
+four operator decision points recorded (revision retention, approval
+semantics for render, per-project ceiling default, the epoch
+boundary). What will NOT be built, confirmed: no second timeline
+engine, no separate queue, no independent storage, no parallel budget
+system, no separate publishing pipeline.
+
+Docs-only stage — no source touched. Verified at HEAD: typecheck,
+lint, the unit/regression suite, the billing suite, production build.
+The next stage (S112 = Stage 1, scene revision foundation) begins
+only on the operator's go — the decision points in §10 are the gate.
+
+

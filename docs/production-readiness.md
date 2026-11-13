@@ -82,6 +82,20 @@ allowlist the moment the preview architecture is proven compatible; the largest
 UI/rendering files are split BEFORE new engines arrive (the S106 decomposition
 pattern); PR #10 (TypeScript 7) stays parked on typescript-eslint's peer ceiling.
 
+**First P2 feature track (adopted 2026-11-13): scene-level editing & repair.**
+The operator delivered the architecture ("a Scene-Level Production Control
+Layer on top of existing production infrastructure"); Stage 0 — the read-only
+repository reconciliation — landed as **S111**
+(docs/design/scene-level-editing-reconciliation.md): capability map against
+live code, the five requirements vs reality, three architectural surprises
+(positional scene identity, the two-document content split, the eleven
+mutators), two found defects (the dead storyboard/upload route; unaudited
+scene edits), and the file-by-file Stage 1–7 plan with the proposal's exit
+criteria restated as tests. Stages 1–7 (S112+) begin on the operator's go —
+the four decision points in the reconciliation's §10 are the gate — and ride
+the existing queue, storage, budget, and QC systems: no second timeline
+engine, no separate job queue, no parallel budget system.
+
 ## P0.1 spec — what the gate asserts
 
 `scripts/test-clean-clone.mts` (local: `npm run verify:clone`; CI: the
