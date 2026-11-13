@@ -30,10 +30,12 @@ import {
   buildGeometry,
   estimateProjectFrames,
   frameAt,
-  scheduleScene,
   WB_RENDER_FRAME_BUDGET,
   type FrameState,
 } from "./timing";
+// W2 — the semantic beat compiler: the render seam schedules through the
+// same beatSceneEvents the editor preview runs (the one-source law).
+import { beatSceneEvents } from "./beat-plan";
 // S87 slice 3 — the engine EMITS the timeline contract: the frame plan maps
 // onto whiteboard-kind clips, and the render loop + assembly read the SAME
 // frame-quantized clock the tracks carry (one derivation, pinned equal —
@@ -286,6 +288,11 @@ export async function renderWhiteboard(
 
   const { chromium } = await import("playwright");
   const lib = loadLibrary(opts.uploadedAssets ?? []);
+  // W2 — the matcher's vocabulary: every asset's tags, built once per
+  // render (uploads ride their manifest tags; built-ins their palette).
+  const assetTags = new Map<string, string[]>(
+    [...lib.assets.values()].map((a) => [a.id, a.tags])
+  );
   const geometry = buildGeometry(
     [...lib.extracted.entries()].map(([id, ex]) => ({ id, paths: ex.paths }))
   );
@@ -308,7 +315,11 @@ export async function renderWhiteboard(
       // the clock is now the one source both the render and the contract
       // read.
       const durationMs = sceneMs[si];
-      const events = scheduleScene(scene, durationMs, geometry);
+      // W2 — the semantic beat schedule: the scene's draws ride the
+      // narration's sentences (the same beatSceneEvents the editor preview
+      // runs — the one-source law). Explicit events stay senior inside;
+      // a degenerate plan falls back to the fill law byte-for-byte.
+      const events = beatSceneEvents(scene, durationMs, geometry, assetTags);
       const frames = clock.scenes[si].frames;
 
       // Per-scene page recycling (the S75 E10 receipt): ONE page held across

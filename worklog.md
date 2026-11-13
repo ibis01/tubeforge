@@ -6714,3 +6714,71 @@ one-source law).
 pins), the live harness GREEN end-to-end (3 renders + repeat render +
 blind kit ≈ 5 min wall). The baseline JSON, the rubric doc, the harness, the
 pure module and the applier fix land in this commit.
+
+---
+
+## W2 — the semantic beat compiler (2026-11-13)
+
+**THE STAGE.** The reconciliation §9 W2, on the §10.1 default (compile-only):
+draw order is now SEMANTIC — the scene's strokes land on the sentences that
+introduce them, not evenly from the lead-in. Beats are a PLANNING artifact:
+they exist long enough to become `AnimationEvent[]` (the doc's existing
+grammar, zero growth — the S87 tracks projection, the validator, and the
+studio's event editor are untouched) and never ride the doc.
+
+**THE SHAPE — and why.** The compiler lives at the SCHEDULING SEAM, not in
+the stored doc: `beatSceneEvents(scene, durationMs, geometry, assetTags)` is
+consumed by BOTH the renderer (render.ts) and the editor preview
+(wb-canvas.tsx) — the one-source law, preview ≡ final by construction. Three
+reasons this beats scaffold-time compilation: (1) the narration clock is the
+boss — beats plan against the SAME effective duration the render uses
+(explicit > VO-measured > estimate), so a measured VO never desyncs the
+choreography the way stored scaffold-time events would; (2) the fill law is
+the byte-identical fallback (`scheduleScene` is untouched — every S67/S73/W1
+pin held without edits); (3) the author's placement `order` stays SENIOR:
+matching is order-monotonic (a placement never draws before an
+earlier-ordered one), so hand-authored boards keep their intent and only
+gain narration alignment.
+
+**THE DELIVERABLES.**
+- `src/lib/tubeforge/whiteboard/beat-plan.ts` (NEW, PURE): `splitSentences`
+  (THE segmentation — llm-planner shares it), sentence classification
+  (emphasis/subject/action/setup/support from punctuation + cue regexes),
+  the concept cue table (mirrors the planner's KEYWORD_PICKS — the planner
+  picks the asset FROM the narration, the beat layer places it AT the
+  narration), tag-overlap matching for uploads, word-proportional windows
+  across the fill law's own envelope ([LEAD_IN, dur − HOLD], the same
+  1200ms floor), and `compileBeats` → plain `draw_path`/`write_text` rows
+  with the fill law's arithmetic (weights, clamps, gap, fit factor — ONE
+  scheduler's numbers; timing.ts now exports PATH_GAP_MS/MIN/MAX/MS_PER_CHAR).
+  Pins baked in: every beat has an action; referenced assets exist; windows
+  fit the clock; nothing outlasts it; explicit events stay senior with the
+  exact claimed-key grammar.
+- render.ts + wb-canvas.tsx: the seam swap (one line each side + the tags
+  build from the merged library).
+- llm-planner.ts: the model MAY emit `beats` in the same schema (1-based
+  sentence + assetIds); normalization polices BEAT-BY-BEAT (out-of-range
+  sentence, unplaced asset, double claim — each dropped WITH its reason,
+  `droppedBeats`/`beatsServed` in the report), valid beats set the mention
+  order of the composed placements; a reply without beats composes
+  byte-identically to before.
+
+**THE PROOF.** Unit suite 538 → 546 (the W2 battery: segmentation,
+determinism, the envelope law, order monotonicity, cue matching, card
+grammar, precedence/no-double-claim/clock law, the REAL semantic delta —
+the coin waits ~3.4s for its "money" sentence where the fill law started it
+at the lead-in — the byte-for-byte fallback on degenerate plans, the LLM
+beat-by-beat drops, and the seam source pins). tsc clean; eslint clean on
+every touched file. THE W1 HARNESS GREEN END-TO-END on real chromium +
+ffmpeg: all three aspects 912/912 exact frames at 38.0s, the full QC battery
+passing on every aspect (frozen-frames and static-shots included — the
+longer inter-beat pen-lift gaps ride the camera drift exactly as designed),
+the seam law holding, and the determinism pin IDENTICAL across re-renders.
+
+**THE HONEST DELTA.** The fresh 16:9 frame hashes MOVED versus the committed
+W1 baseline (first sample cd55c9c0… → 1ff50db7…) — that is the stage working
+as ordered: the strokes land on their sentences now. The committed baseline
+JSON stays the W1 BEFORE-picture (the harness's local overwrite was
+reverted); the fresh receipts (frames, seams, blind kit) live in
+validation/w1/, and the blind re-score against the w1 rubric — semantic
+order, narration alignment — is the operator's next human step.

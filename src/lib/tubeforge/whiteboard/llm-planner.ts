@@ -26,6 +26,9 @@ import {
   scaffoldWhiteboardProject,
   type ScaffoldSceneInput,
 } from "./whiteboard-planner";
+// W2 — the beat layer: the model MAY propose beats in the same schema the
+// native compiler plans; the segmentation is THE engine's (one source).
+import { splitSentences } from "./beat-plan";
 import type {
   WhiteboardAssetPlacement,
   WhiteboardProject,
@@ -105,10 +108,21 @@ export interface LlmConceptPick {
 }
 
 /** The model's per-scene row: `scene` is the STORY scene index (1-based,
- * exactly the number the prompt showed). */
+ * exactly the number the prompt showed). W2: `beats` is OPTIONAL — the
+ * model's semantic read of WHERE each asset belongs in the narration.
+ * Lenient by construction; normalization polices beat-by-beat. */
+export interface LlmBeatProposal {
+  /** The 1-based sentence number (of that scene's narration) that
+   *  introduces the beat's assets. */
+  sentence?: unknown;
+  /** The asset ids the sentence introduces (subset of the scene's picks). */
+  assetIds?: unknown;
+}
+
 export interface LlmScenePlan {
   scene: number;
   assets: LlmConceptPick[];
+  beats?: LlmBeatProposal[];
 }
 
 /** A pick that survived normalization: on-board, in-band, catalog-legal. */
@@ -123,6 +137,24 @@ export interface NormalizedConceptPick {
 export interface NormalizedScenePlan {
   sceneIndex: number;
   picks: NormalizedConceptPick[];
+  /** W2 — the beat plan that survived normalization: sentence-indexed
+   *  (0-based, the engine's splitSentences) asset groups, sorted by
+   *  sentence. Absent when the model proposed nothing usable — the scene
+   *  degrades to the native beat matching at the scheduling seam. */
+  beats?: NormalizedBeat[];
+}
+
+/** A validated beat: the sentence that introduces its assets. */
+export interface NormalizedBeat {
+  sentence: number;
+  assetIds: string[];
+}
+
+/** A beat row (or a beat's asset) dropped in normalization — surfaced with
+ *  its reason, never silent (the E0 extraction discipline). */
+export interface DroppedBeat {
+  scene: number;
+  reason: string;
 }
 
 /** A placement dropped in normalization — surfaced with its reason, never
@@ -161,12 +193,15 @@ export function normalizeLlmScenePlans(
   served: Map<number, NormalizedScenePlan>;
   fallback: number[];
   dropped: DroppedPlacement[];
+  droppedBeats: DroppedBeat[];
 } {
   const maxPicks = ctx.maxConceptsPerScene ?? WB_PLANNER_CONCEPTS_PER_SCENE;
   const storyIndexes = new Set(ctx.scenes.map((s) => s.index));
   const dropped: DroppedPlacement[] = [];
+  const droppedBeats: DroppedBeat[] = [];
   // Merge rows that repeat a scene number; dedupe within the merge.
   const byScene = new Map<number, LlmConceptPick[]>();
+  const rawBeatsByScene = new Map<number, LlmBeatProposal[]>();
   for (const row of raw) {
     const sceneNo = Number(row?.scene);
     if (!Number.isInteger(sceneNo) || !storyIndexes.has(sceneNo)) {
@@ -181,6 +216,10 @@ export function normalizeLlmScenePlans(
     const assets = Array.isArray(row?.assets) ? row.assets : [];
     for (const a of assets) bucket.push(a);
     byScene.set(sceneNo, bucket);
+    const beatBucket = rawBeatsByScene.get(sceneNo) ?? [];
+    const rawBeats = Array.isArray(row?.beats) ? row.beats : [];
+    for (const b of rawBeats) beatBucket.push(b as LlmBeatProposal);
+    if (beatBucket.length > 0) rawBeatsByScene.set(sceneNo, beatBucket);
   }
 
   const served = new Map<number, NormalizedScenePlan>();
@@ -242,14 +281,70 @@ export function normalizeLlmScenePlans(
         reason: `over the ${maxPicks}-concepts-per-scene cap`,
       });
     }
-    if (picks.length > 0) served.set(sceneNo, { sceneIndex: sceneNo, picks });
+    if (picks.length > 0) {
+      const plan: NormalizedScenePlan = { sceneIndex: sceneNo, picks };
+      // W2 — beat-by-beat normalization (the degradation law): valid rows
+      // survive, invalid rows drop WITH their reason, and a scene whose
+      // beats all die simply rides the native matching at the seam.
+      const narration = ctx.scenes.find((s) => s.index === sceneNo)?.narration ?? "";
+      const sentenceCount = splitSentences(narration).length;
+      const rawBeats = rawBeatsByScene.get(sceneNo) ?? [];
+      const pairs: { sentence: number; assetId: string }[] = [];
+      const beaten = new Set<string>();
+      for (const row of rawBeats) {
+        const sentence = Number(row?.sentence);
+        if (!Number.isInteger(sentence) || sentence < 1 || sentence > sentenceCount) {
+          droppedBeats.push({
+            scene: sceneNo,
+            reason: `beat sentence ${String(row?.sentence)} outside the scene's ${sentenceCount} sentence(s)`,
+          });
+          continue;
+        }
+        const ids = Array.isArray(row?.assetIds) ? row.assetIds.map((a) => String(a ?? "").trim()) : [];
+        if (ids.length === 0) {
+          droppedBeats.push({ scene: sceneNo, reason: `beat sentence ${sentence} lists no assets` });
+          continue;
+        }
+        for (const assetId of ids) {
+          if (!assetId) continue;
+          if (!picks.some((p) => p.assetId === assetId)) {
+            droppedBeats.push({
+              scene: sceneNo,
+              reason: `beat asset "${assetId.slice(0, 40)}" is not placed in the scene (beats may only order the scene's own picks)`,
+            });
+            continue;
+          }
+          if (beaten.has(assetId)) {
+            droppedBeats.push({
+              scene: sceneNo,
+              reason: `beat asset "${assetId.slice(0, 40)}" already claimed by an earlier beat`,
+            });
+            continue;
+          }
+          beaten.add(assetId);
+          pairs.push({ sentence: sentence - 1, assetId }); // 1-based → 0-based
+        }
+      }
+      if (pairs.length > 0) {
+        const bySentence = new Map<number, string[]>();
+        for (const { sentence, assetId } of pairs) {
+          const bucket = bySentence.get(sentence) ?? [];
+          bucket.push(assetId);
+          bySentence.set(sentence, bucket);
+        }
+        plan.beats = [...bySentence.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([sentence, assetIds]) => ({ sentence, assetIds }));
+      }
+      served.set(sceneNo, plan);
+    }
   }
 
   const fallback = ctx.scenes
     .map((s) => s.index)
     .filter((idx) => !served.has(idx))
     .sort((a, b) => a - b);
-  return { served, fallback, dropped };
+  return { served, fallback, dropped, droppedBeats };
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +370,28 @@ export function composeLlmScaffold(
     const structural = scene.placements.filter((p) =>
       WB_PLANNER_RESERVED_IDS.has(p.assetId)
     );
-    const picks: WhiteboardAssetPlacement[] = plan.picks.map((pick, j) => ({
+    // W2 — mention order: picks the model beat-ordered ride their beat's
+    // sentence (the narrator introduces them in that order); unmentioned
+    // picks keep their original relative order after the mentioned ones.
+    // Beatless plans compose exactly as before (byte-identical orders).
+    const rankOf = new Map<string, number>();
+    plan.beats?.forEach((b) => {
+      b.assetIds.forEach((assetId) => rankOf.set(assetId, b.sentence));
+    });
+    const orderedPicks = plan.beats
+      ? [...plan.picks]
+          .map((pick, j) => ({ pick, j }))
+          .sort((a, b) => {
+            const ra = rankOf.get(a.pick.assetId);
+            const rb = rankOf.get(b.pick.assetId);
+            if (ra !== undefined && rb !== undefined && ra !== rb) return ra - rb;
+            if (ra !== undefined) return -1;
+            if (rb !== undefined) return 1;
+            return a.j - b.j;
+          })
+          .map(({ pick }) => pick)
+      : plan.picks;
+    const picks: WhiteboardAssetPlacement[] = orderedPicks.map((pick, j) => ({
       assetId: pick.assetId,
       placement: {
         x: pick.x,
@@ -298,11 +414,11 @@ const PLANNER_SYSTEM_PROMPT = `You are a whiteboard video storyboard planner. Yo
 
 {
   "scenes": [
-    { "scene": 1, "assets": [ { "id": "coin", "x": 900, "y": 420, "scale": 1.6, "rotateDeg": 0 } ] }
+    { "scene": 1, "assets": [ { "id": "coin", "x": 900, "y": 420, "scale": 1.6, "rotateDeg": 0 } ], "beats": [ { "sentence": 2, "assetIds": ["coin"] } ] }
   ]
 }
 
-Rules: every id MUST come from the catalog. "scene" is the story scene number you were given. x and y are the asset's center in scene-space on the board you were told about — keep every asset fully on the board and clear of the title card (top) and close card areas. scale between 0.5 and 3, rotateDeg between -180 and 180. One to three assets per scene; prefer fewer, larger, readable pieces over clutter. Never repeat an asset within one scene. Serve EVERY scene. Assets marked "your upload" belong to this video's author — prefer them when they genuinely fit. Never wrap in markdown fences. Never add commentary.`;
+Rules: every id MUST come from the catalog. "scene" is the story scene number you were given. x and y are the asset's center in scene-space on the board you were told about — keep every asset fully on the board and clear of the title card (top) and close card areas. scale between 0.5 and 3, rotateDeg between -180 and 180. One to three assets per scene; prefer fewer, larger, readable pieces over clutter. Never repeat an asset within one scene. Serve EVERY scene. Assets marked "your upload" belong to this video's author — prefer them when they genuinely fit. The "beats" array is OPTIONAL but recommended: for each scene, split its narration into sentences and report which 1-based sentence introduces each asset you placed ("assetIds" = that asset's id, from the same scene's assets). Order beats by sentence; every asset appears in at most one beat; every beat lists at least one asset. Never wrap in markdown fences. Never add commentary.`;
 
 function plannerUserPrompt(
   input: { topic: string; scenes: ScaffoldSceneInput[] },
@@ -356,6 +472,11 @@ export interface WhiteboardLlmPlannerReport {
   fallbackScenes: number[];
   /** Placements dropped in normalization, each with its reason. */
   dropped: DroppedPlacement[];
+  /** W2 — beat rows/assets dropped in normalization, each with its reason
+   *  (the beat-by-beat degradation is surfaced, never silent). */
+  droppedBeats: DroppedBeat[];
+  /** W2 — placements that carry a validated beat (mention order known). */
+  beatsServed: number;
   /** True when the LLM round-trip failed entirely — the project is the
    * NATIVE scaffold, labeled here, never presented as model work. */
   degraded: boolean;
@@ -387,7 +508,12 @@ function validateScenePlans(parsed: Record<string, unknown>): LlmScenePlan[] {
         rotateDeg: p.rotateDeg === undefined ? 0 : Number(p.rotateDeg),
       });
     }
-    out.push({ scene, assets: picks });
+    // W2 — beats pass through LENIENTLY here (normalization polices them
+    // beat-by-beat against the real sentences and picks).
+    const beats = Array.isArray(row.beats)
+      ? (row.beats as unknown[]).map((b) => b as LlmBeatProposal)
+      : undefined;
+    out.push({ scene, assets: picks, ...(beats && beats.length > 0 ? { beats } : {}) });
   }
   if (out.length === 0) throw new Error("the planner reply carried no usable scene rows");
   return out;
@@ -425,6 +551,8 @@ export async function scaffoldWhiteboardProjectLlm(
       servedScenes: 0,
       fallbackScenes: allFallback,
       dropped: [],
+      droppedBeats: [],
+      beatsServed: 0,
       degraded: true,
       degradeReason: reason.slice(0, 300),
     },
@@ -455,7 +583,7 @@ export async function scaffoldWhiteboardProjectLlm(
       retry: { attempts: 2, baseDelayMs: 1500 },
       ...(opts.call ? { call: opts.call } : {}),
     });
-    const { served, fallback, dropped } = normalizeLlmScenePlans(raw, {
+    const { served, fallback, dropped, droppedBeats } = normalizeLlmScenePlans(raw, {
       scenes: input.scenes,
       catalogIds: new Set(input.catalog.map((c) => c.id)),
       width: native.width,
@@ -471,6 +599,8 @@ export async function scaffoldWhiteboardProjectLlm(
         servedScenes: served.size,
         fallbackScenes: fallback,
         dropped,
+        droppedBeats,
+        beatsServed: [...served.values()].reduce((a, p) => a + (p.beats?.reduce((n, b) => n + b.assetIds.length, 0) ?? 0), 0),
         degraded: false,
       },
     };

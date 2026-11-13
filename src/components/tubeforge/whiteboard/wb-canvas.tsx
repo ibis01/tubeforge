@@ -35,9 +35,11 @@ import {
   cameraAt,
   frameAt,
   frameCount,
-  scheduleScene,
   sceneDurationMs,
 } from "@/lib/tubeforge/whiteboard/timing";
+// W2 — the semantic beat compiler: the preview schedules through the same
+// beatSceneEvents the renderer runs (the one-source law — preview ≡ final).
+import { beatSceneEvents } from "@/lib/tubeforge/whiteboard/beat-plan";
 import type { Placement } from "@/lib/tubeforge/whiteboard/svg";
 import type { WhiteboardProject } from "@/lib/tubeforge/whiteboard/storyboard";
 
@@ -87,7 +89,13 @@ function sceneRuntime(
   // voMs), else the narration estimate: the same precedence
   // (explicit > VO-measured > estimate) the render's sceneDurationMs applies.
   const durationMs = sceneDurationMs(scene, voMs?.[scene.id] ?? null);
-  return { lib, geometry, scene, durationMs, events: scheduleScene(scene, durationMs, geometry) };
+  // W2 — the matcher's vocabulary (the same build the renderer makes): the
+  // beat plan is a pure function of (scene, duration, geometry, tags), so
+  // the preview and the final render agree frame-for-frame.
+  const assetTags = new Map<string, string[]>(
+    [...lib.assets.values()].map((a) => [a.id, a.tags])
+  );
+  return { lib, geometry, scene, durationMs, events: beatSceneEvents(scene, durationMs, geometry, assetTags) };
 }
 
 /** Placement bbox corners in SCENE space: R(rot)·s·(u,v) + (x,y) over the

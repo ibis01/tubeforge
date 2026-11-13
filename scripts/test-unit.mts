@@ -13144,6 +13144,361 @@ await test("w1: the baseline receipt, the rubric doc and the text-reveal fix are
   );
 });
 
+// ---------- suite: W2 — the semantic beat compiler (beat-plan.ts) ----------
+
+suiteStart("W2 whiteboard — the semantic beat compiler (beat-plan.ts)");
+
+await test("W2 splitSentences: punctuation attaches, empties drop, unpunctuated text is one sentence", async () => {
+  const { splitSentences } = await import("../src/lib/tubeforge/whiteboard/beat-plan");
+  eq(splitSentences("One. Two! Three?"), ["One.", "Two!", "Three?"], "three sentences, punctuation kept");
+  eq(splitSentences("  A  bumpy   ride.   Then lift-off!  "), ["A bumpy ride.", "Then lift-off!"], "whitespace collapsed");
+  eq(splitSentences("no terminal punctuation here"), ["no terminal punctuation here"], "unpunctuated text is ONE sentence");
+  eq(splitSentences("   "), [], "whitespace-only narration is no sentences");
+  eq(splitSentences('He said "wait." Then left.'), ['He said "wait."', "Then left."], "quote-adjacent punctuation splits");
+});
+
+await test("W2 planBeats: deterministic; windows inside the clock; the hold holds; order monotonic", async () => {
+  const { planBeats } = await import("../src/lib/tubeforge/whiteboard/beat-plan");
+  const { buildGeometry, LEAD_IN_MS, HOLD_END_MS } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  const geo = buildGeometry([...lib.extracted.entries()].map(([id, ex]) => ({ id, paths: ex.paths })));
+  const scene = {
+    id: "scene-1",
+    narration: "Markets react first. Then money moves fast! The data confirms the trend.",
+    background: "#ffffff" as const,
+    placements: [
+      { assetId: "coin", placement: { x: 700, y: 500, scale: 1.4, rotateDeg: 0 }, order: 0 },
+      { assetId: "bar-chart", placement: { x: 1100, y: 500, scale: 1.4, rotateDeg: 0 }, order: 1 },
+    ],
+    animations: [],
+    camera: [{ cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 }],
+  };
+  const durationMs = 8000;
+  const a = planBeats(scene, { durationMs, geometry: geo });
+  const b = planBeats(scene, { durationMs, geometry: geo });
+  ok(a.length > 0, "a usable plan exists");
+  eq(JSON.stringify(a), JSON.stringify(b), "determinism: same inputs → byte-identical beats");
+  // The envelope law: every window starts at/after the lead-in and the
+  // last window ends at durationMs − HOLD_END_MS (±1ms rounding).
+  for (const beat of a) {
+    ok(beat.startMs >= LEAD_IN_MS, `beat ${beat.id} starts at/after the lead-in (${beat.startMs})`);
+    ok(beat.endMs > beat.startMs, `beat ${beat.id} has a non-empty window`);
+    ok(beat.assetIds.length > 0, `beat ${beat.id} carries work (the every-beat-has-an-action law)`);
+  }
+  const last = a[a.length - 1];
+  approx(last.endMs, durationMs - HOLD_END_MS, 1, "the last window ends at the hold edge");
+  // The order-monotonic law: placements visited in order never assign to
+  // an EARLIER sentence than the previous placement's.
+  const sentenceOf = new Map<string, number>();
+  for (const beat of a) for (const assetId of beat.assetIds) sentenceOf.set(assetId, beat.sentence);
+  const coinSentence = sentenceOf.get("coin") ?? -1;
+  const chartSentence = sentenceOf.get("bar-chart") ?? -1;
+  ok(
+    coinSentence >= 0 && chartSentence >= 0 && coinSentence <= chartSentence,
+    `order-monotonic: coin (order 0, sentence ${coinSentence}) never trails bar-chart (order 1, sentence ${chartSentence})`
+  );
+  // The cue-table match: coin rides the MONEY sentence, the chart rides
+  // the DATA sentence — the semantic delta the whole stage exists for.
+  eq(coinSentence, 1, "coin → the 'money' sentence");
+  eq(chartSentence, 2, "bar-chart → the 'data' sentence");
+  eq(a.length, 2, "only sentences with work carry beats (the every-beat-has-an-action law)");
+  eq(a.find((beat) => beat.sentence === 1)?.purpose, "emphasis", "the exclamation sentence classifies as emphasis");
+  eq(a.find((beat) => beat.sentence === 2)?.purpose, "support", "the closing statement classifies as support");
+});
+
+await test("W2 planBeats: the cards own the opening and closing sentences", async () => {
+  const { planBeats } = await import("../src/lib/tubeforge/whiteboard/beat-plan");
+  const { buildGeometry } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  const geo = buildGeometry([...lib.extracted.entries()].map(([id, ex]) => ({ id, paths: ex.paths })));
+  const scene = {
+    id: "scene-1",
+    narration: "Welcome to the forge. Money moves. So remember the check.",
+    background: "#ffffff" as const,
+    placements: [
+      { assetId: "title-hero", placement: { x: 460, y: 120, scale: 1.25, rotateDeg: 0 }, order: 0 },
+      { assetId: "coin", placement: { x: 800, y: 420, scale: 1.6, rotateDeg: 0 }, order: 1 },
+      { assetId: "close-card", placement: { x: 460, y: 380, scale: 1.25, rotateDeg: 0 }, order: 2 },
+    ],
+    animations: [],
+    camera: [{ cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 }],
+  };
+  const beats = planBeats(scene, { durationMs: 9000, geometry: geo });
+  const sentenceOf = new Map<string, number>();
+  for (const beat of beats) for (const assetId of beat.assetIds) sentenceOf.set(assetId, beat.sentence);
+  eq(sentenceOf.get("title-hero"), 0, "title-hero → sentence 0");
+  eq(sentenceOf.get("coin"), 1, "coin → the money sentence");
+  eq(sentenceOf.get("close-card"), 2, "close-card → the last sentence");
+});
+
+await test("W2 compileBeats: explicit events stay senior; no double claims; nothing outlasts the clock", async () => {
+  const { planBeats, compileBeats, beatSceneEvents } = await import("../src/lib/tubeforge/whiteboard/beat-plan");
+  const { buildGeometry } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  const geo = buildGeometry([...lib.extracted.entries()].map(([id, ex]) => ({ id, paths: ex.paths })));
+  const explicit = {
+    type: "draw_path" as const,
+    assetId: "heart-main",
+    pathId: "hm-outline",
+    startMs: 500,
+    durationMs: 1000,
+  };
+  const scene = {
+    id: "scene-1",
+    narration: "The heart pumps. Then blood moves through the chambers!",
+    background: "#ffffff" as const,
+    placements: [{ assetId: "heart-main", placement: { x: 800, y: 400, scale: 2, rotateDeg: 0 }, order: 0 }],
+    animations: [explicit],
+    camera: [{ cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 }],
+  };
+  const durationMs = 8000;
+  const beats = planBeats(scene, { durationMs, geometry: geo });
+  const events = beatSceneEvents(scene, durationMs, geo);
+  ok(beats.length > 0, "a usable plan exists for the heart scene");
+  eq(
+    events.filter((e) => e.type === "draw_path" && e.assetId === "heart-main" && (e as { pathId: string }).pathId === "hm-outline").length,
+    1,
+    "the explicit event survives exactly once — never double-claimed"
+  );
+  eq(
+    JSON.stringify(events.find((e) => e.type === "draw_path" && (e as { pathId?: string }).pathId === "hm-outline")),
+    JSON.stringify(explicit),
+    "the author's event passes through byte-identical (the precedence law)"
+  );
+  const compiled = compileBeats(beats, scene, durationMs, geo);
+  const lastEnd = Math.max(...compiled.map((e) => e.startMs + e.durationMs));
+  ok(lastEnd <= durationMs, `the schedule never outlasts the clock (${lastEnd} ≤ ${durationMs})`);
+  // Every beat's work is inside its own window's neighborhood: compiled
+  // draw/text starts never precede the lead-in.
+  ok(
+    compiled.every((e) => e.startMs >= 400),
+    "compiled work starts at/after the lead-in"
+  );
+  // The deterministic law holds across the full pipeline too.
+  eq(JSON.stringify(beatSceneEvents(scene, durationMs, geo)), JSON.stringify(events), "beatSceneEvents is deterministic");
+});
+
+await test("W2 beatSceneEvents: the semantic delta is real — draws ride the narration, not the lead-in", async () => {
+  const { beatSceneEvents } = await import("../src/lib/tubeforge/whiteboard/beat-plan");
+  const { buildGeometry, scheduleScene } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  const geo = buildGeometry([...lib.extracted.entries()].map(([id, ex]) => ({ id, paths: ex.paths })));
+  const scene = {
+    id: "scene-1",
+    narration: "Markets react first. Then money moves fast!",
+    background: "#ffffff" as const,
+    placements: [{ assetId: "coin", placement: { x: 800, y: 420, scale: 1.6, rotateDeg: 0 }, order: 0 }],
+    animations: [],
+    camera: [{ cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 }],
+  };
+  const durationMs = 8000;
+  const beatEvents = beatSceneEvents(scene, durationMs, geo);
+  const fillEvents = scheduleScene(scene, durationMs, geo);
+  const firstBeatStart = Math.min(...beatEvents.map((e) => e.startMs));
+  const firstFillStart = Math.min(...fillEvents.map((e) => e.startMs));
+  ok(
+    firstBeatStart > firstFillStart,
+    `the coin waits for its sentence (beat ${firstBeatStart}ms > fill law ${firstFillStart}ms)`
+  );
+  // The total work is the same — only the WHEN changed.
+  eq(beatEvents.length, fillEvents.length, "same event count — the grammar never grew");
+  eq(
+    JSON.stringify(beatEvents.map((e) => `${e.type}:${e.assetId}`)),
+    JSON.stringify(fillEvents.map((e) => `${e.type}:${e.assetId}`)),
+    "same work sequence — placement order is senior to matching"
+  );
+});
+
+await test("W2 beatSceneEvents: the fallback is the fill law byte-for-byte when the plan degenerates", async () => {
+  const { beatSceneEvents } = await import("../src/lib/tubeforge/whiteboard/beat-plan");
+  const { buildGeometry, scheduleScene } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  const geo = buildGeometry([...lib.extracted.entries()].map(([id, ex]) => ({ id, paths: ex.paths })));
+  // A placement whose asset carries no drawable work at all → no beats →
+  // the fallback law. Synthetic geometry: an asset with zero paths and no
+  // registered texts (an upload that failed extraction, say).
+  const geo2 = buildGeometry([{ id: "ghost", paths: [] }]);
+  const emptyAsset = {
+    id: "scene-1",
+    narration: "A sentence about nothing drawable.",
+    background: "#ffffff" as const,
+    placements: [{ assetId: "ghost", placement: { x: 800, y: 400, scale: 1, rotateDeg: 0 }, order: 0 }],
+    animations: [],
+    camera: [{ cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 }],
+  };
+  eq(
+    JSON.stringify(beatSceneEvents(emptyAsset, 8000, geo2)),
+    JSON.stringify(scheduleScene(emptyAsset, 8000, geo2)),
+    "no drawable work → the fill law's output, byte-for-byte"
+  );
+  // A zero/negative clock rides the fallback too.
+  const real = {
+    id: "scene-1",
+    narration: "Money moves. Then data confirms it.",
+    background: "#ffffff" as const,
+    placements: [{ assetId: "coin", placement: { x: 800, y: 400, scale: 1.6, rotateDeg: 0 }, order: 0 }],
+    animations: [],
+    camera: [{ cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 }],
+  };
+  eq(
+    JSON.stringify(beatSceneEvents(real, 0, geo)),
+    JSON.stringify(scheduleScene(real, 0, geo)),
+    "a dead clock → the fill law"
+  );
+});
+
+await test("W2 LLM beats: normalization validates beat-by-beat; valid beats set the mention order", async () => {
+  const { normalizeLlmScenePlans, composeLlmScaffold, scaffoldWhiteboardProjectLlm } = await import(
+    "../src/lib/tubeforge/whiteboard/llm-planner"
+  );
+  const { scaffoldWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/whiteboard-planner");
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  const scenes = [
+    { index: 1, title: "Open", narration: "How the idea took hold. Then money moved fast! The data sealed the trend." },
+    { index: 2, title: "Mid", narration: "A single-beat middle scene." },
+    { index: 3, title: "Close", narration: "The final check stands." },
+  ];
+  const raw = [
+    {
+      scene: 1,
+      assets: [
+        { assetId: "coin", x: 900, y: 420, scale: 1.6 },
+        { assetId: "bar-chart", x: 500, y: 600, scale: 1.4 },
+      ],
+      beats: [
+        { sentence: 3, assetIds: ["bar-chart"] }, // valid: the data sentence
+        { sentence: 2, assetIds: ["coin"] }, // valid: the money sentence
+        { sentence: 99, assetIds: ["coin"] }, // invalid: outside the 3 sentences
+        { sentence: 1, assetIds: ["rocket"] }, // invalid: not placed in the scene
+        { sentence: 1, assetIds: ["coin"] }, // invalid: coin already claimed
+      ],
+    },
+  ];
+  const { served, droppedBeats } = normalizeLlmScenePlans(raw, {
+    scenes,
+    catalogIds: new Set(["coin", "bar-chart", "rocket", "check-badge", "lightbulb"]),
+    width: 1920,
+    height: 1080,
+  });
+  const plan = served.get(1);
+  ok(plan !== undefined, "scene 1 was served with a plan");
+  if (!plan) return;
+  eq(droppedBeats.length, 3, "three bad beat rows dropped, each with its reason");
+  ok(droppedBeats.some((d) => /sentence 99/.test(d.reason)), "the out-of-range sentence is named");
+  ok(droppedBeats.some((d) => /rocket/.test(d.reason)), "the unplaced asset is named");
+  ok(droppedBeats.some((d) => /already claimed/.test(d.reason)), "the double-claim is named");
+  eq(plan.beats?.length, 2, "the two valid beats survive");
+  eq(JSON.stringify(plan.beats), JSON.stringify([
+    { sentence: 1, assetIds: ["coin"] },
+    { sentence: 2, assetIds: ["bar-chart"] },
+  ]), "beats are 0-based and sorted by sentence");
+
+  // Compose: mention order follows the beats — coin (sentence 1) draws
+  // before bar-chart (sentence 2), even though the pick array said
+  // otherwise. Orders stay compact after the structural card.
+  const native = scaffoldWhiteboardProject({ scenes, topic: "T" });
+  const composed = composeLlmScaffold(native, scenes, served);
+  eq(
+    composed.scenes[0].placements.map((p) => p.assetId),
+    ["title-hero", "coin", "bar-chart"],
+    "the model's mention order IS the placement order"
+  );
+  eq(composed.scenes[0].placements[1].order, 1, "orders stay compact after the structural card");
+  eq(composed.scenes[0].placements[2].order, 2, "second mention orders second");
+  const v = validateWhiteboardProject(composed, lib.libraryIndex);
+  ok(v.project !== null, `the beat-ordered scaffold validates clean: ${v.errors.join(" · ")}`);
+
+  // The wrapper end-to-end: a reply WITH beats reports them honestly.
+  const passThrough: import("../src/lib/tubeforge/whiteboard/llm-planner").PlannerCall = (_s, _l, fn) => fn();
+  const { project, report } = await scaffoldWhiteboardProjectLlm(
+    { scenes, topic: "T", catalog: [{ id: "coin", tags: ["money"], w: 100, h: 100 }, { id: "bar-chart", tags: ["data"], w: 100, h: 100 }] },
+    {
+      ask: async () =>
+        JSON.stringify({
+          scenes: [
+            {
+              scene: 1,
+              assets: [
+                { id: "bar-chart", x: 500, y: 600, scale: 1.4 },
+                { id: "coin", x: 900, y: 420, scale: 1.6 },
+              ],
+              beats: [
+                { sentence: 2, assetIds: ["coin"] },
+                { sentence: 3, assetIds: ["bar-chart"] },
+              ],
+            },
+          ],
+        }),
+      call: passThrough,
+    }
+  );
+  eq(report.planner, "llm", "an honest llm label");
+  eq(report.beatsServed, 2, "both beat assets accounted");
+  eq(report.droppedBeats.length, 0, "nothing dropped");
+  eq(
+    project.scenes[0].placements.map((p) => p.assetId),
+    ["title-hero", "coin", "bar-chart"],
+    "mention order composed end-to-end"
+  );
+
+  // A reply WITHOUT beats composes exactly as before (the additive law).
+  const noBeats = await scaffoldWhiteboardProjectLlm(
+    { scenes, topic: "T", catalog: [{ id: "coin", tags: ["money"], w: 100, h: 100 }] },
+    { ask: async () => JSON.stringify({ scenes: [{ scene: 1, assets: [{ id: "coin", x: 900, y: 420, scale: 1.6 }] }] }), call: passThrough }
+  );
+  eq(noBeats.report.beatsServed, 0, "no beats proposed → none served");
+  eq(
+    JSON.stringify(noBeats.project.scenes[0].placements.map((p) => p.assetId)),
+    JSON.stringify(["title-hero", "coin"]),
+    "beatless replies compose exactly as before"
+  );
+});
+
+await test("W2: the seams and the one-source constants are wired (source pins)", async () => {
+  // The render seam and the editor preview share THE one entry point.
+  const renderSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/render.ts", "utf8");
+  const canvasSrc = fs.readFileSync("src/components/tubeforge/whiteboard/wb-canvas.tsx", "utf8");
+  ok(
+    renderSrc.includes("beatSceneEvents(scene, durationMs, geometry, assetTags)"),
+    "the renderer schedules through beatSceneEvents (the one-source law)"
+  );
+  ok(
+    canvasSrc.includes("beatSceneEvents(scene, durationMs, geometry, assetTags)"),
+    "the editor preview schedules through beatSceneEvents (preview ≡ final)"
+  );
+  // The beat compiler imports the fill law's constants — never a second
+  // implementation of the schedule math.
+  const beatSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/beat-plan.ts", "utf8");
+  ok(
+    beatSrc.includes('PATH_GAP_MS,') && beatSrc.includes('MIN_PATH_MS,') && beatSrc.includes('MS_PER_CHAR,'),
+    "beat-plan reuses the fill law's arithmetic constants from timing.ts"
+  );
+  const timingSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/timing.ts", "utf8");
+  ok(
+    timingSrc.includes("export const PATH_GAP_MS = 130;") && timingSrc.includes("export const MS_PER_CHAR = 55;"),
+    "timing.ts exports the shared constants (one source, additive)"
+  );
+  // Compile-only: beats never ride the doc — the validator and the tracks
+  // contract are untouched by the grammar (no schema growth).
+  ok(
+    !beatSrc.includes("serializeWhiteboardDoc") && !beatSrc.includes("validateWhiteboardProject"),
+    "the beat layer never touches the doc contract (compile-only, decision §10.1)"
+  );
+  // The LLM prompt offers beats in the same schema.
+  const llmSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/llm-planner.ts", "utf8");
+  ok(
+    llmSrc.includes('"beats"') && llmSrc.includes('import { splitSentences } from "./beat-plan";'),
+    "the LLM planner emits beats in the same schema and shares THE sentence splitter"
+  );
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

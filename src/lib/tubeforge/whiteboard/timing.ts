@@ -24,10 +24,12 @@ import type { AnimationEvent, WhiteboardProject, WhiteboardScene } from "./story
 export const WORDS_PER_SEC = 2.6;
 export const LEAD_IN_MS = 400;
 export const HOLD_END_MS = 900;
-const PATH_GAP_MS = 130; // pen lift between strokes
-const MIN_PATH_MS = 260; // even a dot takes a moment
-const MAX_PATH_MS = 2600; // even a long contour stays snappy
-const MS_PER_CHAR = 55; // text writing speed
+// W2: exported for beat-plan.ts — the beat compiler reuses the fill law's
+// arithmetic (ONE scheduler's numbers; never a second implementation).
+export const PATH_GAP_MS = 130; // pen lift between strokes
+export const MIN_PATH_MS = 260; // even a dot takes a moment
+export const MAX_PATH_MS = 2600; // even a long contour stays snappy
+export const MS_PER_CHAR = 55; // text writing speed
 
 export interface AssetGeometry {
   /** Flattened segments per drawable path id. */
