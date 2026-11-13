@@ -5673,6 +5673,17 @@ MinIO + dl.min.io (the body moved to SeaweedFS at S105 — header now
 matches), and the production-readiness ledger gained the S108
 extension row.
 
-Verified locally: bash -n (docker-smoke.sh), typecheck, lint (0
-problems), 503/503 unit, billing 40/40. The walk itself is CI-proven —
-the first run is the evidence line.
+Verified locally: bash -n (docker-smoke.sh), the explicit scripts
+typecheck (the gate gap this stage surfaced — scripts/*.mts sit outside
+tsc's include), typecheck, lint (0 problems), 503/503 unit, billing
+40/40, storage 15/15, rate 17/17, drill 7/7 (RTO 55ms), alert probe
+HEALTH 0, production build.
+
+**CI run 43339795242 at HEAD `0afbabb` — all 8 jobs green, and the
+whiteboard walk held on its FIRST run**: the worker container rendered
+the seeded project in ~11s (chromium launch → 96 frames → ffmpeg
+encode), `final.mp4` landed at 155,656 bytes through the s3 driver,
+ffprobe read exactly 4s (the explicit 4000ms window), and the video row
+recorded hasVideo + 4.0s — DEPLOYMENT §5.1's "do not call the container
+ready until that smoke passes" is answered: the container is ready, and
+the gate re-proves it on every push to main.
