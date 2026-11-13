@@ -5615,3 +5615,64 @@ reservations), P0.4 (S102 shared rate limiting + proxy trust), P0.5
 restore drill + alert probe), P1.2 (S106 zero warnings +
 decomposition). P2's freeze is at its decision point — the operator
 lifts it explicitly; until then the P0 discipline stays in force.
+
+## S108 — DEPLOYMENT §5.1's last tail closed: the whiteboard render joins the Docker smoke + the post-arc front-document reconciliation (2026-11-13)
+
+**THE GAP.** The P0.6 topology smoke (S105) proves the image boots,
+migrates, serves HTTP, renders with ffmpeg, round-trips the store, and
+recovers the queue — but its render leg was an ffmpeg lavfi color bar in
+the WEB container. The WORKER's heaviest contract, the whiteboard
+engine's chromium lane, was never exercised in-container: DEPLOYMENT §5.1
+said so verbatim ("a real docker build + an in-container whiteboard
+render smoke … remains a REQUIRED production gate … do not call the
+container ready until that smoke passes") — written 2026-11-11, still
+true at HEAD. The playwright install lines landed in the Dockerfile at
+S75-era with only STATIC verification (install-deps --dry-run). This
+stage closes that tail inside the freeze's allowed scope (a reliability
+improvement to an existing gate — no new engine, no product surface).
+
+**THE WALK EXTENSION (scripts/smoke-walk.mts, phase 1).** After the
+cross-process stock job, the walk now seeds a REAL whiteboard project
+and renders it IN-CONTAINER through the job lane: the production
+`scaffoldWhiteboardProject` planner (rule-table placements over the
+BUILT-IN library — module-constant SVGs, bundled by construction, no FS
+tracing risk), one scene at 640×360@24 with an explicit 4000ms window
+(96 frames — the S87 acceptance battery's proven fast shape), silent
+draft (no VO — a legal render per the route's own contract), music off
+(deterministic silence, no Settings dependency), serialized through
+`serializeWhiteboardDoc` into the real `Video.whiteboardProject` column,
+enqueued through the production `createPendingJob` (the MAX_ATTEMPTS_BY_KIND
+law, not a hand-rolled row). The WORKER container claims it, launches
+chromium (the §5.1 launch args + per-scene memory contract), rasterizes,
+encodes, and ships `final.mp4` through the s3 driver. The walk asserts:
+the doc column parses, the job lands done (fail-FAST on a terminal row —
+a broken image reports its error text immediately instead of burning the
+deadline; 300s budget for the happy path), `final.mp4` round-trips out
+of the store, ffprobe reads a real duration, and the video row records
+`hasVideo` + `videoDuration`. Every layer of the §5.1 contract now has
+CI evidence on every main push, minutes after any drift in the
+Dockerfile, the compose, the whiteboard engine, or the queue.
+
+**THE FRONT-DOCUMENT RECONCILIATION.** The S75 law (front documents
+match the live source) had three stale claims at HEAD, all fixed:
+(1) ROADMAP's final-priority table still listed the Docker smoke as
+"PENDING — needs a Docker-capable runner" — CLOSED (S105+S108) with the
+walk's contents; the table's status column re-dated 2026-11-13 (every
+row re-checked current). (2) The standing-risks paragraph predated the
+S97 dependency triage — now records the real state (five merged, two
+tombstoned with dead deps removed, PR #10 TypeScript 7 open:
+typescript-eslint's peer ceiling is <6.1.0, re-verified against npm
+today — latest 8.72.2 — so it stays parked, mergeable the day the
+toolchain catches up). (3) ROADMAP gained the production-readiness arc
+note (S99–S107, every P0/P1 gate closed with CI evidence, the governing
+record docs/production-readiness.md, feature expansion frozen at its
+decision point — lifts only on the operator's explicit call). Also
+DEPLOYMENT §5.1's status block rewritten (the image is CI-proven,
+whiteboard render included), docker-smoke.sh's header still described
+MinIO + dl.min.io (the body moved to SeaweedFS at S105 — header now
+matches), and the production-readiness ledger gained the S108
+extension row.
+
+Verified locally: bash -n (docker-smoke.sh), typecheck, lint (0
+problems), 503/503 unit, billing 40/40. The walk itself is CI-proven —
+the first run is the evidence line.

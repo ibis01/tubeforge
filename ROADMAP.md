@@ -477,10 +477,10 @@ Critical = Phase-0 closers; the P0 shared quality systems precede every
 P1–P3 engine (the anti-goal above still governs: shared contracts
 first, no parallel pipelines).
 
-| # | Work | Priority | Status (2026-11-11) |
+| # | Work | Priority | Status (2026-11-13) |
 | --- | --- | --- | --- |
 | 1 | S74 real motion measurement | Critical | OPEN — the auto-resume loop (cron 521163) drives the 8 paired renders + 16 blind scores; watcher-automated |
-| 2 | Docker production image smoke | Critical | PENDING — needs a Docker-capable runner (the sandbox has none) |
+| 2 | Docker production image smoke | Critical | CLOSED — S105 + S108: the CI docker-smoke job (every main push) builds the production image and walks the full composed topology — HTTP register/login/create, ffmpeg render, S3 round-trip with the S101 lifecycle, cross-process jobs, worker-restart recovery with the S100 token bump — and since S108 renders a REAL whiteboard project IN-CONTAINER through the worker's chromium (DEPLOYMENT §5.1's exact ask: launch args, frames, encode, artifact, ffprobe'd duration) |
 | 3 | Real TTS Whiteboard smoke | Critical | CLOSED — S76 `d991015`: the synthetic-audio caveat struck; the loudness contract pinned at the engine boundary |
 | 4 | Visual Consistency Engine | P0 | IN PROGRESS — Phase A landed (S77: the unified engine + style dimension + auto-chain); Phase B slices 1-6 landed (S78: the dedicated appearance dimension keyed to the approved plan's logged looks; S79: the targeted single-scene re-check after repaints, resume-safe via the job payload; S80: the consistencyCheck user setting off|manual|auto gating both auto-chains; S81: shot-art lock coverage — extra shots paint under the scene-art identity locks, portrait/location seed ladder, anchor-only byte-identical; S82: cross-video character identity — one batched VLM call judging the character's latest frame from each casting video, min-across verdicts, manual-only surface; S83: pose-level identity rows — the pose sheet judged against its own portrait anchor, additive poses[] in the character-identity report); Phase B tail = photoreal-suffix reconciliation only (waits on S74) + live-artifact validation recorded |
 | 5 | Video Critic and Repair | P0 | IN PROGRESS — foundation landed (S84: the rendered-cut quality report — deterministic rows from the QC battery + the VCE consistency report, one fail-open VLM call for narrative+visual over sampled frames, ship\|hold\|insufficient-evidence verdict as a report for the human, repair proposals naming the existing affordances; contract docs/design/s84-video-critic.md); the critic card landed (S85: the report surface in the Video tab — verdict badge, per-dimension rows with sources, proposals, honesty notes, run/re-run + Mission Control resume for interrupted critic jobs); the one-click repair lane landed (S86: each hold's proposal fires the affordance it names — open Storyboard / re-run voiceover / re-render — through the dialog's existing handlers, §0.2 intact); tail recorded (factual dimension — blocked on the per-video research-brief surface; auto-run after render — gated on S74) |
@@ -497,8 +497,24 @@ Items 1–3 close Phase 0; item 4 starts the shared-quality era the
 moment the Critical row is green. The S75 order of operations above
 remains the HOW; this table is the WHAT and the WHEN.
 
+**The production-readiness arc (S99–S107, 2026-11-13).** Between the
+table above and the engines, the repo adopted and CLOSED a
+production-readiness roadmap — every P0/P1 gate holds with CI evidence
+at HEAD: P0.1 clean-clone bootstrap, P0.2 queue leases + fencing,
+P0.3 atomic storage admission, P0.4 shared rate limiting + proxy
+trust, P0.5 nonce CSP, P0.6 the Docker topology smoke (extended S108
+with the in-container whiteboard render), P1.1 the measured restore
+drill + alert probe, P1.2 zero warnings + the storage decomposition.
+The governing record is `docs/production-readiness.md`. Feature
+expansion (new engines beyond the table) stays FROZEN at its decision
+point — the freeze lifts only on the operator's explicit call, and
+nothing unfreezes autonomously.
+
 Standing risks tracked in the worklog: Z.ai gateway outage (S63
 remeasurement and the LLM whiteboard planner gated on the one-probe
 resumption discipline), production `TUBEFORGE_ENCRYPTION_KEY` on Vercel
-(owner-side, unverified), and the open dependency PRs (majors tested
-individually, never batch-merged).
+(owner-side, unverified), and the dependency PRs (the S97 triage:
+five merged, two tombstoned with their dead deps removed, PR #10
+TypeScript 7 still open — typescript-eslint's peer ceiling is
+`<6.1.0`, re-verified against npm 2026-11-13; mergeable the day the
+toolchain catches up).

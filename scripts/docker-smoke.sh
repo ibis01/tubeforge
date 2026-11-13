@@ -4,14 +4,16 @@
 #   bash scripts/docker-smoke.sh
 #
 # Builds the production image and walks the REAL topology end-to-end:
-# postgres (migrations) + MinIO (object storage) + web (Next.js · auth · API)
-# + worker (queue execution). The acceptance walk:
+# postgres (migrations) + SeaweedFS (S3-compatible object storage) + web
+# (Next.js · auth · API) + worker (queue execution). The acceptance walk:
 #
 #   register → login → create project (HTTP, real routes)
 #   → ffmpeg renders a real MP4 inside the web container
-#   → put/get round-trips the artifact through the s3 driver into MinIO
+#   → put/get round-trips the artifact through the s3 driver into the store
 #     (S101 reservation lifecycle settled)
 #   → enqueue a job → the WORKER container executes it cross-process
+#   → a REAL whiteboard project renders IN-CONTAINER through the worker's
+#     chromium (DEPLOYMENT §5.1 — launch args, frames, encode, artifact)
 #   → stop worker → seed an expired-lease running job + a pending job
 #   → start worker → the reaper bumps the fencing token, both jobs land done
 #
@@ -25,8 +27,10 @@
 #     library mirror (public.ecr.aws/docker/library/…) and tagged locally to
 #     the names the Dockerfile / compose expect, so the build and compose
 #     find them in the local cache and never contact Hub;
-#   MinIO → a HOST process downloaded from dl.min.io (MinIO's own CDN), with
-#     the containers talking S3 to it over host.docker.internal:9000.
+#   MinIO → a HOST process instead: dl.min.io is 410 Gone (MinIO retired
+#     the community binaries), so the S3-compatible store is SeaweedFS 3.96
+#     pinned from GitHub releases, with the containers talking S3 to it
+#     over host.docker.internal:9000.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -133,7 +137,7 @@ curl -fsS -b /tmp/smoke-cookies.txt -X POST http://localhost:3000/api/videos \
   -d '{"topic":"Docker smoke","niche":"smoke","format":"classic"}' >/dev/null
 echo "[smoke]   created the project through POST /api/videos"
 
-echo "[smoke] phase 1 — topology reality: migrations, columns, MinIO round-trip, cross-process job"
+echo "[smoke] phase 1 — topology reality: migrations, columns, store round-trip, cross-process job, whiteboard render"
 "${COMPOSE[@]}" exec -T web node --import tsx scripts/smoke-walk.mts --phase 1
 
 echo "[smoke] stopping the worker — seeding the recovery scenario while it is DOWN"

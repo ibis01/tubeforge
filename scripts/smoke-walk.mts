@@ -10,8 +10,11 @@
  *   1  the topology reality: migration chain complete on the live Postgres,
  *      S100/S101 column projections, the HTTP-registered user's rows exist,
  *      a REAL mp4 (ffmpeg, in-image) round-trips put→get through the s3
- *      driver into MinIO with the S101 reservation lifecycle settled, and a
- *      stock job is enqueued for the WORKER container to execute
+ *      driver into MinIO with the S101 reservation lifecycle settled, a
+ *      stock job is enqueued for the WORKER container to execute, and a
+ *      REAL whiteboard project renders IN-CONTAINER through the worker's
+ *      chromium (DEPLOYMENT §5.1's ask — the engine lane, $0 AI: planner
+ *      scaffold over the built-in library, final.mp4 + ffprobe'd duration)
  *   2  (worker stopped by the host) seeds the recovery scenario: an
  *      expired-lease RUNNING job (the S100 dead-worker fingerprint) and a
  *      pending job — both waiting for a live reaper
@@ -23,7 +26,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PrismaClient } from "@prisma/client";
 
@@ -47,8 +50,12 @@ const SMOKE_TOPIC = "Docker smoke";
 const POLL_MS = 1_000;
 const POLL_DEADLINE_MS = 90_000;
 
-async function pollUntil(name: string, fn: () => Promise<boolean>): Promise<boolean> {
-  const deadline = Date.now() + POLL_DEADLINE_MS;
+async function pollUntil(
+  name: string,
+  fn: () => Promise<boolean>,
+  deadlineMs: number = POLL_DEADLINE_MS,
+): Promise<boolean> {
+  const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
     if (await fn()) {
       check(name, true);
@@ -147,6 +154,95 @@ async function phase1(): Promise<void> {
     const row = await db.job.findFirst({ where: { kind: "stock", entityId: video.id, status: "done" } });
     return row !== null;
   });
+
+  // --- the WORKER's chromium contract (DEPLOYMENT §5.1 — the one tail the
+  // topology smoke had not walked): a REAL whiteboard render IN-CONTAINER,
+  // through the job lane, executed by the worker process. $0 AI — the
+  // planner scaffold places assets from the BUILT-IN library (module-
+  // constant SVGs, bundled by construction); one scene at 640×360@24 with
+  // an explicit 4000ms window (96 frames — the acceptance battery's fast
+  // shape); no VO (a silent draft is a legal render); music off for a
+  // deterministic silence. The worker launches chromium, rasterizes the
+  // frames, encodes with ffmpeg, and ships final.mp4 through the s3 driver
+  // — every layer of §5.1's launch-args + per-scene-memory contract on the
+  // real image. ---
+  const { scaffoldWhiteboardProject, serializeWhiteboardDoc, parseWhiteboardDoc } =
+    await import("../src/lib/tubeforge/whiteboard/whiteboard-planner");
+  const wbTopic = "Docker smoke whiteboard";
+  const wbProject = scaffoldWhiteboardProject({
+    scenes: [{ index: 1, title: "The smoke", narration: "the container renders this whiteboard scene" }],
+    topic: wbTopic,
+    width: 640,
+    height: 360,
+    fps: 24,
+  });
+  wbProject.scenes[0].durationMs = 4000; // explicit window — 96 frames
+  const wbVideo = await db.video.create({
+    data: {
+      organizationId: ctx.organizationId,
+      topic: wbTopic,
+      niche: "demo",
+      renderMode: "whiteboard",
+      musicEnabled: false, // deterministic silence — no Settings dependency
+      whiteboardProject: serializeWhiteboardDoc({ rev: 1, project: wbProject }),
+    },
+  });
+  check(
+    "the whiteboard video seeded (renderMode + a parseable doc column)",
+    parseWhiteboardDoc(wbVideo.whiteboardProject) !== null,
+  );
+
+  const { createPendingJob } = await import("../src/lib/tubeforge/queue");
+  await createPendingJob({
+    organizationId: ctx.organizationId,
+    userId: ctx.userId,
+    kind: "whiteboard",
+    entityId: wbVideo.id,
+  });
+
+  // The render poll is fail-FAST on a terminal row (a broken image reports
+  // its error immediately instead of burning the deadline), and generous
+  // when it must wait: chromium boot + 96 frames + encode inside the worker
+  // container is minutes on a CI runner, not seconds.
+  const wbDeadline = Date.now() + 300_000;
+  let wbTerminal: { status: string; error: string | null } | null = null;
+  while (Date.now() < wbDeadline && wbTerminal === null) {
+    const row = await db.job.findFirst({
+      where: { kind: "whiteboard", entityId: wbVideo.id },
+      orderBy: { createdAt: "desc" },
+      select: { status: true, error: true },
+    });
+    if (row && (row.status === "done" || row.status === "failed")) wbTerminal = row;
+    else await new Promise((r) => setTimeout(r, POLL_MS));
+  }
+  check(
+    "the WORKER container rendered the whiteboard video IN-CONTAINER (chromium + ffmpeg)",
+    wbTerminal?.status === "done",
+    wbTerminal
+      ? `${wbTerminal.status}${wbTerminal.error ? " — " + wbTerminal.error.slice(0, 200) : ""}`
+      : "deadline reached (300s)",
+  );
+  if (wbTerminal?.status !== "done") return; // the artifact asserts below depend on the render
+
+  const wbFinal = await withCtx(ctx, () => get(`${wbVideo.id}/final.mp4`));
+  check("the whiteboard final.mp4 landed in the object store", wbFinal.length > 0, `${wbFinal.length} bytes`);
+  const wbScratch = "/tmp/smoke-wb-final.mp4";
+  writeFileSync(wbScratch, wbFinal);
+  const wbProbe = execSync(
+    `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 ${wbScratch}`,
+    { encoding: "utf8" },
+  ).trim();
+  const wbDur = Number(/duration=([\d.]+)/.exec(wbProbe)?.[1] ?? 0);
+  check("ffprobe: the whiteboard final is a real video (duration > 0)", wbDur > 0, `${wbDur}s`);
+  const wbRow = await db.video.findUnique({
+    where: { id: wbVideo.id },
+    select: { hasVideo: true, videoDuration: true },
+  });
+  check(
+    "the video row recorded the render (hasVideo + duration)",
+    wbRow?.hasVideo === true && (wbRow?.videoDuration ?? 0) > 0,
+    `${wbRow?.videoDuration ?? 0}s`,
+  );
 }
 
 async function phase2(): Promise<void> {
@@ -196,14 +292,18 @@ async function phase3(): Promise<void> {
     return row !== null;
   });
 
-  let recovered: { status: string; leaseToken: number } | null = null;
   await pollUntil("the EXPIRED-LEASE job was reaped and executed to done (the S100 law on the real topology)", async () => {
     const row = await db.job.findFirst({
       where: { entityId: `${video.id}#recovery`, status: "done" },
       select: { status: true, leaseToken: true },
     });
-    if (row) recovered = row;
     return row !== null;
+  });
+  // Re-read after the poll (the closure stash TS cannot see through was a
+  // latent type error the explicit scripts typecheck surfaced — S108).
+  const recovered = await db.job.findFirst({
+    where: { entityId: `${video.id}#recovery`, status: "done" },
+    select: { status: true, leaseToken: true },
   });
   if (recovered) {
     check(

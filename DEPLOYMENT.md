@@ -156,12 +156,17 @@ gothic`, `fonts-noto-color-emoji` — so the image renders CJK titles
 without a separate font layer; playwright emits the matching package
 names per distro at build time, bookworm here); `playwright` is pinned
 `1.57.0` in **dependencies**, so the browser version is locked to the
-lockfile. **What is still NOT verified: the image itself.** This dev
-sandbox has no Docker daemon (no `docker`/`podman` binary, checked
-2026-11-11) — a real `docker build` + an in-container whiteboard render
-smoke (render a project inside the built image, probe the mp4) remains
-a REQUIRED production gate on a Docker-capable runner. Static edits are
-not a build; do not call the container ready until that smoke passes.
+lockfile. **Status (2026-11-13): the image is CI-proven, whiteboard
+render included.** The P0.6 Docker production smoke
+(`scripts/docker-smoke.sh`, a CI job on every main push — S105) builds
+the real image and boots the full topology (Postgres + the S3 store +
+web + worker); since S108 its acceptance walk also renders a REAL
+whiteboard project IN-CONTAINER — the worker launches chromium with
+these launch args, rasterizes the frames, encodes with ffmpeg, ships
+`final.mp4` through the s3 driver, and the walk ffprobes the duration
+and checks the video row. (The pre-S105 caveat — "the dev sandbox has
+no Docker daemon, so the image itself is unverified" — is historical:
+the gate now runs where the daemon is, on every push to main.)
 
 **5.2 — The launch args are mandatory.** Chromium must launch with
 `--no-sandbox --disable-dev-shm-usage` — encoded as
