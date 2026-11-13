@@ -119,7 +119,15 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   await db.video.update({
     where: { id },
-    data: { whiteboardProject: serializeWhiteboardDoc({ rev: 1, project }) },
+    data: {
+      whiteboardProject: serializeWhiteboardDoc({ rev: 1, project }),
+      // S119 — scaffolding IS whiteboard intent: pin the lane so the main
+      // render button (and every bare caller — replays, auto-pilot) routes
+      // to the engine. The row, the doc and the Studio the scaffold came
+      // from now agree; a later explicit story mode in the render body
+      // flips it back (render-lane.ts, the mode-drift law's admission twin).
+      renderMode: "whiteboard",
+    },
   });
   // A fresh doc stales whatever the previous doc rendered.
   await invalidateRenderedArtifacts(id);

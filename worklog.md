@@ -6598,3 +6598,51 @@ CI-green push, the house law:
   job re-run went green: **the run completed with all 8 jobs success**.
 
 Final head at close: `745b795` — CI green. The working tree is clean.
+
+## S119 — The render lane contract: the click that degraded to Ken Burns (2026-11-13)
+
+**THE REPORT.** "The whiteboard image had generated but nothing to show."
+The uploaded 62 MB MP4 was evaluated frame-by-frame: near-white 0.3–1.8%,
+AI-illustrated scene art, crossfade seams, narrated throughout — a
+Ken Burns render, not a whiteboard one. The whiteboard ENGINE was never
+broken (the full scaffold → validate → render battery ran green); the
+render took the wrong LANE.
+
+**THE ROOT CAUSE — three layers, each half-doing its job.** (1) The
+detail dialog's mode picker (which lists Whiteboard) is LOCAL state; it
+never persists `Video.renderMode`. (2) `POST /render` routes on the
+ROW's renderMode only — an explicit `mode: "whiteboard"` in the body is
+not a story sub-mode, so it silently degraded to "kenburns". (3) The
+whiteboard scaffold route wrote the doc but never pinned the row. Net:
+pick Whiteboard → scaffold in the Studio (the tab IS reachable — it
+gates on the same local state) → hit the big Render button → Ken Burns
+over the storyboard art, with an honest-looking "Video rendered" toast.
+The Studio's own button 409'd on the mismatch ("switch the render mode
+first") — the main button had no such guard, and `startRender` never
+checked `res.ok`, so a refused admission still toasted success.
+
+**THE FIX — the lane contract, unit-pinned.** `render-lane.ts` (pure):
+an explicit "whiteboard" in the body pins the row to the engine lane;
+an explicit story mode on a whiteboard row flips it back (the mode-drift
+law's admission-time twin — the row holds the user's latest explicit
+truth, so job replays and bare callers agree); a silent or unrecognized
+body defers to the row as before (garbage never kills a whiteboard row).
+`laneDecisionsComplete()` is the priors-table twin: every RENDER_MODES
+id must have a lane decision. Wired three ways: the route resolves +
+persists the pin BEFORE admission; the scaffold route pins the row
+(scaffolding IS whiteboard intent); the dialog's startRender throws on
+!res.ok (a refused admission is a destructive toast, never a false
+"Video rendered").
+
+**THE PROOF — `scripts/check-render-lane.mts`** (live, against :3000):
+kenburns story video → scaffold (row pins to whiteboard) → explicit
+kenburns click (honest story gate 400 + row flips back) → explicit
+whiteboard click (202 + row pins — the exact click that used to degrade)
+→ render completes → sampled frames 98.4–99.3% near-white (the broken
+output measured 0.3–1.8%) — the render IS whiteboard ink. The sample
+ships to `download/tubeforge-whiteboard-sample.mp4` (3 beats of the
+user's own Al-Andalus → Reconquista topic, 14.3s).
+
+**VERIFICATION.** tsc clean, eslint clean on every touched file,
+unit suite 536/536 (534 + the two S119 batteries: the pure truth table
+and the wiring source-pins), the live lane check GREEN end-to-end.

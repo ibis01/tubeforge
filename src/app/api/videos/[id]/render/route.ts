@@ -19,6 +19,7 @@ import { resolveUserPlan, hasCredits, RENDER_ESTIMATE_MICRO, planSupportsResolut
 import { parseWhiteboardDoc } from "@/lib/tubeforge/whiteboard/whiteboard-planner";
 import { validateWhiteboardProject } from "@/lib/tubeforge/whiteboard/storyboard";
 import { loadVideoLibrary } from "@/lib/tubeforge/whiteboard/asset-store";
+import { resolveRenderLane } from "@/lib/tubeforge/render-lane";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -64,13 +65,21 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 
 /**
  * POST — render the final MP4 as a background job (202).
- * Body: { mode?: "kenburns" | "animated", subtitles?: boolean, music?: boolean,
+ * Body: { mode?: "kenburns" | "stock" | "slides" | "animated" | "whiteboard",
+ *         subtitles?: boolean, music?: boolean,
  *         sceneLimit?: number }  — sceneLimit renders a preview (first N scenes).
  *         { sceneIndex } — S114: one scene's preview (scene-preview-NN.mp4).
  *         { boundaryAfter } — S116: the seam pair (scene-boundary-NN.mp4),
  *                             the media the scene recheck's boundary lens
  *                             measures. All three grammars are mutually
  *                             exclusive.
+ *
+ * S119 — THE LANE CONTRACT: `mode` is the user's click (the dialog's mode
+ * picker is local state that only reaches the server here). An explicit
+ * "whiteboard" pins the row to the engine lane; an explicit story mode
+ * flips a whiteboard row back; a silent body defers to the row. Before
+ * S119 `mode: "whiteboard"` degraded silently to kenburns — the picker
+ * said Whiteboard, the button rendered Ken Burns.
  *
  * The job body is runRenderJob (video-jobs.ts) — the SAME function the durable
  * queue's crash-recovery handler runs, with the request options persisted on
@@ -115,6 +124,21 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: 409 }
     );
 
+  const body = await req.json().catch(() => ({}));
+
+  // S119 — THE LANE CONTRACT (render-lane.ts, unit-pinned truth table):
+  // resolve the lane from the body's explicit mode (the click) and the
+  // row's renderMode (the standing truth), persist any pin BEFORE
+  // admission so the engine lane, the job replay and every subsequent
+  // bare caller agree, then dispatch.
+  const bodyMode = typeof body?.mode === "string" ? body.mode : null;
+  const lane = resolveRenderLane(bodyMode, video.renderMode);
+  if (lane.pinRenderMode)
+    await db.video.update({
+      where: { id },
+      data: { renderMode: lane.pinRenderMode },
+    });
+
   // S87 slice 3 — THE SHARED PATH. A whiteboard video renders through its
   // ENGINE lane: peer at the engine level (own planner, own renderer, own
   // Studio), unified at the contract level (the engine emits timeline
@@ -124,7 +148,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // legal render), and the engine renders natively at $0 (no generation
   // API, so no credit gate). Scene previews stay on the Whiteboard
   // Studio's own route (a full render is what "the render button" means).
-  if (video.renderMode === "whiteboard") {
+  if (lane.lane === "whiteboard") {
     const doc = parseWhiteboardDoc(video.whiteboardProject);
     if (!doc)
       return NextResponse.json(
@@ -149,8 +173,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: accepted ? 202 : 200 }
     );
   }
-
-  const body = await req.json().catch(() => ({}));
 
   // Keynote slides design their own deck — storyboard art is optional there.
   if (!video.hasStoryboard && body?.mode !== "slides")

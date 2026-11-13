@@ -12885,6 +12885,69 @@ await test("s118: the §8.2 audit rows + the VCE persistence + the surfaces are 
   );
 });
 
+await test("s119: the render lane contract — resolveRenderLane truth table (pure)", async () => {
+  const { resolveRenderLane, isStoryRenderMode, laneDecisionsComplete } = await import(
+    "../src/lib/tubeforge/render-lane"
+  );
+  // Explicit whiteboard ask: engine lane + pin (the "picked Whiteboard in
+  // the picker, hit the big Render button" click that used to degrade to
+  // kenburns and render the wrong engine).
+  const wb = resolveRenderLane("whiteboard", "kenburns");
+  ok(wb.lane === "whiteboard" && wb.pinRenderMode === "whiteboard", "explicit whiteboard on a story row pins + routes to the engine lane");
+  ok(resolveRenderLane("whiteboard", "stock").pinRenderMode === "whiteboard", "explicit whiteboard pins from any story mode");
+  // Idempotent — the row already agrees, no redundant write.
+  const wbSame = resolveRenderLane("whiteboard", "whiteboard");
+  ok(wbSame.lane === "whiteboard" && wbSame.pinRenderMode === null, "explicit whiteboard on a whiteboard row pins nothing");
+  ok(resolveRenderLane("whiteboard", null).pinRenderMode === "whiteboard", "explicit whiteboard on a null-mode row pins");
+
+  // Explicit story mode on a whiteboard row: flip back, story lane (the
+  // mode-drift law's admission-time twin — the row holds the latest truth).
+  for (const m of ["kenburns", "stock", "slides", "animated"] as const) {
+    const r = resolveRenderLane(m, "whiteboard");
+    ok(r.lane === "story" && r.pinRenderMode === m, `explicit ${m} flips a whiteboard row back to the story lane`);
+  }
+  // Story mode on a story row: no pin, story lane.
+  ok(resolveRenderLane("slides", "kenburns").lane === "story" && resolveRenderLane("slides", "kenburns").pinRenderMode === null, "explicit story mode on a story row changes nothing");
+
+  // Silent body defers to the row (the S87 behavior, preserved).
+  ok(resolveRenderLane(null, "whiteboard").lane === "whiteboard" && resolveRenderLane(null, "whiteboard").pinRenderMode === null, "silent body on a whiteboard row keeps the engine lane");
+  ok(resolveRenderLane(null, "kenburns").lane === "story", "silent body on a story row keeps the story lane");
+  ok(resolveRenderLane(null, null).lane === "story", "silent body + null row = story lane");
+
+  // Garbage never flips a lane (a buggy caller cannot kill a whiteboard row).
+  const garbageWb = resolveRenderLane("nonsense", "whiteboard");
+  ok(garbageWb.lane === "whiteboard" && garbageWb.pinRenderMode === null, "unrecognized mode on a whiteboard row defers to the row");
+  const garbageStory = resolveRenderLane("nonsense", "kenburns");
+  ok(garbageStory.lane === "story" && garbageStory.pinRenderMode === null, "unrecognized mode on a story row defers to the row");
+
+  // Lockstep with the picker list (the priors-table twin).
+  ok(laneDecisionsComplete(), "every RENDER_MODES id except whiteboard has a story-lane row (lockstep)");
+  ok(isStoryRenderMode("kenburns") && isStoryRenderMode("stock") && isStoryRenderMode("slides") && isStoryRenderMode("animated"), "isStoryRenderMode accepts the four story modes");
+  ok(!isStoryRenderMode("whiteboard") && !isStoryRenderMode("nonsense") && !isStoryRenderMode(null), "isStoryRenderMode rejects the lane id, garbage and null");
+});
+
+await test("s119: the lane contract is wired — route resolves the lane, scaffold pins, dialog surfaces rejections (source pin)", async () => {
+  const route = fs.readFileSync("src/app/api/videos/[id]/render/route.ts", "utf8");
+  ok(
+    route.includes("resolveRenderLane(bodyMode, video.renderMode)") && route.includes("lane.pinRenderMode"),
+    "POST /render resolves the lane from the body's click + the row's truth, and persists the pin before admission"
+  );
+  ok(
+    route.indexOf("const body = await req.json") < route.indexOf('if (lane.lane === "whiteboard")'),
+    "the body is parsed BEFORE the lane branch — the picker's click actually reaches the resolver"
+  );
+  const scaffold = fs.readFileSync("src/app/api/videos/[id]/whiteboard/scaffold/route.ts", "utf8");
+  ok(
+    /renderMode: "whiteboard"/.test(scaffold),
+    "POST /whiteboard/scaffold pins the row to the whiteboard lane (scaffolding IS whiteboard intent)"
+  );
+  const dialog = fs.readFileSync("src/components/tubeforge/video-detail-dialog.tsx", "utf8");
+  ok(
+    dialog.includes("Render request failed (HTTP"),
+    "the dialog's startRender throws on !res.ok — a refused admission is a destructive toast, never a false 'Video rendered'"
+  );
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

@@ -1548,7 +1548,7 @@ export function VideoDetailDialog({
     setBusy(sceneLimit ? "preview" : "render");
     setRenderLabel(sceneLimit ? "Rendering preview…" : "Composing the video…");
     try {
-      await fetch(`/api/videos/${video.id}/render`, {
+      const res = await fetch(`/api/videos/${video.id}/render`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1561,6 +1561,14 @@ export function VideoDetailDialog({
           quality: exportQuality,
         }),
       });
+      // S119 — admission rejections (400/402/409) must NOT read as success:
+      // pollRender resolves immediately when no job is running, which used
+      // to toast "Video rendered" over a refused request (the silent-lie
+      // path behind "claimed generated but nothing to show").
+      if (!res.ok) {
+        const rej = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(rej?.error ?? `Render request failed (HTTP ${res.status})`);
+      }
       await pollRender(
         video.id,
         (s) =>
