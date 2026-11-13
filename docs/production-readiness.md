@@ -63,7 +63,12 @@ step is not another feature" — so P2 opens with operations, not engines:
    image), a Neon branch, a separate R2 bucket, Stripe TEST-mode keys + webhook,
    console email, fresh secrets. Requires operator accounts; the provisioning kit
    and drill scripts land as the next stages so provisioning is one command once
-   the accounts exist.
+   the accounts exist. **Kit landed (S110)**: `fly.staging.toml` +
+   `scripts/staging-provision.sh` (one command, `--dry-run` verified) +
+   `scripts/staging-drill.mts` (the HTTP harness: health/billing/pipeline
+   suites, proven live — 2 PASS · 1 SKIP · 0 FAIL against a dev server) +
+   `scripts/staging-drills.sh` + `docs/runbooks/staging.md` (incl. the RC gate,
+   §7). Remaining: the operator's accounts (runbook §1) → provision → drills.
 3. **Launch drills ON staging** — the Stripe checkout → webhook → portal
    lifecycle, the YouTube test-channel publish smoke, backup restore, the k6 load
    run (`scripts/load-test.js`), and worker recovery under load.
@@ -137,3 +142,4 @@ recovery.
 | P1.2  | S106   | 20 lint warnings → 0 (fixed at site, none suppressed); storage.ts decomposed into storage-s3.ts + storage-quota.ts + facade; S101 source pins caught a reversion of the admission law mid-refactor | worklog.md §S106 |
 | P0.6 (extension) | S108 | the topology smoke closes DEPLOYMENT §5.1's last unverified tail — a real whiteboard render IN-CONTAINER rides the walk on every main push; FIRST run green (CI run 43339795242 at `0afbabb`, all 8 jobs): worker chromium launch → 96 frames → encode in ~11s, final.mp4 155,656 bytes through the s3 driver, ffprobe exactly 4s, the video row updated | worklog.md §S108 |
 | P2 opening | S109 | the operator's explicit call (2026-11-13) against the fully-gated baseline at HEAD `8e76c6b` — the fresh review re-validated every gate on a clean checkout (npm ci, typecheck, lint, unit, billing, storage, rate, backup drill ~57 ms RTO, alert probe HEALTH 0, the CI-covered Docker smoke) and upgraded the assessment to "technically strong, approaching paid-beta readiness"; the entry queue above is the review's own ordering | worklog.md §S109 |
+| P2 queue item 2 | S110 | the staging kit: DEPLOYMENT §3 made executable — the provisioner (one command, fresh secrets every run, --dry-run verified), the HTTP drill harness (health/billing/pipeline suites, self-skipping when prerequisites are missing; proven live against a dev server: 2 PASS · 1 SKIP · 0 FAIL, the pipeline suite walking scenes → native scaffold → render job → final.mp4 4.29 MB through the authed route), the orchestrator (harness + k6 + the printed operator-step sequences), the runbook with the RC gate (§7). Provisioning itself awaits the operator's accounts | worklog.md §S110 |

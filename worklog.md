@@ -5752,3 +5752,82 @@ Docs-only stage — no source file touched, no behavior changed. Verified
 at HEAD: typecheck, lint (0 problems), the unit/regression suite, the
 billing suite, production build.
 
+## S110 — the staging kit: DEPLOYMENT §3 made executable (2026-11-13)
+
+**THE QUEUE ITEM.** P2 entry-queue item 2: staging provisioned per
+DEPLOYMENT §3 — "spec in §3, provisioned when accounts exist". The
+accounts are the operator's half; this stage lands the OTHER half so
+provisioning is one command the day they exist, and every drill on the
+§3 list has an executable harness or an exact printed sequence.
+
+**THE KIT.**
+`fly.staging.toml` — the staging overlay: same image, same process
+groups, same health checks and machine sizing as fly.toml (the drill
+ground must match production shape, not be a cheaper cousin), deltas
+exactly three: the app name, `TUBEFORGE_EMAIL_MODE=console` (drill
+links land in `fly logs`), and fresh secrets by construction.
+`scripts/staging-provision.sh` — the one-command provisioner: sources
+gitignored `.env.staging`, preflights flyctl auth + every required
+input (a MISSING line per absent variable), generates FRESH
+AUTH_SECRET/ENCRYPTION_KEY every run (staging never shares production
+secrets — the §3 law), registers the app if absent, sets secrets
+(optionals ride only when set — fly rejects empty values, and the
+Stripe webhook secret arrives only AFTER endpoint registration, which
+is why it is conditional), deploys with the staging config, polls
+health with a 5-minute budget, then prints the two manual steps it
+cannot do (Stripe webhook registration, provider key via Settings) and
+the drill command. `--dry-run` prints the entire plan without
+executing — verified with all inputs present.
+`scripts/staging-drill.mts` — the HTTP-only harness (zero database
+access, pure node imports — typecheckable standalone): three suites,
+each self-skipping with its reason when prerequisites are missing.
+health: status + register + console-mode email verify + logout→login +
+authed list. billing: the plan route's `configured` flag, then a real
+checkout session must mint a checkout.stripe.com URL (the fail-closed
+503 law makes "not configured" an honest SKIP; a 502 — bad price id —
+is a FAIL, actionable). pipeline: the full production walk over HTTP —
+create a story video (AI scene-split), scaffold the whiteboard project
+with the NATIVE planner ($0), enqueue the render, poll to hasVideo,
+fetch final.mp4 through the authenticated mp4 route (302→presigned
+under the s3 driver) — the entire topology minus the AI billable
+surface. A scene error early in the poll (usually "no provider
+configured") SKIPs with the reason instead of burning the timeout.
+`scripts/staging-drills.sh` — the orchestrator: harness suites + the
+k6 load run (skips with a note when k6 is absent) + the exact
+operator-step sequences printed (worker recovery with the flyctl
+restart command, YouTube smoke, Stripe webhook rehearsal via the
+Stripe CLI, the Postgres backup/restore against a scratch Neon
+branch). Exit code propagates the harness (0 = no FAILs).
+`.env.staging.example` — the input template, every variable annotated
+with its dashboard origin; `.gitignore` gains the negation so the
+template is committed while `.env.staging` stays buried.
+`docs/runbooks/staging.md` — the runbook: accounts checklist, inputs,
+provision + the two manual steps, every drill (automated and
+operator-step), reset, teardown, and §7 the RC gate — the checkbox
+list that must be green before the release-candidate tag is cut.
+
+**THE VERIFICATION (the harness proven BEFORE it ever touches
+staging).** bash -n both shell scripts; the standalone typecheck
+(strict) of the harness; eslint on the new file — which flagged 5
+`no-explicit-any` warnings, fixed AT THE SITE with a narrow-at-the-seam
+JSON typing (`asRecord`/`field`/`str` helpers — the S106 law holds,
+0 problems). Then the live proof against a local dev server:
+health PASS (status 200 · register + email-verify · logout→login ·
+authed list); billing SKIP (the honest not-configured path, verified);
+pipeline PASS END-TO-END — 12 scenes, native scaffold, the render job
+done in ~130s (a real chromium + ffmpeg whiteboard render; the first
+attempt caught a genuine sandbox gap — the recycled browser cache —
+and reported it as the render's own error text, exactly the failure
+mode the suite exists to surface), final.mp4 4.29 MB round-tripped
+through the authenticated route. The orchestrator run over all three:
+`2 PASS · 1 SKIP · 0 FAIL`, exit 0. The provisioner dry-run with all
+inputs present prints the full plan (fresh secrets visible in the
+output, every step in order).
+
+Verified at HEAD: bash -n ×2, standalone strict typecheck, eslint
+0/0 on the new file, the full `npm run check` (typecheck, lint, unit,
+billing, storage, rate, drill, alert probe — 0 warnings), production
+build, and the live drill runs above. Staging provisioning itself
+awaits the operator's accounts (runbook §1); the drills then run
+unmodified — the same harness, a different BASE URL.
+

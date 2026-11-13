@@ -67,6 +67,7 @@ server.log
 # --- tf-git-setup: repo hygiene ---
 # keep the env template (the .env* rule above still hides the real .env)
 !.env.example
+!.env.staging.example
 # local-only workspace dirs
 /upload/
 /forensics/

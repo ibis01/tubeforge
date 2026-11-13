@@ -10,7 +10,7 @@ statement of which one is real. This document is that statement.
 | `fly.toml` + `Dockerfile` | **Production**: web + worker process groups from one image | ✅ the deployment of record |
 | `docker-compose.yml` | Local full-stack dev (Postgres + web + worker) | ✅ kept, development only |
 | `vercel.json` | Fluid-compute preview builds only | ⚠️ marked — **not** the production target |
-| (none) | Staging | 🚧 spec in §3, provisioned when accounts exist |
+| (none) | Staging | 🚧 spec in §3 + the S110 kit (`fly.staging.toml`, `scripts/staging-provision.sh`, `scripts/staging-drills.sh`, the runbook [`docs/runbooks/staging.md`](docs/runbooks/staging.md)) — provisioned when operator accounts exist |
 
 ---
 
@@ -112,6 +112,16 @@ The staging environment is the target for: the k6 load run
 (`scripts/load-test.js`), the YouTube test-channel publish smoke, the Stripe
 checkout → webhook → portal lifecycle rehearsal, the backup restore drill,
 and the beta cohort before production opens.
+
+**The S110 kit makes §3 executable**: `scripts/staging-provision.sh`
+(one command — fresh secrets, app registration, secrets, deploy, health
+poll; `--dry-run` prints the plan), `scripts/staging-drill.mts` (the
+HTTP-only drill harness: health / billing / pipeline suites, each
+self-skipping when its prerequisites are missing), and
+`scripts/staging-drills.sh` (the orchestrator: harness + k6 + the exact
+operator-step sequences). The full runbook — accounts checklist, drills,
+reset, teardown, the RC gate — is
+[`docs/runbooks/staging.md`](docs/runbooks/staging.md).
 
 ## 4. Local development
 

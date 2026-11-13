@@ -1,0 +1,70 @@
+# TubeForge STAGING on Fly.io (S110 — the DEPLOYMENT §3 drill ground).
+#
+# Same image, same process groups, same health checks as fly.toml — staging
+# exists to PROVE production shape, not to be a cheaper cousin of it. The
+# deltas are exactly three: the app name, console email (drill links land in
+# `fly logs`), and the secrets never being shared with production (the
+# provisioner generates fresh AUTH_SECRET/ENCRYPTION_KEY every time it runs).
+#
+# Deploy with:   fly deploy --app tubeforge-staging --config fly.staging.toml
+# Provision:     bash scripts/staging-provision.sh   (runbook: docs/runbooks/staging.md)
+#
+# Secrets (set by the provisioner from .env.staging / environment — NEVER
+# commit them): DATABASE_URL (a Neon branch), TUBEFORGE_S3_* (a separate R2
+# bucket), TUBEFORGE_STRIPE_* (TEST mode), TUBEFORGE_AUTH_SECRET +
+# TUBEFORGE_ENCRYPTION_KEY (fresh), optional TUBEFORGE_YT_* (test client)
+# and a provider key for the pipeline drill.
+
+app = "tubeforge-staging"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3000"
+  NODE_ENV = "production"
+  # Drill links (email verification, password reset) print to the logs.
+  TUBEFORGE_EMAIL_MODE = "console"
+
+# web process group -----------------------------------------------------
+[processes]
+  web = "node .next/standalone/server.js"
+  worker = "node --import tsx scripts/worker.mts"
+
+[[services]]
+  processes = ["web"]
+  internal_port = 3000
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "30s"
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "45s"
+    method = "get"
+    path = "/api/auth/status"
+
+# machine sizing — mirrors fly.toml on purpose (the drill ground must match
+# the production shape; the worker memory contract is DEPLOYMENT §5.3).
+[[vm]]
+  processes = ["web"]
+  size = "shared-cpu-2x"
+  memory = "1gb"
+
+[[vm]]
+  processes = ["worker"]
+  size = "shared-cpu-4x"
+  memory = "2gb"
