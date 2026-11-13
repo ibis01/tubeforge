@@ -13838,6 +13838,135 @@ await test("W4 compile-only: the anchors never ride the doc contract", async () 
   ok(timingSrc.includes("export interface WordAnchors"), "the anchor contract lives with the scheduler (one source)");
 });
 
+// ---------- suite: Stage S — the shared animation substrate ----------
+
+suiteStart("Stage S — anim/: easing, keyframes, the clock (S120 §8)");
+
+await test("S easing: the table is complete, pure, clamped — and the overshoot curves actually overshoot", async () => {
+  const { EASE_CURVES, evalEase, isEaseName } = await import("../src/lib/tubeforge/anim/easing");
+  eq(Object.keys(EASE_CURVES).sort(), ["ease-back", "ease-in-out", "ease-out", "linear", "pop"], "five named curves, closed table");
+  ok(isEaseName("pop") && !isEaseName("spring"), "the guard knows the table");
+  for (const [name, fn] of Object.entries(EASE_CURVES)) {
+    eq(fn(-0.5), 0, `${name} clamps below the domain`);
+    eq(fn(0), 0, `${name} starts at 0`);
+    eq(fn(1), 1, `${name} ends at 1`);
+    eq(fn(1.5), 1, `${name} clamps above the domain`);
+    eq(fn(NaN), 0, `${name} maps non-finite to 0`);
+    eq(fn(0.3), fn(0.3), `${name} is pure (same input → same output)`);
+    ok(fn(0.7) >= fn(0.2), `${name} never retrogrades`);
+  }
+  // The overshoot curves overshoot (their entire reason to exist) — the
+  // peaks sit mid-curve (pop ≈ 1.20 @ 0.52, ease-back ≈ 1.10 @ 0.58).
+  ok(EASE_CURVES.pop(0.52) > 1.15, `pop swings past 1 (got ${EASE_CURVES.pop(0.52).toFixed(3)})`);
+  ok(EASE_CURVES["ease-back"](0.58) > 1.08, `ease-back overshoots gently (got ${EASE_CURVES["ease-back"](0.58).toFixed(3)})`);
+  // …and settle exactly.
+  eq(EASE_CURVES.pop(1), 1, "pop settles");
+  eq(EASE_CURVES["ease-back"](1), 1, "ease-back settles");
+  // easeInOut is the WHITEBOARD's own cubic family — one motion feel.
+  const u = 0.3;
+  eq(EASE_CURVES["ease-in-out"](u), u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2, "the cubic closed form matches");
+  eq(evalEase("ease-out", 0.5), 1 - Math.pow(0.5, 3), "evalEase reads the table");
+  let threw = false;
+  try {
+    evalEase("spring" as never, 0.5);
+  } catch {
+    threw = true;
+  }
+  ok(threw, "an unknown curve refuses loudly");
+});
+
+await test("S easing: the zoompan expressions reproduce motion.ts's shapes byte-for-byte", async () => {
+  const { zoomProgressExpr } = await import("../src/lib/tubeforge/anim/easing");
+  eq(zoomProgressExpr("linear", 120), "(on/120)", "linear = motion.ts's linear shape");
+  eq(zoomProgressExpr("smooth", 120), "(0.5-0.5*cos(PI*on/120))", "smooth = motion.ts's cosine shape");
+  eq(zoomProgressExpr("ease-in-out", 90), zoomProgressExpr("smooth", 90), "ease-in-out compiles to the same cosine");
+  const motionSrc = fs.readFileSync("src/lib/tubeforge/motion.ts", "utf8");
+  ok(motionSrc.includes("(0.5-0.5*cos(PI*on/"), "motion.ts's own source carries the same smooth shape (one family)");
+  eq(zoomProgressExpr("ease-back", 60), "(1+2.70158*pow(on/60-1,3)+1.70158*pow(on/60-1,2))", "ease-back compiles to its closed form");
+  let threw = false;
+  try {
+    zoomProgressExpr("linear", 0);
+  } catch {
+    threw = true;
+  }
+  ok(threw, "a non-positive frame count refuses");
+});
+
+await test("S keyframes: clamped evaluation, strict ascent, per-segment ease, structured lerp", async () => {
+  const { evalAt, keyframes } = await import("../src/lib/tubeforge/anim/keyframe");
+  const keys = [
+    { tMs: 0, value: 0 },
+    { tMs: 1000, value: 100, ease: "ease-in-out" as const },
+    { tMs: 2000, value: 40 },
+  ];
+  eq(evalAt(keys, -50), 0, "before the first key → the first value");
+  eq(evalAt(keys, 2500), 40, "after the last key → the last value");
+  eq(evalAt(keys, 0), 0, "at the first key");
+  eq(evalAt(keys, 2000), 40, "at the last key");
+  approx(evalAt(keys, 500), 50, 1e-9, "midpoint of the eased segment (cubic in-out is symmetric)");
+  approx(evalAt(keys, 1500), 70, 1e-9, "the default-ease segment is linear");
+  ok(evalAt(keys, 250) > 0 && evalAt(keys, 250) < 25, "ease-in-out starts slower than linear");
+  const lerpKeys = [
+    { tMs: 0, value: 10 },
+    { tMs: 1000, value: 20 },
+  ];
+  eq(evalAt(lerpKeys, 500, (a, b, _u) => (a + b) / 2), 15, "a custom lerp rides the hook");
+  const built = keyframes([[0, 1] as const, [500, 9] as const], "pop");
+  eq(built.length, 2, "keyframes() builds the list");
+  eq(built[1].ease, "pop", "the shared ease lands on every key");
+  const throws = async (fn: () => unknown, why: string) => {
+    let threw = false;
+    try {
+      await fn();
+    } catch {
+      threw = true;
+    }
+    ok(threw, why);
+  };
+  await throws(() => evalAt([], 0), "an empty list refuses");
+  await throws(() => evalAt([{ tMs: 500, value: 1 }, { tMs: 500, value: 2 }], 0), "duplicate times refuse (strict ascent)");
+  await throws(() => evalAt([{ tMs: 0, value: NaN }], 0), "a non-finite value refuses");
+  // Determinism: same keys, same t → byte-identical numbers.
+  eq(JSON.stringify(evalAt(keys, 1234)), JSON.stringify(evalAt(keys, 1234)), "deterministic");
+});
+
+await test("S clock: framePlanWindows matches the whiteboard's framePlanClock byte-behavior; the wall is one wall", async () => {
+  const { framePlanWindows, ANIM_FRAME_BUDGET, frameCountOf, quantizeClock } = await import("../src/lib/tubeforge/anim/clock");
+  const { framePlanClock } = await import("../src/lib/tubeforge/whiteboard/tracks");
+  const { WB_RENDER_FRAME_BUDGET } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const ms = [4000, 5350, 12000, 4000];
+  eq(JSON.stringify(framePlanWindows(ms, 24)), JSON.stringify(framePlanClock(ms, 24)), "byte-identical to the whiteboard's clock");
+  eq(frameCountOf(5350, 24), 128, "frameCountOf = the encoder's exact count");
+  eq(quantizeClock(1.005), 1.0, "the 2-dp clock rounds");
+  const w = framePlanWindows(ms, 24);
+  for (let i = 1; i < w.scenes.length; i++) {
+    eq(w.scenes[i].startSec, w.scenes[i - 1].endSec, `window ${i} is contiguous with its predecessor`);
+  }
+  eq(w.totalSec, quantizeClock(w.scenes.reduce((a, s) => a + s.deliveredSec, 0)), "the total is the 2-dp sum");
+  const junk = (call: () => unknown, why: string) => {
+    let threw = false;
+    try {
+      call();
+    } catch {
+      threw = true;
+    }
+    ok(threw, why);
+  };
+  junk(() => framePlanWindows([4000, 0], 24), "a zero duration refuses");
+  junk(() => framePlanWindows([NaN], 24), "a NaN duration refuses");
+  junk(() => framePlanWindows([4000], 0), "a junk fps refuses");
+  eq(ANIM_FRAME_BUDGET, WB_RENDER_FRAME_BUDGET, "ONE wall: the substrate's budget = the whiteboard's pinned budget");
+});
+
+await test("S purity: the substrate imports no fs, no clock, no randomness", async () => {
+  for (const f of ["src/lib/tubeforge/anim/easing.ts", "src/lib/tubeforge/anim/keyframe.ts", "src/lib/tubeforge/anim/clock.ts"]) {
+    const src = fs.readFileSync(f, "utf8");
+    ok(!/from\s+["'](fs|node:fs|path|node:path|os|node:os)["']/.test(src), `${f} touches no filesystem`);
+    ok(!/Date\.now|performance\.now|setTimeout|Math\.random/.test(src), `${f} reads no clock and rolls no dice`);
+    ok(!src.includes("tubeforge/whiteboard"), `${f} imports no whiteboard module (the substrate is engine-neutral)`);
+  }
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
