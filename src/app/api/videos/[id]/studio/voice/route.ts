@@ -31,8 +31,10 @@ import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseJson, voiceSwapSchema, ApiValidationError } from "@/lib/tubeforge/validation";
 import { performVoiceSwap, sceneWavDurations } from "@/lib/tubeforge/clip-ops";
+import { parseScenes } from "@/lib/tubeforge/story";
 import { resolvePreviewVoice } from "@/lib/tubeforge/voice-preview";
-import { serializeTimeline, guardTimelineOverwrite, TIMELINE_OVERWRITE_ERROR } from "@/lib/tubeforge/timeline";
+import { parseTimeline, serializeTimeline, guardTimelineOverwrite, TIMELINE_OVERWRITE_ERROR } from "@/lib/tubeforge/timeline";
+import { commitSceneChanges } from "@/lib/tubeforge/scene-revisions";
 import { videoDir } from "@/lib/tubeforge/ai";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -84,6 +86,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // performVoiceSwap validates the pipeline prerequisites (story format,
   // tts source, voiceover exists, doc exists, voice differs) and does the
   // asset work; every failure it throws carries a readable message.
+  //
+  // S112 — the swap re-derives every doc window from the fresh reads, so
+  // every scene whose union slice moved (all of them, normally) records a
+  // structural revision; the narration TEXT is unchanged, and approved
+  // visual work is untouched by construction.
+  const beforeScenes = parseScenes(video.scenes);
+  const beforeDoc = parseTimeline(video.timeline);
   let result;
   try {
     result = await performVoiceSwap(video, resolved.voice);
@@ -94,14 +103,20 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
   }
 
-  await db.video.update({
-    where: { id },
-    data: {
+  const commit = await commitSceneChanges({
+    video,
+    beforeScenes,
+    beforeDoc,
+    afterScenes: result.rowScenes,
+    afterDoc: result.timeline,
+    kind: "structural",
+    origin: "voice-swap",
+    userId: auth.ctx.userId,
+    rowUpdate: {
       voice: result.voice,
-      scenes: JSON.stringify(result.rowScenes),
-      timeline: serializeTimeline(result.timeline),
       ...(result.audioDuration !== null ? { audioDuration: result.audioDuration } : {}),
     },
+    timeline: serializeTimeline(result.timeline),
   });
 
   return NextResponse.json({
@@ -111,7 +126,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     voice: result.voice,
     wavDurations: sceneWavDurations(
       videoDir(id),
-      result.rowScenes.map((s) => s.index)
+      commit.scenes.map((s) => s.index)
     ),
   });
 }

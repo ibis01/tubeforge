@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "incremental": false,
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@/*": ["../src/*"]
+    }
+  },
+  "include": ["./test-scene-revisions.mts", "../src/types/heic-convert.d.ts"]
+}

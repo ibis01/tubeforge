@@ -18,10 +18,12 @@
 
 import { db } from "./tenant-db";
 import { generateScriptPackage, type ResearchBrief } from "./ai";
-import { generateSceneScriptPackage } from "./story";
+import { generateSceneScriptPackage, parseScenes } from "./story";
 import { JobCancelledError, cancellableSleep, throwIfCancelled } from "./cancel";
 import { errorText } from "@/lib/tubeforge/redact";
 import { log } from "./log";
+import { commitSceneChanges } from "./scene-revisions";
+import { parseTimeline } from "./timeline";
 
 // S57/T-57.2 — the module's logger (the old [script-job] prefix became a binding).
 const scriptJobLog = log.child({ mod: "script-job" });
@@ -103,14 +105,22 @@ export async function runScriptJob(
         }
         const tags = [...modelTags].slice(0, 12);
 
-        await db.video.update({
-          where: { id: videoId },
-          data: {
+        // S112 — whole-script regen = EPOCH (fresh ids for all scenes,
+        // genesis revisions, retired lines simply stop). The job body runs
+        // under the spawning request's tenant ctx, so createdBy resolves.
+        await commitSceneChanges({
+          video,
+          beforeScenes: parseScenes(video.scenes),
+          beforeDoc: parseTimeline(video.timeline),
+          afterScenes: pkg.scenes,
+          afterDoc: parseTimeline(video.timeline),
+          kind: "epoch",
+          origin: "script-job-regen",
+          rowUpdate: {
             title: pkg.title,
             script: pkg.script,
             description: pkg.description,
             tags: tags.join(", "),
-            scenes: JSON.stringify(pkg.scenes),
             wordCount: wordCount(pkg.script),
             status: "scripted",
             error: null,

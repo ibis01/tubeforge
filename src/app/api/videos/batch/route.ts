@@ -11,6 +11,9 @@ const batchLog = log.child({ mod: "batch" });
 import { aiCall } from "@/lib/tubeforge/budget";
 import { CreditBlockedError, creditBlockResponse } from "@/lib/tubeforge/billing";
 import { generateSceneScriptPackage } from "@/lib/tubeforge/story";
+import { parseScenes } from "@/lib/tubeforge/story";
+import { commitSceneChanges } from "@/lib/tubeforge/scene-revisions";
+import { parseTimeline } from "@/lib/tubeforge/timeline";
 import { deriveStatus } from "@/lib/tubeforge/status";
 import { startJob } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
@@ -197,14 +200,21 @@ export async function POST(req: NextRequest) {
                   }
                 : null,
             });
-            await db.video.update({
-              where: { id: video.id },
-              data: {
+            // S112 — EPOCH commit (fresh video, genesis revisions from
+            // creation; the batch's script job runs under the request ctx).
+            await commitSceneChanges({
+              video,
+              beforeScenes: parseScenes(video.scenes),
+              beforeDoc: parseTimeline(video.timeline),
+              afterScenes: pkg.scenes,
+              afterDoc: parseTimeline(video.timeline),
+              kind: "epoch",
+              origin: "batch-regen",
+              rowUpdate: {
                 title: pkg.title,
                 script: pkg.script,
                 description: pkg.description,
                 tags: pkg.tags.join(", "),
-                scenes: JSON.stringify(pkg.scenes),
                 wordCount: wordCount(pkg.script),
                 status: "scripted",
                 error: null,

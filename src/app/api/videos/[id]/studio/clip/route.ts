@@ -20,7 +20,9 @@ import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseJson, clipOpSchema, ApiValidationError } from "@/lib/tubeforge/validation";
 import { performClipOp, sceneWavDurations } from "@/lib/tubeforge/clip-ops";
-import { serializeTimeline, guardTimelineOverwrite, TIMELINE_OVERWRITE_ERROR } from "@/lib/tubeforge/timeline";
+import { parseScenes } from "@/lib/tubeforge/story";
+import { parseTimeline, serializeTimeline, guardTimelineOverwrite, TIMELINE_OVERWRITE_ERROR } from "@/lib/tubeforge/timeline";
+import { commitSceneChanges } from "@/lib/tubeforge/scene-revisions";
 import { videoDir } from "@/lib/tubeforge/ai";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -54,6 +56,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // performClipOp validates the pipeline prerequisites (doc exists, art +
   // WAV on disk, voice source) and does the asset work; every failure it
   // throws carries a readable, actionable message.
+  //
+  // S112 — the before snapshot (row + doc) feeds the revision diff: a
+  // split records the edited first half + a GENESIS revision for the
+  // second half's fresh id; a duplicate records only the genesis; a
+  // re-voice records the narration + window change; a delete records
+  // nothing (the scene leaves the working set; its history stays).
+  const beforeScenes = parseScenes(video.scenes);
+  const beforeDoc = parseTimeline(video.timeline);
   let result;
   try {
     result = await performClipOp(video, body);
@@ -64,13 +74,18 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
   }
 
-  await db.video.update({
-    where: { id },
-    data: {
-      scenes: JSON.stringify(result.rowScenes),
-      timeline: serializeTimeline(result.timeline),
-      ...(result.audioDuration !== null ? { audioDuration: result.audioDuration } : {}),
-    },
+  const commit = await commitSceneChanges({
+    video,
+    beforeScenes,
+    beforeDoc,
+    afterScenes: result.rowScenes,
+    afterDoc: result.timeline,
+    kind: body.action === "revoice" ? "edit" : "structural",
+    origin: `clip-${body.action}`,
+    userId: auth.ctx.userId,
+    rowUpdate:
+      result.audioDuration !== null ? { audioDuration: result.audioDuration } : {},
+    timeline: serializeTimeline(result.timeline),
   });
 
   return NextResponse.json({
@@ -80,7 +95,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     activity: result.activity,
     wavDurations: sceneWavDurations(
       videoDir(id),
-      result.rowScenes.map((s) => s.index)
+      commit.scenes.map((s) => s.index)
     ),
   });
 }

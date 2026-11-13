@@ -34,6 +34,7 @@ import {
 import { parseJson, assembleSaveSchema, ApiValidationError } from "@/lib/tubeforge/validation";
 import { sceneWavDurations } from "@/lib/tubeforge/clip-ops";
 import { videoDir } from "@/lib/tubeforge/ai";
+import { commitSceneChanges } from "@/lib/tubeforge/scene-revisions";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -200,12 +201,21 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     renderPrefs: body.renderPrefs ?? null,
   };
 
-  await db.video.update({
-    where: { id },
-    data: {
-      timeline: serializeTimeline(timeline),
-      ...(rowScenes !== null ? { scenes: rowScenes } : {}),
-    },
+  // S112 — the PUT is BOTH a creative doc editor (trims, mixes, caption
+  // timing → per-scene "edit" revisions of the moved union slices) and the
+  // reorder path (sceneOrder → "structural"). Ids ride the row (reorder
+  // preserves them; the render maps durations onto the row BY POSITION, so
+  // the row moves with the doc — one commit, never two sources of truth).
+  await commitSceneChanges({
+    video,
+    beforeScenes: parseScenes(video.scenes),
+    beforeDoc: parseTimeline(video.timeline),
+    afterScenes: rowScenes !== null ? parseScenes(rowScenes) : parseScenes(video.scenes),
+    afterDoc: timeline,
+    kind: body.sceneOrder ? "structural" : "edit",
+    origin: body.sceneOrder ? "assemble-reorder" : "assemble-save",
+    userId: auth.ctx.userId,
+    timeline: serializeTimeline(timeline),
   });
 
   return NextResponse.json({ timeline });

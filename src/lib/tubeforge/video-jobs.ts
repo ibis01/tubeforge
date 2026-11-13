@@ -58,6 +58,7 @@ import {
   musicBedActive,
 } from "./music";
 import { qcForVideo, qcForPreview, type QcReport } from "./qc";
+import { commitSceneChanges } from "./scene-revisions";
 import {
   resolveContentPolicy,
   runRestrictedVisualScan,
@@ -422,6 +423,9 @@ export async function runSceneJob(
   const scenes: Scene[] = parseScenes(video.scenes);
   const scene = scenes.find((s) => s.index === sceneIndex);
   if (!scene) return; // scene vanished (re-scripted) — end quietly
+  // S112 — the pre-mutation snapshot for the revision diff (the re-roll
+  // bumps seedVariant in place below).
+  const beforeScenes = parseScenes(video.scenes);
 
   const instruction =
     typeof opts.instruction === "string" ? opts.instruction.trim() : "";
@@ -435,10 +439,19 @@ export async function runSceneJob(
       // painting so the pinned seed (identity locking on text-to-image
       // providers) yields a fresh image instead of the same pixels, then
       // persist the bump — a later resume must not reuse the old take.
+      // S112 — the bump is a scene-content change: it lands as an immutable
+      // revision (origin "storyboard-reroll") in the same transaction as
+      // the row write. The art file itself becomes a tracked artifact in
+      // Stage 2 (provenance); the take counter is the row's honest record.
       scene.seedVariant = Math.min((scene.seedVariant ?? 0) + 1, 999);
-      await db.video.update({
-        where: { id: videoId },
-        data: { scenes: JSON.stringify(scenes) },
+      await commitSceneChanges({
+        video,
+        beforeScenes,
+        beforeDoc: parseTimeline(video.timeline),
+        afterScenes: scenes,
+        afterDoc: parseTimeline(video.timeline),
+        kind: "edit",
+        origin: "storyboard-reroll",
       });
       await generateSceneImage({ videoId, scene, character: await castOptsFor(video) });
     }

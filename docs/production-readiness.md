@@ -91,10 +91,27 @@ live code, the five requirements vs reality, three architectural surprises
 (positional scene identity, the two-document content split, the eleven
 mutators), two found defects (the dead storyboard/upload route; unaudited
 scene edits), and the file-by-file Stage 1–7 plan with the proposal's exit
-criteria restated as tests. Stages 1–7 (S112+) begin on the operator's go —
-the four decision points in the reconciliation's §10 are the gate — and ride
-the existing queue, storage, budget, and QC systems: no second timeline
-engine, no separate job queue, no parallel budget system.
+criteria restated as tests. **The operator's go came with the build
+order (2026-11-13, "start, don't stop"), and the four §10 decision
+points resolved to their recommended defaults**: revision rows are kept
+forever (only superseded ARTIFACTS are GC candidates), render consumes
+the latest APPROVED revision per scene, spend ceilings are opt-in per
+video, and whole-script regens/converts are EPOCHS. **Stage 1 landed as
+S112** — the SceneRevision table (immutable, append-only, unique on
+(videoId, sceneId, version)), stable Scene.id minting (carry for
+interactive mutators, fresh-against-history for epochs), the union-slice
+content snapshot (row scene + timeline doc scene), optimistic
+concurrency twice over (expectedSceneVersion → 409+current, and the
+unique index as the hard floor), first-touch backfill (the pre-edit
+state records as v1, so even the first edit has a rollback target),
+rollback-as-new-revision (never a delete; history is never erased),
+approved heads never superseded, and ALL ELEVEN scenes-column mutators
+retrofitted through one commit path (a source pin enforces it). New
+API surface: GET /scenes/[n]/revisions + POST /scenes/[n]/rollback.
+Exit criteria pinned by a new DB-backed battery (12 tests, in `check`).
+Stages 2–7 continue on the same order, riding the existing queue,
+storage, budget, and QC systems: no second timeline engine, no separate
+job queue, no parallel budget system.
 
 ## P0.1 spec — what the gate asserts
 
@@ -157,3 +174,5 @@ recovery.
 | P0.6 (extension) | S108 | the topology smoke closes DEPLOYMENT §5.1's last unverified tail — a real whiteboard render IN-CONTAINER rides the walk on every main push; FIRST run green (CI run 43339795242 at `0afbabb`, all 8 jobs): worker chromium launch → 96 frames → encode in ~11s, final.mp4 155,656 bytes through the s3 driver, ffprobe exactly 4s, the video row updated | worklog.md §S108 |
 | P2 opening | S109 | the operator's explicit call (2026-11-13) against the fully-gated baseline at HEAD `8e76c6b` — the fresh review re-validated every gate on a clean checkout (npm ci, typecheck, lint, unit, billing, storage, rate, backup drill ~57 ms RTO, alert probe HEALTH 0, the CI-covered Docker smoke) and upgraded the assessment to "technically strong, approaching paid-beta readiness"; the entry queue above is the review's own ordering | worklog.md §S109 |
 | P2 queue item 2 | S110 | the staging kit: DEPLOYMENT §3 made executable — the provisioner (one command, fresh secrets every run, --dry-run verified), the HTTP drill harness (health/billing/pipeline suites, self-skipping when prerequisites are missing; proven live against a dev server: 2 PASS · 1 SKIP · 0 FAIL, the pipeline suite walking scenes → native scaffold → render job → final.mp4 4.29 MB through the authed route), the orchestrator (harness + k6 + the printed operator-step sequences), the runbook with the RC gate (§7). Provisioning itself awaits the operator's accounts | worklog.md §S110 |
+| Feature track Stage 0 | S111 | the read-only repository reconciliation of the operator's scene-level editing architecture (docs/design/scene-level-editing-reconciliation.md): capability map, the five requirements vs reality, three architectural surprises, two live defects found, the file-by-file Stage 1–7 plan | worklog.md §S111 |
+| Feature track Stage 1 | S112 | the revision foundation: SceneRevision (append-only, unique (videoId, sceneId, version)), stable Scene.id, the union-slice snapshot, expectedSceneVersion optimistic concurrency (409 + current head), first-touch backfill, rollback-as-new-revision, approved-never-superseded, all eleven mutators converged through commitSceneChanges (source-pinned), GET /scenes/[n]/revisions + POST /scenes/[n]/rollback; verified by the new 12-test DB battery + 8 unit pins + the full check chain + production build. Two real bugs the new battery caught and fixed at the site: parseScenes dropped the minted id on read; the diff counted minted ids as content changes | worklog.md §S112 |

@@ -291,3 +291,16 @@ export const paceChangeSchema = z.object({
     .min(0.5, "Pick a pace between 0.5× and 2×")
     .max(2, "Pick a pace between 0.5× and 2×"),
 });
+
+/** POST /api/videos/[id]/scenes/[n]/rollback — S112: restore a previous
+ *  revision's content as a NEW revision. Shape only; the "scene has no
+ *  history" / "revision does not exist" / "already at that content"
+ *  refusals live one layer in at rollbackScene, where the row + the
+ *  revision chain are known. */
+export const sceneRollbackSchema = z.object({
+  toVersion: z
+    .number({ message: "toVersion must be the revision number to restore" })
+    .int()
+    .min(1)
+    .max(1_000_000),
+});

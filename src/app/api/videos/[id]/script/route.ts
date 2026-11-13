@@ -4,10 +4,12 @@ import path from "path";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { generateScriptPackage } from "@/lib/tubeforge/ai";
-import { generateSceneScriptPackage } from "@/lib/tubeforge/story";
+import { generateSceneScriptPackage, parseScenes } from "@/lib/tubeforge/story";
 import { deriveStatus } from "@/lib/tubeforge/status";
 import { startJob, isJobRunning } from "@/lib/tubeforge/jobs";
 import { serializeVideo } from "@/lib/tubeforge/serialize";
+import { commitSceneChanges } from "@/lib/tubeforge/scene-revisions";
+import { parseTimeline } from "@/lib/tubeforge/timeline";
 import { errorText } from "@/lib/tubeforge/redact";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -131,14 +133,24 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         // The old cover depicted the old story — invalidate it.
         if (hadScript) await invalidateThumbnail(id);
 
-        await db.video.update({
-          where: { id },
-          data: {
+        // S112 — a whole-script regen is an EPOCH: every scene is new
+        // content. Fresh ids are minted against the FULL historical set
+        // (current + retired), every scene gets a genesis revision, and the
+        // previous epoch's lines simply stop (their history stays readable).
+        await commitSceneChanges({
+          video,
+          beforeScenes: parseScenes(video.scenes),
+          beforeDoc: parseTimeline(video.timeline),
+          afterScenes: pkg.scenes,
+          afterDoc: parseTimeline(video.timeline),
+          kind: "epoch",
+          origin: "script-regen",
+          userId: auth.ctx.userId,
+          rowUpdate: {
             title: pkg.title,
             script: pkg.script,
             description: pkg.description,
             tags: pkg.tags.join(", "),
-            scenes: JSON.stringify(pkg.scenes),
             wordCount: wordCount(pkg.script),
             hasVoiceover: false,
             audioDuration: null,

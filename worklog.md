@@ -5915,3 +5915,128 @@ The next stage (S112 = Stage 1, scene revision foundation) begins
 only on the operator's go — the decision points in §10 are the gate.
 
 
+
+---
+
+## S112 — Scene-Level Editing & Repair, Stage 1: the revision foundation
+
+**THE OPERATOR'S GO.** Stage 0 (S111) ended "the next stage begins only on
+the operator's go — the decision points in §10 are the gate." The go came
+as a build order: "Start don't stop till you're done." The four decision
+points resolve to their recommended defaults, recorded here:
+
+1. **Revision retention** — all revision rows are kept forever (rows are
+   small JSON snapshots); only superseded ARTIFACTS are GC candidates
+   (Stage 2's retention policy). "History never erased" holds absolutely.
+2. **Approval semantics for render** — the latest APPROVED revision per
+   scene (Stage 6); a "pinned project revision" freeze stays out.
+3. **Per-project spend ceiling** — opt-in per video (nullable column,
+   Stage 4); no org-wide default that could change existing behavior.
+4. **Structural-epoch boundary** — whole-script regens (route, job,
+   batch) and convert are EPOCHS: one genesis revision per new scene,
+   fresh ids, retired lines simply stop. Per-scene diffs there would
+   have tripled Stage 1's surface for no creative value.
+
+**THE LAWS** (src/lib/tubeforge/scene-revisions.ts, each pinned by test):
+
+- **APPEND-ONLY.** One immutable row per (video, scene, version). The
+  only UPDATE in the codebase on this table is the head→superseded
+  status flip, which never touches content. Editing can never overwrite
+  another revision; the (videoId, sceneId, version) unique index makes
+  even a racing writer physically unable to double-mint a version — the
+  loser's transaction fails whole and surfaces as the same 409 conflict
+  the polite gate produces.
+- **STABLE IDENTITY.** Scene.id is minted once (carry-by-index for
+  interactive mutators — indices are identity there, minted fresh and
+  never renumbered; fresh-against-full-history for epochs — a sceneId's
+  revision line is exactly one content lineage, across any amount of
+  reordering and regenerating).
+- **THE UNION SLICE.** content = { scene, docScene }: the row Scene AND
+  its timeline-doc scene. A scene's editable content spans two
+  documents; a revision that snapshots half a scene would be a lie, and
+  a rollback of half a scene would be worse.
+- **DIFF-DRIVEN HISTORY.** Interactive mutators record revisions ONLY
+  for scenes whose slice actually changed — a one-scene edit writes one
+  revision, not twelve. Identity is not content: the diff strips the id
+  (the battery caught the first draft counting minted ids as changes —
+  fixed at the site).
+- **OPTIMISTIC CONCURRENCY, TWICE.** expectedSceneVersion on PATCH
+  /scenes (optional during transition; the UI adopts it in Stage 7):
+  0 = no history yet, N = "I based this edit on vN"; mismatch → 409 +
+  the current head, the whiteboard conflict precedent. And the unique
+  index as the DB floor under everything.
+- **ROLLBACK IS A NEW REVISION.** POST /scenes/[n]/rollback appends a
+  revision carrying the old content (changeKind "rollback", note "Rollback
+  to vN"); history is never erased; a rollback is itself rollback-able.
+  Staleness sweeps match PATCH /scenes exactly (restored narration kills
+  the old read's artifacts; restored caption kills renders).
+- **APPROVED IS NEVER DESTROYED.** An approved head keeps its status
+  under newer drafts — approvedRevision() keeps resolving it, which is
+  Stage 6's render source and the guarantee behind "a narration change
+  must not destroy approved visual assets."
+- **FIRST-TOUCH BACKFILL.** The first interactive edit on a scene with
+  no history records the PRE-EDIT state as v1 (changeKind "backfill",
+  born superseded, parented correctly) — so even the very first edit
+  has a rollback target.
+
+**THE RETROFIT — all eleven scenes-column write paths converged.**
+PATCH /scenes (edit), PUT /assemble (reorder = structural, creative doc
+save = edit), studio/clip (split/duplicate = structural + genesis for
+new ids, revoice = edit), studio/voice + studio/pace (structural — doc
+windows move, narration text does not), storyboard re-roll in the scene
+job (edit — the seedVariant take counter), stock match/repick/clear
+(edit — the incremental per-scene persist IS the revision commit, so an
+interrupted run's history matches exactly the scenes that landed a
+clip), script/route + script-job + batch (EPOCH "script-regen" /
+"script-job-regen" / "batch-regen"), convert (EPOCH "convert"). The only
+remaining direct writes are stock's two defensive fallbacks for the
+video-vanished-mid-run edge — pinned at exactly two by the source pin.
+A NEW mutator that writes the scenes column directly fails the unit
+battery's eleven-file source pin.
+
+**SCHEMA.** SceneRevision (org-scoped, tenant-db list updated and the
+T-4.14 pin extended): unique (videoId, sceneId, version); head/approved
+lookups on (videoId, sceneId, status); the epoch scan on (videoId,
+changeKind); TEXT content per the SQLite-parity house law. Migration
+20261115000000_s112_scene_revisions (Postgres-owned, additive) + the
+derived SQLite mirror (the sync law). Scene.id rides the JSON (types.ts
++ parseScenes preserves it — the battery caught parseScenes stripping
+it, which would have churned identity on every read; fixed at the site).
+
+**API.** GET /api/videos/[id]/scenes/[n]/revisions (the chain, head +
+approved pointers, parsed union-slice content; honest empty history for
+never-touched scenes) and POST .../scenes/[n]/rollback (toVersion;
+404/409 refusal arms: no-scene, no-target, no-history, already-current).
+PATCH /scenes gains expectedSceneVersion + a revision block in the
+response. sceneRollbackSchema joins the validation catalog.
+
+**TESTS.** scripts/test-scene-revisions.mts — a new DB-backed battery in
+the billing pattern, IN THE CHECK CHAIN (`npm run test:scene-revisions`):
+12 tests covering every exit criterion (backfill+immutability, surgical
+diff, conflict + hard floor, rollback + refusal arms, epochs ×2,
+approved protection, the doc-slice half). 8 unit pins (minting
+determinism, carry semantics, retired-identity avoidance, in-place id
+assignment, union-slice round-trip, expected-version math, the
+eleven-mutator source pin, the PATCH gate source pin). The standalone
+strict typecheck of the new script runs via scripts/tsconfig.s112.json
+(scripts sit outside tsc's include — the S108/S110 law).
+
+**VERIFIED:** typecheck; lint (0 problems — the new battery is
+non-null-assertion-free per the house rule, must() at every presence
+site); unit 511/511 (503 + 8 new); billing 40/40; storage 12/12; rate;
+scene-revisions 12/12; drill RTO 58ms; alert probe HEALTH 0; production
+build (exit 0, both new routes compiled into the standalone bundle, no
+new warnings — the 4 Turbopack warnings pre-exist at HEAD, verified by
+a stash-build). Two REAL bugs the new battery caught in its own first
+draft, both fixed at the site: parseScenes dropped Scene.id on read
+(identity churn on every parse); the diff serialization counted minted
+ids as content (first-touch edits would have written revisions for
+scenes nobody edited).
+
+**KNOWN LIMITS, deliberate for Stage 1** (the plan's later stages own
+them): rollback restores the doc slice with its ORIGINAL window times
+(Stage 5's boundary recheck is the seam checker); a deleted scene's
+history stops but the deletion itself is not a revision (array-level
+state; the client undo covers it today); revisions and row writes are
+atomic together, but the pre-commit storage sweeps share PATCH's
+existing posture (files first, then the transaction).

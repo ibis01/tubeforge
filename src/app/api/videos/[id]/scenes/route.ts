@@ -4,59 +4,34 @@ import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseScenes, serializeScenes } from "@/lib/tubeforge/story";
 import { CAMERAS, sanitizeSceneStyle } from "@/lib/tubeforge/types";
 import { parseTimeline, serializeTimeline, guardTimelineOverwrite } from "@/lib/tubeforge/timeline";
-import * as storage from "@/lib/tubeforge/storage";
+import {
+  commitSceneChanges,
+  invalidateNarrationArtifacts,
+  invalidateCaptionArtifacts,
+  RevisionConflict,
+} from "@/lib/tubeforge/scene-revisions";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-/** Artifacts keyed off the OLD narration (Stage 4a, T-4.4 — same semantics as
- *  the script-edit PATCH): the spoken audio no longer matches the text, so
- *  the voiceover, renders, short and the EDITED scene's voice clip die.
- *  Scene art PNGs, stock clips, thumbnails — and every OTHER scene's WAV
- *  (its text did not change, its read is still current) — survive. */
-const NARRATION_STALE =
-  /\/(voiceover\.wav|voice-source\.\w+|final\.mp4|preview\.mp4|subtitles\.srt|short\.mp4|short-thumb\.png)$/;
-
-/** S43 — a caption edit bakes into the NEXT render: the burned subtitles are
- *  stale, but the voiceover/WAVs are untouched (captions never touch audio).
- *  Only rendered artifacts die; re-render is cheap (no re-TTS). */
-const CAPTION_STALE =
-  /\/(final\.mp4|preview\.mp4|subtitles\.srt|short\.mp4|short-thumb\.png)$/;
-
-/** The edited scene's own artifacts: its read (scene-XX.wav) and its render
- *  intermediate (scene-XX.mp4). Other scenes' files are NOT stale — wiping
- *  them forced the voiceover stage to re-read the whole script (12× the TTS
- *  cost for a one-scene text edit). */
-function editedSceneStaleKeys(sceneIndex: number): string[] {
-  const nn = String(sceneIndex).padStart(2, "0");
-  return [`scene-${nn}.wav`, `scene-${nn}.mp4`];
-}
-
-async function invalidateNarrationArtifacts(
-  videoId: string,
-  sceneIndex: number
-): Promise<boolean> {
-  const perScene = new Set(editedSceneStaleKeys(sceneIndex));
-  try {
-    const keys = await storage.list(videoId);
-    const stale = keys.filter(
-      (k) => NARRATION_STALE.test(k) || perScene.has(k.split("/").pop() ?? "")
-    );
-    await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));
-    return stale.length > 0;
-  } catch {
-    return false; // prefix absent — nothing to invalidate
-  }
-}
-
 /**
  * PATCH — Scene Studio text edits for ONE scene (index-keyed).
- * Body: { index, visual?, mood?, caption?, camera?, style?, narration? }
+ * Body: { index, visual?, mood?, caption?, camera?, style?, narration?,
+ *         expectedSceneVersion? }
  *
  * Text-only edits keep the storyboard image and any rendered MP4 valid —
  * EXCEPT narration: the spoken audio is keyed off the old narration text, so
  * a narration edit drops the voiceover + renders (Stage 4a, T-4.4), exactly
  * like a classic script edit does. The response reports `invalidated` so the
  * client can refresh the video DTO's stage flags.
+ *
+ * S112 — Scene-Level Editing, Stage 1: every PATCH lands as an immutable
+ * SceneRevision (the union slice — row scene + timeline doc scene). First
+ * touch records the pre-edit state as v1 (backfill), so even the very first
+ * edit has a rollback target. `expectedSceneVersion` (optional during the
+ * transition; the UI adopts it in Stage 7) is the optimistic-concurrency
+ * gate: the version the client based its edit on. Mismatch → 409 + the
+ * current head (the whiteboard conflict precedent) — concurrent edits
+ * conflict loudly, they never silently overwrite.
  */
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   const auth = await requireUser(req);
@@ -78,6 +53,23 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   if (!Number.isInteger(index) || index < 1)
     return NextResponse.json({ error: "A valid scene index is required" }, { status: 400 });
 
+  // S112 — expectedSceneVersion: absent = legacy last-write-wins client
+  // (still recorded as a revision, just not conflict-checked); 0 = "no
+  // revisions yet"; N = "I based this edit on vN".
+  let expectedSceneVersion: number | null = null;
+  if (body?.expectedSceneVersion !== undefined) {
+    expectedSceneVersion = Number(body.expectedSceneVersion);
+    if (!Number.isInteger(expectedSceneVersion) || expectedSceneVersion < 0)
+      return NextResponse.json(
+        { error: "expectedSceneVersion must be a non-negative integer (0 = no revisions yet)" },
+        { status: 400 }
+      );
+  }
+
+  // S112 — the BEFORE snapshot: parseScenes returns fresh objects, but the
+  // edit below mutates them in place, so the revision diff needs an
+  // independent pre-edit copy (a shared reference would diff against itself).
+  const beforeScenes = parseScenes(video.scenes);
   const scenes = parseScenes(video.scenes);
   const scene = scenes.find((s) => s.index === index);
   if (!scene)
@@ -148,6 +140,8 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   // the row while the render kept the doc's stale snapshot — the "edited the
   // caption, nothing changed" trap. Matched by scene INDEX inside the doc;
   // absent/misaligned docs are skipped (the row flag still carries the edit).
+  const beforeDoc = parseTimeline(video.timeline);
+  let afterDoc = beforeDoc;
   if (captionChanged) {
     // S87 slice 1 — the overwrite guard first: an unknown-stamp stored doc
     // is a newer build's doc, so the doc write below is skipped (a v2
@@ -155,7 +149,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     // row's caption flag above already carries the edit; this route's
     // human-facing write is unconditional either way.
     const guard = guardTimelineOverwrite(video.timeline);
-    const doc = guard.blocked ? null : parseTimeline(video.timeline);
+    const doc = guard.blocked ? null : beforeDoc;
     const docScene = doc?.scenes.find((s) => s.index === index) ?? null;
     if (doc && docScene) {
       docScene.caption = scene.caption
@@ -165,6 +159,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
             endSec: docScene.caption?.endSec ?? docScene.endSec,
           }
         : null;
+      afterDoc = doc;
       await db.video.update({
         where: { id },
         data: { timeline: serializeTimeline(doc) },
@@ -173,51 +168,81 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   }
 
   // A narration change makes the spoken audio stale — drop voiceover +
-  // renders the same way the classic script edit does (T-4.4).
+  // renders the same way the classic script edit does (T-4.4). S112: the
+  // sweeps + flag resets now live in the shared scene-revisions lib (the
+  // rollback lane enforces the same rules) and ride the SAME transaction
+  // as the revision write.
   let invalidated = false;
+  const rowUpdate: Record<string, unknown> = {};
   if (narrationChanged && video.hasVoiceover) {
     invalidated = await invalidateNarrationArtifacts(id, index);
-    await db.video.update({
-      where: { id },
-      data: {
-        hasVoiceover: false,
-        audioDuration: null,
-        voiceSource: "tts",
-        voiceLabel: null,
-        hasVideo: false,
-        hasShort: false,
-        shortDuration: null,
-        shortScene: null,
-      },
+    Object.assign(rowUpdate, {
+      hasVoiceover: false,
+      audioDuration: null,
+      voiceSource: "tts",
+      voiceLabel: null,
+      hasVideo: false,
+      hasShort: false,
+      shortDuration: null,
+      shortScene: null,
     });
   } else if (captionChanged && (video.hasVideo || video.hasShort)) {
     // S43 — the burned subtitles no longer match, but the audio is current:
     // drop ONLY the rendered artifacts (voiceover + per-scene WAVs survive,
     // so the re-render re-mixes without re-TTS). The response reports
     // `captionsEdited` so the client can say what to do next.
-    try {
-      const keys = await storage.list(id);
-      const stale = keys.filter((k) => CAPTION_STALE.test(k));
-      await Promise.all(stale.map((k) => storage.remove(k).catch(() => {})));
-    } catch {
-      // prefix absent — nothing to invalidate
-    }
-    await db.video.update({
-      where: { id },
-      data: {
-        hasVideo: false,
-        hasShort: false,
-        shortDuration: null,
-        shortScene: null,
-      },
+    invalidated = await invalidateCaptionArtifacts(id);
+    Object.assign(rowUpdate, {
+      hasVideo: false,
+      hasShort: false,
+      shortDuration: null,
+      shortScene: null,
     });
   }
 
-  await db.video.update({ where: { id }, data: { scenes: JSON.stringify(updated) } });
+  // S112 — one transaction: the row write (scenes + flags) + the immutable
+  // revision (with the before-state backfill on first touch).
+  let commit;
+  try {
+    commit = await commitSceneChanges({
+      video,
+      beforeScenes,
+      beforeDoc,
+      afterScenes: updated,
+      afterDoc,
+      kind: "edit",
+      origin: "scenes-patch",
+      userId: auth.ctx.userId,
+      rowUpdate,
+      expectedVersion: expectedSceneVersion,
+      expectedSceneIndex: index,
+    });
+  } catch (err) {
+    if (err instanceof RevisionConflict)
+      return NextResponse.json(
+        {
+          error: err.message,
+          ...(err.current ? { current: err.current } : {}),
+        },
+        { status: 409 }
+      );
+    throw err;
+  }
+
+  const revision = commit.created[commit.created.length - 1];
 
   return NextResponse.json({
-    scene: (await serializeScenes(id, updated)).find((s) => s.index === index) ?? null,
+    scene: (await serializeScenes(id, commit.scenes)).find((s) => s.index === index) ?? null,
     invalidated,
     captionsEdited: captionChanged,
+    revision: revision
+      ? {
+          sceneId: revision.sceneId,
+          version: revision.version,
+          status: revision.status,
+          changeKind: revision.changeKind,
+          origin: revision.origin,
+        }
+      : null,
   });
 }

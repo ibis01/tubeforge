@@ -263,6 +263,13 @@ export type MusicMoodId = (typeof MUSIC_MOODS)[number]["id"];
 /** A single story beat — narration drives TTS, visual drives storyboard art. */
 export interface Scene {
   index: number; // 1-based
+  // S112 — the STABLE scene identity (Scene-Level Editing & Repair, Stage 1).
+  // Indices are positional: they shift across structural ops and are rebuilt
+  // 1..N by whole-script regens (epochs). The id is minted once at first
+  // touch (scene-revisions.ts), survives reorder/edit/split-of-the-first-half,
+  // and keys the SceneRevision history. Absent = a legacy array not yet
+  // touched by any revision-writing mutator.
+  id?: string;
   title: string;
   narration: string;
   visual: string; // image prompt (subject, setting, action, composition)

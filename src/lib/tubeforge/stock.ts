@@ -36,6 +36,8 @@ import { verifyClip } from "./stock-verify";
 import type { Scene, StockRef } from "./types";
 import { currentCtx } from "./tenant";
 import { log } from "./log";
+import { commitSceneChanges, ensureSceneIdsInPlace } from "./scene-revisions";
+import { parseTimeline } from "./timeline";
 import {
   deleteProviderCredential,
   getProviderCredential,
@@ -294,6 +296,14 @@ export async function fetchStockForScenes(opts: {
   let fetched = 0;
   const missing: Scene[] = [];
 
+  // S112 — identity up front: every scene the loop below touches gets its
+  // stable id before the first incremental persist, so each commit's
+  // revision diff keys on identity, not position.
+  ensureSceneIdsInPlace(opts.scenes);
+  const video = await db.video.findUnique({ where: { id: opts.videoId } });
+  const beforeDoc = video ? parseTimeline(video.timeline) : null;
+  let prevScenes = JSON.parse(JSON.stringify(opts.scenes)) as Scene[];
+
   // S89 — the duplicate ledger: every placed ref's clip key (legacy refs
   // without providerId contribute nothing — recorded, not guessed), joined
   // by every ref this run accepts.
@@ -339,7 +349,24 @@ export async function fetchStockForScenes(opts: {
     }
 
     // Persist incrementally so a crash mid-run keeps finished scenes.
-    await db.video.update({ where: { id: opts.videoId }, data: { scenes: JSON.stringify(opts.scenes) } });
+    // S112 — each incremental persist IS the revision commit: the diff-driven
+    // recorder writes exactly the scenes whose stock ref moved since the
+    // previous commit (usually one), so an interrupted run's history matches
+    // exactly the scenes that actually landed a clip.
+    if (video) {
+      await commitSceneChanges({
+        video,
+        beforeScenes: prevScenes,
+        beforeDoc,
+        afterScenes: opts.scenes,
+        afterDoc: beforeDoc,
+        kind: "edit",
+        origin: opts.onlyScene != null ? "stock-repick" : "stock-match",
+      });
+      prevScenes = JSON.parse(JSON.stringify(opts.scenes)) as Scene[];
+    } else {
+      await db.video.update({ where: { id: opts.videoId }, data: { scenes: JSON.stringify(opts.scenes) } });
+    }
     if (i < missing.length - 1) await sleep(1200); // pace both free APIs
   }
 
@@ -348,8 +375,14 @@ export async function fetchStockForScenes(opts: {
 
 /** Remove all stock clips + refs (storyboard stays untouched).
  *  Stage 4a (T-4.0): clips are storage objects — removal goes through the
- *  driver (s3-safe, decrements the org quota). */
+ *  driver (s3-safe, decrements the org quota).
+ *  S112: the clear is a scene-content change per cleared scene — it lands as
+ *  revisions (origin "stock-clear") in the same transaction as the row
+ *  write, with the pre-clear state snapshotted BEFORE the loop mutates. */
 export async function clearStock(videoId: string, scenes: Scene[]): Promise<number> {
+  const beforeScenes = JSON.parse(JSON.stringify(scenes)) as Scene[];
+  ensureSceneIdsInPlace(scenes);
+  const video = await db.video.findUnique({ where: { id: videoId } });
   let cleared = 0;
   for (const scene of scenes) {
     if (scene.stock) {
@@ -358,7 +391,20 @@ export async function clearStock(videoId: string, scenes: Scene[]): Promise<numb
     }
     await storage.remove(`${videoId}/${stockFile(scene.index)}`).catch(() => {});
   }
-  if (cleared > 0)
-    await db.video.update({ where: { id: videoId }, data: { scenes: JSON.stringify(scenes) } });
+  if (cleared > 0) {
+    if (video) {
+      await commitSceneChanges({
+        video,
+        beforeScenes,
+        beforeDoc: parseTimeline(video.timeline),
+        afterScenes: scenes,
+        afterDoc: parseTimeline(video.timeline),
+        kind: "edit",
+        origin: "stock-clear",
+      });
+    } else {
+      await db.video.update({ where: { id: videoId }, data: { scenes: JSON.stringify(scenes) } });
+    }
+  }
   return cleared;
 }

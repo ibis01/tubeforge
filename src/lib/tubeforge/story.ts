@@ -117,6 +117,9 @@ export function parseScenes(json: string | null | undefined): Scene[] {
     return arr
       .map((s: Record<string, unknown>, i: number) => ({
         index: Number(s.index ?? i + 1),
+        // S112 — the stable scene identity survives the parse (never re-minted
+        // on read): rollback, conflict checks and revision diffs key on it.
+        id: typeof s.id === "string" && s.id ? s.id : undefined,
         title: String(s.title ?? `Scene ${i + 1}`),
         narration: String(s.narration ?? "").trim(),
         visual: String(s.visual ?? "").trim(),

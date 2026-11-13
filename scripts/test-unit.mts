@@ -2364,7 +2364,7 @@ await test("tenant-db: every org-scoped model matches the lowercased lookup", as
   const expected = [
     "channel", "character", "video", "activity", "researchsession",
     "scheduleslot", "videostat", "voiceprofile", "musictrack", "job", "membership",
-    "characterappearance", "location", "prop",
+    "characterappearance", "location", "prop", "scenerevision",
   ];
   for (const m of expected) {
     ok(ORG_SCOPED_MODELS.has(m), `"${m}" is org-scoped`);
@@ -12106,6 +12106,162 @@ await test("S104 THE OWNERSHIP LAW: middleware owns the CSP, next.config ships n
   ok(
     svg.includes("export function sanitizeSvg") && svg.includes('"script"'),
     "the SVG ingestion gate stands (S64): sanitize before storage, rasterize before trust — the audit's PARTIAL is now FULL",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// S112 — Scene-Level Editing & Repair, Stage 1: the revision foundation
+// (pure-logic pins; the DB-backed exit criteria live in
+//  scripts/test-scene-revisions.mts, the billing-battery pattern)
+// ---------------------------------------------------------------------------
+
+await test("scene-revisions: mintSceneId is deterministic and collision-free", async () => {
+  const { mintSceneId } = await import("../src/lib/tubeforge/scene-revisions.ts");
+  eq(mintSceneId(3, new Set()), "s3", "fresh hint mints s<hint>");
+  eq(mintSceneId(3, new Set(["s3"])), "s3-2", "taken hint disambiguates -2");
+  eq(mintSceneId(3, new Set(["s3", "s3-2"])), "s3-3", "and -3 next");
+  eq(mintSceneId(0, new Set()), "s1", "non-positive hint clamps to 1");
+});
+
+await test("scene-revisions: carrySceneIds preserves identity by index, mints for new scenes", async () => {
+  const { carrySceneIds } = await import("../src/lib/tubeforge/scene-revisions.ts");
+  const mk = (index: number, id?: string): Scene => ({
+    index, title: `t${index}`, narration: "n", visual: "v", camera: "slow-zoom",
+    mood: "m", caption: "c", hostInScene: false, rehook: false, sfx: "none", ...(id ? { id } : {}),
+  });
+  const before = [mk(1, "s1"), mk(2, "s2"), mk(3, "s3")];
+  // A split of scene 2, the clip-op shape: the first half keeps index 2
+  // (edited narration), the second half mints fresh index 4 spliced right
+  // after it, scene 3 keeps its index and position AFTER the new scene.
+  const after = [
+    mk(1),
+    { ...mk(2), narration: "first half" },
+    { ...mk(2), index: 4, narration: "second half", caption: "" },
+    mk(3),
+  ];
+  const carried = carrySceneIds(before, after);
+  eq(carried[0].id, "s1", "scene 1 keeps its id");
+  eq(carried[1].id, "s2", "the edited first half inherits by index");
+  eq(carried[2].id, "s4", "the split's second half mints a fresh id for its fresh index");
+  eq(carried[3].id, "s3", "the trailing scene keeps its id through the splice");
+  // Legacy arrays (no ids anywhere) mint s<index> for every scene.
+  const legacy = carrySceneIds([], [mk(1), mk(2)]);
+  eq(legacy[0].id, "s1", "legacy first scene mints s1");
+  eq(legacy[1].id, "s2", "legacy second scene mints s2");
+});
+
+await test("scene-revisions: mintFreshSceneIds never reuses a retired identity", async () => {
+  const { mintFreshSceneIds } = await import("../src/lib/tubeforge/scene-revisions.ts");
+  const mk = (index: number): Scene => ({
+    index, title: `t${index}`, narration: "n", visual: "v", camera: "slow-zoom",
+    mood: "m", caption: "c", hostInScene: false, rehook: false, sfx: "none",
+  });
+  // The previous epoch used s1..s2 (current) plus a retired s3 (history only).
+  const epoch2 = mintFreshSceneIds([mk(1), mk(2), mk(3)], ["s1", "s2", "s3"]);
+  const ids = epoch2.map((s) => s.id);
+  eq(new Set(ids).size, 3, "all minted ids are unique");
+  for (const id of ids) ok(!["s1", "s2", "s3"].includes(id as string), `minted id ${id} avoids the retired set`);
+  // Deterministic: same inputs → same ids (a replayed op mints the same identities).
+  eq(JSON.stringify(mintFreshSceneIds([mk(1), mk(2), mk(3)], ["s1", "s2", "s3"]).map((s) => s.id)), JSON.stringify(ids), "deterministic mint");
+});
+
+await test("scene-revisions: ensureSceneIdsInPlace mints without replacing objects", async () => {
+  const { ensureSceneIdsInPlace } = await import("../src/lib/tubeforge/scene-revisions.ts");
+  const a: Scene = {
+    index: 1, title: "t", narration: "n", visual: "v", camera: "slow-zoom",
+    mood: "m", caption: "c", hostInScene: false, rehook: false, sfx: "none",
+  };
+  const b: Scene = { ...a, index: 2, id: "kept" };
+  const scenes = [a, b];
+  const aRef = scenes[0];
+  const minted = ensureSceneIdsInPlace(scenes);
+  ok(minted, "one id was minted");
+  eq(scenes[0], aRef, "the array keeps the SAME object references");
+  eq(scenes[0].id, "s1", "minted in place");
+  eq(scenes[1].id, "kept", "existing ids untouched");
+  ok(!ensureSceneIdsInPlace(scenes), "second pass mints nothing");
+});
+
+await test("scene-revisions: the union slice round-trips and diffs honestly", async () => {
+  const { contentJson, parseRevisionContent } = await import("../src/lib/tubeforge/scene-revisions.ts");
+  const scene: Scene = {
+    index: 1, title: "t", narration: "n", visual: "v", camera: "slow-zoom",
+    mood: "m", caption: "c", hostInScene: false, rehook: false, sfx: "none",
+  };
+  const json = contentJson({ scene, docScene: null });
+  const parsed = parseRevisionContent(json);
+  ok(parsed !== null, "parses");
+  eq(parsed?.scene.narration, "n", "scene round-trips");
+  eq(parsed?.docScene, null, "null docScene round-trips as null");
+  eq(parseRevisionContent("not json"), null, "corrupt content parses to null");
+  eq(parseRevisionContent(JSON.stringify({ docScene: null })), null, "content without a scene is null");
+  // undefined vs null cannot fabricate a diff: both serialize the same.
+  eq(
+    contentJson({ scene, docScene: undefined as unknown as null }),
+    contentJson({ scene, docScene: null }),
+    "undefined docScene serializes identically to null",
+  );
+});
+
+await test("scene-revisions: checkExpectedVersion — 0 passes on no history, mismatch conflicts", async () => {
+  const { checkExpectedVersion, RevisionConflict } = await import("../src/lib/tubeforge/scene-revisions.ts");
+  checkExpectedVersion(0, null); // first edit on a never-touched scene
+  checkExpectedVersion(3, { version: 3 }); // honest head
+  let threw = false;
+  try {
+    checkExpectedVersion(1, { version: 3 });
+  } catch (err) {
+    threw = err instanceof RevisionConflict;
+  }
+  ok(threw, "stale expected version conflicts");
+  threw = false;
+  try {
+    checkExpectedVersion(2, null); // client claims history that does not exist
+  } catch (err) {
+    threw = err instanceof RevisionConflict;
+  }
+  ok(threw, "phantom expected version conflicts");
+});
+
+await test("scene-revisions: the eleven mutator sites all record revisions (source pin)", async () => {
+  // The S111 reconciliation's inventory: ELEVEN write paths touch the
+  // Video.scenes column. Stage 1's law: every one of them either commits
+  // through commitSceneChanges or is a defensive fallback in stock.ts (the
+  // video-vanished-mid-run edge). A NEW path that writes scenes directly
+  // fails this pin — it would bypass the revision history.
+  const mutators: Array<[string, string]> = [
+    ["src/app/api/videos/[id]/scenes/route.ts", "commitSceneChanges"],
+    ["src/app/api/videos/[id]/assemble/route.ts", "commitSceneChanges"],
+    ["src/app/api/videos/[id]/studio/clip/route.ts", "commitSceneChanges"],
+    ["src/app/api/videos/[id]/studio/voice/route.ts", "commitSceneChanges"],
+    ["src/app/api/videos/[id]/studio/pace/route.ts", "commitSceneChanges"],
+    ["src/app/api/videos/[id]/script/route.ts", "commitSceneChanges"],
+    ["src/app/api/videos/batch/route.ts", "commitSceneChanges"],
+    ["src/lib/tubeforge/script-job.ts", "commitSceneChanges"],
+    ["src/lib/tubeforge/convert.ts", "commitSceneChanges"],
+    ["src/lib/tubeforge/stock.ts", "commitSceneChanges"],
+    ["src/lib/tubeforge/video-jobs.ts", "commitSceneChanges"],
+  ];
+  for (const [file, needle] of mutators) {
+    const src = fs.readFileSync(file, "utf8");
+    ok(src.includes(needle), `${file} commits through the revision recorder`);
+  }
+  // And the ONLY remaining direct scenes-column writes are stock's two
+  // video-vanished fallbacks (guarded by the `if (video)` branch).
+  const stockSrc = fs.readFileSync("src/lib/tubeforge/stock.ts", "utf8");
+  const direct = (stockSrc.match(/scenes: JSON\.stringify/g) ?? []).length;
+  eq(direct, 2, "stock keeps exactly the two defensive fallback writes");
+});
+
+await test("scene-revisions: PATCH /scenes carries the optimistic-concurrency gate (source pin)", async () => {
+  const src = fs.readFileSync("src/app/api/videos/[id]/scenes/route.ts", "utf8");
+  ok(
+    src.includes("expectedSceneVersion") && src.includes("RevisionConflict"),
+    "the PATCH parses expectedSceneVersion and maps RevisionConflict to 409",
+  );
+  ok(
+    src.includes("status: 409"),
+    "a conflict returns 409 (the whiteboard precedent), never a silent overwrite",
   );
 });
 

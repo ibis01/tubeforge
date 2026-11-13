@@ -92,6 +92,8 @@ model Organization {
   appearances      CharacterAppearance[]
   locations        Location[]
   props            Prop[]
+  // S112 — scene revision history (Stage 1 of Scene-Level Editing & Repair).
+  sceneRevisions   SceneRevision[]
 }
 
 // One user per organization row. Exactly one member holds role "owner" —
@@ -442,6 +444,10 @@ model Video {
   // <videoId>/whiteboard/assets/<assetId>.svg; bytes + the per-org count
   // feed the quota walls (gate 6).
   whiteboardAssetUploads WhiteboardAssetUpload[]
+  // S112 — Scene-Level Editing & Repair (Stage 1): the immutable per-scene
+  // revision history. Cascades with the video (history dies with its
+  // project); rows are append-only by construction (see SceneRevision).
+  sceneRevisions        SceneRevision[]
 
   @@index([organizationId])
   @@index([status])
@@ -471,6 +477,53 @@ model WhiteboardAssetUpload {
 
   @@unique([videoId, assetId])
   @@index([organizationId])
+}
+
+// S112 — Scene-Level Editing & Repair, Stage 1: the revision foundation
+// (docs/design/scene-level-editing-reconciliation.md §9). One IMMUTABLE row
+// per (video, scene, version): every scene-content change lands as a NEW
+// revision — never an in-place edit — so history can never be overwritten,
+// concurrent edits are detectable, and any prior state can be restored
+// (rollback = a new revision carrying old content; the append-only law).
+//
+// sceneId is the STABLE id carried on Scene.id inside the Video.scenes JSON
+// (minted at first touch; see scene-revisions.ts). Indices are positional
+// and shift across structural ops and epoch regens; ids do not — a sceneId's
+// revision line is exactly one content lineage.
+//
+// content snapshots the scene's UNION slice — { scene, docScene }: the row
+// Scene AND its timeline-doc TimelineScene — because a scene's editable
+// content lives in both documents (rollback of half a scene would be a lie).
+// Kept TEXT (not a Json column) per the house law so SQLite and Postgres
+// behave identically.
+//
+// status ladder: draft (landed, not yet checked) | previewing (S114) |
+// needs_repair (S115) | approved (S116 — render's source of truth) |
+// superseded (a newer revision exists). An APPROVED head is never flipped
+// to superseded by a newer draft — the latest approved revision stays
+// addressable for render and rollback.
+model SceneRevision {
+  id             String   @id @default(cuid())
+  organizationId String
+  videoId        String
+  sceneId        String // stable Scene.id — NOT the positional index
+  version        Int // 1-based, monotonic per (videoId, sceneId)
+  parentVersion  Int? // the head this revision was made against (null = genesis)
+  status         String   @default("draft")
+  changeKind     String   @default("edit") // edit | structural | epoch | rollback | backfill
+  origin         String // the mutator that wrote it ("scenes-patch", "clip-split", "script-regen", …)
+  content        String // JSON SceneRevisionContent — { scene, docScene } union slice
+  note           String?
+  createdBy      String? // acting user; null = job body / legacy
+  createdAt      DateTime @default(now())
+
+  video        Video        @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([videoId, sceneId, version])
+  @@index([videoId, sceneId, status])
+  @@index([organizationId])
+  @@index([videoId, changeKind]) // the epoch scan (fresh-id minting reads history)
 }
 
 model Activity {

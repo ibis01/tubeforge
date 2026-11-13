@@ -26,8 +26,10 @@ import { log } from "./log";
 
 // S57/T-57.2 — the module's logger (the old [convert] prefix became a binding).
 const convertLog = log.child({ mod: "convert" });
-import { sceneWavFile, normalizeScene, applyRetentionRules, isRehookPosition } from "./story";
+import { sceneWavFile, normalizeScene, applyRetentionRules, isRehookPosition, parseScenes } from "./story";
 import { SCENE_COUNTS, type Scene } from "./types";
+import { commitSceneChanges } from "./scene-revisions";
+import { parseTimeline } from "./timeline";
 
 import { materialize } from "./storage";import * as storage from "./storage";
 
@@ -352,11 +354,18 @@ export async function convertClassicToScenes(opts: {
 
   // 4) Flip the video to story format. Storyboard + video flags reset; the
   //    voiceover stays (per-scene WAVs + merged file all exist).
-  await db.video.update({
-    where: { id: opts.videoId },
-    data: {
+  //    S112 — the flip is an EPOCH: the classic video had no scenes, so all
+  //    minted scenes are genesis revisions (origin "convert").
+  await commitSceneChanges({
+    video,
+    beforeScenes: parseScenes(video.scenes),
+    beforeDoc: parseTimeline(video.timeline),
+    afterScenes: scenes,
+    afterDoc: parseTimeline(video.timeline),
+    kind: "epoch",
+    origin: "convert",
+    rowUpdate: {
       format: "story",
-      scenes: JSON.stringify(scenes),
       hasStoryboard: false,
       hasVideo: false,
       hasVoiceover: hasVoice,

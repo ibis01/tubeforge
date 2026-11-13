@@ -1,0 +1,509 @@
+// S112 — Scene-Level Editing & Repair, Stage 1: the revision foundation's
+// DB-backed exit criteria (the billing-battery pattern: real SQLite DB,
+// real lib calls, fixtures cleaned up on exit).
+//
+// The proposal's Stage 1 exit: "editing cannot overwrite another revision
+// or destroy approved work". Pinned here as executable law:
+//
+//   1. APPEND-ONLY   — a second edit leaves v1's bytes untouched; versions
+//                      are monotonic; the unique index rejects duplicates.
+//   2. FIRST TOUCH   — the pre-edit state lands as v1 (backfill, born
+//                      superseded), so even the first edit has a rollback
+//                      target.
+//   3. CONFLICT      — a stale expectedVersion throws RevisionConflict
+//                      carrying the current head; nothing is written.
+//   4. SURGICAL      — a one-scene edit of a three-scene video writes
+//                      exactly one revision (diff-driven history).
+//   5. ROLLBACK      — restores old content as a NEW revision; every prior
+//                      row survives (history is never erased).
+//   6. EPOCH         — a whole-script regen mints ids that were NEVER used
+//                      (current + retired), genesis rows for all scenes.
+//   7. APPROVED      — an approved head is never superseded by a newer
+//                      draft; approvedRevision() keeps resolving it.
+//   8. UNION SLICE   — a doc-side change (window/mix) records a revision
+//                      carrying the docScene half.
+//   9. ROLLBACK ARMS — no-history / no-target / already-current each refuse
+//                      with their own reason, writing nothing.
+//
+// Run: npm run test:scene-revisions   (needs the local SQLite DB; part of check)
+
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { PrismaClient } from "@prisma/client";
+import type { Video } from "@prisma/client";
+
+const _root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+const rawDb = new PrismaClient();
+
+import {
+  commitSceneChanges,
+  rollbackScene,
+  headRevision,
+  approvedRevision,
+  listRevisions,
+  RevisionConflict,
+  parseRevisionContent,
+  type SceneRevisionContent,
+} from "../src/lib/tubeforge/scene-revisions";
+import { must } from "../src/lib/tubeforge/must";
+import type { Scene } from "../src/lib/tubeforge/types";
+import type { AssembledTimeline, TimelineScene } from "../src/lib/tubeforge/timeline";
+
+let passed = 0;
+let failed = 0;
+const failures: string[] = [];
+let suite = "";
+
+function suiteStart(name: string) {
+  suite = name;
+  console.log(`\n◆ ${name}`);
+}
+
+async function test(name: string, fn: () => void | Promise<void>) {
+  try {
+    await fn();
+    passed++;
+    console.log(`  ✓ ${name}`);
+  } catch (err) {
+    failed++;
+    const msg = err instanceof Error ? err.message : String(err);
+    failures.push(`[${suite}] ${name} — ${msg}`);
+    console.error(`  ✗ ${name} — ${msg}`);
+  }
+}
+
+function ok(cond: unknown, msg: string): asserts cond {
+  if (!cond) throw new Error(msg);
+}
+
+function eq<T>(actual: T, expected: T, label = "value") {
+  const a = JSON.stringify(actual);
+  const b = JSON.stringify(expected);
+  if (a !== b) throw new Error(`${label}: expected ${b}, got ${a}`);
+}
+
+// --- fixtures ---------------------------------------------------------------
+
+const MARK = `s112_${Date.now().toString(36)}`;
+const CLEANUP_VIDEO_IDS: string[] = [];
+const CLEANUP_ORG_IDS: string[] = [];
+
+function mkScene(index: number, over: Partial<Scene> = {}): Scene {
+  return {
+    index,
+    title: `Beat ${index}`,
+    narration: `Narration for scene ${index}.`,
+    visual: `A wide shot of beat ${index}`,
+    camera: "slow-zoom",
+    mood: "golden hour",
+    caption: `CAP ${index}`,
+    hostInScene: false,
+    rehook: false,
+    sfx: "none",
+    ...over,
+  };
+}
+
+async function makeVideo(scenes: Scene[], over: Partial<Video> = {}): Promise<Video> {
+  const org = await rawDb.organization.create({
+    data: { name: `S112 fixture ${MARK}`, slug: `s112-${MARK}-${CLEANUP_ORG_IDS.length}` },
+  });
+  CLEANUP_ORG_IDS.push(org.id);
+  const video = await rawDb.video.create({
+    data: {
+      organizationId: org.id,
+      topic: "S112 fixture topic",
+      niche: "history",
+      format: "story",
+      scenes: JSON.stringify(scenes),
+      hasVoiceover: false,
+      ...over,
+    },
+  });
+  CLEANUP_VIDEO_IDS.push(video.id);
+  return video;
+}
+
+function docOf(scenes: Scene[]): AssembledTimeline {
+  const docScenes: TimelineScene[] = scenes.map((s, i) => ({
+    index: s.index,
+    title: s.title,
+    narration: s.narration,
+    visual: s.visual,
+    startSec: i * 10,
+    endSec: i * 10 + 10,
+    durationSec: 10,
+    transitionIn: i === 0 ? null : "fade",
+    transitionOut: i === scenes.length - 1 ? null : "fade",
+    audio: {
+      voice: { enabled: true, level: 1 },
+      music: { enabled: true, level: 0.2, ducking: true },
+      sfx: { enabled: false, level: 1, kind: null },
+      ambient: { enabled: false, level: 0, kind: null },
+    },
+    caption: null,
+    source: "ai",
+    stockSource: null,
+    stockQuery: null,
+    shot: null,
+  }));
+  return {
+    schema: 2,
+    scenes: docScenes,
+    tracks: [],
+    sceneCount: docScenes.length,
+    totalDurationSec: docScenes.length * 10,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+async function reload(id: string): Promise<Video> {
+  const v = await rawDb.video.findUnique({ where: { id } });
+  if (!v) throw new Error("fixture video vanished");
+  return v;
+}
+
+function parseScenesOf(v: Video): Scene[] {
+  return v.scenes ? (JSON.parse(v.scenes) as Scene[]) : [];
+}
+
+/** The stable id of one scene of the row (fixtures guarantee presence). */
+function sceneIdOf(v: Video, index: number): string {
+  return must(`scene ${index} id`, parseScenesOf(v).find((s) => s.index === index)?.id);
+}
+
+// --- the battery ------------------------------------------------------------
+
+const v3 = await makeVideo([mkScene(1), mkScene(2), mkScene(3)]);
+
+suiteStart("S112 · append-only + first touch");
+
+await test("first edit backfills the pre-edit state as v1 and lands the edit as v2", async () => {
+  const before = parseScenesOf(v3);
+  const after = before.map((s) =>
+    s.index === 2 ? { ...s, narration: "Edited narration for scene 2." } : s
+  );
+  const commit = await commitSceneChanges({
+    video: v3,
+    beforeScenes: before,
+    beforeDoc: null,
+    afterScenes: after,
+    afterDoc: null,
+    kind: "edit",
+    origin: "test-first-edit",
+    userId: "user-fixture",
+  });
+  eq(commit.created.length, 1, "exactly one edit revision");
+  eq(commit.backfills.length, 1, "exactly one backfill row");
+  const head = commit.created[0];
+  eq(head.version, 2, "the edit is v2 (v1 is the backfill)");
+  eq(head.parentVersion, 1, "parented on the backfill");
+  eq(head.status, "draft", "a fresh edit is draft");
+  eq(head.changeKind, "edit", "changeKind edit");
+  const backfill = commit.backfills[0];
+  eq(backfill.status, "superseded", "the backfill is born superseded");
+  ok(
+    (parseRevisionContent(backfill.content)?.scene.narration ?? "").includes("Narration for scene 2"),
+    "the backfill carries the PRE-edit narration"
+  );
+  // The row now carries stable ids.
+  const row = parseScenesOf(await reload(v3.id));
+  ok(row.every((s) => typeof s.id === "string" && s.id.length > 0), "every scene gained an id");
+});
+
+await test("a second edit leaves v1 and v2 byte-identical (immutability)", async () => {
+  const v = await reload(v3.id);
+  const rowsBefore = await listRevisions(v3.id, sceneIdOf(v, 2));
+  const frozen = rowsBefore.map((r) => ({ id: r.id, content: r.content, version: r.version }));
+  const before = parseScenesOf(v);
+  const after = before.map((s) => (s.index === 2 ? { ...s, mood: "blue hour" } : s));
+  const commit = await commitSceneChanges({
+    video: v,
+    beforeScenes: before,
+    beforeDoc: null,
+    afterScenes: after,
+    afterDoc: null,
+    kind: "edit",
+    origin: "test-second-edit",
+  });
+  eq(commit.created.length, 1, "one new revision");
+  eq(commit.created[0].version, 3, "monotonic version");
+  eq(commit.backfills.length, 0, "no second backfill");
+  const rowsAfter = await listRevisions(v3.id, sceneIdOf(v, 2));
+  eq(rowsAfter.length, 3, "three rows now");
+  for (const f of frozen) {
+    const now = must(`row v${f.version}`, rowsAfter.find((r) => r.id === f.id));
+    eq(now.content, f.content, `v${f.version} content is byte-identical after the new edit`);
+  }
+  // v2 was draft, now superseded by v3.
+  const v2row = rowsAfter.find((r) => r.version === 2);
+  eq(v2row?.status, "superseded", "the prior draft head retired");
+});
+
+await test("a one-scene edit of three writes exactly one revision (surgical history)", async () => {
+  const v = await reload(v3.id);
+  const before = parseScenesOf(v);
+  const after = before.map((s) => (s.index === 3 ? { ...s, caption: "NEW CAP" } : s));
+  const commit = await commitSceneChanges({
+    video: v,
+    beforeScenes: before,
+    beforeDoc: null,
+    afterScenes: after,
+    afterDoc: null,
+    kind: "edit",
+    origin: "test-surgical",
+  });
+  eq(commit.created.length, 1, "only scene 3 got a revision");
+  ok(
+    commit.created[0].sceneId === sceneIdOf(v, 3),
+    "the revision is keyed on scene 3's stable id"
+  );
+  const total = await rawDb.sceneRevision.count({ where: { videoId: v3.id } });
+  eq(
+    total,
+    5,
+    "video total: scene 2 (backfill v1 + v2 + v3) + scene 3's first touch (backfill v1 + v2)"
+  );
+});
+
+suiteStart("S112 · optimistic concurrency");
+
+await test("a stale expectedVersion conflicts with the current head and writes nothing", async () => {
+  const v = await reload(v3.id);
+  const sceneId = sceneIdOf(v, 2);
+  const head = await headRevision(v3.id, sceneId);
+  eq(head?.version, 3, "head is v3");
+  const countBefore = await rawDb.sceneRevision.count({ where: { videoId: v3.id } });
+  const before = parseScenesOf(v);
+  const after = before.map((s) => (s.index === 2 ? { ...s, caption: "RACED" } : s));
+  let conflicted: RevisionConflict | null = null;
+  try {
+    await commitSceneChanges({
+      video: v,
+      beforeScenes: before,
+      beforeDoc: null,
+      afterScenes: after,
+      afterDoc: null,
+      kind: "edit",
+      origin: "test-conflict",
+      expectedVersion: 2, // stale — the client based its edit on v2
+      expectedSceneIndex: 2,
+    });
+  } catch (err) {
+    if (err instanceof RevisionConflict) conflicted = err;
+  }
+  ok(conflicted !== null, "the stale edit conflicts");
+  eq(conflicted?.current?.version ?? 0, 3, "the conflict carries the current head (v3)");
+  const countAfter = await rawDb.sceneRevision.count({ where: { videoId: v3.id } });
+  eq(countAfter, countBefore, "nothing was written by the refused edit");
+});
+
+await test("an honest expectedVersion passes the gate", async () => {
+  const v = await reload(v3.id);
+  const sceneId = sceneIdOf(v, 2);
+  const head = await headRevision(v3.id, sceneId);
+  const before = parseScenesOf(v);
+  const after = before.map((s) => (s.index === 2 ? { ...s, caption: "HONEST" } : s));
+  const commit = await commitSceneChanges({
+    video: v,
+    beforeScenes: before,
+    beforeDoc: null,
+    afterScenes: after,
+    afterDoc: null,
+    kind: "edit",
+    origin: "test-honest",
+    expectedVersion: head?.version ?? 0,
+    expectedSceneIndex: 2,
+  });
+  eq(commit.created.length, 1, "the honest edit lands");
+});
+
+await test("the unique index is the hard floor: a duplicate version cannot be inserted", async () => {
+  const v = await reload(v3.id);
+  const sceneId = sceneIdOf(v, 2);
+  const head = must("scene 2 head", await headRevision(v3.id, sceneId));
+  let p2002 = false;
+  try {
+    await rawDb.sceneRevision.create({
+      data: {
+        organizationId: v.organizationId,
+        videoId: v3.id,
+        sceneId,
+        version: head.version, // race the same version
+        origin: "test-race",
+        content: "{}",
+      },
+    });
+  } catch (err) {
+    p2002 = (err as { code?: string }).code === "P2002";
+  }
+  ok(p2002, "the DB rejects a duplicate (videoId, sceneId, version)");
+});
+
+suiteStart("S112 · rollback");
+
+await test("rollback restores old content as a NEW revision; history survives", async () => {
+  const v = await reload(v3.id);
+  const result = await rollbackScene({ video: v, sceneIndex: 2, toVersion: 2, userId: "user-fixture" });
+  ok(result.ok, "rollback ok");
+  if (!result.ok) throw new Error("unreachable");
+  const sceneId = sceneIdOf(v, 2);
+  const rows = await listRevisions(v3.id, sceneId);
+  eq(rows.length, 5, "v1..v4 plus the rollback = 5 rows — nothing was erased");
+  const head = rows[0];
+  eq(head.version, 5, "the rollback is the new head");
+  eq(head.changeKind, "rollback", "changeKind rollback");
+  eq(head.note, "Rollback to v2", "the note names the target");
+  const content = parseRevisionContent(head.content);
+  ok(
+    (content?.scene.narration ?? "").includes("Edited narration for scene 2"),
+    "the head now carries v2's narration"
+  );
+  // The ROW was restored too.
+  const rowScene = parseScenesOf(await reload(v3.id)).find((s) => s.index === 2);
+  ok(
+    (rowScene?.narration ?? "").includes("Edited narration for scene 2"),
+    "the row's scene narration is restored"
+  );
+});
+
+await test("rollback refuses: no history / no target / already current", async () => {
+  const fresh = await makeVideo([mkScene(1)]); // never touched — no ids, no history
+  const noHistory = await rollbackScene({ video: fresh, sceneIndex: 1, toVersion: 1 });
+  eq(noHistory.ok, false, "refused");
+  if (!noHistory.ok) eq(noHistory.reason, "no-history", "reason: no-history");
+
+  const v = await reload(v3.id);
+  const noTarget = await rollbackScene({ video: v, sceneIndex: 2, toVersion: 99 });
+  eq(noTarget.ok, false, "refused");
+  if (!noTarget.ok) eq(noTarget.reason, "no-target", "reason: no-target");
+
+  const again = await rollbackScene({ video: v, sceneIndex: 2, toVersion: 5 });
+  eq(again.ok, false, "refused");
+  if (!again.ok) eq(again.reason, "already-current", "reason: already-current");
+});
+
+suiteStart("S112 · epochs");
+
+await test("an epoch mints never-used ids and genesis rows for every scene", async () => {
+  const v = await reload(v3.id);
+  const oldScenes = parseScenesOf(v);
+  const oldIds = new Set(oldScenes.map((s) => s.id));
+  const regen = [mkScene(1, { narration: "New epoch scene 1" }), mkScene(2, { narration: "New epoch scene 2" })];
+  const commit = await commitSceneChanges({
+    video: v,
+    beforeScenes: oldScenes,
+    beforeDoc: null,
+    afterScenes: regen,
+    afterDoc: null,
+    kind: "epoch",
+    origin: "test-epoch",
+  });
+  eq(commit.created.length, 2, "genesis rows for both new scenes");
+  ok(commit.created.every((r) => r.changeKind === "epoch"), "changeKind epoch");
+  ok(commit.created.every((r) => r.parentVersion === null), "genesis has no parent");
+  const newRow = parseScenesOf(await reload(v3.id));
+  eq(newRow.length, 2, "the row now carries the regen scenes");
+  const newIds = newRow.map((s) => s.id);
+  eq(new Set(newIds).size, 2, "unique ids");
+  for (const id of newIds) ok(!oldIds.has(id), `minted id ${id} was never used before`);
+  // Retired lines simply STOP: their rows remain, read-only history.
+  const retired = await listRevisions(v3.id, must("old scene 2 id", oldScenes.find((s) => s.index === 2)?.id));
+  ok(retired.length > 0, "the retired scene's history is still readable");
+});
+
+await test("a second epoch avoids the FIRST epoch's ids too (full historical set)", async () => {
+  const v = await reload(v3.id);
+  const epoch1Ids = new Set(parseScenesOf(v).map((s) => s.id));
+  const regen2 = [mkScene(1, { narration: "Epoch 3 scene 1" })];
+  await commitSceneChanges({
+    video: v,
+    beforeScenes: parseScenesOf(v),
+    beforeDoc: null,
+    afterScenes: regen2,
+    afterDoc: null,
+    kind: "epoch",
+    origin: "test-epoch-2",
+  });
+  const epoch2Ids = parseScenesOf(await reload(v3.id)).map((s) => s.id);
+  for (const id of epoch2Ids) ok(!epoch1Ids.has(id), `second-epoch id ${id} avoids all retired ids`);
+});
+
+suiteStart("S112 · approved work is never destroyed");
+
+await test("an approved head stays approved under a newer draft", async () => {
+  const v = await reload(v3.id);
+  const sceneId = sceneIdOf(v, 1);
+  // Scene 1 of the current epoch has its genesis row; bless it approved
+  // (what Stage 5's recheck flow will do).
+  const head = must("scene 1 head", await headRevision(v3.id, sceneId));
+  await rawDb.sceneRevision.update({ where: { id: head.id }, data: { status: "approved" } });
+  const approvedBefore = await approvedRevision(v3.id, sceneId);
+  eq(approvedBefore?.version, head.version, "approvedRevision resolves the blessed head");
+
+  // A new draft lands on top.
+  const before = parseScenesOf(v);
+  const after = before.map((s) => (s.index === 1 ? { ...s, mood: "neon night" } : s));
+  const commit = await commitSceneChanges({
+    video: v,
+    beforeScenes: before,
+    beforeDoc: null,
+    afterScenes: after,
+    afterDoc: null,
+    kind: "edit",
+    origin: "test-approved-protect",
+  });
+  eq(commit.created.length, 1, "the draft landed");
+  eq(commit.created[0].status, "draft", "the new head is a draft");
+
+  const approvedRow = await rawDb.sceneRevision.findUnique({ where: { id: head.id } });
+  eq(approvedRow?.status, "approved", "the approved row was NOT superseded");
+  const approvedAfter = await approvedRevision(v3.id, sceneId);
+  eq(approvedAfter?.id, head.id, "approvedRevision still resolves it — render + rollback keep their source");
+});
+
+suiteStart("S112 · the union slice");
+
+await test("a doc-side change records a revision carrying the docScene half", async () => {
+  const v = await reload(v3.id);
+  const before = parseScenesOf(v);
+  const beforeDoc = docOf(before);
+  // Trim scene 1's window in the doc (a creative edit, row untouched).
+  const afterDoc: AssembledTimeline = {
+    ...beforeDoc,
+    scenes: beforeDoc.scenes.map((d) =>
+      d.index === 1 ? { ...d, endSec: d.endSec - 2, durationSec: d.durationSec - 2 } : d
+    ),
+  };
+  const commit = await commitSceneChanges({
+    video: v,
+    beforeScenes: before,
+    beforeDoc,
+    afterScenes: before,
+    afterDoc,
+    kind: "edit",
+    origin: "test-doc-slice",
+    timeline: JSON.stringify(afterDoc),
+  });
+  eq(commit.created.length, 1, "the doc-side change recorded a revision");
+  const content: SceneRevisionContent | null = parseRevisionContent(commit.created[0].content);
+  const slice = must("union-slice content", content);
+  eq(slice.docScene?.endSec, 8, "the revision's docScene carries the trimmed window");
+  eq(slice.scene.narration, before[0].narration, "the row half is intact");
+  // And the timeline column moved with it.
+  const stored = await reload(v3.id);
+  ok((stored.timeline ?? "").includes("\"endSec\":8"), "the doc was persisted in the same transaction");
+});
+
+// --- teardown ---------------------------------------------------------------
+
+try {
+  for (const id of CLEANUP_VIDEO_IDS) await rawDb.video.delete({ where: { id } }).catch(() => {});
+  for (const id of CLEANUP_ORG_IDS) await rawDb.organization.delete({ where: { id } }).catch(() => {});
+} finally {
+  await rawDb.$disconnect();
+}
+
+console.log(`\n${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
+for (const f of failures) console.log(`  ✗ ${f}`);
+process.exit(failed > 0 ? 1 : 0);
