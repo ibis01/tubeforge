@@ -404,12 +404,28 @@ export async function startJob(
   entityId: string,
   kind: JobKind,
   fn: () => Promise<void>,
-  opts: { payload?: unknown } = {}
+  opts: { payload?: unknown; idempotencyKey?: string | null } = {}
 ): Promise<boolean> {
   await ensureRecovered();
 
   const k = key(entityId, kind);
   if (state.running.has(k) || state.queued.has(k)) return false;
+
+  // S115 — the idempotency law: a keyed enqueue whose logical work already
+  // happened (done) or is happening (pending/running) is a duplicate. The
+  // retry-after-done double-bill path dies here (the unique index is the
+  // race floor under createPendingJob); a FAILED row re-queues honestly.
+  if (opts.idempotencyKey) {
+    const standing = await db.job
+      .findUnique({
+        where: { idempotencyKey: opts.idempotencyKey },
+        select: { id: true, status: true },
+      })
+      .catch(() => null);
+    // Only work that already happened (or is happening) blocks; a FAILED
+    // row is honestly re-queueable (createPendingJob resets it).
+    if (standing && ["pending", "running", "done"].includes(standing.status)) return false;
+  }
 
   // Cross-process dedupe: a pending OR running row from ANOTHER process
   // (the worker) must block a duplicate enqueue — the in-memory check above
@@ -435,15 +451,18 @@ export async function startJob(
   let jobId: string | null = null;
   if (jobCtx) {
     try {
-      jobId = (
-        await createPendingJob({
-          organizationId: jobCtx.organizationId,
-          userId: jobCtx.userId,
-          kind,
-          entityId,
-          payload: opts.payload,
-        })
-      ).jobId;
+      const enqueued = await createPendingJob({
+        organizationId: jobCtx.organizationId,
+        userId: jobCtx.userId,
+        kind,
+        entityId,
+        payload: opts.payload,
+        idempotencyKey: opts.idempotencyKey ?? null,
+      });
+      jobId = enqueued.jobId;
+      // S115 — a keyed enqueue that resolved to a standing row (done
+      // included) is a duplicate: no closure, no run, no spend.
+      if (enqueued.duplicate) return false;
     } catch (err) {
       // DB hiccup — run untracked (Stage-1 behavior) rather than block the stage.
       jobsLog.error("failed to persist job row — running untracked", { err });

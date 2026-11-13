@@ -91,6 +91,8 @@ model Organization {
   sceneRevisions   SceneRevision[]
   // S113 — per-scene artifact provenance (Stage 2).
   sceneArtifacts   SceneArtifact[]
+  // S115 — the durable repair records (Stage 4).
+  sceneRepairs     SceneRepair[]
 }
 
 // One user per organization row. Exactly one member holds role "owner" —
@@ -423,6 +425,13 @@ model Video {
   // unknown version reads it as absent and never overwrites it.
   referenceAnalysis String?
 
+  // S115 — Scene-Level Editing, Stage 4: the per-project spend ceiling
+  // (micro-USD), OPT-IN per video (null = no ceiling beyond the org's credit
+  // balance — the operator decision point resolved to opt-in so existing
+  // behavior never changes silently). Enforced in the same admission as the
+  // credit hold: video-scoped UsageRecord spend + the estimate ≤ ceiling,
+  // else 402 (cost-guard.ts).
+  spendCeilingMicro Int?
   // S94 — the 3D scene doc (the versioned Scene3D contract: camera orbit
   // keyframes, primitive objects, lights — the deterministic scaffold or a
   // future Blender adapter's output). The tenth JSON doc column; null = no
@@ -448,6 +457,8 @@ model Video {
   // S113 — Stage 2: per-scene artifact provenance (prompts, input hashes,
   // costs). Cascades with the video.
   sceneArtifacts        SceneArtifact[]
+  // S115 — Stage 4: the durable repair proposals + their approval ladder.
+  sceneRepairs          SceneRepair[]
 
   @@index([organizationId])
   @@index([status])
@@ -563,6 +574,46 @@ model SceneArtifact {
 
   @@unique([videoId, storageKey, inputHash])
   @@index([videoId, sceneIndex, type])
+  @@index([organizationId])
+}
+
+// S115 — Scene-Level Editing & Repair, Stage 4: the durable repair record
+// (docs/design/scene-level-editing-reconciliation.md §5.5). The S84 critic
+// and the S77 Visual Consistency Engine already emit per-scene repair
+// PROPOSALS with ready instruction strings — as ephemeral report JSON. This
+// table is those proposals, PERSISTED, with the estimate + affected-asset
+// list + approval + job linkage the proposals lack: the propose→approve→run
+// ladder the operator's requirement D demands (no silent paid calls — a
+// repair NEVER generates before an explicit approval stamps approvedBy).
+// status ladder: proposed (estimate attached, awaiting a human) |
+// awaiting_approval (superseded alias, reserved) | running (job enqueued) |
+// completed (targetVersion = the revision the repair produced) | failed |
+// rejected (the human said no — the estimate stays as a record).
+model SceneRepair {
+  id             String   @id @default(cuid())
+  organizationId String
+  videoId        String
+  sceneId        String? // stable Scene.id when the video carries ids
+  sceneIndex     Int
+  sourceVersion  Int // the head revision the repair targets
+  targetVersion  Int? // the revision the completed repair produced
+  instruction    String // the repair instruction (critic/VCE proposal or freeform)
+  origin         String // "critic" | "vce" | "manual"
+  estimateMicroUsd Int @default(0) // requirement D: the estimate BEFORE approval
+  affectedAssets String // JSON: what regenerates (the Stage 2 plan's list)
+  status         String   @default("proposed")
+  approvedBy     String?
+  approvedAt     DateTime?
+  jobId          String? // the enqueued scene job (the idempotent retry link)
+  idempotencyKey String? // the job's key — approving twice cannot double-bill
+  note           String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  video        Video        @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([videoId, sceneIndex])
   @@index([organizationId])
 }
 
@@ -790,6 +841,12 @@ model Job {
   // the job with the SAME choices instead of factory defaults. Kept as TEXT
   // (not a Json column) so the SQLite mirror and Postgres behave identically.
   payload         String?
+  // S115 — Scene-Level Editing, Stage 4: the idempotency key (caller-minted,
+  // deterministic per logical work: "<kind>:<entity>:<content-hash>[:<opts-hash>]"). A
+  // retry of the SAME request (network retry, double-click, job replay)
+  // resolves to the standing row — done rows are NOT re-enqueued, killing the
+  // retry-after-done double-bill path. Null = legacy un-keyed enqueue.
+  idempotencyKey  String?  @unique
   cancelRequested Boolean      @default(false) // cooperative cancel — visible cross-process
   startedAt       DateTime     @default(now()) // set at claim (execution start)
   endedAt         DateTime?

@@ -2365,6 +2365,7 @@ await test("tenant-db: every org-scoped model matches the lowercased lookup", as
     "channel", "character", "video", "activity", "researchsession",
     "scheduleslot", "videostat", "voiceprofile", "musictrack", "job", "membership",
     "characterappearance", "location", "prop", "scenerevision", "sceneartifact",
+    "scenerepair",
   ];
   for (const m of expected) {
     ok(ORG_SCOPED_MODELS.has(m), `"${m}" is org-scoped`);
@@ -12413,6 +12414,79 @@ await test("scene-preview: the lane is wired and walled (source pin)", async () 
   ok(
     mp4.includes("scene-preview") && mp4.includes("statScenePreviewFile"),
     "the mp4 route streams the scene-preview variant (authed, org-scoped)"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// S115 — Scene-Level Editing & Repair, Stage 4: repair + cost authorization
+// + job idempotency (pure pins; the DB-backed ladder lives in the battery)
+// ---------------------------------------------------------------------------
+
+await test("scene-repairs: the estimate uses the admission's own table", async () => {
+  const { repairEstimateMicroUsd } = await import("../src/lib/tubeforge/scene-repairs.ts");
+  const { ESTIMATED_COST_MICRO } = await import("../src/lib/tubeforge/billing.ts");
+  eq(
+    repairEstimateMicroUsd("kenburns"),
+    ESTIMATED_COST_MICRO.image,
+    "a kenburns repair regenerates the art take only"
+  );
+  eq(
+    repairEstimateMicroUsd("animated"),
+    ESTIMATED_COST_MICRO.image + ESTIMATED_COST_MICRO.video,
+    "an animated repair also pays the i2v clip — the number the human approves is the number the gate enforces"
+  );
+});
+
+await test("scene-repairs: the repair plan names exactly what regenerates", async () => {
+  const { repairPlan } = await import("../src/lib/tubeforge/scene-repairs.ts");
+  const plan = repairPlan("vid", 4);
+  ok(plan.sceneKeys.includes("vid/scene-04.png"), "the art take regenerates");
+  ok(!plan.sceneKeys.some((k) => k.endsWith(".wav")), "the read never regenerates");
+  ok(plan.videoRenders, "the video-level renders rebuild (the union)");
+});
+
+await test("cost-guard: the ceiling admission law", async () => {
+  const { CostCeilingExceededError } = await import("../src/lib/tubeforge/cost-guard.ts");
+  ok(
+    new CostCeilingExceededError(500, 600, 200).message.includes("ceiling"),
+    "the refusal names the ceiling in human words"
+  );
+});
+
+await test("s115: the idempotency + approval gates are wired (source pin)", async () => {
+  const queue = fs.readFileSync("src/lib/tubeforge/queue.ts", "utf8");
+  ok(
+    queue.includes("idempotencyKey?: string | null") &&
+      queue.includes('["pending", "running", "done"].includes(standing.status)') &&
+      queue.includes("return { jobId: standing.id, duplicate: true };"),
+    "createPendingJob resolves a keyed retry of done/pending/running work to the standing row (done rows are never re-enqueued)"
+  );
+  ok(
+    queue.includes("RE-QUEUED: an honest retry of failed work re-runs the same row"),
+    "a FAILED row re-queues honestly — retries of failed work are not deduped away"
+  );
+  ok(
+    queue.includes('(err as { code?: string }).code === "P2002"'),
+    "the unique index is the race floor — a colliding insert re-reads the winner"
+  );
+  const jobs = fs.readFileSync("src/lib/tubeforge/jobs.ts", "utf8");
+  ok(
+    jobs.includes("if (enqueued.duplicate) return false;"),
+    "startJob refuses to run a duplicate — no closure, no spend"
+  );
+  const repairs = fs.readFileSync("src/lib/tubeforge/scene-repairs.ts", "utf8");
+  ok(
+    repairs.includes("approving twice cannot spend twice"),
+    "a repair that is already running/completed refuses re-approval"
+  );
+  ok(
+    repairs.includes("assertWithinVideoCeiling"),
+    "approval runs the ceiling admission before the enqueue"
+  );
+  const schema = fs.readFileSync("prisma/schema.prisma", "utf8");
+  ok(
+    schema.includes("spendCeilingMicro Int?") && schema.includes("idempotencyKey  String?  @unique"),
+    "the opt-in ceiling + the unique idempotency key are schema law"
   );
 });
 

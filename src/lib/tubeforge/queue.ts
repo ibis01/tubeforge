@@ -232,8 +232,70 @@ export async function createPendingJob(input: {
   entityId: string;
   /** Request-scoped options for the crash-recovery handler (JSON-encoded). */
   payload?: unknown;
-}): Promise<EnqueueResult> {
+  /** S115 — the idempotency key: a retry of the same logical work resolves
+   *  to the standing row WHATEVER its status (a done row is NOT re-enqueued
+   *  — the retry-after-done double-bill path dies here). Null = legacy
+   *  un-keyed enqueue (the pending/running dedup still guards those). */
+  idempotencyKey?: string | null;
+}): Promise<EnqueueResult & { duplicate: boolean }> {
   const maxAttempts = MAX_ATTEMPTS_BY_KIND[input.kind] ?? DEFAULT_MAX_ATTEMPTS;
+  if (input.idempotencyKey) {
+    // Insert-on-key: read first (the common case — a fresh key), let the
+    // unique index catch the race, re-read on collision. Exactly one row
+    // per key, ever. DONE (and pending/running) rows are duplicates — the
+    // logical work already happened or is happening; the retry-after-done
+    // double-bill path dies here. FAILED/cancelled/interrupted rows are
+    // RE-QUEUED: an honest retry of failed work re-runs the same row
+    // (attempts stay counted; maxAttempts still bounds the retries).
+    const standing = await db.job.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+    if (standing) {
+      if (["pending", "running", "done"].includes(standing.status))
+        return { jobId: standing.id, duplicate: true };
+      // Re-queue the terminal row — CONDITIONALLY (the S100 fencing law: no
+      // unconditional Job writes in this file). The status guard makes the
+      // re-queue race-safe: only a row still in the failed family moves.
+      await db.job.updateMany({
+        where: {
+          id: standing.id,
+          status: { in: ["failed", "cancelled", "interrupted"] },
+        },
+        data: {
+          status: "pending",
+          nextRunAt: new Date(),
+          error: null,
+          cancelRequested: false,
+          progress: 0,
+          label: null,
+        },
+      });
+      return { jobId: standing.id, duplicate: false };
+    }
+    try {
+      const row = await db.job.create({
+        data: {
+          organizationId: input.organizationId,
+          userId: input.userId,
+          kind: input.kind,
+          entityId: input.entityId,
+          status: "pending",
+          maxAttempts,
+          nextRunAt: new Date(),
+          startedAt: new Date(),
+          idempotencyKey: input.idempotencyKey,
+          ...(input.payload === undefined || input.payload === null
+            ? {}
+            : { payload: JSON.stringify(input.payload) }),
+        },
+      });
+      return { jobId: row.id, duplicate: false };
+    } catch (err) {
+      if ((err as { code?: string }).code === "P2002") {
+        const winner = await db.job.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+        if (winner) return { jobId: winner.id, duplicate: true };
+      }
+      throw err;
+    }
+  }
   const row = await db.job.create({
     data: {
       organizationId: input.organizationId,
@@ -249,7 +311,7 @@ export async function createPendingJob(input: {
         : { payload: JSON.stringify(input.payload) }),
     },
   });
-  return { jobId: row.id };
+  return { jobId: row.id, duplicate: false };
 }
 
 /** Register the in-process closure for a job this process created. */

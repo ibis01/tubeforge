@@ -6220,3 +6220,79 @@ typecheck of the battery; production build exit 0.
 handles (transition into the next scene) are Stage 5's boundary recheck,
 not the preview's job; the UI panel that surfaces previews + staleness
 is Stage 7.
+
+---
+
+## S115 — Scene-Level Editing & Repair, Stage 4: repair + cost authorization + job idempotency
+
+**THE EXIT CRITERION** (the proposal's own): failed or repeated requests
+cannot silently incur duplicate costs.
+
+**THE LADDER (requirement D, executable).** POST /scenes/[n]/repair:
+- PROPOSE {instruction} — the estimate (the admission's OWN cost table:
+  image + i2v-when-animated) and the affected-asset list (Stage 2's
+  dependency map: the art take regenerates, the renders rebuild, the
+  read NEVER does) are computed and STORED on a SceneRepair row. No job,
+  no cost, nothing generated.
+- APPROVE {repairId, approve: true} — the ceiling admission (402 with
+  the numbers when the per-project line breaks), the approvedBy stamp,
+  the idempotent enqueue. The only step that can spend. A repair already
+  running/completed refuses re-approval (409); a FAILED repair
+  re-approves into an honest re-queue of the same job row.
+- REJECT — nothing was generated, nothing was spent; the estimate stays
+  as a record.
+GET — the scene's repair feed (the approval inbox). SceneRepair is the
+durable form of what the S84 critic and the S77 VCE emit as ephemeral
+report JSON (origin: critic | vce | manual); rewiring those emitters +
+the S86 one-click buttons onto the ladder is Stage 7's UX work — the
+ladder itself is complete and pinned.
+
+**THE DOUBLE-BILL KILLER.** Job.idempotencyKey (TEXT, unique): a keyed
+enqueue resolves to the standing row — done/pending/running rows are
+duplicates (the retry-after-done path that re-billed a finished job is
+dead; the unique index is the race floor, P2002 re-reads the winner);
+failed/cancelled/interrupted rows RE-QUEUE (an honest retry of failed
+work re-runs the same row, attempts still counted, maxAttempts still
+bounding) — CONDITIONALLY, an updateMany guarded by the status set, so
+the S100 fencing law's "zero plain job.update writes in queue.ts" pin
+still holds (it caught my first draft's unconditional update — fixed at
+the site). The render route enqueues under
+render:<videoId>:<row updatedAt>:<opts digest> — a retried request or
+double-click resolves to the standing job; ANY content change bumps
+updatedAt and mints a fresh key, so a re-render after an edit is never
+blocked. The battery's double-bill pin walks the whole sequence: create
+→ retry-while-pending → retry-after-done → ONE row, one jobId, every
+time.
+
+**THE PER-PROJECT CEILING (opt-in).** Video.spendCeilingMicro (null = no
+ceiling — the operator decision point's resolution, so existing behavior
+never changes silently). cost-guard.ts: videoSpendMicroUsd sums the
+UsageRecord bridge's video-scoped rows (the board's "no per-video
+attribution" tail closes here too); assertWithinVideoCeiling refuses
+with the numbers. Wired in the SAME admission window as the credit hold
+on the render route and inside repair approval — the org's credits gate
+the USER, the ceiling gates the PROJECT.
+
+**TESTS.** Battery 20→23: the double-bill sequence; the ladder
+(propose stores estimate + affected list with ZERO jobs; approve stamps +
+links the job by the idempotent key — under withCtx with a REAL user
+fixture, after the first draft's fake userId tripped the Job FK, which
+is itself the tenancy law working; re-approve never creates a second
+row; reject keeps the record); the ceiling (the bridge sum, the fit, the
+refusal with numbers, null passes). 4 unit pins (the estimate table, the
+repair plan, the ceiling error, the wired-and-walled source pin — which
+also caught its own first draft quoting the pre-refinement dedup shape).
+The scene-job settle hook (running → completed/failed with
+targetVersion) rides approve's closure.
+
+**VERIFIED:** typecheck; lint 0; unit 522/522; billing 40/40; storage
+12/12; rate 17/17; scene-revisions 23/23; drill RTO 63ms; alert probe
+HEALTH 0; standalone strict typecheck; production build exit 0. The
+S100 fencing pin and the T-4.14 tenant pin both enforced their laws on
+this stage's own first draft — the gate system working as designed.
+
+**KNOWN LIMITS, deliberate:** the critic/VCE emitters still write
+ephemeral report JSON (their rewiring onto SceneRepair + the one-click
+UI is Stage 7); the repair's job lane runs the existing scene job
+(instruction-edit path) — a repair-specific orchestrator with
+boundary-aware recheck lands with Stage 5.

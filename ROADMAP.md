@@ -522,8 +522,10 @@ rollback-as-new-revision, all eleven mutators converged) and Stage 2
 measured over-invalidation fix) and Stage 3 (S114, the scene preview
 lane — scene-preview-NN.mp4 through the same segment machinery,
 nothing else touched, stale labeling against the head revision) are
-landed; Stages 4–7 follow (repair + cost authorization, scene QC,
-approved-only assembly, UX + hardening).
+and Stage 4 (S115, the propose→approve repair
+ladder, per-project spend ceilings, and job idempotency keys — the
+double-bill killer) are landed; Stages 5–7 follow (scene QC +
+boundary validation, approved-only assembly, UX + hardening).
 
 Standing risks tracked in the worklog: Z.ai gateway outage (S63
 remeasurement and the LLM whiteboard planner gated on the one-probe

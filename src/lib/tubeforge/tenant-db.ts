@@ -50,6 +50,7 @@ export const ORG_SCOPED_MODELS = new Set(
     "prop",
     "sceneRevision", // S112 — scene revision history (scene-level editing)
     "sceneArtifact", // S113 — per-scene artifact provenance
+    "sceneRepair", // S115 — the durable repair records
   ].map((m) => m.toLowerCase())
 );
 

@@ -1,8 +1,13 @@
+import { createHash } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/tubeforge/tenant-db";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { parseScenes } from "@/lib/tubeforge/story";
 import { isJobRunning, lastJobError, jobProgress, startJob } from "@/lib/tubeforge/jobs";
+import { assertWithinVideoCeiling, CostCeilingExceededError } from "@/lib/tubeforge/cost-guard";
+
+const digestOf = (input: string) =>
+  createHash("sha256").update(input, "utf8").digest("hex").slice(0, 16);
 import { runRenderJob, runWhiteboardJob, type RenderJobOptions } from "@/lib/tubeforge/video-jobs";
 import { resolveMusicForVideo, isMusicEnabledForVideo, musicBedActive } from "@/lib/tubeforge/music";
 import { docMusicPick, resolveDeliveryQuality, resolveBurnSubtitles } from "@/lib/tubeforge/studio-doc";
@@ -177,6 +182,27 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
   }
 
+  // S115 — the per-PROJECT ceiling (opt-in, Video.spendCeilingMicro),
+  // enforced in the same admission window as the credit hold: the video's
+  // recorded spend + this render's estimate must fit, else 402 with the
+  // numbers. The org's credit balance gates the USER; this gates the
+  // PROJECT ("enforce remaining budget", the operator's requirement D).
+  try {
+    await assertWithinVideoCeiling(video, RENDER_ESTIMATE_MICRO);
+  } catch (err) {
+    if (err instanceof CostCeilingExceededError)
+      return NextResponse.json(
+        {
+          error: err.message,
+          spentMicroUsd: err.spentMicroUsd,
+          ceilingMicroUsd: err.ceilingMicroUsd,
+          estimateMicroUsd: err.estimateMicroUsd,
+        },
+        { status: 402 }
+      );
+    throw err;
+  }
+
   // Keynote slides: captions duplicate the slide headlines — default OFF.
   const mode = ["animated", "stock", "slides"].includes(body?.mode) ? body.mode : "kenburns";
   // S14 — the delivery: the caption's shipping form resolves through the
@@ -276,11 +302,19 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // Clear any stale error before the job starts.
   await db.video.update({ where: { id }, data: { error: null } });
 
+  // S115 — the idempotent enqueue: the key is deterministic per (video row
+  // state, options) — a retried request or double-click resolves to the
+  // standing job (done rows are never re-billed); ANY content change bumps
+  // updatedAt and mints a fresh key, so a re-render after an edit is never
+  // blocked. The unique index is the race floor.
+  const renderIdempotencyKey = `render:${id}:${video.updatedAt.getTime()}:${digestOf(
+    JSON.stringify(renderOpts)
+  )}`;
   const accepted = await startJob(
     id,
     "render",
     () => runRenderJob(id, renderOpts),
-    { payload: renderOpts }
+    { payload: renderOpts, idempotencyKey: renderIdempotencyKey }
   );
 
   return NextResponse.json(

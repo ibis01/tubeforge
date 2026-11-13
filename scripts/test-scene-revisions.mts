@@ -59,6 +59,7 @@ import { planSceneInvalidation, sweepInvalidArtifacts } from "../src/lib/tubefor
 import { invalidateRenderedArtifacts } from "../src/lib/tubeforge/render";
 import * as storage from "../src/lib/tubeforge/storage";
 import { videoDir } from "../src/lib/tubeforge/ai";
+import { withCtx } from "../src/lib/tubeforge/tenant";
 import { must } from "../src/lib/tubeforge/must";
 import type { Scene } from "../src/lib/tubeforge/types";
 import type { AssembledTimeline, TimelineScene } from "../src/lib/tubeforge/timeline";
@@ -101,6 +102,7 @@ function eq<T>(actual: T, expected: T, label = "value") {
 const MARK = `s112_${Date.now().toString(36)}`;
 const CLEANUP_VIDEO_IDS: string[] = [];
 const CLEANUP_ORG_IDS: string[] = [];
+const CLEANUP_USER_IDS: string[] = [];
 
 function mkScene(index: number, over: Partial<Scene> = {}): Scene {
   return {
@@ -794,11 +796,154 @@ await test("the preview artifact registers with its built-from revision (stale l
   );
 });
 
+suiteStart("S115 · repair + cost authorization + idempotency");
+
+await test("the double-bill killer: a keyed enqueue resolves to ONE job row, done included", async () => {
+  const { createPendingJob } = await import("../src/lib/tubeforge/queue.ts");
+  const org = CLEANUP_ORG_IDS[0];
+  const key = `test-dblbill:${MARK}`;
+  const first = await createPendingJob({
+    organizationId: org, userId: null, kind: "render", entityId: "dblbill-video", idempotencyKey: key,
+  });
+  ok(!first.duplicate, "the first enqueue creates");
+  const count1 = await rawDb.job.count({ where: { idempotencyKey: key } });
+  eq(count1, 1, "exactly one row after the first enqueue");
+
+  // A retry while PENDING: same row, flagged duplicate.
+  const second = await createPendingJob({
+    organizationId: org, userId: null, kind: "render", entityId: "dblbill-video", idempotencyKey: key,
+  });
+  ok(second.duplicate, "the retry is a duplicate");
+  eq(second.jobId, first.jobId, "it resolves to the SAME job id");
+
+  // THE RETRY-AFTER-DONE PATH: mark the row done, retry again — still the
+  // same row. Before S115 a done job offered no dedup at all.
+  await rawDb.job.update({ where: { id: first.jobId }, data: { status: "done", endedAt: new Date() } });
+  const third = await createPendingJob({
+    organizationId: org, userId: null, kind: "render", entityId: "dblbill-video", idempotencyKey: key,
+  });
+  ok(third.duplicate, "the retry-after-done is a duplicate");
+  eq(third.jobId, first.jobId, "still the same job — no second paid run");
+  const count2 = await rawDb.job.count({ where: { idempotencyKey: key } });
+  eq(count2, 1, "ONE row for the whole sequence — the double-bill path is dead");
+
+  await rawDb.job.delete({ where: { id: first.jobId } });
+});
+
+await test("the repair ladder: propose (no cost, no job) → approve (job + stamp) → re-approve refused", async () => {
+  const { proposeSceneRepair, approveSceneRepair, rejectSceneRepair } = await import("../src/lib/tubeforge/scene-repairs.ts");
+  const v = await makeVideo([mkScene(1), mkScene(2)], { renderMode: "kenburns" });
+  // A REAL user row — Job.userId carries an FK; the approval stamp reads it.
+  const approver = await rawDb.user.create({
+    data: { email: `s115-ladder-${MARK}@example.test`, passwordHash: "pbkdf2$1$s$h" },
+  });
+  CLEANUP_USER_IDS.push(approver.id);
+
+  // PROPOSE: estimate + affected assets stored; no job, no spend.
+  const proposed = await proposeSceneRepair({
+    video: v, sceneIndex: 2, instruction: "Make the lighting warmer, keep the composition", userId: approver.id,
+  });
+  ok(proposed.ok, "proposal created");
+  if (!proposed.ok) throw new Error("unreachable");
+  const { ESTIMATED_COST_MICRO } = await import("../src/lib/tubeforge/billing.ts");
+  eq(proposed.estimateMicroUsd, ESTIMATED_COST_MICRO.image, "the estimate is the image call");
+  ok(proposed.affectedAssets.sceneKeys.includes(`${v.id}/scene-02.png`), "the affected list names what regenerates");
+  ok(proposed.affectedAssets.videoRenders, "and the renders rebuild");
+  const jobsBefore = await rawDb.job.count({ where: { entityId: { contains: v.id } } });
+  eq(jobsBefore, 0, "PROPOSE enqueues nothing — no silent paid calls");
+
+  // APPROVE: the job is enqueued under the idempotent key; the stamp lands.
+  // (The scene job body runs the real pipeline — the fixture has no art, so
+  // the closure settles the repair failed; the ENQUEUE + KEY + STAMP are the
+  // authorization surface under test. withCtx gives startJob the tenant
+  // context the route would.)
+  const approved = await withCtx(
+    { userId: approver.id, organizationId: v.organizationId, role: "owner" },
+    () => approveSceneRepair({ video: v, repairId: proposed.repairId, userId: approver.id })
+  );
+  ok(approved.ok, "approved");
+  if (!approved.ok) throw new Error("unreachable");
+  const approvedJobId = must("approved job", approved.jobId);
+  ok(approvedJobId !== null, "a job row exists");
+  const repairRow = await rawDb.sceneRepair.findUnique({ where: { id: proposed.repairId } });
+  ok(
+    repairRow?.status === "running" || repairRow?.status === "failed",
+    "the repair is running (or settled failed by the fixture's art-less scene job — the ladder is intact either way)"
+  );
+  eq(repairRow?.approvedBy, approver.id, "the approval stamp is on the record");
+  ok(repairRow?.idempotencyKey === approved.idempotencyKey, "the job link is the idempotent key");
+
+  // RE-APPROVE: either refused (still running — 409, not a second job) or,
+  // if the fixture's job already settled failed, an honest re-queue of the
+  // SAME row — never a second job, never a second spend.
+  const sceneJobCount = async () =>
+    rawDb.job.count({ where: { entityId: `${v.id}#scene2` } });
+  const beforeReapprove = await sceneJobCount();
+  const again = await withCtx(
+    { userId: approver.id, organizationId: v.organizationId, role: "owner" },
+    () => approveSceneRepair({ video: v, repairId: proposed.repairId, userId: approver.id })
+  );
+  const afterReapprove = await sceneJobCount();
+  eq(afterReapprove, Math.max(beforeReapprove, 1), "no second job row — approving twice cannot spend twice");
+  if (!again.ok) eq(again.status, 409, "the refusal is 409");
+
+  // The enqueued job is cleaned with the fixture video's org cascade —
+  // remove it explicitly here to keep the local DB tidy for the suite.
+  await rawDb.job.delete({ where: { id: must("job", approved.jobId) } }).catch(() => {});
+
+  // REJECT arm on a fresh proposal: nothing was generated, nothing spent.
+  const p2 = await proposeSceneRepair({ video: v, sceneIndex: 1, instruction: "Remove the crowd in the background" });
+  ok(p2.ok, "second proposal");
+  if (p2.ok) {
+    const rejected = await rejectSceneRepair({ video: v, repairId: p2.repairId, userId: approver.id });
+    ok(rejected.ok, "rejected");
+    const row = await rawDb.sceneRepair.findUnique({ where: { id: p2.repairId } });
+    eq(row?.status, "rejected", "the rejection is a record, and the estimate stays");
+  }
+});
+
+await test("the per-project ceiling: the admission refuses at the line (402 shape)", async () => {
+  const costGuard = await import("../src/lib/tubeforge/cost-guard.ts");
+  const { assertWithinVideoCeiling, videoSpendMicroUsd } = costGuard;
+  type CeilingError = InstanceType<typeof costGuard.CostCeilingExceededError>;
+  const v = await makeVideo([mkScene(1)], { spendCeilingMicro: 10_000 });
+
+  // Seed the video-scoped spend: 9,000 micro via a bridged UsageRecord.
+  const org = await rawDb.organization.findUnique({ where: { id: v.organizationId } });
+  const user = await rawDb.user.create({
+    data: { email: `s115-${MARK}@example.test`, passwordHash: "pbkdf2$1$s$h" },
+  });
+  CLEANUP_USER_IDS.push(user.id);
+  await rawDb.usageRecord.create({
+    data: {
+      organizationId: must("org", org).id, userId: user.id, capability: "image", provider: "test",
+      costMicroUsd: 9_000, videoId: v.id, sceneIndex: 1,
+    },
+  });
+  eq(await videoSpendMicroUsd(v.id), 9_000, "the per-video spend sums through the bridge");
+
+  // A 500 estimate fits (9,500 ≤ 10,000).
+  await assertWithinVideoCeiling(v, 500);
+  // A 2,000 estimate breaks the line (11,000 > 10,000).
+  let refused: CeilingError | null = null;
+  try {
+    await assertWithinVideoCeiling(v, 2_000);
+  } catch (err) {
+    if (err instanceof costGuard.CostCeilingExceededError) refused = err;
+  }
+  ok(refused !== null, "the admission refuses over the ceiling");
+  eq(refused?.ceilingMicroUsd, 10_000, "the refusal carries the numbers");
+  // And a NULL ceiling (the opt-in default) never refuses.
+  const v2 = await makeVideo([mkScene(1)]);
+  await assertWithinVideoCeiling(v2, 1_000_000);
+});
+
 // --- teardown ---------------------------------------------------------------
 
 try {
   for (const id of CLEANUP_VIDEO_IDS) await rawDb.video.delete({ where: { id } }).catch(() => {});
   for (const id of CLEANUP_ORG_IDS) await rawDb.organization.delete({ where: { id } }).catch(() => {});
+  for (const id of CLEANUP_USER_IDS) await rawDb.user.delete({ where: { id } }).catch(() => {});
 } finally {
   await rawDb.$disconnect();
 }

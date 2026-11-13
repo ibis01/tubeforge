@@ -137,10 +137,23 @@ scene's head) labels it, surfaced by GET /scenes/[n]/artifacts (with the
 mp4 route's scene-preview variant streaming the file, authed +
 org-scoped). Battery now 20 (the preview pin is a REAL ffmpeg render:
 three scenes' fixtures, preview scene 2, assert scene-preview-02.mp4
-landed and every other key untouched). Stages 4–7 continue on the same
-order, riding the existing queue, storage, budget, and QC systems: no
-second timeline engine, no separate job queue, no parallel budget
-system.
+landed and every other key untouched). **Stage 4 landed as S115** —
+repair + cost authorization + job idempotency: the propose→approve→reject
+ladder (POST /scenes/[n]/repair: estimate from the admission's own cost
+table, the affected-asset list from Stage 2's map shown BEFORE approval,
+no code path generating before the approvedBy stamp — requirement D's
+"no silent paid calls" as the ladder's shape), the SceneRepair table
+(the durable form of the critic/VCE proposals), Job.idempotencyKey
+(unique; done/pending/running rows resolve retries to the standing row
+— the retry-after-done double-bill path is dead; failed rows re-queue
+honestly, conditionally per the S100 fencing law), Video.spendCeilingMicro
+(opt-in per project, enforced in the same admission window as the credit
+hold via cost-guard.ts: video-scoped spend + estimate ≤ ceiling, else
+402 with the numbers), and the render route joining both gates. Battery
+23/23 incl. the double-bill pin and the ladder. Stages 5–7 continue on
+the same order, riding the existing queue, storage, budget, and QC
+systems: no second timeline engine, no separate job queue, no parallel
+budget system.
 
 ## P0.1 spec — what the gate asserts
 
@@ -204,6 +217,7 @@ recovery.
 | P2 opening | S109 | the operator's explicit call (2026-11-13) against the fully-gated baseline at HEAD `8e76c6b` — the fresh review re-validated every gate on a clean checkout (npm ci, typecheck, lint, unit, billing, storage, rate, backup drill ~57 ms RTO, alert probe HEALTH 0, the CI-covered Docker smoke) and upgraded the assessment to "technically strong, approaching paid-beta readiness"; the entry queue above is the review's own ordering | worklog.md §S109 |
 | P2 queue item 2 | S110 | the staging kit: DEPLOYMENT §3 made executable — the provisioner (one command, fresh secrets every run, --dry-run verified), the HTTP drill harness (health/billing/pipeline suites, self-skipping when prerequisites are missing; proven live against a dev server: 2 PASS · 1 SKIP · 0 FAIL, the pipeline suite walking scenes → native scaffold → render job → final.mp4 4.29 MB through the authed route), the orchestrator (harness + k6 + the printed operator-step sequences), the runbook with the RC gate (§7). Provisioning itself awaits the operator's accounts | worklog.md §S110 |
 | Feature track Stage 0 | S111 | the read-only repository reconciliation of the operator's scene-level editing architecture (docs/design/scene-level-editing-reconciliation.md): capability map, the five requirements vs reality, three architectural surprises, two live defects found, the file-by-file Stage 1–7 plan | worklog.md §S111 |
+| Feature track Stage 4 | S115 | repair + cost authorization + idempotency: the propose→approve→reject ladder (estimate + affected assets stored before any spend; approving twice cannot spend twice), SceneRepair (the durable critic/VCE proposal form), Job.idempotencyKey (unique; done rows never re-enqueued — the double-bill killer, pinned; failed rows re-queue conditionally per the fencing law), the opt-in per-project spend ceiling enforced beside the credit hold (cost-guard.ts, 402 with the numbers), the render route gated + keyed | worklog.md §S115 |
 | Feature track Stage 3 | S114 | the scene preview lane: render {sceneIndex} → scene-preview-NN.mp4 through the same segment machinery (mutually exclusive with sceneLimit; the render job branches to its own orchestrator — no finalize, no QC, no flags), preview artifacts registered with built-from revision + the stale law (current/stale/unknown), GET /scenes/[n]/artifacts + the mp4 route's scene-preview variant; the preview pin is a real end-to-end ffmpeg render asserting nothing else moves | worklog.md §S114 |
 | Feature track Stage 2 | S113 | the dependency map + artifact provenance: scene-deps.ts (the declarative table, unit-pinned; PATCH /scenes + rollbackScene both sweep through it — the private regex copies are gone), SceneArtifact (prompt persisted, input hash, revision linkage, cost accumulated through the UsageRecord bridge), registration at the image/TTS/i2v/whiteboard sites, and the §8.3 over-invalidation fix measured by pin (one-scene art change: scenes 1+3's clips survive, scene 2's + the renders die); verified by the 18-test battery + 5 new unit pins + the full chain + build | worklog.md §S113 |
 | Feature track Stage 1 | S112 | the revision foundation: SceneRevision (append-only, unique (videoId, sceneId, version)), stable Scene.id, the union-slice snapshot, expectedSceneVersion optimistic concurrency (409 + current head), first-touch backfill, rollback-as-new-revision, approved-never-superseded, all eleven mutators converged through commitSceneChanges (source-pinned), GET /scenes/[n]/revisions + POST /scenes/[n]/rollback; verified by the new 12-test DB battery + 8 unit pins + the full check chain + production build. Two real bugs the new battery caught and fixed at the site: parseScenes dropped the minted id on read; the diff counted minted ids as content changes | worklog.md §S112 |
