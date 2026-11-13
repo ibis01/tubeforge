@@ -445,11 +445,17 @@ and the engine design docs):
    recorded.
 3. **Visual Consistency platform service** — not verified as complete.
 4. **Video Critic and Repair foundation** — not verified as complete.
-5. **Universal timeline contract and editor** — pending; the Whiteboard
-   loop proves the shared contracts first.
+5. **Universal timeline contract and editor** — the contract is CLOSED at
+   the code level (S87: slices 0–5, the §4.C acceptance battery 18/18
+   wired into CI; the recorded tail is the slice-4 soak gate, S87 §13).
+   The Whiteboard loop proved the shared contracts first, as ordered.
 6. **Audio / motion graphics / character animation / documentary / 3D
    engines, asset marketplace** — pending, sequenced after the shared
-   systems they consume.
+   systems they consume. The file-by-file implementation roadmap for the
+   2D track (the W3–W7 finishing stages, the motion-graphics engine,
+   the 2D character rig, the shared animation substrate, the style
+   router, and schema-3 mixed composition) is **S120**
+   (`docs/design/s120-2d-animation-roadmap.md`).
 
 ### The S75 order of operations (the approved sequencing, recorded as law)
 
