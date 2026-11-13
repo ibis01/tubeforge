@@ -5,8 +5,12 @@
 //   huggingface → POST {baseUrl}/models/{model}
 //   runway      → POST {baseUrl}/image_to_video
 //   luma        → POST {baseUrl}/generations
-//   magichour   → POST {baseUrl}/image-to-video (two-step: upload → generate),
-//                 poll GET {baseUrl}/video-projects/{id}
+//   magichour   → POST {baseUrl}/image-to-video (two-step: upload → generate)
+//   agnes       → POST {baseUrl}/videos (async polling via /agnesapi)
+//   nvidia      → POST {baseUrl}/v1/videos/generations
+//   kling       → POST {baseUrl}/image-to-video (async polling)
+//   hailuo      → POST {baseUrl}/v1/video_generation (async polling)
+//   ltxstudio   → POST {baseUrl}/v2/image-to-video (async polling)
 
 import { zaiClientFor } from "../zai-client";
 import { getCapability, type CapabilityConfig } from "./settings";
@@ -39,6 +43,16 @@ export async function imageToVideo(
       return lumaVideo(req, config);
     case "magichour":
       return magicHourVideo(req, config);
+    case "agnes":
+      return agnesVideo(req, config);
+    case "nvidia":
+      return nvidiaVideo(req, config);
+    case "kling":
+      return klingVideo(req, config);
+    case "hailuo":
+      return hailuoVideo(req, config);
+    case "ltxstudio":
+      return ltxStudioVideo(req, config);
     case "zai":
     default:
       return zaiVideo(req, config);
@@ -209,8 +223,8 @@ async function runwayVideo(
         model,
         promptImage: `data:image/png;base64,${req.imagePngBase64}`,
         promptText: req.prompt,
-        duration: 5,
-        ratio: "1280:768",
+        duration: req.duration || 5,
+        ratio: "1280:720",
       }),
     },
   );
@@ -303,20 +317,7 @@ async function lumaVideo(
 }
 
 // ---------- Magic Hour (free tier) ----------
-//
-// Three-step flow:
-//  1. POST /v1/files/upload-urls     → { items: [{ upload_url, file_path }] }
-//  2. PUT  {upload_url}              → upload the PNG bytes
-//  3. POST /v1/image-to-video        → { id, credits_charged }
-//  4. GET  /v1/video-projects/{id}   → poll until status is complete/error
-//
-// The status endpoint is /video-projects/{id}, NOT /image-to-video/{id}.
-// That path mismatch was the "HTTP 404" the settings test was hitting.
 
-/** Exported for the S95 pin suite (the S37 zaiVideoViaClient seam).
- *  opts.pollMs / opts.maxPolls exist so the pins can script the whole
- *  4-step flow in milliseconds; production defaults keep 5s x 60 = the
- *  5-minute poll budget the status endpoint's latency justifies. */
 export async function magicHourVideo(
   req: ImageToVideoRequest,
   config: CapabilityConfig,
@@ -331,7 +332,6 @@ export async function magicHourVideo(
   const model = config.model?.trim() || "wan-2.2";
   const endSeconds = req.duration ?? 5;
 
-  // Step 1 — request an upload URL for a PNG image.
   const uploadReq = await providerFetchJson<{
     items: { upload_url: string; file_path: string }[];
   }>("Magic Hour upload request", joinUrl(baseUrl, "files/upload-urls"), {
@@ -352,11 +352,6 @@ export async function magicHourVideo(
     );
   }
 
-  // Step 2 — PUT the raw image bytes to the presigned URL.
-  // S95 hardening: this rode RAW fetch — no AbortSignal, so a hung upload
-  // stalled the whole video job past every other timeout in the pipeline.
-  // providerFetch gives it the download-capability deadline (10 min) and
-  // the redacted error surface every other provider step already had.
   const imageBuffer = Buffer.from(req.imagePngBase64, "base64");
   await providerFetch(
     "Magic Hour image upload",
@@ -369,7 +364,6 @@ export async function magicHourVideo(
     { capability: "download" },
   );
 
-  // Step 3 — submit the image-to-video job with the uploaded file_path.
   const submitRes = await providerFetch(
     "Magic Hour Video",
     joinUrl(baseUrl, "image-to-video"),
@@ -401,7 +395,6 @@ export async function magicHourVideo(
     );
   }
 
-  // Step 4 — poll the video-project status endpoint (NOT /image-to-video/{id}).
   for (let i = 0; i < maxPolls; i++) {
     await new Promise((r) => setTimeout(r, pollMs));
     const pollRes = await providerFetch(
@@ -430,9 +423,308 @@ export async function magicHourVideo(
         `Magic Hour failed: ${task.error?.message ?? task.status}`,
       );
     }
-    // queued / rendering → keep polling
   }
   throw new Error(
-    `Magic Hour timed out after ${Math.round((maxPolls * pollMs) / 1000)}s`
+    `Magic Hour timed out after ${Math.round((maxPolls * pollMs) / 1000)}s`,
   );
+}
+
+// ---------- Agnes AI (Free Tier) ----------
+
+async function agnesVideo(
+  req: ImageToVideoRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
+  let baseUrl = config.baseUrl?.trim() || "https://apihub.agnes-ai.com/v1";
+  if (!baseUrl.endsWith("/v1")) {
+    baseUrl = baseUrl.replace(/\/$/, "") + "/v1";
+  }
+  const model = config.model?.trim() || "agnes-video-2.5-flash";
+  const key = config.apiKey?.trim();
+  if (!key) throw new Error("Agnes AI needs an API key");
+
+  const submit = () =>
+    providerFetch("Agnes Video", joinUrl(baseUrl, "videos"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model,
+        prompt: req.prompt,
+        seconds: String(req.duration || 5),
+        mode: "keyframe",
+        size: "720P",
+        aspect_ratio: "16:9",
+        first_frame: `data:image/png;base64,${req.imagePngBase64}`,
+      }),
+    });
+
+  // 503 "video_queue_full" is a transient overload — retry up to 3 times
+  // with a 15s gap before surfacing the error. Total wait ≈ 45s.
+  let response: Response | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      response = await submit();
+      break;
+    } catch (err) {
+      const isQueueFull =
+        err instanceof Error &&
+        (err.message.includes("503") || err.message.includes("queue_full"));
+      if (isQueueFull && attempt < 2) {
+        await new Promise((r) => setTimeout(r, 15_000));
+        continue;
+      }
+      throw err;
+    }
+  }
+  if (!response) throw new Error("Agnes queue remained full after 3 attempts");
+
+  const data = await response.json();
+  if (!data.video_id) {
+    throw new Error(
+      `Agnes AI failed to start generation: ${JSON.stringify(data).slice(0, 300)}`,
+    );
+  }
+
+  const pollBase = baseUrl.replace(/\/v1$/, "");
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const poll = await providerFetch(
+      "Agnes Poll",
+      `${pollBase}/agnesapi?video_id=${data.video_id}&model_name=${encodeURIComponent(model)}`,
+      { headers: { Authorization: `Bearer ${key}` } },
+    );
+    const task = await poll.json();
+
+    if (task.status === "completed") {
+      const url = task.url;
+      if (!url) throw new Error("Agnes returned no video URL");
+      const vidRes = await providerFetch("Agnes Download", url, {});
+      return Buffer.from(new Uint8Array(await vidRes.arrayBuffer()));
+    }
+    if (task.status === "failed") {
+      throw new Error(`Agnes failed: ${task.error || "unknown error"}`);
+    }
+  }
+  throw new Error("Agnes timed out");
+}
+
+// ---------- NVIDIA NIM (Wan2.2-Animate) ----------
+
+async function nvidiaVideo(
+  req: ImageToVideoRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
+  const meta = providerMetaRequired("video", "nvidia");
+  const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
+  const model = config.model?.trim() || "wan-ai/wan2.2-animate-2-14b";
+  const key = config.apiKey?.trim();
+  if (!key) throw new Error("NVIDIA NIM needs an API key (nvapi-…)");
+
+  const response = await providerFetch(
+    "NVIDIA Video",
+    joinUrl(baseUrl, "v1/videos/generations"),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model,
+        prompt: req.prompt,
+        image: `data:image/png;base64,${req.imagePngBase64}`,
+      }),
+    },
+  );
+
+  const data = await response.json();
+  if (data.data && data.data[0]?.url) {
+    const vidRes = await providerFetch("NVIDIA Download", data.data[0].url, {});
+    return Buffer.from(new Uint8Array(await vidRes.arrayBuffer()));
+  }
+  if (data.id) {
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 5000));
+      const poll = await providerFetch(
+        "NVIDIA Poll",
+        joinUrl(baseUrl, `v1/videos/generations/${data.id}`),
+        { headers: { Authorization: `Bearer ${key}` } },
+      );
+      const task = await poll.json();
+      if (task.status === "succeeded" || task.status === "completed") {
+        const url = task.data?.[0]?.url || task.url;
+        if (!url) throw new Error("NVIDIA returned no video URL");
+        const vidRes = await providerFetch("NVIDIA Download", url, {});
+        return Buffer.from(new Uint8Array(await vidRes.arrayBuffer()));
+      }
+      if (task.status === "failed") throw new Error("NVIDIA generation failed");
+    }
+  }
+  throw new Error("NVIDIA returned an unexpected response format");
+}
+
+// ---------- Kling AI ----------
+
+async function klingVideo(
+  req: ImageToVideoRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
+  const meta = providerMetaRequired("video", "kling");
+  const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
+  const model = config.model?.trim() || "kling-v1";
+  const key = config.apiKey?.trim();
+  if (!key) throw new Error("Kling AI needs an API key");
+
+  const response = await providerFetch(
+    "Kling Video",
+    joinUrl(baseUrl, "image-to-video"),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model,
+        prompt: req.prompt,
+        image: `data:image/png;base64,${req.imagePngBase64}`,
+        duration: req.duration || 5,
+      }),
+    },
+  );
+
+  const data = await response.json();
+  if (!data.task_id) throw new Error("Kling failed to start generation");
+
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const poll = await providerFetch(
+      "Kling Poll",
+      joinUrl(baseUrl, `tasks/${data.task_id}`),
+      { headers: { Authorization: `Bearer ${key}` } },
+    );
+    const task = await poll.json();
+    if (task.task_status === "succeed") {
+      const url = task.task_result?.videos?.[0]?.url;
+      if (!url) throw new Error("Kling returned no video URL");
+      const vidRes = await providerFetch("Kling Download", url, {});
+      return Buffer.from(new Uint8Array(await vidRes.arrayBuffer()));
+    }
+    if (task.task_status === "failed")
+      throw new Error("Kling generation failed");
+  }
+  throw new Error("Kling timed out");
+}
+
+// ---------- Hailuo AI (MiniMax) ----------
+
+async function hailuoVideo(
+  req: ImageToVideoRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
+  const meta = providerMetaRequired("video", "hailuo");
+  const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
+  const model = config.model?.trim() || "MiniMax-Hailuo-02";
+  const key = config.apiKey?.trim();
+  if (!key) throw new Error("Hailuo AI needs an API key");
+
+  const response = await providerFetch(
+    "Hailuo Video",
+    joinUrl(baseUrl, "v1/video_generation"),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model,
+        prompt: req.prompt,
+        first_frame_image: `data:image/png;base64,${req.imagePngBase64}`,
+        duration: req.duration || 6,
+        resolution: "1080P",
+      }),
+    },
+  );
+
+  const data = await response.json();
+  if (!data.task_id) throw new Error("Hailuo failed to start generation");
+
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const poll = await providerFetch(
+      "Hailuo Poll",
+      joinUrl(baseUrl, `v1/video_generation/${data.task_id}`),
+      { headers: { Authorization: `Bearer ${key}` } },
+    );
+    const task = await poll.json();
+    if (task.status === "Success") {
+      const url = task.file_id
+        ? joinUrl(baseUrl, `v1/files/${task.file_id}`)
+        : task.video_url;
+      if (!url) throw new Error("Hailuo returned no video URL");
+      const vidRes = await providerFetch("Hailuo Download", url, {});
+      return Buffer.from(new Uint8Array(await vidRes.arrayBuffer()));
+    }
+    if (task.status === "Fail") throw new Error("Hailuo generation failed");
+  }
+  throw new Error("Hailuo timed out");
+}
+
+// ---------- LTX Studio ----------
+
+async function ltxStudioVideo(
+  req: ImageToVideoRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
+  const meta = providerMetaRequired("video", "ltxstudio");
+  const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
+  const model = config.model?.trim() || "ltx-2-5-pro";
+  const key = config.apiKey?.trim();
+  if (!key) throw new Error("LTX Studio needs an API key");
+
+  const response = await providerFetch(
+    "LTX Video",
+    joinUrl(baseUrl, "v2/image-to-video"),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        image_uri: `data:image/png;base64,${req.imagePngBase64}`,
+        prompt: req.prompt,
+        model,
+        duration: req.duration || 8,
+        resolution: "1920x1080",
+      }),
+    },
+  );
+
+  const data = await response.json();
+  if (!data.id) throw new Error("LTX Studio failed to start generation");
+
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const poll = await providerFetch(
+      "LTX Poll",
+      joinUrl(baseUrl, `v2/image-to-video/${data.id}`),
+      { headers: { Authorization: `Bearer ${key}` } },
+    );
+    const task = await poll.json();
+    if (task.status === "completed") {
+      const url = task.result?.video_url;
+      if (!url) throw new Error("LTX returned no video URL");
+      const vidRes = await providerFetch("LTX Download", url, {});
+      return Buffer.from(new Uint8Array(await vidRes.arrayBuffer()));
+    }
+    if (task.status === "failed")
+      throw new Error(`LTX failed: ${task.error || "unknown"}`);
+  }
+  throw new Error("LTX timed out");
 }

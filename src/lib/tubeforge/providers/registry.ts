@@ -40,12 +40,6 @@ export const CHAT_PROVIDERS: ProviderMeta[] = [
     label: "OpenAI",
     defaultBaseUrl: "https://api.openai.com/v1",
     keyUrl: "https://platform.openai.com/api-keys",
-    // gpt-4.1-mini / gpt-4.1 / o4-mini removed (S95, 2026-11-12 UTC): the
-    // S34 tombstone already pulled their price rows (OpenAI's live page no
-    // longer lists them) — the registry now stops OFFERING them too, per the
-    // same law as grok-3: a model with no live price source gets no row and
-    // no registry slot; a stale configured id prices at the conservative
-    // fallback.
     models: [
       { id: "gpt-4o-mini", hint: "cheap + fast — great for scripts" },
       { id: "gpt-4o" },
@@ -57,9 +51,6 @@ export const CHAT_PROVIDERS: ProviderMeta[] = [
     label: "Anthropic (Claude)",
     defaultBaseUrl: "https://api.anthropic.com",
     keyUrl: "https://console.anthropic.com/settings/keys",
-    // claude-opus-4-1 removed (S95, 2026-11-12 UTC): Anthropic's pricing
-    // page lists it as retired on the Claude API ("Opus 4.1, Opus 4, Sonnet
-    // 4 and Haiku 3.5 are retired ... remain only on some cloud platforms").
     models: [
       { id: "claude-sonnet-4-5", hint: "recommended" },
       { id: "claude-haiku-4-5", hint: "fast + affordable" },
@@ -98,13 +89,12 @@ export const CHAT_PROVIDERS: ProviderMeta[] = [
     label: "DeepSeek",
     defaultBaseUrl: "https://api.deepseek.com/v1",
     keyUrl: "https://platform.deepseek.com/api_keys",
-    // deepseek-chat / deepseek-reasoner replaced (S95, 2026-11-12 UTC):
-    // DeepSeek's live pricing page no longer lists those ids — the current
-    // lineup is deepseek-flash and deepseek-v4-pro (peak/off-peak billing).
-    // The registry offers the ids the provider actually prices today.
     models: [
       { id: "deepseek-flash", hint: "fast general — peak $0.30/$1.20 per 1M" },
-      { id: "deepseek-v4-pro", hint: "pro reasoning — peak $1.32/$3.96 per 1M" },
+      {
+        id: "deepseek-v4-pro",
+        hint: "pro reasoning — peak $1.32/$3.96 per 1M",
+      },
     ],
   },
   {
@@ -113,9 +103,6 @@ export const CHAT_PROVIDERS: ProviderMeta[] = [
     label: "Mistral",
     defaultBaseUrl: "https://api.mistral.ai/v1",
     keyUrl: "https://console.mistral.ai/api-keys/",
-        // pixtral-large-latest removed (S95, 2026-11-12 UTC): not in Mistral's
-    // current model lineup (docs.mistral.ai generalist table). mistral-large
-    // -latest stays — the rolling alias maps to Mistral Large 4 ($0.7/$2.1).
     models: [{ id: "mistral-large-latest" }],
   },
   {
@@ -124,9 +111,6 @@ export const CHAT_PROVIDERS: ProviderMeta[] = [
     label: "xAI Grok",
     defaultBaseUrl: "https://api.x.ai/v1",
     keyUrl: "https://console.x.ai/",
-    // grok-3 removed (S95, 2026-11-12 UTC): it no longer appears on xAI's
-    // current models page — a new dispatch to it fails at the provider, so
-    // the registry stops offering it. Same law as the groq retired lineup.
     models: [{ id: "grok-4" }],
   },
   {
@@ -257,8 +241,49 @@ export const IMAGE_PROVIDERS: ProviderMeta[] = [
       { id: "turbo", hint: "faster, slightly lower quality" },
       { id: "flux-realism", hint: "photorealistic" },
     ],
-    note: "No API key, but the anonymous tier stamps a WATERMARK on every image (the old nologo=true parameter no longer applies to keyless calls) and allows 1 image / 45s / IP — a 16-scene storyboard takes ~12 min. For watermark-free free images switch to Together AI's FLUX.1-schnell-Free, or buy a pollen key here to remove it. No identity-locked edits (host scenes fall back to prompt-seeded generation).",
+    note: "No API key, but the anonymous tier stamps a WATERMARK on every image and allows 1 image / 45s / IP — a 16-scene storyboard takes ~12 min. For watermark-free free images switch to Cloudflare, Together AI, or Hugging Face. No identity-locked edits (host scenes fall back to prompt-seeded generation).",
     requiresKey: false,
+  },
+  {
+    id: "cloudflare",
+    kind: "native",
+    label: "Cloudflare Workers AI",
+    defaultBaseUrl:
+      "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID",
+    keyUrl: "https://dash.cloudflare.com/profile/api-tokens",
+    models: [
+      {
+        id: "@cf/black-forest-labs/flux-1-schnell",
+        hint: "free — ~500 images/day",
+      },
+      { id: "@cf/stabilityai/stable-diffusion-xl-base-1.0", hint: "SDXL" },
+    ],
+    note: "Replace YOUR_ACCOUNT_ID in the base URL with your Cloudflare Account ID (Workers & Pages → sidebar). Free tier: 10,000 Neurons/day ≈ 500 FLUX.1-schnell images. No credit card required.",
+  },
+  {
+    id: "huggingface",
+    kind: "native",
+    label: "Hugging Face",
+    defaultBaseUrl: "https://api-inference.huggingface.co",
+    keyUrl: "https://huggingface.co/settings/tokens",
+    models: [
+      { id: "black-forest-labs/FLUX.1-dev", hint: "high quality" },
+      { id: "black-forest-labs/FLUX.1-schnell", hint: "faster" },
+      { id: "stabilityai/stable-diffusion-xl-base-1.0", hint: "classic SDXL" },
+    ],
+    note: "Free tier: ~300 requests/hour. Requires an HF_TOKEN with read access (free to create, no credit card). Models cold-start (30-90s) and surface as a retryable rate limit.",
+  },
+  {
+    id: "nvidia",
+    kind: "native",
+    label: "NVIDIA NIM",
+    defaultBaseUrl: "https://ai.api.nvidia.com",
+    keyUrl: "https://build.nvidia.com/explore/visual",
+    models: [
+      { id: "black-forest-labs/flux.1-dev", hint: "high quality" },
+      { id: "black-forest-labs/flux.2-klein", hint: "newer, faster" },
+    ],
+    note: "Free tier: 1,000 inference credits/month. No credit card required. Key starts with nvapi-.",
   },
   {
     id: "together",
@@ -280,7 +305,7 @@ export const IMAGE_PROVIDERS: ProviderMeta[] = [
         hint: "premium — ~$0.04/image, best quality",
       },
     ],
-    note: "The better free lane: a free API key unlocks FLUX.1-schnell-Free — real FLUX quality with NO watermark (unlike Pollinations' anonymous tier) and ~10 images/min instead of 1 per 45s. Honors the per-character seed, so recurring hosts stay recognizable across scenes. Paid schnell ~$0.004/image, FLUX.1.1-pro ~$0.04/image. No identity-locked edits (host scenes fall back to prompt-seeded generation).",
+    note: "The better free lane: a free API key unlocks FLUX.1-schnell-Free — real FLUX quality with NO watermark (unlike Pollinations' anonymous tier) and ~10 images/min instead of 1 per 45s. NOTE: Together now requires a one-time $15 credit purchase before the API key is issued (they refund remaining credit if you never exceed the free tier). For a truly card-free option, use Cloudflare Workers AI, Hugging Face, or NVIDIA NIM.",
   },
   {
     id: "openai",
@@ -334,19 +359,57 @@ export const VIDEO_PROVIDERS: ProviderMeta[] = [
     note: "Ken Burns render mode needs no AI video at all.",
   },
   {
-    id: "fal",
+    id: "agnes",
     kind: "native",
-    label: "fal.ai Video (Free Credits)",
-    defaultBaseUrl: "https://fal.run",
-    keyUrl: "https://fal.ai/dashboard/keys",
+    label: "Agnes AI (Free)",
+    defaultBaseUrl: "https://apihub.agnes-ai.com",
+    keyUrl: "https://platform.agnes-ai.com",
+    models: [{ id: "agnes-video-2.5", hint: "free — 720P, async polling" }],
+    note: "Completely free video generation. No credit card required.",
+  },
+  {
+    id: "nvidia",
+    kind: "native",
+    label: "NVIDIA NIM Wan2.2",
+    defaultBaseUrl: "https://ai.api.nvidia.com",
+    keyUrl: "https://build.nvidia.com/explore/visual",
     models: [
-      { id: "fal-ai/fast-svd", hint: "Stable Video Diffusion" },
-      {
-        id: "fal-ai/minimax/video-01/image-to-video",
-        hint: "MiniMax Hailuo Video",
-      },
+      { id: "wan-ai/wan2.2-animate-2-14b", hint: "OpenAI-compatible endpoint" },
     ],
-    note: "Includes free starting credits. Fast generation.",
+    note: "Free tier: 1,000 credits/month. No credit card required.",
+  },
+  {
+    id: "kling",
+    kind: "native",
+    label: "Kling AI",
+    defaultBaseUrl: "https://api-beijing.klingai.com",
+    keyUrl: "https://app.klingai.com/dev",
+    models: [{ id: "kling-v1", hint: "image-to-video" }],
+    note: "New users get one-time free credits + daily free credits.",
+  },
+  {
+    id: "hailuo",
+    kind: "native",
+    label: "Hailuo AI (MiniMax)",
+    defaultBaseUrl: "https://api.minimax.io",
+    keyUrl: "https://platform.minimax.io",
+    models: [
+      { id: "MiniMax-Hailuo-02", hint: "1080P, 6s" },
+      { id: "MiniMax-Hailuo-2.3", hint: "newer, faster" },
+    ],
+    note: "New users get 200 free credits on signup.",
+  },
+  {
+    id: "ltxstudio",
+    kind: "native",
+    label: "LTX Studio",
+    defaultBaseUrl: "https://api.ltx.io",
+    keyUrl: "https://ltx.studio",
+    models: [
+      { id: "ltx-2-5-pro", hint: "high quality, 8s" },
+      { id: "ltx-2-5-fast", hint: "faster, lower cost" },
+    ],
+    note: "Free tier: 800 one-time credits on signup.",
   },
   {
     id: "magichour",
@@ -378,6 +441,7 @@ export const VIDEO_PROVIDERS: ProviderMeta[] = [
     defaultBaseUrl: "https://api.dev.runwayml.com/v1",
     keyUrl: "https://dev.runwayml.com/",
     models: [{ id: "gen4_turbo" }, { id: "gen3a_turbo" }],
+    note: "125 one-time free credits on signup.",
   },
   {
     id: "luma",
@@ -386,6 +450,21 @@ export const VIDEO_PROVIDERS: ProviderMeta[] = [
     defaultBaseUrl: "https://api.lumalabs.ai/dream-machine/v1",
     keyUrl: "https://lumalabs.ai/dream-machine/api/keys",
     models: [{ id: "ray-2" }, { id: "ray-flash-2" }],
+  },
+  {
+    id: "fal",
+    kind: "native",
+    label: "fal.ai Video (Free Credits)",
+    defaultBaseUrl: "https://fal.run",
+    keyUrl: "https://fal.ai/dashboard/keys",
+    models: [
+      { id: "fal-ai/fast-svd", hint: "Stable Video Diffusion" },
+      {
+        id: "fal-ai/minimax/video-01/image-to-video",
+        hint: "MiniMax Hailuo Video",
+      },
+    ],
+    note: "Includes free starting credits. Fast generation.",
   },
 ];
 
@@ -460,12 +539,22 @@ export const OPENAI_VOICES = [
 ] as const;
 
 /** S98 — does an image TEST dispatch on this provider/model cost $0?
- *  Pollinations: keyless, always the free (watermarked) lane. Together: the
- *  -Free model — and a BLANK model, which resolves to the registry default,
- *  FLUX.1-schnell-Free — is $0. Every other provider/model may bill, so the
- *  paid-test confirm stays. Shared by the settings test route (whether to
- *  demand confirmCost) and the settings UI (the hint under the Test button);
- *  one predicate so the two can never drift.
+ *
+ *  Updated for the S98 free tier expansion:
+ *   • Pollinations: keyless, always the free (watermarked) lane.
+ *   • Cloudflare Workers AI: 10,000 Neurons/day free — every test is $0
+ *     until the daily quota is hit.
+ *   • Hugging Face: ~300 req/hr free — every test is $0 until the rate
+ *     limit is hit (which surfaces as a retryable 429).
+ *   • NVIDIA NIM: 1,000 credits/month free — every test is $0 until the
+ *     credits are exhausted.
+ *   • Together AI: the `-Free` model (or a BLANK model, which resolves to
+ *     the registry default FLUX.1-schnell-Free) is $0.
+ *  Every other provider/model may bill, so the paid-test confirm stays.
+ *
+ *  Shared by the settings test route (whether to demand confirmCost) and the
+ *  settings UI (the hint under the Test button); one predicate so the two
+ *  can never drift.
  *
  *  Lives HERE, not in the image adapter: settings-view is a client component
  *  and importing from image.ts would drag zai-client.ts (the server-only
@@ -474,6 +563,9 @@ export const OPENAI_VOICES = [
  *  registry.ts is already client-safe (the view imports it for the selects). */
 export function imageTestFreeLane(provider: string, model: string): boolean {
   if (provider === "pollinations") return true;
+  if (provider === "cloudflare") return true;
+  if (provider === "huggingface") return true;
+  if (provider === "nvidia") return true;
   if (provider === "together") {
     const m = model.trim();
     return m === "" || /free/i.test(m);

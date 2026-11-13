@@ -1,28 +1,18 @@
 // Artwork adapter — thumbnails, storyboard scenes, portraits, pose sheets.
-//  /home/ibismuh/tubeforge/src/lib/tubeforge/providers/image.ts
-//   zai        → bundled Z.ai SDK (CogView, data[0].base64, supports identity edits)
-//   openai     → POST {baseUrl}/images/generations (DALL·E 3 / gpt-image-1) and
-//                multipart /images/edits for gpt-image-1 / dall-e-2
-//   stability  → POST {baseUrl}/v2beta/stable-image/generate/sd3
-//   fal        → POST {baseUrl}/fal-ai/flux/dev
-//   replicate  → POST {baseUrl}/v1/models/.../predictions
-//   ideogram   → POST {baseUrl}/generate
-//   recraft    → POST {baseUrl}/images/generations
+//
+//   zai          → bundled Z.ai SDK (CogView, data[0].base64, supports identity edits)
+//   openai       → POST {baseUrl}/images/generations (DALL·E 3 / gpt-image-1) and
+//                  multipart /images/edits for gpt-image-1 / dall-e-2
+//   stability    → POST {baseUrl}/v2beta/stable-image/generate/sd3
+//   fal          → POST {baseUrl}/fal-ai/flux/dev
+//   replicate    → POST {baseUrl}/v1/models/.../predictions
+//   ideogram     → POST {baseUrl}/generate
+//   recraft      → POST {baseUrl}/images/generations
 //   pollinations → Free URL-based generation
-//   together   → POST {baseUrl}/images/generations (FLUX.1-schnell; the
-//                -Free model is $0, ~10 img/min, NO watermark — the better
-//                free lane vs pollinations' watermarked anonymous tier)
-//
-// imageEdit() returns null when the provider/model can't edit images —
-// callers fall back to a prompt-seeded fresh generation (cast fragment), the
-// same path used when no reference portrait exists.
-//
-// z.ai occasionally returns HTTP 200 with a body that has no `data` field
-// (capacity / soft-rate-limit envelopes). The z-ai-web-dev-sdk then crashes
-// with "Cannot read properties of undefined (reading 'map')" because it does
-// `result.data.map(...)` unguarded. We catch that TypeError here and rethrow
-// as a 429-flavored message so the budget.ts retry layer treats it as a
-// rate-limit storm and backs off (instead of failing the storyboard).
+//   together     → POST {baseUrl}/images/generations (FLUX.1-schnell-Free — $0, ~10 img/min)
+//   cloudflare   → POST {baseUrl}/accounts/{accountId}/ai/run/{model}  (10,000 Neurons/day)
+//   huggingface  → POST {baseUrl}/models/{model}  (binary image, ~300 req/hr free)
+//   nvidia       → POST {baseUrl}/v1/genai/{model}  (1,000 credits/month free)
 
 import { zaiClientFor } from "../zai-client";
 import { redactText } from "../redact";
@@ -30,7 +20,6 @@ import { getCapability, type CapabilityConfig } from "./settings";
 import { providerMetaRequired } from "./registry";
 import { log } from "../log";
 
-// S57/T-57.2 — the module's logger (the old [pollinations] prefix became a binding).
 const imageLog = log.child({ mod: "image" });
 import {
   joinUrl,
@@ -50,15 +39,16 @@ function isMalformedSdkResponse(err: unknown): boolean {
  *  retryable, 429-flavored error so budget.ts backs off. Also races the
  *  call against a 150s deadline — the SDK's fetches have no timeout, and
  *  one hung call used to stall a whole storyboard. */
-async function callZaiImage<T>(label: string, fn: () => Promise<T>): Promise<T> {
+async function callZaiImage<T>(
+  label: string,
+  fn: () => Promise<T>,
+): Promise<T> {
   try {
     return await withTimeout(150_000, label, fn);
   } catch (err) {
     if (isMalformedSdkResponse(err)) {
-      // Upstream sent 200 but the body was missing `data` — almost always a
-      // capacity / soft-rate-limit envelope. Make the retry layer see "429".
       throw new Error(
-        `429 too many requests — ${label} returned a malformed response (no data field), treating as rate limit`
+        `429 too many requests — ${label} returned a malformed response (no data field), treating as rate limit`,
       );
     }
     throw err;
@@ -68,8 +58,8 @@ async function callZaiImage<T>(label: string, fn: () => Promise<T>): Promise<T> 
 export interface ImageRequest {
   prompt: string;
   size: string;
-  /** Optional generation seed. HONORED by Pollinations (URL `&seed=`) and
-   *  Together (body `seed` — reproducible FLUX generations); z.ai + the other
+  /** Optional generation seed. HONORED by Pollinations (URL `&seed=`),
+   *  Together (body `seed`), and NVIDIA (body `seed`); z.ai + the other
    *  OpenAI-compatible APIs have no seed parameter, so the field is silently
    *  ignored there. Callers pin a stable seed per character or per video+scene
    *  to keep a recurring host recognizable across scenes — the closest a
@@ -77,8 +67,9 @@ export interface ImageRequest {
   seed?: number;
   /** S49 — optional negative prompt (content-policy exclusions). Rides the
    *  providers whose APIs take one (stability, fal, replicate, ideogram,
-   *  recraft); z.ai / openai / pollinations have no such parameter and
-   *  ignore it — the SANITIZED POSITIVE prompt carries the policy there
+   *  recraft, together); z.ai / openai / pollinations / cloudflare /
+   *  huggingface / nvidia have no such parameter and ignore it — the
+   *  SANITIZED POSITIVE prompt carries the policy there
    *  (restricted-subjects.ts appends the hard negative clause to the prompt
    *  itself, so no provider is protected only by this field). */
   negativePrompt?: string;
@@ -112,8 +103,9 @@ export async function imageEditSupported(
     const model = config.model?.trim() || "dall-e-3";
     return model !== "dall-e-3";
   }
-  // All other providers (stability, fal, replicate, ideogram, recraft, pollinations,
-  // together) do not support identity-locked edits in this pipeline yet.
+  // All other providers (stability, fal, replicate, ideogram, recraft,
+  // pollinations, together, cloudflare, huggingface, nvidia) do not support
+  // identity-locked edits in this pipeline yet.
   return false;
 }
 
@@ -128,6 +120,12 @@ export async function imageGenerate(
       return pollinationsImage(req, config);
     case "together":
       return togetherImage(req, config);
+    case "cloudflare":
+      return cloudflareImage(req, config);
+    case "huggingface":
+      return huggingFaceImage(req, config);
+    case "nvidia":
+      return nvidiaImage(req, config);
     case "openai":
       return openaiImage(req, config);
     case "stability":
@@ -158,16 +156,15 @@ export async function imageEdit(
   return null; // Caller falls back to prompt-seeded generation
 }
 
-// ---------- Z.ai (SDK — unchanged legacy shape) ----------
+// ---------- Z.ai (SDK) ----------
 
 async function zaiImage(req: ImageRequest): Promise<Buffer> {
   const zai = await zaiClientFor("image");
   const response = await callZaiImage("Z.ai image", () =>
     zai.images.generations.create({
       prompt: req.prompt,
-      // App only ever passes "1344x768" (wide) or "1024x1024" (square).
       size: req.size as "1344x768" | "1024x1024",
-    })
+    }),
   );
   const base64 = response.data[0]?.base64;
   if (!base64) throw new Error("Image generation returned no data");
@@ -178,15 +175,12 @@ async function zaiImage(req: ImageRequest): Promise<Buffer> {
 
 async function zaiImageEdit(req: ImageEditRequest): Promise<Buffer> {
   const zai = await zaiClientFor("image");
-  // NOTE: the SDK's .d.ts wrongly declares `image`, but the live Z.ai edit
-  // endpoint takes `images: [{url}]` (proven by working pose generation) —
-  // the SDK posts the body verbatim, hence the cast.
   const response = await callZaiImage("Z.ai image edit", () =>
     zai.images.generations.edit({
       prompt: req.prompt,
       images: [{ url: `data:image/png;base64,${req.imagePngBase64}` }],
       size: req.size as "1344x768" | "1024x1024",
-    } as Parameters<typeof zai.images.generations.edit>[0])
+    } as Parameters<typeof zai.images.generations.edit>[0]),
   );
   const base64 = response.data[0]?.base64;
   if (!base64) throw new Error("Image edit returned no data");
@@ -307,7 +301,6 @@ async function stabilityImage(
   form.append("prompt", req.prompt);
   form.append("output_format", "png");
   form.append("aspect_ratio", aspectRatio);
-  // S49 — Stability's core + sd3 endpoints both take negative_prompt.
   if (req.negativePrompt) form.append("negative_prompt", req.negativePrompt);
 
   const endpoint = model.includes("sdxl") ? "core" : "sd3";
@@ -387,7 +380,12 @@ async function replicateImage(
 
   let url = joinUrl(baseUrl, `models/${model}/predictions`);
   const body: {
-    input: { prompt: string; aspect_ratio: string; output_format: string; negative_prompt?: string };
+    input: {
+      prompt: string;
+      aspect_ratio: string;
+      output_format: string;
+      negative_prompt?: string;
+    };
     version?: string;
   } = {
     input: {
@@ -509,27 +507,11 @@ async function recraftImage(
 }
 
 // ---------- Pollinations.ai (free, URL-based, no API key) ----------
-//
-// URL shape:  https://image.pollinations.ai/prompt/{url-encoded-prompt}?width=W&height=H&model=flux&nologo=true&seed=N
-// Returns the image bytes directly. Pollinations:
-//   * currently returns JPEG bytes regardless of the URL path (we convert to PNG below);
-//   * caps the resolution on the free tier (1024x576 requests come back as 1015x580);
-//   * occasionally returns 503 SERVICE_UNAVAILABLE during heavy load — the body says
-//     "Retry after 10s", so we rethrow with a "429" token so budget.ts triggers the
-//     shared cool-down and the storyboard loop waits it out instead of failing.
-//
-// Identity-locked edits are not supported — imageEdit() returns null above, and
-// the caller's existing fallback adds the cast appearance fragment to the prompt
-// and re-enters imageGenerate(), which lands back here.
 
-/** Map an app size (e.g. "1344x768") onto the closest Pollinations-friendly pair.
- *  Free-tier Pollinations silently downscales larger requests, so we cap the
- *  width at 1024 to avoid wasting bandwidth on a response that gets shrunk anyway. */
 function pollinationsSize(size: string): { width: number; height: number } {
   const m = size.match(/^(\d+)x(\d+)$/);
   const w = m ? Number(m[1]) : 1344;
   const h = m ? Number(m[2]) : 768;
-  // Free-tier downscale cap — request at most 1024 on the long edge.
   if (w <= 1024 && h <= 1024) return { width: w, height: h };
   if (w >= h) {
     const scale = 1024 / w;
@@ -541,30 +523,22 @@ function pollinationsSize(size: string): { width: number; height: number } {
 
 async function pollinationsImage(
   req: ImageRequest,
-  config: CapabilityConfig
+  config: CapabilityConfig,
 ): Promise<Buffer> {
   const meta = providerMetaRequired("image", "pollinations");
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const model = config.model?.trim() || "flux";
   const { width, height } = pollinationsSize(req.size);
 
-  // Seed policy: a CALLER-PROVIDED seed is honored verbatim (identity pinning —
-  // same seed + same identity fragment + different scene prompts keeps a
-  // recurring host recognizable across scenes). No seed → random per request
-  // (thumbnail A/B variety, first-take spontaneity). Pollinations honors
-  // `seed` for reproducible generations; seeds live in [0, 2^31-1].
   const seed =
     typeof req.seed === "number" && Number.isFinite(req.seed)
       ? Math.max(0, Math.min(2_147_483_647, Math.floor(req.seed)))
       : Math.floor(Math.random() * 1_000_000);
   const promptUrl = `${baseUrl}/prompt/${encodeURIComponent(req.prompt)}`;
   const url = `${promptUrl}?width=${width}&height=${height}&model=${encodeURIComponent(
-    model
+    model,
   )}&nologo=true&seed=${seed}`;
 
-  // Pollinations returns 503 with a JSON body when at capacity. providerFetch
-  // throws ProviderHttpError on non-2xx; we catch 503 and rethrow with a "429"
-  // token so budget.ts treats it as a rate-limit storm.
   let response: Response;
   try {
     response = await providerFetch("Pollinations", url, {});
@@ -573,13 +547,10 @@ async function pollinationsImage(
       err instanceof ProviderHttpError &&
       (err.status === 503 || err.status === 429 || err.status === 402)
     ) {
-      // 503 = capacity; 402 = free-tier rate limit (1 image / 45s / IP);
-      // both should trigger the shared cool-down so the storyboard waits
-      // instead of failing.
       throw new Error(
         redactText(
-          `429 too many requests — Pollinations rate-limited (HTTP ${err.status}); retry in ~20s. ${err.message.slice(0, 200)}`
-        )
+          `429 too many requests — Pollinations rate-limited (HTTP ${err.status}); retry in ~20s. ${err.message.slice(0, 200)}`,
+        ),
       );
     }
     throw err;
@@ -589,58 +560,35 @@ async function pollinationsImage(
     throw new Error(`Pollinations returned ${bytes.length} bytes — too small`);
   }
 
-  // Pollinations returns JPEG bytes. The rest of the pipeline assumes PNG
-  // (file extension .png, Content-Type: image/png, base64 image/png mime in
-  // the VLM gate). Convert via sharp so downstream consumers stay consistent.
   if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-    // JPEG magic bytes — re-encode to PNG.
     try {
       const sharp = (await import("sharp")).default;
       const png = await sharp(bytes).png().toBuffer();
       if (png.length > 1000) return png;
     } catch (err) {
-      imageLog.warn("JPEG to PNG conversion failed, serving JPEG as-is", { err });
+      imageLog.warn("JPEG to PNG conversion failed, serving JPEG as-is", {
+        err,
+      });
     }
   }
   return bytes;
 }
 
 // ---------- Together AI (FLUX.1-schnell; -Free is the $0 lane) ----------
-//
-// POST {baseUrl}/images/generations with an OpenAI-ish body. Schema verified
-// against docs.together.ai/reference/post-images-generations (2026-11-12):
-//   request  { model, prompt, width, height, steps, n, seed,
-//              negative_prompt?, response_format: "base64"|"url",
-//              output_format: "jpeg"|"png" }
-//   response { data: [{ b64_json } | { url }] }
-// The model enum offered there is exactly the three FLUX ids in the registry.
-//
-// S96 — the reason this adapter exists: Pollinations' anonymous tier stamps a
-// watermark on every image (nologo=true no longer applies to keyless calls),
-// while black-forest-labs/FLUX.1-schnell-Free is $0, un-watermarked, real
-// FLUX, and allows ~10 images/min (a 16-scene storyboard renders in ~2 min
-// instead of pollinations' ~12). The free tier rate limit surfaces as HTTP
-// 429 — rethrown with the "429" token so budget.ts triggers the shared
-// cool-down and the storyboard loop waits it out instead of failing.
-//
-// Seed policy mirrors Pollinations: a CALLER-PROVIDED seed rides the body
-// verbatim (clamped to [0, 2^31-1]) for identity pinning — same seed + same
-// cast fragment + different scene prompts keeps a recurring host
-// recognizable across scenes. No seed → the provider picks one.
 
-export async function togetherImage(
+async function togetherImage(
   req: ImageRequest,
   config: CapabilityConfig,
 ): Promise<Buffer> {
   const meta = providerMetaRequired("image", "together");
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const model =
-    config.model?.trim() || meta.models[0]?.id || "black-forest-labs/FLUX.1-schnell-Free";
+    config.model?.trim() ||
+    meta.models[0]?.id ||
+    "black-forest-labs/FLUX.1-schnell-Free";
   const key = config.apiKey?.trim();
   if (!key) throw new Error("Together AI needs an API key");
 
-  // App sizes are already FLUX-friendly (multiples of 16, ≤2MP) — pass
-  // straight through: 1344x768 (wide), 1024x1024 (square), 1024x1792 (tall).
   const m = req.size.match(/^(\d+)x(\d+)$/);
   const width = m ? Number(m[1]) : 1344;
   const height = m ? Number(m[2]) : 768;
@@ -652,13 +600,8 @@ export async function togetherImage(
     height,
     n: 1,
     response_format: "base64",
-    // Native PNG — the pipeline assumes PNG end to end, so we never need the
-    // sharp JPEG re-encode the pollinations lane sometimes runs.
     output_format: "png",
   };
-  // schnell is a 4-step distilled model (the API default of 20 steps is for
-  // the dev/pro families and just burns latency there); non-schnell models
-  // take the provider's own default.
   if (/schnell/i.test(model)) body.steps = 4;
   if (typeof req.seed === "number" && Number.isFinite(req.seed)) {
     body.seed = Math.max(0, Math.min(2_147_483_647, Math.floor(req.seed)));
@@ -667,30 +610,25 @@ export async function togetherImage(
 
   let data: { data?: { b64_json?: string; url?: string }[] };
   try {
-    data = await providerFetchJson<{ data?: { b64_json?: string; url?: string }[] }>(
-      "Together AI",
-      joinUrl(baseUrl, "images/generations"),
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${key}`,
-        },
-        body: JSON.stringify(body),
+    data = await providerFetchJson<{
+      data?: { b64_json?: string; url?: string }[];
+    }>("Together AI", joinUrl(baseUrl, "images/generations"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
       },
-    );
+      body: JSON.stringify(body),
+    });
   } catch (err) {
     if (
       err instanceof ProviderHttpError &&
       (err.status === 429 || err.status === 402)
     ) {
-      // 429 = the ~10 img/min free-tier window; 402 = out of credits on a
-      // paid model. Both should trigger the shared cool-down so the
-      // storyboard waits instead of failing.
       throw new Error(
         redactText(
-          `429 too many requests — Together AI rate-limited (HTTP ${err.status}); the FLUX.1-schnell-Free tier allows ~10 images/min. ${err.message.slice(0, 200)}`
-        )
+          `429 too many requests — Together AI rate-limited (HTTP ${err.status}); the FLUX.1-schnell-Free tier allows ~10 images/min. ${err.message.slice(0, 200)}`,
+        ),
       );
     }
     throw err;
@@ -703,4 +641,247 @@ export async function togetherImage(
     return Buffer.from(new Uint8Array(await response.arrayBuffer()));
   }
   throw new Error("Together AI returned no image data");
+}
+
+// ---------- Cloudflare Workers AI ----------
+//
+// Endpoint:  POST {baseUrl}/accounts/{accountId}/ai/run/{model}
+//            where baseUrl = https://api.cloudflare.com/client/v4
+//                  accountId is parsed from the user's saved base URL
+//                  model = e.g. "@cf/black-forest-labs/flux-1-schnell"
+// Auth:      Authorization: Bearer {API_TOKEN}
+// Response:  binary PNG (newer deployments) OR JSON { result: { image: "base64…" } }
+//
+// The user MUST include their account ID in the base URL — there's no way to
+// derive it from the API token alone. The registry's defaultBaseUrl shows the
+// placeholder YOUR_ACCOUNT_ID so the Settings UI hints at what to swap.
+//
+// Free tier: 10,000 Neurons/day ≈ 500 FLUX.1-schnell images/day at 1024×1024.
+//
+// NSFW false-positive retry: Cloudflare's FLUX NSFW filter is overaggressive
+// (GitHub issues open since Oct 2024) — even prompts like "a solid teal
+// circle" get flagged with error code 8007 ("Input prompt contains NSFW
+// content"). The community reports that the SAME prompt usually succeeds on
+// a second attempt seconds later, so this adapter retries once on that exact
+// error signature before giving up.
+
+async function cloudflareImage(
+  req: ImageRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
+  const meta = providerMetaRequired("image", "cloudflare");
+  const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
+  const model = config.model?.trim() || "@cf/black-forest-labs/flux-1-schnell";
+  const key = config.apiKey?.trim();
+  if (!key) throw new Error("Cloudflare Workers AI needs an API token");
+
+  // Parse the account ID out of the base URL.
+  // Accepted: https://api.cloudflare.com/client/v4/accounts/{accountId}
+  const accountId = baseUrl.match(/accounts\/([^/]+)/)?.[1];
+  if (!accountId) {
+    throw new Error(
+      "Cloudflare Workers AI needs your Account ID in the base URL — use https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID",
+    );
+  }
+  // Strip the /accounts/{id} suffix so joinUrl() doesn't double it.
+  const rootUrl = baseUrl.replace(/\/accounts\/[^/]+.*$/, "");
+
+  // FLUX.1-schnell accepts `steps` (integer, 1-8); 4 is the documented sweet
+  // spot for the distilled model. (The SDXL model on Cloudflare uses
+  // `num_steps` instead — that's why the two are easy to confuse. FLUX
+  // rejects `num_steps` with "Additional or unevaluated properties not
+  // allowed".)
+  const callOnce = () =>
+    providerFetch(
+      "Cloudflare Workers AI",
+      joinUrl(rootUrl, `accounts/${accountId}/ai/run/${model}`),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({
+          prompt: req.prompt,
+          steps: 4,
+        }),
+      },
+    );
+
+  let response: Response;
+  try {
+    response = await callOnce();
+  } catch (err) {
+    // Cloudflare's FLUX NSFW filter has known false positives on benign
+    // prompts — error code 8007 / "Input prompt contains NSFW content".
+    // Retry once after a short delay; the same prompt often succeeds on
+    // the second attempt (see cloudflare/workerd issues #2900, #3306).
+    const isNsfwFalsePositive =
+      err instanceof ProviderHttpError && /nsfw/i.test(err.message);
+    if (isNsfwFalsePositive) {
+      await new Promise((r) => setTimeout(r, 3000));
+      response = await callOnce();
+    } else {
+      throw err;
+    }
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+
+  // Newer Cloudflare deployments return raw image bytes for image models.
+  if (contentType.startsWith("image/")) {
+    const buffer = Buffer.from(new Uint8Array(await response.arrayBuffer()));
+    if (buffer.length < 1000) {
+      throw new Error("Cloudflare Workers AI returned an empty image");
+    }
+    return buffer;
+  }
+
+  // Older / JSON envelope: { result: { image: "<base64 or data: URI>" }, success }
+  const data = (await response.json()) as {
+    result?: { image?: string };
+    success?: boolean;
+    errors?: { message?: string }[];
+  };
+  const image = data.result?.image;
+  if (!image) {
+    const detail =
+      data.errors
+        ?.map((e) => e.message)
+        .filter(Boolean)
+        .join(" · ") || "no result.image field";
+    throw new Error(`Cloudflare Workers AI returned no image — ${detail}`);
+  }
+  const b64 = image.replace(/^data:image\/[a-z]+;base64,/, "");
+  return decodeB64("Cloudflare Workers AI", b64, "image");
+}
+
+// ---------- Hugging Face Inference API ----------
+//
+// Endpoint:  POST {baseUrl}/models/{model}
+//            where baseUrl = https://api-inference.huggingface.co
+//                  model   = e.g. "black-forest-labs/FLUX.1-dev"
+// Auth:      Authorization: Bearer {HF_TOKEN}
+// Body:      { inputs: "<prompt>" }
+// Response:  binary image bytes on success, JSON { error: "…" } on failure
+//
+// Free tier: ~300 requests/hour. Model cold-start returns 503 for 30-90s;
+// we surface that as a "429 too many requests" so budget.ts triggers the
+// shared cool-down and retries instead of failing the storyboard.
+
+async function huggingFaceImage(
+  req: ImageRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
+  const meta = providerMetaRequired("image", "huggingface");
+  const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
+  const model = config.model?.trim() || "black-forest-labs/FLUX.1-dev";
+  const key = config.apiKey?.trim();
+  if (!key) throw new Error("Hugging Face needs an API token");
+
+  let response: Response;
+  try {
+    response = await providerFetch(
+      "Hugging Face image",
+      joinUrl(baseUrl, `models/${model}`),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({ inputs: req.prompt }),
+      },
+    );
+  } catch (err) {
+    if (err instanceof ProviderHttpError && err.status === 503) {
+      throw new Error(
+        redactText(
+          `429 too many requests — Hugging Face model is cold-starting (HTTP 503); retry in ~30s.`,
+        ),
+      );
+    }
+    throw err;
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.startsWith("image/")) {
+    const text = await response.text().catch(() => "");
+    if (/loading|queue/i.test(text)) {
+      throw new Error(
+        redactText(
+          `429 too many requests — Hugging Face model is still loading; retry in ~30s. ${text.slice(0, 200)}`,
+        ),
+      );
+    }
+    throw new Error(
+      `Hugging Face returned a non-image response (${contentType || "no content-type"}): ${text.slice(0, 200)}`,
+    );
+  }
+
+  const buffer = Buffer.from(new Uint8Array(await response.arrayBuffer()));
+  if (buffer.length < 1000) {
+    throw new Error("Hugging Face returned an empty image");
+  }
+  return buffer;
+}
+
+// ---------- NVIDIA NIM ----------
+//
+// Endpoint:  POST {baseUrl}/v1/genai/{model}
+//            where baseUrl = https://ai.api.nvidia.com
+//                  model   = e.g. "black-forest-labs/flux.1-dev"
+// Auth:      Authorization: Bearer {nvapi-…}
+// Body:      { prompt, mode: "base", cfg_scale, width, height, seed, steps }
+// Response:  { image: "base64" } OR { artifacts: [{ base64: "…" }] }
+//
+// Free tier: 1,000 requests/month, no credit card required.
+
+async function nvidiaImage(
+  req: ImageRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
+  const meta = providerMetaRequired("image", "nvidia");
+  const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
+  const model = config.model?.trim() || "black-forest-labs/flux.1-dev";
+  const key = config.apiKey?.trim();
+  if (!key) throw new Error("NVIDIA NIM needs an API key (nvapi-…)");
+
+  const width = req.size === "1024x1792" ? 1024 : 1344;
+  const height =
+    req.size === "1024x1792" ? 1792 : req.size === "1024x1024" ? 1024 : 768;
+
+  const response = await providerFetch(
+    "NVIDIA NIM",
+    joinUrl(baseUrl, `v1/genai/${model}`),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        prompt: req.prompt,
+        mode: "base",
+        cfg_scale: 7,
+        width,
+        height,
+        seed:
+          typeof req.seed === "number" && Number.isFinite(req.seed)
+            ? Math.max(0, Math.min(2_147_483_647, Math.floor(req.seed)))
+            : 0,
+        steps: 30,
+      }),
+    },
+  );
+
+  const data = (await response.json()) as {
+    image?: string;
+    artifacts?: { base64?: string }[];
+  };
+  const b64 = data.image ?? data.artifacts?.[0]?.base64;
+  if (!b64) throw new Error("NVIDIA NIM returned no image");
+  const cleaned = b64.replace(/^data:image\/[a-z]+;base64,/, "");
+  return decodeB64("NVIDIA NIM", cleaned, "image");
 }

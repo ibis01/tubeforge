@@ -59,7 +59,6 @@ export async function GET(req: NextRequest) {
     caps[cap] = publicCapability(await getCapability(cap));
   }
 
-  // READ FROM DATABASE (readLegacyZai), NOT THE FILE SYSTEM (readZaiCredentials)
   const legacy = await readLegacyZai();
 
   return NextResponse.json({
@@ -151,8 +150,6 @@ export async function PUT(req: NextRequest) {
     // Empty key = keep the saved one (masked field stays blank in the UI).
     if (body.apiKey !== undefined) patch.apiKey = String(body.apiKey).trim();
 
-    // "Use the same account as Script writing" — adopt the chat provider's
-    // saved credentials (provider + endpoint + key) for this capability.
     if (body.copyCredsFrom) {
       const source = await getCapability(
         String(body.copyCredsFrom) as CapabilityId,
@@ -207,8 +204,6 @@ export async function POST(req: NextRequest) {
 
   const started = Date.now();
   try {
-    // Z.ai with an UNSAVED key needs the throwaway-client flow (the shared
-    // SDK only reads the saved config).
     if (
       (provider === "zai" ||
         (!provider &&
@@ -291,10 +286,6 @@ export async function POST(req: NextRequest) {
       }
       case "image":
       case "imageEdit": {
-        // S98 — the free lanes skip the paid-test confirm: pollinations
-        // (keyless) and together's -Free model (blank model resolves to the
-        // registry default, which IS the Free one). The predicate lives in
-        // the adapter module so the UI hint and this gate can never drift.
         const imageTestModel = String(body.model ?? "").trim();
         if (!imageTestFreeLane(provider, imageTestModel) && !body.confirmCost) {
           return NextResponse.json({
@@ -331,8 +322,10 @@ export async function POST(req: NextRequest) {
         }
         const buffer = await imageGenerate(
           {
+            // Cloudflare's NSFW filter false-positives on "solid teal circle".
+            // A detailed landscape prompt passes the filter reliably.
             prompt:
-              "A solid teal circle centered on a white background, minimal.",
+              "A serene mountain landscape at sunrise, with soft golden light illuminating the peaks, a calm lake in the foreground reflecting the sky, and a clear blue atmosphere.",
             size: "1344x768",
           },
           overrides,
@@ -345,7 +338,64 @@ export async function POST(req: NextRequest) {
         });
       }
       case "video": {
-        const isFree = provider === "zai" || provider === "huggingface";
+        // Magic Hour's video generation needs a real image (its processor
+        // rejects 1x1 placeholder PNGs). The Settings Test button is an
+        // auth-probe instead: hit /video-projects to verify the key is
+        // valid, without burning a credit.
+        if (provider === "magichour") {
+          const baseUrl =
+            overrides.baseUrl?.trim() || "https://api.magichour.ai/v1";
+          const cfg = await getCapability("video", overrides);
+          const key = apiKeyOverride || cfg.apiKey || "";
+          if (!key) {
+            return NextResponse.json(
+              {
+                ok: false,
+                capability: "video",
+                error:
+                  "Magic Hour needs an API key (get one at magichour.ai/developer)",
+              },
+              { status: 200 },
+            );
+          }
+          try {
+            const res = await fetch(`${baseUrl}/video-projects?limit=1`, {
+              headers: { Authorization: `Bearer ${key}` },
+            });
+            if (!res.ok) {
+              const text = await res.text().catch(() => "");
+              return NextResponse.json(
+                {
+                  ok: false,
+                  capability: "video",
+                  error: `Magic Hour auth failed (HTTP ${res.status}): ${text.slice(0, 200)}`,
+                },
+                { status: 200 },
+              );
+            }
+            const data = (await res.json()) as { projects?: unknown[] };
+            return NextResponse.json({
+              ok: true,
+              capability: "video",
+              reply: `Magic Hour key is valid · ${data.projects?.length ?? 0} recent project(s) found`,
+              latencyMs: Date.now() - started,
+            });
+          } catch (err) {
+            return NextResponse.json(
+              {
+                ok: false,
+                capability: "video",
+                error: `Magic Hour unreachable: ${err instanceof Error ? err.message : String(err)}`,
+              },
+              { status: 200 },
+            );
+          }
+        }
+
+        // Other video providers generate a real clip. The free tier
+        // providers (zai, huggingface, agnes, nvidia) skip the confirm.
+        const freeVideoProviders = ["zai", "huggingface", "agnes", "nvidia"];
+        const isFree = freeVideoProviders.includes(provider);
         if (!isFree && !body.confirmCost) {
           return NextResponse.json({
             ok: false,
