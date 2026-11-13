@@ -9,18 +9,19 @@ standard + the content-policy visual scan under a restricted policy), and
 publishes to a connected YouTube channel — all inside a multi-user web
 application with metered AI spending and Stripe billing underneath.
 
-**Status:** S-series stage S75 (2026-11-10) — the production loop is
-feature-complete and the foundation proofs are in: cross-tenant
-isolation, a durable DB-backed queue, DB-backed login lockout (S46),
-shared multi-instance spend admission (S47), and a hardened 6-job CI
-lane whose receipts land by SHA. On top of the studio, the **Whiteboard
-Engine** (the native, $0-per-render creative mode — E0–E9 landed) and
-the **Creator Intelligence Engine** (hook scoring, packaging lint,
-transcript-based Shorts selection, retention ingestion — CI-1..CI-4
-landed) are in the tree. The remaining distance to a paid launch is
-operational, tracked in the S47 “Production Integrity and Acceptance”
-ledger in [`TASKS.md`](TASKS.md) and the Whiteboard readiness ledger in
-[`docs/audits/s75-architecture-reconciliation-record.md`](docs/audits/s75-architecture-reconciliation-record.md).
+**Status:** S-series stage S109 (2026-11-13). The production loop is
+feature-complete, and the production-readiness arc (S99–S108) closed every
+reliability gate with CI evidence — clean-clone bootstrap, queue leases +
+fencing, atomic storage admission, shared rate limiting + trusted-proxy IP law,
+nonce CSP, the Docker production-topology smoke (in-container whiteboard render
+included), measured restore drills, and zero avoidable warnings. **P2 opened on
+the operator's call (2026-11-13)**: the entry queue is staging provisioning →
+launch drills → release candidate (see
+[`docs/production-readiness.md`](docs/production-readiness.md)). On top of the
+studio, the **Whiteboard Engine** (the native, $0-per-render creative mode —
+E0–E9 landed) and the **Creator Intelligence Engine** (hook scoring, packaging
+lint, transcript-based Shorts selection, retention ingestion — CI-1..CI-4
+landed) are in the tree.
 
 ## What's inside
 
@@ -83,12 +84,14 @@ voice-server setup — see [`SETUP.md`](SETUP.md).
 | `npm run test:queue` | the queue contract + worker-restart recovery: interrupted jobs resume, unknown kinds never pollute video rows |
 | `npm run backup` | SQLite backup + restore roundtrip against the live DB |
 
-CI (`.github/workflows/ci.yml`): every push and PR runs six jobs — secret
-scan (gitleaks), typecheck·lint·unit, production build, money-path coverage,
-PostgreSQL integration (migrations + wedge recovery), and the full Playwright
-e2e suite. The ffmpeg-install step carries the boot-time dpkg-lock wait +
-retry pattern (landed after five documented runner stalls — see the
-worklog's CI-flake receipts).
+CI (`.github/workflows/ci.yml`): every push and PR runs eight jobs — secret
+scan (gitleaks), typecheck·lint·unit (with the queue, billing, storage,
+rate-limiter, restore-drill, and alert batteries), production build,
+money-path coverage, PostgreSQL integration (migrations + wedge recovery),
+clean-clone bootstrap (P0.1), the Docker production-topology smoke (P0.6),
+and the full Playwright e2e suite. The ffmpeg-install step carries the
+boot-time dpkg-lock wait + retry pattern (landed after five documented
+runner stalls — see the worklog's CI-flake receipts).
 
 ## Repository tour
 

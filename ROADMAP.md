@@ -508,7 +508,11 @@ drill + alert probe, P1.2 zero warnings + the storage decomposition.
 The governing record is `docs/production-readiness.md`. Feature
 expansion (new engines beyond the table) stays FROZEN at its decision
 point — the freeze lifts only on the operator's explicit call, and
-nothing unfreezes autonomously.
+nothing unfreezes autonomously. **The call was made on 2026-11-13
+(S109): P2 is OPEN**, against the fully-gated baseline; the entry
+queue — security-doc reconciliation, staging provisioning, the launch
+drills, the release-candidate tag — is recorded in
+`docs/production-readiness.md`.
 
 Standing risks tracked in the worklog: Z.ai gateway outage (S63
 remeasurement and the LLM whiteboard planner gated on the one-probe

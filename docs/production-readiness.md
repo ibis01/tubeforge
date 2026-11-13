@@ -48,7 +48,34 @@ not features that attract them.
 | P0.6  | Docker production smoke                    | The full production topology renders successfully end-to-end (see the target topology below)                                                                  | **S105** — `docker-smoke.sh` walks postgres + the S3 store + web + worker: HTTP register→create, ffmpeg render, S3 round-trip, cross-process job, worker-restart recovery (CI job on main pushes); **S108** — the walk now also renders a REAL whiteboard project IN-CONTAINER through the worker's chromium (DEPLOYMENT §5.1's recorded tail: launch args, frames, encode, artifact, ffprobe'd duration) |
 | P1.1  | Monitoring + restore drills                | Measured recovery time and actionable alerts                                                                                                                  | **S103** — measured restore drill (CI, RTO printed) + `alert:probe` (8 actionable checks) + runbook §4.1 |
 | P1.2  | Module decomposition                       | Reduced complexity and zero avoidable warnings                                                                                                                 | **S106** — 20 warnings fixed at the site (eslint 0/0); storage.ts (768 lines) split into facade + `storage-s3.ts` + `storage-quota.ts` with re-exports |
-| P2    | Feature expansion                          | Remains frozen until the gates above close                                                                                                                     | **GATES CLOSED (S106)** — the freeze lifts on the operator's explicit call; until then P0 discipline stays in force |
+| P2    | Feature expansion                          | Remains frozen until the gates above close                                                                                                                     | **OPENED (S109, 2026-11-13)** — the operator's explicit call, against the fully-gated baseline; the entry queue is recorded below |
+
+## P2 entry queue (adopted 2026-11-13, from the operator's review at HEAD `8e76c6b`)
+
+The freeze is lifted. The review's verdict sets the order — "the next best
+step is not another feature" — so P2 opens with operations, not engines:
+
+1. **Security-doc drift closed** — S109 (this record): SECURITY.md reconciled to
+   the live source (the stale 2025-10-28 posture, the wrong backup.sh-absent note,
+   the pre-account checklist), README re-dated (S109, the real eight-job CI lane),
+   ROADMAP's arc note records the lift.
+2. **Staging provisioned** per DEPLOYMENT §3 — `tubeforge-staging` on Fly (same
+   image), a Neon branch, a separate R2 bucket, Stripe TEST-mode keys + webhook,
+   console email, fresh secrets. Requires operator accounts; the provisioning kit
+   and drill scripts land as the next stages so provisioning is one command once
+   the accounts exist.
+3. **Launch drills ON staging** — the Stripe checkout → webhook → portal
+   lifecycle, the YouTube test-channel publish smoke, backup restore, the k6 load
+   run (`scripts/load-test.js`), and worker recovery under load.
+4. **Release-candidate tag** — tag `vX.Y.Z-rc1` at the post-drill HEAD; cut the
+   GitHub Release from the worklog entry.
+
+Standing cleanups that ride alongside: the rate limiter's fail-open posture is
+monitored aggressively (the alert probe; a `RateLimitCounter write failed`
+announcement is an incident, not a log line); `frame-ancestors` moves to an
+allowlist the moment the preview architecture is proven compatible; the largest
+UI/rendering files are split BEFORE new engines arrive (the S106 decomposition
+pattern); PR #10 (TypeScript 7) stays parked on typescript-eslint's peer ceiling.
 
 ## P0.1 spec — what the gate asserts
 
@@ -109,3 +136,4 @@ recovery.
 | P1.1  | S103   | the restore drill is MEASURED (RTO printed per run) and the alert probe prints actionable ALERT lines (8 checks) | worklog.md §S103 |
 | P1.2  | S106   | 20 lint warnings → 0 (fixed at site, none suppressed); storage.ts decomposed into storage-s3.ts + storage-quota.ts + facade; S101 source pins caught a reversion of the admission law mid-refactor | worklog.md §S106 |
 | P0.6 (extension) | S108 | the topology smoke closes DEPLOYMENT §5.1's last unverified tail — a real whiteboard render IN-CONTAINER rides the walk on every main push; FIRST run green (CI run 43339795242 at `0afbabb`, all 8 jobs): worker chromium launch → 96 frames → encode in ~11s, final.mp4 155,656 bytes through the s3 driver, ffprobe exactly 4s, the video row updated | worklog.md §S108 |
+| P2 opening | S109 | the operator's explicit call (2026-11-13) against the fully-gated baseline at HEAD `8e76c6b` — the fresh review re-validated every gate on a clean checkout (npm ci, typecheck, lint, unit, billing, storage, rate, backup drill ~57 ms RTO, alert probe HEALTH 0, the CI-covered Docker smoke) and upgraded the assessment to "technically strong, approaching paid-beta readiness"; the entry queue above is the review's own ordering | worklog.md §S109 |

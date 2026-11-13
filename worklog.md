@@ -5687,3 +5687,68 @@ ffprobe read exactly 4s (the explicit 4000ms window), and the video row
 recorded hasVideo + 4.0s — DEPLOYMENT §5.1's "do not call the container
 ready until that smoke passes" is answered: the container is ready, and
 the gate re-proves it on every push to main.
+
+## S109 — P2 opened on the operator's call + the review's documentation drift closed (2026-11-13)
+
+**THE CALL.** The governing decision (S99) froze major feature
+development until the production-readiness gates closed, and S107
+recorded that the freeze "lifts only on the operator's explicit call —
+this record does not unfreeze anything by itself." That call arrived
+2026-11-13, delivered with a fresh production-readiness review of HEAD
+`8e76c6b` that re-validated every gate on a clean checkout (npm ci,
+typecheck, lint, the unit/regression suite, billing, storage
+reservations, the shared rate limiter, the backup drill at ~57 ms RTO,
+alert probe HEALTH 0, and the CI-covered Docker/Chromium whiteboard
+smoke) and upgraded the standing assessment to "technically strong,
+approaching paid-beta readiness". The freeze is LIFTED; this stage
+records it, exactly as the S107 contract requires — recorded as such,
+nothing unfrozen before the call, nothing beyond it.
+
+**THE REVIEW'S QUEUE IS THE P2 ENTRY QUEUE**
+(docs/production-readiness.md, "P2 entry queue"). The review's own
+verdict: "the next best step is not another feature" — P2 opens with
+operations, not engines: (1) the stale security documentation (this
+stage), (2) the real staging environment per DEPLOYMENT §3 (Fly app +
+Neon branch + R2 bucket + Stripe test mode + fresh secrets — "provisioned
+when accounts exist"; the provisioning kit + drill scripts land as the
+next stages so it is one command once accounts exist), (3) the launch
+drills ON staging (Stripe checkout→webhook→portal lifecycle, YouTube
+test-channel publish, backup restore, the k6 load run, worker recovery
+under load), (4) the release-candidate tag cut from the worklog entry.
+Standing cleanups adopted alongside, from the review's own findings: the
+rate limiter's fail-open posture is monitored aggressively (the alert
+probe; a `RateLimitCounter write failed` announcement is an incident,
+not a log line); `frame-ancestors`/`X-Frame-Options` stay omitted for
+cross-origin sandbox-iframe previews until an allowlist is proven
+compatible with that architecture; the largest UI/rendering files are
+split BEFORE new engines arrive (the S106 pattern); PR #10 stays parked
+on typescript-eslint's peer ceiling (<6.1.0).
+
+**THE DOC DRIFT, CLOSED.** SECURITY.md predated the entire arc: "Last
+updated 2025-10-28"; a Backups note claiming `scripts/backup.sh` "is
+currently absent from the shipped tree" (restored in Stage 1, task
+T-1.1 — the file's own header records it); a "What this pass locked
+down" table and a daily-use checklist still describing the single-user
+opt-in lock (`bun run auth:reset` purging a lock that no longer exists —
+the Stage-2 CLI resets ONE USER's password by email). Rewritten: a
+current-posture table (accounts/tenancy, DB-backed lockout, shared
+DB-backed rate limiting + the trusted-proxy walk, nonce CSP + the SVG
+gate, queue fencing, atomic storage admission, encrypted provider keys,
+SSRF guards, CSRF origin check, backups with the MEASURED restore RTO,
+the per-push topology smoke), the two DELIBERATE exceptions stated as
+policy with their rationale (the limiter fails OPEN and loud — a damper,
+not a security control; frame-ancestors absent for preview embeds,
+pinned by the CSP suite), the 2025-10-28 pass re-labeled HISTORICAL and
+kept verbatim as the audit trail, the checklist moved to the account
+model, and the backups section telling the whole current story
+(backup.sh both dialects + backup-postgres.sh + the CI-riding restore
+drill). README's status block still said "S75 (2026-11-10)" and counted
+a "six-job" CI lane — re-dated to S109 with the real EIGHT jobs
+(clean-clone and docker-smoke had landed uncounted). ROADMAP's arc note
+records the lift. The roadmap's P2 row reads OPENED (S109) and the
+evidence ledger gained the P2-opening row.
+
+Docs-only stage — no source file touched, no behavior changed. Verified
+at HEAD: typecheck, lint (0 problems), the unit/regression suite, the
+billing suite, production build.
+
