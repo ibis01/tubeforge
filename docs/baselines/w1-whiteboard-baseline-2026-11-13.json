@@ -1,0 +1,780 @@
+{
+  "stage": "W1",
+  "what": "whiteboard perceptual baseline — five fixed scene types × three aspects",
+  "definition": {
+    "module": "src/lib/tubeforge/whiteboard/benchmark-scenarios.ts",
+    "projectHashes": {
+      "16:9": "488237559e75adaa407fc7c42921f0b5ec91798f81f74e7c81c44b2cfacf7efa",
+      "9:16": "674ea3db98d437e6ac7dd750072f50103d3a95f2de4b7801f0d2a474b1155df8",
+      "1:1": "c745ea6042419d100978bb116f6470434753ea311788b38ae12e9a6f6af3e871"
+    },
+    "fps": 24,
+    "totalDurationMs": 38000,
+    "sceneIds": [
+      "w1-title",
+      "w1-process",
+      "w1-comparison",
+      "w1-phrase",
+      "w1-conclusion"
+    ],
+    "spans": [
+      {
+        "id": "w1-title",
+        "kind": "title",
+        "startMs": 0,
+        "durationMs": 7500,
+        "endMs": 7500
+      },
+      {
+        "id": "w1-process",
+        "kind": "process diagram",
+        "startMs": 7500,
+        "durationMs": 8500,
+        "endMs": 16000
+      },
+      {
+        "id": "w1-comparison",
+        "kind": "comparison",
+        "startMs": 16000,
+        "durationMs": 8000,
+        "endMs": 24000
+      },
+      {
+        "id": "w1-phrase",
+        "kind": "handwritten key phrase",
+        "startMs": 24000,
+        "durationMs": 7000,
+        "endMs": 31000
+      },
+      {
+        "id": "w1-conclusion",
+        "kind": "conclusion",
+        "startMs": 31000,
+        "durationMs": 7000,
+        "endMs": 38000
+      }
+    ],
+    "narrations": {
+      "w1-title": "Your heart beats about one hundred thousand times every single day. Today, we draw how it keeps you alive.",
+      "w1-process": "Here is the loop. The right side pumps blood to the lungs to pick up oxygen. The left side then fires it out to the whole body.",
+      "w1-comparison": "An athlete's resting heart beats about forty times a minute. The average heart sits near seventy. Training makes every beat count.",
+      "w1-phrase": "If you remember one number, make it this one: sixty to one hundred beats every minute.",
+      "w1-conclusion": "Now you can draw the heart yourself. Sketch it, label it, and share the story."
+    }
+  },
+  "recordedAt": "2026-11-13T19:05:37.955Z",
+  "environment": {
+    "node": "v24.22.2",
+    "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+    "playwright": "Version 1.65.0",
+    "chromium": "chromium-1200, chromium-1254, chromium_headless_shell-1200, chromium_headless_shell-1254"
+  },
+  "aspects": {
+    "16:9": {
+      "aspect": "16:9",
+      "dim": "1920x1080",
+      "outDir": "validation/w1/aspect-16x9",
+      "durationSec": 38,
+      "decodedFrames": 912,
+      "expectedFrames": 912,
+      "renderWallMs": 80779,
+      "sceneReceipts": [
+        {
+          "id": "w1-title",
+          "frames": 180,
+          "durationMs": 7500
+        },
+        {
+          "id": "w1-process",
+          "frames": 204,
+          "durationMs": 8500
+        },
+        {
+          "id": "w1-comparison",
+          "frames": 192,
+          "durationMs": 8000
+        },
+        {
+          "id": "w1-phrase",
+          "frames": 168,
+          "durationMs": 7000
+        },
+        {
+          "id": "w1-conclusion",
+          "frames": 168,
+          "durationMs": 7000
+        }
+      ],
+      "samples": [
+        {
+          "id": "w1-title",
+          "kind": "title",
+          "tSec": 4.5,
+          "sha256": "cd55c9c01360b10d3d460be07300f5060c4ee1d1ebdc8b91b1abaa83569ac3bc",
+          "inkCoverage": 0.9533188657407408,
+          "darkRatio": 0.025890239197530866,
+          "meanLuma": 249.19807882506157
+        },
+        {
+          "id": "w1-process",
+          "kind": "process diagram",
+          "tSec": 12.6,
+          "sha256": "cb0ae6b6636c4011da57d5f200a7c474b46a35c5d2103bda56a340ac15f27cb8",
+          "inkCoverage": 0.9722984182098765,
+          "darkRatio": 0.008569637345679013,
+          "meanLuma": 252.88268574968453
+        },
+        {
+          "id": "w1-comparison",
+          "kind": "comparison",
+          "tSec": 20.8,
+          "sha256": "dfb8442d8ad0c37043057352414b7dcaad8fa670493041fe4b50afc3a6c13140",
+          "inkCoverage": 0.9671204668209876,
+          "darkRatio": 0.011201774691358024,
+          "meanLuma": 252.1640753172945
+        },
+        {
+          "id": "w1-phrase",
+          "kind": "handwritten key phrase",
+          "tSec": 28.2,
+          "sha256": "f7c645aec8eb732bff1afcd02594f4acea5a6978e360ffc0958408b1d8beb663",
+          "inkCoverage": 0.9666893325617284,
+          "darkRatio": 0.011144868827160493,
+          "meanLuma": 252.36917178579228
+        },
+        {
+          "id": "w1-conclusion",
+          "kind": "conclusion",
+          "tSec": 35.2,
+          "sha256": "4d926ef9362f45f2ee9a6250e070bd7c2b0b74e6739c01789e42c5ff00277783",
+          "inkCoverage": 0.9714144483024691,
+          "darkRatio": 0.007882426697530864,
+          "meanLuma": 252.9379358944696
+        }
+      ],
+      "seams": [
+        {
+          "between": [
+            "w1-title",
+            "w1-process"
+          ],
+          "lastTSec": 7.438,
+          "firstTSec": 7.5,
+          "outgoing": {
+            "sha256": "9a97b0f68326c3064fc6f5fb201fadd08a9d384d80e864dd8147b500495176d4",
+            "inkCoverage": 0.9480492862654321,
+            "darkRatio": 0.027751253858024693,
+            "meanLuma": 248.79189763704585
+          },
+          "incoming": {
+            "sha256": "e99d5c51ad6974b04bb6fbbabf6b7d4f57dc56a4650dfe3528eaf23e9745575d",
+            "inkCoverage": 0.9805550733024692,
+            "darkRatio": 0.0015933641975308642,
+            "meanLuma": 254.2163200091136
+          }
+        },
+        {
+          "between": [
+            "w1-process",
+            "w1-comparison"
+          ],
+          "lastTSec": 15.938,
+          "firstTSec": 16,
+          "outgoing": {
+            "sha256": "6ab7afbbfc6d921c47aac3a7b2127aae04f673fcd1991e2f1117ac977fe31a25",
+            "inkCoverage": 0.9648500192901235,
+            "darkRatio": 0.011782889660493828,
+            "meanLuma": 252.21228591379958
+          },
+          "incoming": {
+            "sha256": "2e3d8b672ea865e1edf4af4d88900073b05cb8e6b02f614642c343e077a26ef4",
+            "inkCoverage": 0.9736332947530865,
+            "darkRatio": 0.0016001157407407407,
+            "meanLuma": 254.1052126497861
+          }
+        },
+        {
+          "between": [
+            "w1-comparison",
+            "w1-phrase"
+          ],
+          "lastTSec": 23.938,
+          "firstTSec": 24,
+          "outgoing": {
+            "sha256": "915f63172876f296e100ec2270ca563ec6c3fef53f0f5365ff9159996d9c2f12",
+            "inkCoverage": 0.9643499228395062,
+            "darkRatio": 0.013328993055555556,
+            "meanLuma": 251.72604280542453
+          },
+          "incoming": {
+            "sha256": "859f53ad54cf20708ff1889f2c84279e1632cfddd1c54eb824d32958a4d80c18",
+            "inkCoverage": 0.9735985725308642,
+            "darkRatio": 0.0016010802469135802,
+            "meanLuma": 254.10540368161588
+          }
+        },
+        {
+          "between": [
+            "w1-phrase",
+            "w1-conclusion"
+          ],
+          "lastTSec": 30.938,
+          "firstTSec": 31,
+          "outgoing": {
+            "sha256": "2a5fc13dccf7ed8e4e05c42b6944af426cb36fbbcf4e59992e76da06ccb99033",
+            "inkCoverage": 0.9568904320987655,
+            "darkRatio": 0.019972993827160494,
+            "meanLuma": 250.70781495021427
+          },
+          "incoming": {
+            "sha256": "c13fdfeef02172168591106837399aeb2067a51cfebf67fa1127984884a2930a",
+            "inkCoverage": 0.9734837962962963,
+            "darkRatio": 0.001597704475308642,
+            "meanLuma": 254.10937489303663
+          }
+        }
+      ],
+      "qc": {
+        "overall": "(unreported)",
+        "checks": [
+          {
+            "id": "playable",
+            "status": "pass"
+          },
+          {
+            "id": "black-frames",
+            "status": "pass"
+          },
+          {
+            "id": "frozen-frames",
+            "status": "pass"
+          },
+          {
+            "id": "aspect",
+            "status": "pass"
+          },
+          {
+            "id": "loudness",
+            "status": "pass"
+          },
+          {
+            "id": "true-peak",
+            "status": "pass"
+          },
+          {
+            "id": "loudness-range",
+            "status": "pass"
+          },
+          {
+            "id": "dead-air",
+            "status": "pass"
+          },
+          {
+            "id": "static-shots",
+            "status": "pass"
+          },
+          {
+            "id": "flicker",
+            "status": "pass"
+          },
+          {
+            "id": "stutter",
+            "status": "pass"
+          },
+          {
+            "id": "cut-alignment",
+            "status": "unmeasured"
+          },
+          {
+            "id": "tail-fade",
+            "status": "pass"
+          }
+        ]
+      }
+    },
+    "9:16": {
+      "aspect": "9:16",
+      "dim": "1080x1920",
+      "outDir": "validation/w1/aspect-9x16",
+      "durationSec": 38,
+      "decodedFrames": 912,
+      "expectedFrames": 912,
+      "renderWallMs": 80004,
+      "sceneReceipts": [
+        {
+          "id": "w1-title",
+          "frames": 180,
+          "durationMs": 7500
+        },
+        {
+          "id": "w1-process",
+          "frames": 204,
+          "durationMs": 8500
+        },
+        {
+          "id": "w1-comparison",
+          "frames": 192,
+          "durationMs": 8000
+        },
+        {
+          "id": "w1-phrase",
+          "frames": 168,
+          "durationMs": 7000
+        },
+        {
+          "id": "w1-conclusion",
+          "frames": 168,
+          "durationMs": 7000
+        }
+      ],
+      "samples": [
+        {
+          "id": "w1-title",
+          "kind": "title",
+          "tSec": 4.5,
+          "sha256": "d9c12b9a5415dd5a2fbe9b79640b50b642bc3e303bb4fbfb0f0b685e13544d8a",
+          "inkCoverage": 0.9578337191358025,
+          "darkRatio": 0.021325231481481483,
+          "meanLuma": 250.13799320815744
+        },
+        {
+          "id": "w1-process",
+          "kind": "process diagram",
+          "tSec": 12.6,
+          "sha256": "61468c0e106cc070ed71d9f621835bebefefdf08cdd59550857b7891c21a6cdb",
+          "inkCoverage": 0.9741565393518519,
+          "darkRatio": 0.0066280864197530865,
+          "meanLuma": 253.20471417098267
+        },
+        {
+          "id": "w1-comparison",
+          "kind": "comparison",
+          "tSec": 20.8,
+          "sha256": "96ec3d80863459f995c3583459702b39d9dc7d17e96b22a81ea6bac95dbfc168",
+          "inkCoverage": 0.9698292824074074,
+          "darkRatio": 0.00826195987654321,
+          "meanLuma": 252.74900847526914
+        },
+        {
+          "id": "w1-phrase",
+          "kind": "handwritten key phrase",
+          "tSec": 28.2,
+          "sha256": "23523f7ce57402384c567ebcbe0e316d9e9c73f5428212e563f490b936b8ff4e",
+          "inkCoverage": 0.9710580632716049,
+          "darkRatio": 0.00786988811728395,
+          "meanLuma": 252.97296721309934
+        },
+        {
+          "id": "w1-conclusion",
+          "kind": "conclusion",
+          "tSec": 35.2,
+          "sha256": "c3c702388e55a37768bd68b9f08f6bcb3acf6b25b0e9714961a06d33365ed530",
+          "inkCoverage": 0.973341049382716,
+          "darkRatio": 0.006594810956790123,
+          "meanLuma": 253.18910400516592
+        }
+      ],
+      "seams": [
+        {
+          "between": [
+            "w1-title",
+            "w1-process"
+          ],
+          "lastTSec": 7.438,
+          "firstTSec": 7.5,
+          "outgoing": {
+            "sha256": "da65216383e0c0430c34f114e4cc13b7f2f3f849492d48767f1b65f2d6f7191c",
+            "inkCoverage": 0.9534500385802469,
+            "darkRatio": 0.022670235339506174,
+            "meanLuma": 249.84733672917184
+          },
+          "incoming": {
+            "sha256": "4dc33af305f06ac73b3df3d6a3f8b5e7b73b9790cfb837df821155fdd21188ed",
+            "inkCoverage": 0.9792042824074074,
+            "darkRatio": 0.0015923996913580246,
+            "meanLuma": 254.1877785787771
+          }
+        },
+        {
+          "between": [
+            "w1-process",
+            "w1-comparison"
+          ],
+          "lastTSec": 15.938,
+          "firstTSec": 16,
+          "outgoing": {
+            "sha256": "d4c5811265c336f9d5a4b2ab660a1e7aca566ea55cc8d3458d075013ebd8f60f",
+            "inkCoverage": 0.9706934799382716,
+            "darkRatio": 0.008466917438271606,
+            "meanLuma": 252.87966596811268
+          },
+          "incoming": {
+            "sha256": "0f1447235be7cbafcb1f700e331cf55e3068061070d590804d8baded8c3b778a",
+            "inkCoverage": 0.9813020833333334,
+            "darkRatio": 0.0015943287037037037,
+            "meanLuma": 254.23573970599702
+          }
+        },
+        {
+          "between": [
+            "w1-comparison",
+            "w1-phrase"
+          ],
+          "lastTSec": 23.938,
+          "firstTSec": 24,
+          "outgoing": {
+            "sha256": "e1d149e8681ea298e95c992a4133801a1d0e596cebf36e761e4d5af33ffe32e9",
+            "inkCoverage": 0.9684196566358024,
+            "darkRatio": 0.009478202160493826,
+            "meanLuma": 252.49558338392038
+          },
+          "incoming": {
+            "sha256": "c32ae54f9099e4b3b747b349f9cf5c4a5dcecb7133d4d68bd1efe215ffaca110",
+            "inkCoverage": 0.9799995177469136,
+            "darkRatio": 0.0016044560185185185,
+            "meanLuma": 254.2133647003051
+          }
+        },
+        {
+          "between": [
+            "w1-phrase",
+            "w1-conclusion"
+          ],
+          "lastTSec": 30.938,
+          "firstTSec": 31,
+          "outgoing": {
+            "sha256": "ee8909d6b19b45fb7428724c332812fa80729e44ba389ba202da04d64bac031b",
+            "inkCoverage": 0.9631679205246914,
+            "darkRatio": 0.013596643518518518,
+            "meanLuma": 251.79804759677253
+          },
+          "incoming": {
+            "sha256": "3035b926be1c0e366645def67dbef094918b99d24b12dd09e7b76bd98fb7eca8",
+            "inkCoverage": 0.9755748456790123,
+            "darkRatio": 0.0016001157407407407,
+            "meanLuma": 254.14652004783696
+          }
+        }
+      ],
+      "qc": {
+        "overall": "(unreported)",
+        "checks": [
+          {
+            "id": "playable",
+            "status": "pass"
+          },
+          {
+            "id": "black-frames",
+            "status": "pass"
+          },
+          {
+            "id": "frozen-frames",
+            "status": "pass"
+          },
+          {
+            "id": "aspect",
+            "status": "pass"
+          },
+          {
+            "id": "loudness",
+            "status": "pass"
+          },
+          {
+            "id": "true-peak",
+            "status": "pass"
+          },
+          {
+            "id": "loudness-range",
+            "status": "pass"
+          },
+          {
+            "id": "dead-air",
+            "status": "pass"
+          },
+          {
+            "id": "static-shots",
+            "status": "pass"
+          },
+          {
+            "id": "flicker",
+            "status": "pass"
+          },
+          {
+            "id": "stutter",
+            "status": "pass"
+          },
+          {
+            "id": "cut-alignment",
+            "status": "unmeasured"
+          },
+          {
+            "id": "tail-fade",
+            "status": "pass"
+          }
+        ]
+      }
+    },
+    "1:1": {
+      "aspect": "1:1",
+      "dim": "1080x1080",
+      "outDir": "validation/w1/aspect-1x1",
+      "durationSec": 38,
+      "decodedFrames": 912,
+      "expectedFrames": 912,
+      "renderWallMs": 50016,
+      "sceneReceipts": [
+        {
+          "id": "w1-title",
+          "frames": 180,
+          "durationMs": 7500
+        },
+        {
+          "id": "w1-process",
+          "frames": 204,
+          "durationMs": 8500
+        },
+        {
+          "id": "w1-comparison",
+          "frames": 192,
+          "durationMs": 8000
+        },
+        {
+          "id": "w1-phrase",
+          "frames": 168,
+          "durationMs": 7000
+        },
+        {
+          "id": "w1-conclusion",
+          "frames": 168,
+          "durationMs": 7000
+        }
+      ],
+      "samples": [
+        {
+          "id": "w1-title",
+          "kind": "title",
+          "tSec": 4.5,
+          "sha256": "5fcdb36e382e2db986442518a6f2de382985657909d92d11e6774e38c13db4ec",
+          "inkCoverage": 0.9657253086419753,
+          "darkRatio": 0.01363511659807956,
+          "meanLuma": 251.63017647424383
+        },
+        {
+          "id": "w1-process",
+          "kind": "process diagram",
+          "tSec": 12.6,
+          "sha256": "d74de0b44c21a0e289ad065399be8055c2097f48f192fa5ec1452bcc798575c7",
+          "inkCoverage": 0.973298182441701,
+          "darkRatio": 0.006492626886145405,
+          "meanLuma": 253.20035686159449
+        },
+        {
+          "id": "w1-comparison",
+          "kind": "comparison",
+          "tSec": 20.8,
+          "sha256": "9c4ba9dca7fecfa59749ef033d1bb7bcaf89cd1697966182dcd71589a0470a75",
+          "inkCoverage": 0.9691143689986282,
+          "darkRatio": 0.008671124828532236,
+          "meanLuma": 252.7069097923627
+        },
+        {
+          "id": "w1-phrase",
+          "kind": "handwritten key phrase",
+          "tSec": 28.2,
+          "sha256": "81956fa27d407f2c67274f1b8d6d0639f23a5989b524a12be6e0856c84904f08",
+          "inkCoverage": 0.9696373456790124,
+          "darkRatio": 0.007495713305898491,
+          "meanLuma": 252.97434488967792
+        },
+        {
+          "id": "w1-conclusion",
+          "kind": "conclusion",
+          "tSec": 35.2,
+          "sha256": "b2212736b51f81dfe2a0f6f4c8edbe11675f0771065f26dfdd9819747f8b39e8",
+          "inkCoverage": 0.9720044581618655,
+          "darkRatio": 0.006385459533607682,
+          "meanLuma": 253.23137003153016
+        }
+      ],
+      "seams": [
+        {
+          "between": [
+            "w1-title",
+            "w1-process"
+          ],
+          "lastTSec": 7.438,
+          "firstTSec": 7.5,
+          "outgoing": {
+            "sha256": "b5474c07d5a7c8a7af2213b5099a0821cdf19c6f21bc8316607ea25b2b89031c",
+            "inkCoverage": 0.9583590534979424,
+            "darkRatio": 0.01719564471879287,
+            "meanLuma": 250.91368213046957
+          },
+          "incoming": {
+            "sha256": "96667feb2ad496dd55a9450d88fc3a693026ee4ed8b1ea4ab442eb9e0c31948a",
+            "inkCoverage": 0.9785039437585734,
+            "darkRatio": 0.002852366255144033,
+            "meanLuma": 253.96688356667931
+          }
+        },
+        {
+          "between": [
+            "w1-process",
+            "w1-comparison"
+          ],
+          "lastTSec": 15.938,
+          "firstTSec": 16,
+          "outgoing": {
+            "sha256": "d5acd08cd8107f4a51fa79979f526b442f0a204775d36e0e7cebd06c52ed7402",
+            "inkCoverage": 0.9698448216735254,
+            "darkRatio": 0.008155006858710562,
+            "meanLuma": 252.86150061056222
+          },
+          "incoming": {
+            "sha256": "893cbda42fe81539ceea0ce155c5383dbf3d8b3a0124bc8cdc31701aa894b4da",
+            "inkCoverage": 0.97897719478738,
+            "darkRatio": 0.002840363511659808,
+            "meanLuma": 253.96341828685422
+          }
+        },
+        {
+          "between": [
+            "w1-comparison",
+            "w1-phrase"
+          ],
+          "lastTSec": 23.938,
+          "firstTSec": 24,
+          "outgoing": {
+            "sha256": "5c87542a15fd8ce224d2098aeddf38615332ad4ef3cd2e4b3a419ebac1850291",
+            "inkCoverage": 0.9680632716049383,
+            "darkRatio": 0.009219821673525377,
+            "meanLuma": 252.57944025787629
+          },
+          "incoming": {
+            "sha256": "22cff9b38e0c32bcbf02ff208c8aba1dcb056f5f8c75fb3e74e32b2d777b1d34",
+            "inkCoverage": 0.9789137517146776,
+            "darkRatio": 0.0028455075445816187,
+            "meanLuma": 253.9675018470366
+          }
+        },
+        {
+          "between": [
+            "w1-phrase",
+            "w1-conclusion"
+          ],
+          "lastTSec": 30.938,
+          "firstTSec": 31,
+          "outgoing": {
+            "sha256": "b4a1783846eb0f9da548a2f3c2cfeedfc7a60d2c7170209b6f0edba28c57ae2c",
+            "inkCoverage": 0.9635845336076817,
+            "darkRatio": 0.012152777777777778,
+            "meanLuma": 252.07062986077239
+          },
+          "incoming": {
+            "sha256": "3b50e24969da018ea16820a5a5d1e8e43d1f7cd1ea9f005cc39cdf5331d4f496",
+            "inkCoverage": 0.9785390946502057,
+            "darkRatio": 0.002856652949245542,
+            "meanLuma": 253.94504773659602
+          }
+        }
+      ],
+      "qc": {
+        "overall": "(unreported)",
+        "checks": [
+          {
+            "id": "playable",
+            "status": "pass"
+          },
+          {
+            "id": "black-frames",
+            "status": "pass"
+          },
+          {
+            "id": "frozen-frames",
+            "status": "pass"
+          },
+          {
+            "id": "aspect",
+            "status": "pass"
+          },
+          {
+            "id": "loudness",
+            "status": "pass"
+          },
+          {
+            "id": "true-peak",
+            "status": "pass"
+          },
+          {
+            "id": "loudness-range",
+            "status": "pass"
+          },
+          {
+            "id": "dead-air",
+            "status": "pass"
+          },
+          {
+            "id": "static-shots",
+            "status": "pass"
+          },
+          {
+            "id": "flicker",
+            "status": "pass"
+          },
+          {
+            "id": "stutter",
+            "status": "pass"
+          },
+          {
+            "id": "cut-alignment",
+            "status": "unmeasured"
+          },
+          {
+            "id": "tail-fade",
+            "status": "pass"
+          }
+        ]
+      }
+    }
+  },
+  "determinismPin": {
+    "aspect": "16:9",
+    "runs": 2,
+    "sampleHashesIdentical": true,
+    "sceneFrameCountsIdentical": true,
+    "hashes": [
+      [
+        "cd55c9c01360b10d3d460be07300f5060c4ee1d1ebdc8b91b1abaa83569ac3bc",
+        "cb0ae6b6636c4011da57d5f200a7c474b46a35c5d2103bda56a340ac15f27cb8",
+        "dfb8442d8ad0c37043057352414b7dcaad8fa670493041fe4b50afc3a6c13140",
+        "f7c645aec8eb732bff1afcd02594f4acea5a6978e360ffc0958408b1d8beb663",
+        "4d926ef9362f45f2ee9a6250e070bd7c2b0b74e6739c01789e42c5ff00277783"
+      ],
+      [
+        "cd55c9c01360b10d3d460be07300f5060c4ee1d1ebdc8b91b1abaa83569ac3bc",
+        "cb0ae6b6636c4011da57d5f200a7c474b46a35c5d2103bda56a340ac15f27cb8",
+        "dfb8442d8ad0c37043057352414b7dcaad8fa670493041fe4b50afc3a6c13140",
+        "f7c645aec8eb732bff1afcd02594f4acea5a6978e360ffc0958408b1d8beb663",
+        "4d926ef9362f45f2ee9a6250e070bd7c2b0b74e6739c01789e42c5ff00277783"
+      ]
+    ]
+  },
+  "rubric": {
+    "doc": "docs/audits/w1-blind-rubric.md",
+    "dimensions": [
+      "stroke-naturalness",
+      "semantic-order",
+      "narration-alignment",
+      "camera-readability",
+      "hand-realism",
+      "continuity",
+      "text-readability",
+      "audio",
+      "comprehension"
+    ]
+  },
+  "gate": {
+    "passed": true,
+    "failures": []
+  }
+}

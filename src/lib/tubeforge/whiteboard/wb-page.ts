@@ -121,15 +121,26 @@ export const APPLY_FRAME_FN = `(payloadJson) => {
     el.style.opacity = prog > 0 ? "1" : "0";
     if (prog <= 0) continue;
     const clipId = "clip-" + key.replace(/[^a-zA-Z0-9_-]/g, "_");
-    let rect = document.getElementById(clipId);
-    if (!rect) {
-      const cp = document.createElementNS("http://www.w3.org/2000/svg", "clipPath");
-      cp.id = clipId;
-      rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      cp.appendChild(rect);
-      document.getElementById("defs-root").appendChild(cp);
+    // W1 baseline catch (the bug the harness was built to find): the old
+    // code reused ONE variable for two different elements — the fresh
+    // <rect> on the create path, but getElementById(clipId) on every
+    // later frame, which returns the <clipPath> ITSELF. The width updates
+    // then landed on the clipPath (a visual no-op) and the clip rect kept
+    // its FIRST frame's sliver width forever: every whiteboard text after
+    // its reveal's first frame was clipped to invisibility — editor
+    // preview AND final MP4 alike (this function is the one-source law
+    // both surfaces ride). The clip rect is now addressed THROUGH its
+    // clipPath parent on every frame, so the reveal width actually grows.
+    let clip = document.getElementById(clipId);
+    if (!clip) {
+      clip = document.createElementNS("http://www.w3.org/2000/svg", "clipPath");
+      clip.id = clipId;
+      clip.appendChild(document.createElementNS("http://www.w3.org/2000/svg", "rect"));
+      document.getElementById("defs-root").appendChild(clip);
       el.setAttribute("clip-path", "url(#" + clipId + ")");
     }
+    const rect = clip.firstElementChild;
+    if (!rect) continue;
     const bb = el.getBBox();
     rect.setAttribute("x", String(bb.x - 2));
     rect.setAttribute("y", String(bb.y - 2));

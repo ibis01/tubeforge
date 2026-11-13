@@ -6646,3 +6646,71 @@ user's own Al-Andalus → Reconquista topic, 14.3s).
 **VERIFICATION.** tsc clean, eslint clean on every touched file,
 unit suite 536/536 (534 + the two S119 batteries: the pure truth table
 and the wiring source-pins), the live lane check GREEN end-to-end.
+
+## W1 — The whiteboard perceptual baseline: the benchmark that CATCHES things (2026-11-13)
+
+**THE STAGE.** The W-track's first stage, per the Stage 0 reconciliation
+(docs/design/whiteboard-videoscribe-reconciliation.md §9 W1): a FIXED
+perceptual benchmark — five scene types (title, process diagram, comparison,
+handwritten key phrase, conclusion) × three house aspects (1920×1080,
+1080×1920, 1080×1080), same narration + built-in assets every run, receipts
+(frames, ink coverage, seam integrity), the 1–5 blind rubric, and the
+determinism pin — so every W2+ iteration is MEASURED against the same
+artifacts instead of vibes. Exit criterion: iterations are measurable.
+
+**THE DELIVERABLES.**
+- `src/lib/tubeforge/whiteboard/benchmark-scenarios.ts` (NEW, PURE): the
+  frozen definition — five hand-authored scenes on the library's own
+  benchmark topic ("How Your Heart Works"), two design spaces (1600×900
+  landscape, 900×1600 portrait) with a pure fit transform per aspect, explicit
+  durations (7.5+8.5+8+7+7 = 38 s, the VO-free determinism anchor), the
+  sample/seam clock plans, and the nine frozen rubric dimension ids. Two
+  builds of the same aspect are byte-identical — the unit battery pins it.
+- `scripts/w1-whiteboard-benchmark.mts` (NEW, the s67-e9a-proof pattern):
+  builds → validates → renders EVERY aspect through the real engine (chromium
+  + ffmpeg + the house music bed, so the QC playable contract holds), then
+  drops receipts: per-scene engine stats, RAW-RGB frame SHA-256s at frozen
+  sample points, ink coverage + dark-pixel ratios, seam pairs, the full house
+  QC battery (expectedAspect + frameRate passed as production does), and the
+  blind kit (codenamed MP4s + frames, code key gitignored). The gate is HARD:
+  duration/frames ±tolerance, no blank samples, seam law (outgoing ink
+  present, incoming stroke-free), zero QC fails, determinism pin identical.
+  RED gate = no baseline lands.
+- `docs/audits/w1-blind-rubric.md` (NEW): the 1–5 instrument (nine dimensions,
+  anchors, blind protocol) + the baseline scores.
+- `docs/baselines/w1-whiteboard-baseline-2026-11-13.json` (NEW, committed):
+  the receipt — env versions, definition hashes, per-aspect samples/seams/QC,
+  determinism pin, GREEN gate.
+
+**THE CATCH — the baseline's first proof of value.** The first run found a
+P0 every existing gate is blind to: **every whiteboard `write_text` element
+was invisible in every rendered frame** — editor preview AND final MP4 alike.
+Root cause (wb-page.ts `APPLY_FRAME_FN`): the text-reveal clip's rect was
+re-addressed through `getElementById(clipId)` on every frame after its first —
+which returns the `<clipPath>` ITSELF, not the `<rect>` inside it — so the
+reveal width froze at the first frame's sliver. The unit contracts pinned the
+frame-plan MATH; the Docker smoke curls APIs; no gate ever LOOKED at a frame
+carrying text. The fix is one seam: address the rect THROUGH its clipPath
+parent on every frame (`clip.firstElementChild`), pinned by the W1 source-pin
+battery. Receipt: the 16:9 title sample's dark-pixel ratio went 0.76% → 2.59%
+(the headline text), phrase 0.82% → 1.11%. One fix heals both surfaces (the
+one-source law).
+
+**THE PROOF — the recorded baseline (post-fix, the honest "before").**
+- Determinism pin: two full 16:9 renders — IDENTICAL raw-frame SHA-256s and
+  identical per-scene frame counts (the S64 law re-proven at benchmark level).
+- All three aspects: 912/912 decoded frames (exact), 38.0s (exact), zero QC
+  fails (13 pass + the documented cut-alignment unmeasured).
+- Seam receipt (the W6 gap, measured honestly): outgoing last frames carry
+  0.87–1.33% ink; incoming first frames are the clean dot-grid board with the
+  resting hand (0.16% dark) — four hard board-wipes per video, baselined.
+- The rubric's baseline composite: **2.4 / 5** (audio N/A in the silent lane)
+  — concentrated exactly where the reconciliation predicted: semantic order
+  (W2), narration anchors (W4), camera direction (W5), continuity (W6), hand
+  finishing (W7). Full per-dimension notes in the rubric doc.
+
+**VERIFICATION.** tsc clean, eslint clean on every touched file, unit suite
+536 → 538 (the two W1 batteries: the pure definition + the receipt/source
+pins), the live harness GREEN end-to-end (3 renders + repeat render +
+blind kit ≈ 5 min wall). The baseline JSON, the rubric doc, the harness, the
+pure module and the applier fix land in this commit.

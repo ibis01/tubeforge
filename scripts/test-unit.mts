@@ -12948,6 +12948,202 @@ await test("s119: the lane contract is wired — route resolves the lane, scaffo
   );
 });
 
+await test("w1: the benchmark definition is pure, fixed and aspect-complete", async () => {
+  const {
+    W1_ASPECTS,
+    W1_ASPECT_IDS,
+    W1_FPS,
+    W1_SCENE_IDS,
+    W1_SCENE_KINDS,
+    W1_RUBRIC_DIMENSIONS,
+    W1_ASSET_VIEWBOX,
+    buildBenchmarkProject,
+    w1MappedPlacements,
+    w1SamplePlan,
+    w1SceneSpans,
+    w1SeamPlan,
+    w1TotalDurationMs,
+  } = await import("../src/lib/tubeforge/whiteboard/benchmark-scenarios");
+  const { validateWhiteboardProject } = await import(
+    "../src/lib/tubeforge/whiteboard/storyboard"
+  );
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+
+  // The frozen shape: five scene types, three house aspects, 24 fps.
+  ok(W1_SCENE_IDS.length === 5, "exactly five fixed scene types");
+  ok(
+    JSON.stringify([...W1_SCENE_IDS]) ===
+      JSON.stringify(["w1-title", "w1-process", "w1-comparison", "w1-phrase", "w1-conclusion"]),
+    "the scene ids are the reconciliation's W1 list, in render order"
+  );
+  ok(
+    JSON.stringify(Object.values(W1_SCENE_KINDS)) ===
+      JSON.stringify(["title", "process diagram", "comparison", "handwritten key phrase", "conclusion"]),
+    "the scene kinds map one-to-one onto the five types"
+  );
+  ok(JSON.stringify(W1_ASPECT_IDS) === JSON.stringify(["16:9", "9:16", "1:1"]), "three house aspects");
+  ok(
+    W1_ASPECTS["16:9"].width === 1920 && W1_ASPECTS["16:9"].height === 1080 &&
+      W1_ASPECTS["9:16"].width === 1080 && W1_ASPECTS["9:16"].height === 1920 &&
+      W1_ASPECTS["1:1"].width === 1080 && W1_ASPECTS["1:1"].height === 1080,
+    "the aspect dimensions are the E10 set (1920x1080 / 1080x1920 / 1080x1080)"
+  );
+  ok(W1_FPS === 24, "the benchmark rides the engine's 24 fps");
+
+  // Determinism: two builds of the same aspect are byte-identical.
+  for (const a of W1_ASPECT_IDS) {
+    ok(
+      JSON.stringify(buildBenchmarkProject(a)) === JSON.stringify(buildBenchmarkProject(a)),
+      `two builds of ${a} are byte-identical (the pure-layout law)`
+    );
+  }
+
+  // The definition validates against the REAL library, every aspect.
+  const lib = loadLibrary();
+  for (const a of W1_ASPECT_IDS) {
+    const { project, errors } = validateWhiteboardProject(buildBenchmarkProject(a), lib.libraryIndex);
+    ok(project !== null && errors.length === 0, `the ${a} benchmark project passes the engine gate (${errors.length} errors)`);
+  }
+
+  // The viewBox mirror matches the loaded library (a library drift must
+  // fail loudly, not silently skew the bounds pins).
+  for (const [id, vb] of Object.entries(W1_ASSET_VIEWBOX)) {
+    const real = lib.assets.get(id);
+    ok(
+      real !== undefined && real.viewBox.w === vb.w && real.viewBox.h === vb.h,
+      `viewBox mirror for "${id}" matches the library (${vb.w}x${vb.h})`
+    );
+  }
+
+  // Every mapped placement rect sits inside its canvas (the no-clip law).
+  for (const a of W1_ASPECT_IDS) {
+    const { width, height } = W1_ASPECTS[a];
+    for (const sceneId of W1_SCENE_IDS) {
+      for (const pl of w1MappedPlacements(sceneId, a)) {
+        ok(
+          pl.x >= 0 && pl.y >= 0 && pl.x + pl.w <= width && pl.y + pl.h <= height,
+          `${a}/${sceneId}: "${pl.assetId}" rect ${pl.w}x${pl.h} @(${pl.x},${pl.y}) fits ${width}x${height}`
+        );
+      }
+    }
+  }
+
+  // The clock: explicit durations inside the scene budget, spans contiguous,
+  // samples inside their span, seams between adjacent scenes.
+  const spans = w1SceneSpans();
+  ok(spans.length === 5 && spans[0].startMs === 0, "the span table covers five contiguous scenes from t=0");
+  for (let i = 0; i < spans.length; i++) {
+    const s = spans[i];
+    ok(s.durationMs >= 4000 && s.durationMs <= 30_000, `${s.id}: explicit duration inside the [4s,30s] budget`);
+    if (i > 0) ok(s.startMs === spans[i - 1].endMs, `${s.id} starts exactly when ${spans[i - 1].id} ends`);
+  }
+  ok(w1TotalDurationMs() === 38_000, "the benchmark totals 38s of video per aspect");
+  for (const s of w1SamplePlan()) {
+    const span = spans.find((x) => x.id === s.id);
+    ok(span !== undefined, `the sample plan covers a real scene (${s.id})`);
+    if (!span) continue;
+    ok(
+      s.tSec > span.startMs / 1000 && s.tSec < span.endMs / 1000,
+      `${s.id} sample @${s.tSec}s sits inside its span (mid-ink, never the blank lead-in)`
+    );
+  }
+  const seams = w1SeamPlan();
+  ok(seams.length === 4, "four seams between five scenes");
+  for (const seam of seams) {
+    const [outId, inId] = seam.between;
+    const out = spans.find((x) => x.id === outId);
+    ok(out !== undefined, `the seam references a real outgoing scene (${outId})`);
+    if (!out) continue;
+    ok(
+      seam.firstTSec === out.endMs / 1000 && seam.lastTSec < out.endMs / 1000 && seam.lastTSec > out.endMs / 1000 - 0.1,
+      `${outId}→${inId}: the seam pair brackets the cut (last-frame seek 1.5 frames before endMs — the input-seek rounding law)`
+    );
+  }
+
+  // The rubric contract: nine frozen dimensions (the doc pins against this).
+  ok(
+    JSON.stringify([...W1_RUBRIC_DIMENSIONS]) ===
+      JSON.stringify([
+        "stroke-naturalness", "semantic-order", "narration-alignment", "camera-readability",
+        "hand-realism", "continuity", "text-readability", "audio", "comprehension",
+      ]),
+    "the nine rubric dimensions are frozen in the module (single source)"
+  );
+});
+
+await test("w1: the baseline receipt, the rubric doc and the text-reveal fix are in the tree (source pin)", async () => {
+  // The committed baseline receipt.
+  const baselinePath = fs
+    .readdirSync("docs/baselines")
+    .filter((f) => f.startsWith("w1-whiteboard-baseline-"))
+    .sort()
+    .pop();
+  ok(baselinePath !== undefined, "a w1-whiteboard-baseline-*.json receipt is committed under docs/baselines/");
+  if (baselinePath) {
+    const baseline = JSON.parse(fs.readFileSync(path.join("docs/baselines", baselinePath), "utf8")) as {
+      stage?: string;
+      gate?: { passed?: boolean };
+      determinismPin?: { sampleHashesIdentical?: boolean; sceneFrameCountsIdentical?: boolean };
+      aspects?: Record<string, { samples?: unknown[]; seams?: unknown[]; sceneReceipts?: unknown[] }>;
+      rubric?: { dimensions?: string[] };
+    };
+    ok(baseline.stage === "W1", "the receipt is a W1 record");
+    ok(baseline.gate?.passed === true, "the receipt's gate is GREEN (no failures recorded)");
+    ok(
+      baseline.determinismPin?.sampleHashesIdentical === true &&
+        baseline.determinismPin?.sceneFrameCountsIdentical === true,
+      "the determinism pin holds in the receipt: two 16:9 renders, identical hashes + frame counts"
+    );
+    ok(
+      Object.keys(baseline.aspects ?? {}).length === 3 &&
+        Object.values(baseline.aspects ?? {}).every(
+          (a) => a.samples?.length === 5 && a.seams?.length === 4 && a.sceneReceipts?.length === 5
+        ),
+      "every aspect receipt carries 5 samples, 4 seams and 5 scene receipts"
+    );
+    ok(
+      (baseline.rubric?.dimensions?.length ?? 0) === 9,
+      "the receipt cites the nine-dimension rubric"
+    );
+  }
+
+  // The rubric doc exists and carries the instrument + the baseline scores.
+  const rubric = fs.readFileSync("docs/audits/w1-blind-rubric.md", "utf8");
+  for (const d of [
+    "stroke-naturalness", "semantic-order", "narration-alignment", "camera-readability",
+    "hand-realism", "continuity", "text-readability", "audio", "comprehension",
+  ]) {
+    ok(rubric.includes(d), `the rubric doc scores the "${d}" dimension`);
+  }
+  ok(
+    rubric.includes("Baseline scores") && rubric.includes("2.4 / 5"),
+    "the rubric doc records the baseline composite (the honest before-picture)"
+  );
+  ok(
+    rubric.includes("blind kit") && rubric.includes("codenamed"),
+    "the rubric doc specifies the blind-kit protocol (codenamed artifacts, key out of the repo)"
+  );
+
+  // The W1 catch — the text-reveal fix — is in the tree: the clip rect is
+  // addressed THROUGH its clipPath parent on every frame (the sliver bug).
+  const wbPage = fs.readFileSync("src/lib/tubeforge/whiteboard/wb-page.ts", "utf8");
+  ok(
+    wbPage.includes("clip.firstElementChild") && wbPage.includes("W1 baseline catch"),
+    "APPLY_FRAME_FN addresses the clip rect through its clipPath parent — the invisible-text sliver bug is fixed at the one-source law"
+  );
+  ok(
+    !/\bright = document\.getElementById\(clipId\);\s*\n\s*if \(!rect\) \{/.test(wbPage),
+    "the old rect-variable double-life is gone (no getElementById(clipId) assigned to the rect variable)"
+  );
+
+  // The harness + the pure definition are committed.
+  ok(fs.existsSync("scripts/w1-whiteboard-benchmark.mts"), "the W1 harness script is committed");
+  ok(
+    fs.existsSync("src/lib/tubeforge/whiteboard/benchmark-scenarios.ts"),
+    "the pure benchmark definition module is committed"
+  );
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
