@@ -15514,6 +15514,132 @@ await test("S121 P1 evidence binding: the override covers the report's CONTENT, 
   ok(!qp.qcOverrideEvidenceValid(override, { ...sameContentLater, checkedAt: "2026-03-03T00:00:00.000Z" }), "a new checkedAt still stales the override");
 });
 
+
+// ---------- suite: S121 P2 — the camera-keys, two-bone IK, contact and gait substrate ----------
+
+suiteStart("S121 P2 — the camera-keys, two-bone IK, contact and gait substrate");
+
+await test("S121 P2 anim/camera: the keys model validates, interpolates smoothstep, and projects", async () => {
+  const cam = await import("../src/lib/tubeforge/anim/camera");
+  // validate refusals — each names its reason
+  const refusals: [string, () => void][] = [
+    ["empty keys", () => cam.validateCameraMove({ intent: "x", keys: [] })],
+    ["no t=0 anchor", () => cam.validateCameraMove({ intent: "x", keys: [{ t: 0.5, x: 0, y: 0, z: 5, fov: 50 }] })],
+    ["non-ascending t", () => cam.validateCameraMove({ intent: "x", keys: [{ t: 0, x: 0, y: 0, z: 5, fov: 50 }, { t: 0, x: 1, y: 0, z: 5, fov: 50 }] })],
+    ["non-finite", () => cam.validateCameraMove({ intent: "x", keys: [{ t: 0, x: NaN, y: 0, z: 5, fov: 50 }] })],
+    ["fov low", () => cam.validateCameraMove({ intent: "x", keys: [{ t: 0, x: 0, y: 0, z: 5, fov: 10 }] })],
+    ["fov high", () => cam.validateCameraMove({ intent: "x", keys: [{ t: 0, x: 0, y: 0, z: 5, fov: 120 }] })],
+  ];
+  for (const [label, fn] of refusals) {
+    let threw = false;
+    try { fn(); } catch { threw = true; }
+    ok(threw, `the ${label} move is refused`);
+  }
+  // interpolation: smoothstep between neighbors, hold outside
+  const move = { intent: "push", keys: [
+    { t: 0, x: 0, y: 0, z: 10, fov: 60 },
+    { t: 2, x: 0, y: 0, z: 5, fov: 40 },
+    { t: 4, x: 2, y: 0, z: 5, fov: 40 },
+  ] };
+  cam.validateCameraMove(move);
+  eq(cam.cameraAt(move, -1).z, 10, "hold before the first key");
+  eq(cam.cameraAt(move, 5).z, 5, "hold after the last key");
+  const mid = cam.cameraAt(move, 1);
+  ok(mid.z > 5 && mid.z < 10, "midpoint z between the keys");
+  ok(Math.abs(mid.z - 7.5) < 1e-9, "the smoothstep midpoint sits at the exact middle");
+  eq(cam.cameraAt(move, 3).x, 1, "the second span's midpoint x");
+  // frame-quantized determinism (S64): the same quantized t is byte-identical
+  const t1 = cam.cameraAt(move, 1.0).z;
+  const t2 = cam.cameraAt(move, 1.0).z;
+  eq(t1, t2, "the same t is byte-identical across calls");
+  // projection
+  const proj = cam.projectPoint(move, 0, { x: 0, y: 0, z: 0 });
+  ok(proj !== null && proj.scale > 0, "the origin projects in front of the camera");
+  eq(cam.projectPoint(move, 0, { x: 0, y: 0, z: 10 }), null, "the point at the camera plane is null");
+  eq(cam.projectPoint(move, 0, { x: 0, y: 0, z: 12 }), null, "the point behind the camera is null");
+});
+
+await test("S121 P2 anim/ik: two-bone IK round-trips, respects the pole, refuses the unreachable", async () => {
+  const ik = await import("../src/lib/tubeforge/anim/ik");
+  const chain = { upper: 1, fore: 1 };
+  // unreachable refused
+  let threw = false;
+  try { ik.solveTwoBone(chain, { x: 3, y: 0 }, { x: 0, y: 1 }); } catch { threw = true; }
+  ok(threw, "a target beyond the reach is refused");
+  // straight reach
+  const straight = ik.solveTwoBone(chain, { x: 2, y: 0 }, { x: 0, y: 1 });
+  ok(Math.abs(straight.hand.x - 2) < 1e-9, "the hand lands on the target");
+  // pole side: elbow above vs below the shoulder->target line
+  const up = ik.solveTwoBone(chain, { x: 1.5, y: 0 }, { x: 0, y: 1 });
+  const down = ik.solveTwoBone(chain, { x: 1.5, y: 0 }, { x: 0, y: -1 });
+  ok(up.elbow.y > 0, "an upward pole bends the elbow up");
+  ok(down.elbow.y < 0, "a downward pole bends the elbow down");
+  // round-trip via FK
+  const pose = ik.solveTwoBone(chain, { x: 1.2, y: 0.4 }, { x: 0, y: 1 });
+  const dx = pose.hand.x - pose.elbow.x;
+  const dy = pose.hand.y - pose.elbow.y;
+  ok(Math.abs(Math.hypot(dx, dy) - 1) < 1e-9, "the forearm length survives the solve");
+  ok(Math.abs(pose.elbow.x * pose.elbow.x + pose.elbow.y * pose.elbow.y - 1) < 1e-6, "the upper length survives the solve");
+});
+
+await test("S121 P2 anim/contact: ownership flows legally or the timeline is refused", async () => {
+  const ct = await import("../src/lib/tubeforge/anim/contact");
+  const legal = [
+    { t: 0, kind: "grab" as const, subject: "hero", object: "sword" },
+    { t: 1.5, kind: "handoff" as const, subject: "hero", object: "sword", to: "squire" },
+    { t: 3, kind: "release" as const, subject: "squire", object: "sword" },
+  ];
+  ct.validateContactTimeline(legal); // must not throw
+  eq(ct.contactOwnersAt(legal, 0.5).get("sword"), "hero", "the hero holds after the grab");
+  eq(ct.contactOwnersAt(legal, 2).get("sword"), "squire", "the squire holds after the handoff");
+  eq(ct.contactOwnersAt(legal, 3.1).has("sword"), false, "nothing holds after the release");
+  const refusals: [string, () => void][] = [
+    ["double grab", () => ct.validateContactTimeline([
+      { t: 0, kind: "grab", subject: "a", object: "x" },
+      { t: 1, kind: "grab", subject: "b", object: "x" },
+    ])],
+    ["release by a non-holder", () => ct.validateContactTimeline([
+      { t: 0, kind: "grab", subject: "a", object: "x" },
+      { t: 1, kind: "release", subject: "b", object: "x" },
+    ])],
+    ["handoff to oneself", () => ct.validateContactTimeline([
+      { t: 0, kind: "grab", subject: "a", object: "x" },
+      { t: 1, kind: "handoff", subject: "a", object: "x", to: "a" },
+    ])],
+    ["release with no holder", () => ct.validateContactTimeline([
+      { t: 0, kind: "release", subject: "a", object: "x" },
+    ])],
+    ["non-ascending t", () => ct.validateContactTimeline([
+      { t: 1, kind: "grab", subject: "a", object: "x" },
+      { t: 0, kind: "release", subject: "a", object: "x" },
+    ])],
+  ];
+  for (const [label, fn] of refusals) {
+    let threw = false;
+    try { fn(); } catch { threw = true; }
+    ok(threw, `the ${label} timeline is refused`);
+  }
+  const summary = ct.contactTimelineSummary(legal);
+  eq(summary[0].holders.join(","), "hero,squire", "the summary lists the holders in order");
+});
+
+await test("S121 P2 anim/gait: the phase rides world distance, never the camera", async () => {
+  const gait = await import("../src/lib/tubeforge/anim/gait");
+  const p = { strideLength: 1, cadence: 2 };
+  eq(gait.gaitPhaseAt(p, 0, 100), 0, "a stationary body stands in phase no matter the clock");
+  eq(gait.gaitPhaseAt(p, 2.5, 0), 2.5, "phase is distance in strides");
+  eq(gait.gaitPhaseAt(p, 2.5, 7), 2.5, "time alone moves nothing — only world distance does");
+  eq(gait.stridePhaseAt(0.1), "stance", "the stance band");
+  eq(gait.stridePhaseAt(0.7), "swing", "the swing band");
+  eq(gait.stridePhaseAt(-0.1), "swing", "a negative phase wraps (no negative output)");
+  const arcMid = gait.footArcAt(0.8, 0.3);
+  ok(arcMid.y > 0 && arcMid.y <= 0.3, "the swing foot lifts on the sine arc");
+  eq(gait.footArcAt(0.1, 0.3).y, 0, "the stance foot is planted");
+  let threw = false;
+  try { gait.validateGaitParams({ strideLength: 0, cadence: 1 }); } catch { threw = true; }
+  ok(threw, "a zero stride is refused");
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
