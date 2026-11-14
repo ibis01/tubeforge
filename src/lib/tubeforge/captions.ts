@@ -282,6 +282,110 @@ export interface AsrWordSpan {
 }
 
 /**
+ * S121 P1 — the ONE measured alignment: the transcript cursor's chunk ends
+ * AND the measured chunk windows, computed together from the measured word
+ * stream. The one-alignment law: caption cues AND the whiteboard's voice
+ * anchors read THIS (previously the two lanes duplicated the cursor+windows
+ * dance). Null when the word stream cannot hold the chunks — the caller
+ * degrades to the proportional rung, byte-identical. Pure.
+ */
+export function measuredAlignment(
+  chunks: CaptionChunk[],
+  words: AsrWordSpan[]
+): { ends: number[]; windows: { startSec: number; endSec: number }[]; tokens: string[] } | null {
+  if (words.length === 0 || chunks.length === 0) return null;
+  // The token stream the greedy cursor works on — the same normalization as
+  // the historical transcript path (one tokenizer, one index space).
+  const tokens = words.map((w) => tokenizeKeepAll(w.word)[0] ?? w.word.trim().toLowerCase());
+  if (tokens.length < chunks[0].words.length) return null; // too few tokens to place even chunk 1
+  const ends = chunkEndPositionsByTranscript(chunks, tokens);
+  const windows = chunkWindowsFromWordTimes(words, ends);
+  if (!windows) return null;
+  return { ends, windows, tokens };
+}
+
+// ---------- S121 P1 — the word→cue grouping rules ----------
+
+/** One measured caption cue: the narration TEXT verbatim + the MEASURED
+ *  window (ms) its words occupy. */
+export interface WordCue {
+  text: string;
+  startMs: number;
+  endMs: number;
+}
+
+// The SVD-derived grouping constants (reimplemented independently — MIT
+// source, audited 2026-11-14). A cue flushes when ANY of these fires.
+const CUE_MAX_WORDS = 8;
+const CUE_MAX_MS = 3_500;
+const CUE_MAX_CHARS = 58;
+const CUE_GAP_MS = 400;
+
+/**
+ * S121 P1 — group the narration's words into caption cues using the MEASURED
+ * word spans: a cue breaks at a real spoken pause (>400 ms between adjacent
+ * words), at sentence punctuation, at 8 words, at 3.5 s, or at 58 chars —
+ * the measured spans decide WHERE cues break, the narration TEXT decides
+ * WHAT they say (a misheard word never enters captions). The narration
+ * arrives as the captions lane's per-chunk texts (the cue text is built from
+ * the chunk words verbatim) and the measured spans align per chunk; a count
+ * drift anywhere → null (the caller keeps the chunk-window cues — never
+ * misaligned captions). Pure — unit-pinned.
+ */
+export function groupWordCues(
+  chunkNarrations: string[],
+  chunkSpans: { startMs: number; endMs: number }[][] | null
+): WordCue[] | null {
+  if (!chunkSpans) return null;
+  // The narration's word stream — the chunk texts' own words in order, so
+  // the cue text is the narration verbatim (punctuation rides along).
+  const narrationWords = chunkNarrations.flatMap((t) => t.trim().split(/\s+/).filter(Boolean));
+  const spans: { startMs: number; endMs: number }[] = chunkSpans.flat();
+  if (narrationWords.length === 0 || spans.length !== narrationWords.length) return null;
+
+  const cues: WordCue[] = [];
+  let text: string[] = [];
+  let startMs = spans[0].startMs;
+  let endMs = spans[0].endMs;
+  let lastSpanEnd = -1;
+  const flush = () => {
+    if (text.length === 0) return;
+    cues.push({ text: text.join(" "), startMs, endMs });
+    text = [];
+  };
+
+  for (let i = 0; i < narrationWords.length; i++) {
+    const word = narrationWords[i];
+    const span = spans[i];
+    // The span stream must march forward — an overlapping stream is a caller
+    // bug and would emit misaligned cues: refuse, never guess.
+    if (span.endMs < span.startMs || span.startMs < lastSpanEnd) return null;
+    lastSpanEnd = span.endMs;
+    if (text.length === 0) {
+      startMs = span.startMs;
+    } else if (span.startMs - endMs > CUE_GAP_MS) {
+      flush(); // a real spoken pause — the cue breaks before this word
+      startMs = span.startMs;
+    }
+    text.push(word);
+    endMs = Math.max(endMs, span.endMs);
+    // The flush rules AFTER the word joins (punctuation, count, duration,
+    // width).
+    if (/[.!?]["')\]]*$/.test(word)) flush();
+    else if (text.length >= CUE_MAX_WORDS) flush();
+    else if (endMs - startMs >= CUE_MAX_MS) flush();
+    else if (text.join(" ").length >= CUE_MAX_CHARS) flush();
+  }
+  flush();
+  // Invariants: no overlap, every span monotone (a violated one is a caller
+  // bug — refuse rather than emit misaligned cues).
+  for (let i = 1; i < cues.length; i++) {
+    if (cues[i].startMs < cues[i - 1].endMs) return null;
+  }
+  return cues.length > 0 ? cues : null;
+}
+
+/**
  * S121 RUNG 1 — the MEASURED chunk windows: instead of spreading the word
  * stream proportionally across the speech runs, each chunk's window is the
  * measured span of the words the transcript cursor assigned to it. The laws
@@ -464,11 +568,15 @@ export async function buildSmartSrt(
     if (opts.asr) {
       try {
         opts.onProgress?.(`Syncing captions for scene ${scene.index} (ASR)`);
-        // S121 RUNG 1 — the MEASURED pass first: word timestamps decide where
-        // chunks sit (the whisperx ±10-30 ms class). Anything that refuses —
-        // a provider without word support (typed signal), a server hiccup,
-        // a word stream that can't hold the chunks — degrades to RUNG 2
-        // below, byte-identical: the ladder never fails a render.
+        // S121 RUNG 1 — the MEASURED pass first, through the ONE alignment
+        // (measuredAlignment — the whiteboard's anchors read the same
+        // computation). Word timestamps decide where cues sit; the
+        // groupWordCues rules break cues at real spoken pauses when the
+        // spans align 1:1 with the narration, chunk-window cues otherwise.
+        // Anything that refuses — a provider without word support (typed
+        // signal), a server hiccup, a word stream that can't hold the
+        // chunks — degrades to RUNG 2 below, byte-identical: the ladder
+        // never fails a render.
         let measured: { text: string; words: AsrWordSpan[] } | null = null;
         try {
           const detailed = await transcribeWords(wavPath);
@@ -478,13 +586,52 @@ export async function buildSmartSrt(
         }
 
         if (measured) {
-          const tokens = measured.words.map(
-            (w) => tokenizeKeepAll(w.word)[0] ?? w.word.trim().toLowerCase()
-          );
-          const measuredEnds = chunkEndPositionsByTranscript(chunks, tokens);
-          const measuredWindows = chunkWindowsFromWordTimes(measured.words, measuredEnds);
-          if (measuredWindows) {
-            const windows = measuredWindows;
+          const aligned = measuredAlignment(chunks, measured.words);
+          if (aligned) {
+            // Per-chunk 1:1 spans (chunk's measured word count == its
+            // narration word count) feed the pause-aware cue grouping; any
+            // drift → the chunk-window cues instead.
+            const perChunkSpans: { startMs: number; endMs: number }[][] = [];
+            let spansAligned = true;
+            for (let ci = 0; ci < chunks.length; ci++) {
+              const startIdx = Math.min(ci === 0 ? 0 : aligned.ends[ci - 1], measured.words.length - 1);
+              const endIdx = Math.min(aligned.ends[ci] - 1, measured.words.length - 1);
+              const chunkNarrationWords = chunks[ci].text.trim().split(/\s+/).filter(Boolean);
+              const chunkWords = endIdx >= startIdx
+                ? measured.words.slice(startIdx, endIdx + 1)
+                : [];
+              if (chunkWords.length === chunkNarrationWords.length && chunkNarrationWords.length > 0) {
+                perChunkSpans.push(
+                  chunkWords.map((w) => ({ startMs: w.start * 1000, endMs: w.end * 1000 }))
+                );
+              } else {
+                spansAligned = false;
+                break;
+              }
+            }
+            const wordCues = spansAligned ? groupWordCues(chunks.map((c) => c.text), perChunkSpans) : null;
+            if (wordCues) {
+              // MEASURED cues — the spans decide where cues break.
+              for (const cue of wordCues) {
+                const wavStart = cue.startMs / 1000;
+                const wavEnd = Math.max(cue.endMs / 1000, wavStart + 0.4);
+                const globalStart = Math.max(
+                  segment.start + 0.02,
+                  segment.start + LEAD_SEC + wavStart - 0.08
+                );
+                const rawEnd = segment.start + LEAD_SEC + wavEnd;
+                cues.push({
+                  start: globalStart,
+                  end: Math.min(rawEnd, segment.start + segment.duration),
+                  text: cue.text,
+                });
+              }
+              method = "asr";
+              continue;
+            }
+            // No 1:1 alignment → the chunk windows still carry the MEASURED
+            // windows (the shared alignment's output).
+            const windows = aligned.windows;
             chunks.forEach((chunk, ci) => {
               const { startSec: wavStart, endSec: rawWavEnd } = windows[ci];
               const globalStart = Math.max(
@@ -501,7 +648,7 @@ export async function buildSmartSrt(
             method = "asr";
             continue;
           }
-          // windows null → fall through to the proportional rung below.
+          // alignment null → fall through to the proportional rung below.
         }
 
         const transcript = await transcribe(wavPath);

@@ -87,6 +87,37 @@ export function isConsentBasis(v: string): v is ConsentBasis {
 }
 
 /**
+ * S121 — the ONE consent decision for the clone flow (the route and the test
+ * pin share this; the law is not duplicated). Given the raw form fields:
+ *   • a statement without a (valid) basis is an error — a claim of right must
+ *     NAME its basis ("own_voice" | "speaker_permission"), never just text;
+ *   • a basis without a statement is also an error — a basis alone records
+ *     nothing auditable;
+ *   • both present + valid basis → the consent that lands on the profile;
+ *   • both absent → undefined (legacy rows keep null; cloning stays allowed
+ *     — the ledger grows as users fill it in, it never blocks a clone).
+ */
+export function parseCloneConsent(
+  consentTextRaw: string,
+  consentBasisRaw: string
+): { ok: true; consent: { text: string; basis: ConsentBasis } | undefined } | { ok: false; error: string } {
+  const text = consentTextRaw.trim();
+  const basis = consentBasisRaw.trim();
+  if (!text && !basis) return { ok: true, consent: undefined };
+  if (text && !isConsentBasis(basis))
+    return {
+      ok: false,
+      error: "consentBasis must be 'own_voice' or 'speaker_permission'",
+    };
+  if (!text && basis)
+    return {
+      ok: false,
+      error: "consentText is required when a consentBasis is given — record the claim itself",
+    };
+  return { ok: true, consent: { text: text.slice(0, 2000), basis: basis as ConsentBasis } };
+}
+
+/**
  * Pick the clone-capable provider to use for a fresh clone, regardless of
  * which TTS provider is currently "active". Order of preference:
  *   1. selfhost — the user's OWN server (saved URL): free Chatterbox, no

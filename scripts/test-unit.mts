@@ -15281,6 +15281,41 @@ await test("S121 consent ledger: the basis vocabulary is closed", async () => {
   eq(legacy.consentBasis, null, "no basis is null, never guessed");
 });
 
+await test("S121 consent ledger: the clone flow's consent law (parseCloneConsent)", async () => {
+  const vc = await import("../src/lib/tubeforge/voice-clone");
+
+  // Both absent → no consent recorded, cloning never blocked.
+  const absent = vc.parseCloneConsent("", "");
+  ok(absent.ok && absent.consent === undefined, "absent consent → undefined, not an error");
+
+  // A statement without a basis is refused — a claim of right must NAME it.
+  const noBasis = vc.parseCloneConsent("This is my own narration voice", "");
+  ok(!noBasis.ok, "statement without basis is refused");
+  ok(!noBasis.ok && /consentBasis must be/.test(noBasis.error), "the refusal names the missing basis");
+
+  // An invalid basis is refused by name (the route 400s with this text).
+  const badBasis = vc.parseCloneConsent("some statement", "found_it_on_youtube");
+  ok(!badBasis.ok, "invalid basis refused");
+  ok(!badBasis.ok && badBasis.error === "consentBasis must be 'own_voice' or 'speaker_permission'",
+    "the error text is the route's 400 body");
+
+  // A basis without a statement records nothing auditable → refused.
+  const bareBasis = vc.parseCloneConsent("", "own_voice");
+  ok(!bareBasis.ok, "basis without statement refused");
+  ok(!bareBasis.ok && /consentText is required/.test(bareBasis.error), "the refusal names the missing statement");
+
+  // Both present + valid basis → the consent that lands on the profile,
+  // with the statement trimmed and length-capped.
+  const good = vc.parseCloneConsent("  Recorded with the speaker  ", "speaker_permission");
+  ok(good.ok && good.consent, "valid consent parsed");
+  eq(good.ok && good.consent.text, "Recorded with the speaker", "the statement is trimmed");
+  eq(good.ok && good.consent.basis, "speaker_permission", "the basis rides through typed");
+
+  // The oversized statement is capped (the row column is bounded).
+  const huge = vc.parseCloneConsent("x".repeat(3000), "own_voice");
+  ok(huge.ok && huge.consent && huge.consent.text.length === 2000, "the statement is capped at 2000 chars");
+});
+
 await test("S121 word-offset arithmetic: chunked audio shifts measured words by the measured chunk start", async () => {
   const verify = await import("../src/lib/tubeforge/verify");
   eq(verify.shiftAsrWord({ word: "hi", start: 1.2, end: 1.5 }, 25), { word: "hi", start: 26.2, end: 26.5 }, "second-chunk offset");
@@ -15303,6 +15338,180 @@ await test("S121 settings: the asr capability follows tts until an ai.asr row is
   eq(asrCfg.model ?? "", ttsCfg.model ?? "", "unset asr rides the tts model");
   eq(asrCfg.baseUrl ?? "", ttsCfg.baseUrl ?? "", "unset asr rides the tts base URL");
   // The ai.asr key is the one way out (the saved row wins).
+});
+
+// ---------- suite: S121 P1 — semantic scene directives + pause-aware captions + evidence-bound review gates ----------
+
+suiteStart("S121 P1 — semantic scene directives + pause-aware captions + evidence-bound review gates");
+
+await test("S121 P1 grouping: measured cues split at real spoken pauses, never misalign", async () => {
+  const captions = await import("../src/lib/tubeforge/captions.ts");
+
+  // One chunk, five words with a big spoken pause between word 2 and 3 —
+  // the >400ms gap flushes a cue boundary.
+  const spans = [
+    [
+      { startMs: 100, endMs: 300 },
+      { startMs: 300, endMs: 500 },
+      { startMs: 1100, endMs: 1400 }, // 600ms gap → flush before this word
+      { startMs: 1400, endMs: 1600 },
+      { startMs: 1600, endMs: 1800 },
+    ],
+  ];
+  const cues = captions.groupWordCues(["one two, three four five"], spans);
+  ok(cues, "cues grouped");
+  eq(cues.length, 2, "the pause split the cue");
+  eq(cues[0].text, "one two,", "cue 0 carries the narration words verbatim");
+  eq(cues[0].startMs, 100, "cue 0 starts at its first word");
+  eq(cues[0].endMs, 500, "cue 0 ends at its last word");
+  eq(cues[1].text, "three four five", "cue 1 carries the rest");
+  eq(cues[1].startMs, 1100, "cue 1 starts at its own first word");
+
+  // Sentence punctuation flushes after the word.
+  const sentence = captions.groupWordCues(["Stop. Look. Listen."], [[
+    { startMs: 0, endMs: 200 },
+    { startMs: 200, endMs: 400 },
+    { startMs: 400, endMs: 600 },
+  ]]);
+  ok(sentence, "sentence cues");
+  eq(sentence.map((c) => c.text), ["Stop.", "Look.", "Listen."], "each sentence is its own cue");
+
+  // Count drift → null (never misaligned captions).
+  eq(
+    captions.groupWordCues(["one two three"], [[
+      { startMs: 0, endMs: 100 },
+      { startMs: 100, endMs: 200 },
+    ]]),
+    null,
+    "text↔speech count drift → null"
+  );
+  // A misheard stream that cannot hold the chunks → the shared alignment refuses.
+  eq(
+    captions.measuredAlignment(captions.captionChunks("one two three."), []),
+    null,
+    "no words → the alignment is null"
+  );
+  // Overlap invariant: a non-monotone span stream is refused, never emitted.
+  eq(
+    captions.groupWordCues(["one two"], [[
+      { startMs: 500, endMs: 600 },
+      { startMs: 100, endMs: 200 },
+    ]]),
+    null,
+    "overlapping cues → null"
+  );
+  // The 8-word cap: a long run without punctuation or pauses splits at 8.
+  const long = captions.groupWordCues(["a b c d e f g h i j"], [[
+    { startMs: 0, endMs: 100 }, { startMs: 100, endMs: 200 }, { startMs: 200, endMs: 300 },
+    { startMs: 300, endMs: 400 }, { startMs: 400, endMs: 500 }, { startMs: 500, endMs: 600 },
+    { startMs: 600, endMs: 700 }, { startMs: 700, endMs: 800 }, { startMs: 800, endMs: 900 },
+    { startMs: 900, endMs: 1000 },
+  ]]);
+  ok(long, "the long run groups");
+  eq(long[0].text, "a b c d e f g h", "the 8-word cap flushes");
+  eq(long[1].text, "i j", "the remainder rides its own cue");
+});
+
+await test("S121 P1 director: the semantic directive vocabulary is policed", async () => {
+  const dp = await import("../src/lib/tubeforge/director-plan.ts");
+
+  // The validator refuses, naming its reason, every hollow form.
+  const refusals: [string, () => void, RegExp][] = [
+    ["bad role", () => dp.validateSceneAction({ role: "vibe" as never, purpose: "the dam breaks", before: "a tall dry wall", after: "water floods the valley" }), /role/],
+    ["generic purpose", () => dp.validateSceneAction({ role: "actor", purpose: "animation", before: "a tall dry wall", after: "water floods the valley" }), /generic/],
+    ["thin purpose", () => dp.validateSceneAction({ role: "actor", purpose: "go", before: "a tall dry wall", after: "water floods the valley" }), /purpose/],
+    ["identical states", () => dp.validateSceneAction({ role: "actor", purpose: "the dam breaks", before: "water floods the valley", after: "water floods the valley" }), /SAME state/],
+    ["thin states", () => dp.validateSceneAction({ role: "actor", purpose: "the dam breaks", before: "wall", after: "flood" }), /too thin/],
+    ["bad cueRef", () => dp.validateSceneAction({ role: "actor", purpose: "the dam breaks", before: "a tall dry wall", after: "water floods the valley", cueRef: "shot-2" }), /cueRef/],
+  ];
+  for (const [label, fn, rx] of refusals) {
+    let message = "";
+    try { fn(); } catch (err) { message = (err as Error).message; }
+    ok(rx.test(message), `the ${label} is refused by name (${message.slice(0, 60)}…)`);
+  }
+  // A concrete directive passes.
+  dp.validateSceneAction({ role: "actor", purpose: "the dam breaks under the flood weight", before: "a tall dry wall", after: "water floods the valley" });
+
+  // parsePlan DROPS invalid directives (never guesses), keeps the valid ones.
+  const plan = dp.parsePlan(JSON.stringify({
+    version: 2, generatedAt: "t", concept: "c",
+    scenes: [{
+      sceneIndex: 1, mood: "m", transitionIn: "", motion: "smart",
+      needsI2V: false, useStock: false, pacing: "normal", ambience: "none", sfx: "none",
+      sceneActions: [
+        { role: "actor", purpose: "the dam breaks under the flood weight", before: "a tall dry wall", after: "water floods the valley", cueRef: "0" },
+        { role: "actor", purpose: "animation", before: "a tall dry wall", after: "water floods the valley" },
+        { role: "prop", purpose: "the lamp shatters on the stone floor", before: "an intact oil lamp", after: "a shattered lamp and spilled oil" },
+        { role: "actor", purpose: "movement" },
+      ],
+      shots: [],
+    }],
+  }));
+  ok(plan, "the plan parses");
+  eq(plan?.scenes[0].sceneActions?.length, 2, "the two hollow directives are dropped, the two concrete ones stay");
+  eq(plan?.scenes[0].sceneActions?.[0].role, "actor", "the kept directive rides typed");
+
+  // sceneScaleMotionFindings: camera movement does not count as acting.
+  const acting = dp.parsePlan(JSON.stringify({
+    version: 2, generatedAt: "t", concept: "c",
+    scenes: [{
+      sceneIndex: 3, mood: "m", transitionIn: "", motion: "smart",
+      needsI2V: false, useStock: false, pacing: "normal", ambience: "none", sfx: "none",
+      sceneActions: [
+        { role: "actor", purpose: "push in for drama", before: "a wide shot of the marketplace", after: "a close-up shot of the marketplace" },
+        { role: "actor", purpose: "the merchant slams the scale down", before: "the merchant holds the scale", after: "the merchant slams the scale onto the counter" },
+      ],
+      shots: [],
+    }],
+  }));
+  ok(acting, "the findings plan parses");
+  const findings = acting ? dp.sceneScaleMotionFindings(acting.scenes[0]) : [];
+  eq(findings.length, 1, "only the frame-move claim is flagged");
+  eq(findings[0]?.sceneIndex, 3, "the finding names its scene");
+  ok(/camera motion does not count as acting/.test(findings[0]?.reason ?? ""), "the finding cites the law");
+});
+
+await test("S121 P1 evidence binding: the override covers the report's CONTENT, not just its timestamp", async () => {
+  const qp = await import("../src/lib/tubeforge/qc-policy.ts");
+
+  // canonicalJson: key order is irrelevant, whitespace-free, recursive.
+  eq(qp.canonicalJson({ b: 2, a: 1 }), '{"a":1,"b":2}', "keys are sorted");
+  eq(qp.canonicalJson({ z: { c: 3, a: [2, 1] }, a: 1 }), '{"a":1,"z":{"a":[2,1],"c":3}}', "nested objects sort recursively, arrays keep order");
+  eq(qp.canonicalJson(null), "null", "null serializes");
+
+  const report = {
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    checks: [
+      { id: "frozen-frames", label: "Frozen frames", status: "fail", value: "2.3s", detail: "hold-last-frame" },
+      { id: "loudness", label: "Loudness", status: "pass", value: "-14.0" },
+    ],
+  };
+  const sameContentLater = { ...report, checkedAt: "2026-02-02T00:00:00.000Z" };
+  eq(qp.reviewEvidenceHash(report), qp.reviewEvidenceHash(sameContentLater), "the SAME content hashes the same across re-measurements");
+  const edited = { ...report, checks: [report.checks[0], { ...report.checks[1], status: "unmeasured" }] };
+  ok(qp.reviewEvidenceHash(edited) !== qp.reviewEvidenceHash(report), "a content change flips the hash");
+  ok(qp.reviewEvidenceHash(report).length === 64, "the hash is sha256 hex");
+
+  // The stamp round-trip.
+  const stamped = qp.stampOverrideNote("ships anyway — the freeze is an editorial hold", report);
+  ok(/^\[evidence:[0-9a-f]{16}\] /.test(stamped), "the note carries the evidence stamp");
+  eq(qp.overrideEvidenceStamp(stamped), qp.reviewEvidenceHash(report).slice(0, 16), "the stamp parses back");
+  eq(qp.overrideNoteText(stamped), "ships anyway — the freeze is an editorial hold", "the human's note rides intact");
+  eq(qp.overrideEvidenceStamp("a legacy note with no stamp"), null, "a legacy note parses to null");
+
+  // The gate: stamped + content matches → valid; content changed → holds again.
+  const override = {
+    qcOverrideAt: new Date(0),
+    qcOverrideNote: stamped,
+    qcOverrideForCheckedAt: "2026-02-02T00:00:00.000Z",
+  };
+  ok(qp.qcOverrideEvidenceValid(override, sameContentLater), "a stamped override covers re-measured SAME content");
+  ok(!qp.qcOverrideEvidenceValid(override, edited), "a content change breaks the override — the gate holds again");
+  // The legacy contract: a stamp-less note keeps the timestamp-only behavior.
+  const legacy = { ...override, qcOverrideNote: "a legacy note with no stamp" };
+  ok(qp.qcOverrideEvidenceValid(legacy, sameContentLater), "a legacy override keeps the timestamp-only contract");
+  // And the base staleness law still applies underneath.
+  ok(!qp.qcOverrideEvidenceValid(override, { ...sameContentLater, checkedAt: "2026-03-03T00:00:00.000Z" }), "a new checkedAt still stales the override");
 });
 
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);

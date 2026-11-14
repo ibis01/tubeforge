@@ -38,6 +38,7 @@
 // final.mp4 download and in-app preview stay open: inspecting a flagged file
 // is how a human decides.
 
+import crypto from "node:crypto";
 import type { QcCheckDTO, QcReportDTO, QcStatusDTO } from "./types";
 
 export type QcSeverity = "block" | "report";
@@ -251,6 +252,88 @@ export function applyQcPolicy(
 // ---------------------------------------------------------------------------
 // The override — a human accepted EXACTLY this report's findings
 // ---------------------------------------------------------------------------
+
+/**
+ * S121 P1 — the canonical JSON: object keys sorted recursively, no
+ * whitespace. Two semantically identical reports serialize to the SAME
+ * string regardless of key order — the evidence hash's foundation.
+ * Pure, unit-pinned.
+ */
+export function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value ?? null);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(",")}}`;
+}
+
+/**
+ * S121 P1 — the review EVIDENCE hash: sha256 over the canonical JSON of the
+ * report's CONTENT (scope + every check's id/label/status/value/detail) —
+ * deliberately EXCLUDING the envelope's timestamps (checkedAt/ranAt/overall/
+ * passed). A re-render that measures the SAME findings hashes the same even
+ * though its checkedAt moved; a report whose CONTENT differs (any finding
+ * edited, added, or dropped) hashes differently. This is what makes the
+ * override cover WHAT a human accepted, not merely WHEN.
+ * Pure, unit-pinned.
+ */
+export function reviewEvidenceHash(report: QcReportLike | null): string {
+  if (!report || !Array.isArray(report.checks)) return "";
+  const content = {
+    scope: report.scope ?? null,
+    checks: report.checks.map((c) => ({
+      id: c.id,
+      label: c.label,
+      status: c.status,
+      value: c.value,
+      detail: c.detail ?? null,
+    })),
+  };
+  return crypto.createHash("sha256").update(canonicalJson(content)).digest("hex");
+}
+
+/** The evidence stamp prefix stamped onto an override note (16 hex is
+ *  plenty for a tamper-evidence tripwire — this is a review binding, not a
+ *  password). */
+export const EVIDENCE_STAMP_RE = /^\[evidence:([0-9a-f]{16})\] /;
+
+/** Stamp an override note with the accepted report's evidence hash. */
+export function stampOverrideNote(note: string, report: QcReportLike): string {
+  return `[evidence:${reviewEvidenceHash(report).slice(0, 16)}] ${note}`;
+}
+
+/** Parse the evidence stamp back out of a stored note. Null = legacy note
+ *  (stamped before S121) — the timestamp-only contract keeps applying. */
+export function overrideEvidenceStamp(note: string | null | undefined): string | null {
+  if (!note) return null;
+  const m = EVIDENCE_STAMP_RE.exec(note);
+  return m ? m[1] : null;
+}
+
+/** The note without its evidence stamp (what the human actually wrote). */
+export function overrideNoteText(note: string | null | undefined): string {
+  if (!note) return "";
+  return note.replace(EVIDENCE_STAMP_RE, "");
+}
+
+/**
+ * S121 P1 — the strengthened override check: the standing qcOverrideValid
+ * contract (override exists + anchors THIS report's checkedAt) PLUS, when
+ * the note carries an evidence stamp, the standing report's CONTENT hash
+ * must still match it. A legacy (stamp-less) note keeps the timestamp-only
+ * contract — backward-compatible by design. A stamped note whose report
+ * content changed (same checkedAt, edited findings) no longer covers the
+ * override: the gate holds again.
+ */
+export function qcOverrideEvidenceValid(
+  override: QcOverrideLike | null | undefined,
+  report: QcReportLike | null
+): boolean {
+  if (!override || !qcOverrideValid(override, report)) return false;
+  const stamp = overrideEvidenceStamp(override.qcOverrideNote);
+  if (stamp === null) return true; // legacy note — timestamp-only contract
+  return stamp === reviewEvidenceHash(report).slice(0, 16);
+}
 
 /** Row shape (Prisma Video or a test fixture). */
 export interface QcOverrideLike {

@@ -14,7 +14,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { getCapability } from "@/lib/tubeforge/providers/settings";
-import { cloneVoice, isCloneProvider, isConsentBasis, pickCloneProvider } from "@/lib/tubeforge/voice-clone";
+import { cloneVoice, isCloneProvider, parseCloneConsent, pickCloneProvider } from "@/lib/tubeforge/voice-clone";
 import { errorText } from "@/lib/tubeforge/redact";
 
 export async function POST(req: NextRequest) {
@@ -62,20 +62,16 @@ export async function POST(req: NextRequest) {
   // S121 consent ledger — the uploader records WHOSE voice this is and the
   // basis of their claim. Optional today (legacy rows have null), persisted
   // on every clone when supplied; the UI prompts for it next to the upload.
-  const consentText =
-    typeof form.get("consentText") === "string" ? String(form.get("consentText")).trim() : "";
+  // The law lives in parseCloneConsent (voice-clone.ts) — shared with its pin.
+  const consentTextRaw =
+    typeof form.get("consentText") === "string" ? String(form.get("consentText")) : "";
   const consentBasisRaw =
-    typeof form.get("consentBasis") === "string" ? String(form.get("consentBasis")).trim() : "";
-  if (consentText && !isConsentBasis(consentBasisRaw)) {
-    return NextResponse.json(
-      { error: "consentBasis must be 'own_voice' or 'speaker_permission'" },
-      { status: 400 }
-    );
+    typeof form.get("consentBasis") === "string" ? String(form.get("consentBasis")) : "";
+  const parsedConsent = parseCloneConsent(consentTextRaw, consentBasisRaw);
+  if (!parsedConsent.ok) {
+    return NextResponse.json({ error: parsedConsent.error }, { status: 400 });
   }
-  const consent =
-    consentText && isConsentBasis(consentBasisRaw)
-      ? { text: consentText, basis: consentBasisRaw }
-      : undefined;
+  const consent = parsedConsent.consent;
 
   if (!(file instanceof File) && typeof url !== "string")
     return NextResponse.json(

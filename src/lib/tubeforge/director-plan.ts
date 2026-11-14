@@ -225,6 +225,10 @@ export interface DirectorScene {
   props?: string[];
   outfit?: string; // cast look for the scene (persisted to CharacterAppearance)
   accessory?: string;
+  /** S121 P1 — the semantic directives: WHO the scene's world-change is
+   *  for, WHY it happens (concrete, validated), and the before→after states.
+   *  Absent on pre-S121 plans; invalid entries are dropped at parse. */
+  sceneActions?: SceneActionDirective[];
   shots: DirectorShot[];
 }
 
@@ -254,7 +258,150 @@ export interface DirectorPlan {
 export type DirectorState = "proposed" | "approved" | "dismissed";
 
 // ---------------------------------------------------------------------------
-// Parse + normalize — the LLM's JSON is a suggestion; this is the contract.
+// S121 P1 — the semantic scene-action directives (the Stickman Video
+// Director's declarative-semantics pattern, MIT source audited 2026-11-14,
+// reimplemented independently). A scene that MOVES something in the story
+// world says WHY: who acts (role), what changes (before → after), and the
+// purpose that names the change. The validator is the law — a generic
+// purpose says nothing and is refused by name.
+// ---------------------------------------------------------------------------
+
+/** What kind of world-change this directive claims. */
+export const SCENE_ACTION_ROLES = ["actor", "prop", "information"] as const;
+export type SceneActionRole = (typeof SCENE_ACTION_ROLES)[number];
+
+export interface SceneActionDirective {
+  role: SceneActionRole;
+  /** WHY the change happens — concrete ("the dam breaks under the flood's
+   *  weight"), never generic ("animation"/"movement"/"nice"). */
+  purpose: string;
+  /** The state before the change (concrete, visual). */
+  before: string;
+  /** The state after the change (concrete, visual). */
+  after: string;
+  /** Optional anchor: a shotIndex ("0") or a narration cue word. */
+  cueRef?: string;
+}
+
+const GENERIC_PURPOSE_WORDS = new Set([
+  "animation", "movement", "motion", "change", "nice", "cool", "action",
+  "effect", "dynamic", "interesting", "visual", "style", "motion-graphic",
+]);
+
+function isGenericPurpose(purpose: string): boolean {
+  const words = purpose.toLowerCase().replace(/[^a-z\s-]/g, " ").split(/\s+/).filter(Boolean);
+  // A purpose made ONLY of generic words says nothing about the story.
+  return words.length > 0 && words.every((w) => GENERIC_PURPOSE_WORDS.has(w));
+}
+
+/**
+ * validateSceneAction — the directive law. Every refusal NAMES its reason
+ * (the LLM's next attempt can fix exactly what broke; the human reviewer
+ * sees the same reason). Throws when the directive says nothing.
+ */
+export function validateSceneAction(a: SceneActionDirective): void {
+  if (!SCENE_ACTION_ROLES.includes(a.role))
+    throw new Error(`scene action refused: role "${a.role}" is not one of ${SCENE_ACTION_ROLES.join(" | ")}`);
+  if (!a.purpose || a.purpose.trim().length < 3)
+    throw new Error("scene action refused: the purpose is missing or too short to name a why (3+ chars)");
+  if (isGenericPurpose(a.purpose))
+    throw new Error(`scene action refused: the purpose "${a.purpose}" is generic — name WHY the world changes (the words animation/movement/nice say nothing)`);
+  if (!a.before || a.before.trim().length < 3)
+    throw new Error("scene action refused: the before state is missing or too short (3+ chars, concrete)");
+  if (!a.after || a.after.trim().length < 3)
+    throw new Error("scene action refused: the after state is missing or too short (3+ chars, concrete)");
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+  if (norm(a.before) === norm(a.after))
+    throw new Error(`scene action refused: before and after describe the SAME state ("${a.before.slice(0, 60)}") — a change that changes nothing is not an action`);
+  if (norm(a.before).split(" ").filter(Boolean).length < 3 || norm(a.after).split(" ").filter(Boolean).length < 3)
+    throw new Error("scene action refused: the before/after whys are too thin — give each state at least 3 words of concrete description");
+  if (a.cueRef !== undefined && a.cueRef !== "" && !/^\d{1,3}$/.test(a.cueRef.trim()))
+    throw new Error(`scene action refused: cueRef "${a.cueRef.slice(0, 20)}" must be a shotIndex number (or omitted)`);
+}
+
+/** Parse + validate ONE raw directive entry; null = invalid (dropped). */
+function normalizeSceneAction(raw: Record<string, unknown>): SceneActionDirective | null {
+  if (!raw || typeof raw !== "object") return null;
+  const role = asString(raw.role).toLowerCase();
+  const directive: SceneActionDirective = {
+    role: (SCENE_ACTION_ROLES as readonly string[]).includes(role) ? (role as SceneActionRole) : "actor",
+    purpose: asString(raw.purpose).slice(0, 200),
+    before: asString(raw.before).slice(0, 200),
+    after: asString(raw.after).slice(0, 200),
+    cueRef: asString(raw.cueRef).slice(0, 8) || undefined,
+  };
+  try {
+    validateSceneAction(directive);
+    return directive;
+  } catch {
+    /* the caller sees a plan without the junk entry — parse never guesses */
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// S121 P1 — scene-scale motion vs ACTING (the SVD law "camera movement does
+// not count as acting", reimplemented). A role:"actor" directive whose
+// before/after differ only by WHOLE-FRAME vocabulary (camera verbs, framings,
+// compositions) and add no new subject content is an ADVISORY finding: the
+// plan claims the world acted when only the frame moved. Nothing auto-edits
+// the plan — the finding rides the critic's motion dimension for the human.
+// ---------------------------------------------------------------------------
+
+const WHOLE_FRAME_WORDS = new Set([
+  // camera verbs (CAMERA_MOVES + legacy vocabulary)
+  "static", "hold", "punch", "punch-in", "zoom", "zoom-in", "zoom-out", "pan",
+  "pan-left", "pan-right", "pan-up", "pan-down", "tilt", "tilt-up", "tilt-down",
+  "crane", "crane-up", "crane-down", "dolly", "dolly-in", "dolly-out",
+  "truck-left", "truck-right", "pedestal-up", "pedestal-down", "drift",
+  "handheld", "tracking", "orbit", "push-in", "pull-out", "ken-burns",
+  // framing / composition vocabulary
+  "wide", "medium", "close-up", "closeup", "close", "extreme", "shot",
+  "framing", "composition", "angle", "camera", "frame", "view", "crops",
+  "rule-of-thirds", "centered", "center", "left", "right", "upper", "lower",
+  "the", "a", "an", "of", "on", "in", "to", "and", "with", "into", "over",
+]);
+
+function contentWords(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 0 && !WHOLE_FRAME_WORDS.has(w));
+}
+
+export interface SceneScaleMotionFinding {
+  sceneIndex: number;
+  actionIndex: number;
+  reason: string;
+}
+
+/**
+ * sceneScaleMotionFindings — the plan-time advisory sweep. For every
+ * ACTING-role directive whose after adds NO new content beyond whole-frame
+ * vocabulary (the after's content words are a subset of the before's), the
+ * claimed acting is really scene-scale motion. Pure; empty when nothing
+ * claims acting through camera moves.
+ */
+export function sceneScaleMotionFindings(scene: DirectorScene): SceneScaleMotionFinding[] {
+  const findings: SceneScaleMotionFinding[] = [];
+  const actions = scene.sceneActions ?? [];
+  for (let i = 0; i < actions.length; i++) {
+    const a = actions[i];
+    if (a.role !== "actor") continue;
+    const beforeContent = new Set(contentWords(a.before));
+    const afterContent = contentWords(a.after);
+    const genuinelyNew = afterContent.filter((w) => !beforeContent.has(w));
+    if (genuinelyNew.length === 0) {
+      findings.push({
+        sceneIndex: scene.sceneIndex,
+        actionIndex: i,
+        reason: `acting claim "${a.purpose.slice(0, 60)}" only moves the frame (before/after share all subject content) — camera motion does not count as acting; give the SUBJECT an action or demote the directive`,
+      });
+    }
+  }
+  return findings;
+}
 
 function asString(v: unknown, fallback = ""): string {
   return typeof v === "string" ? v.trim() : fallback;
@@ -348,6 +495,12 @@ export function parsePlan(json: string | null | undefined): DirectorPlan | null 
       props: asNameList(so.props, 3),
       outfit: asString(so.outfit).slice(0, 160) || undefined,
       accessory: asString(so.accessory).slice(0, 160) || undefined,
+      // S121 P1 — the semantic directives: every entry validated, invalid
+      // ones DROPPED (parsePlan never guesses; a plan full of junk actions
+      // parses to a plan with no actions, never to invented ones).
+      sceneActions: (Array.isArray(so.sceneActions) ? so.sceneActions : [])
+        .map((a) => normalizeSceneAction(a as Record<string, unknown>))
+        .filter((a): a is SceneActionDirective => a !== null),
       shots: shots.sort((a, b) => a.shotIndex - b.shotIndex),
     });
   }

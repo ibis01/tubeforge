@@ -18,6 +18,13 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { clsx } from "clsx";
 import {
@@ -53,6 +60,9 @@ interface CloneProfile {
   sourceLabel: string | null;
   durationSec: number | null;
   hasAudition: boolean;
+  // S121 consent ledger — the recorded basis claim (null = not recorded)
+  hasConsent?: boolean;
+  consentBasis?: string | null;
   createdAt: string;
 }
 
@@ -80,6 +90,12 @@ export function VoiceView() {
   const [cloneUrl, setCloneUrl] = useState("");
   const [cloneName, setCloneName] = useState("");
   const [cloneSampleText, setCloneSampleText] = useState("");
+  // S121 consent ledger — WHOSE voice this is and the basis of the claim.
+  // Empty basis = no consent recorded (legacy rows stay null; the API only
+  // persists what is supplied). The statement alone is not enough: the basis
+  // must name the claim ("own_voice" | "speaker_permission") or nothing is sent.
+  const [cloneConsentBasis, setCloneConsentBasis] = useState<"" | "own_voice" | "speaker_permission">("");
+  const [cloneConsentText, setCloneConsentText] = useState("");
   const [cloning, setCloning] = useState(false);
 
   // Clone-time previews still synthesizing on the (CPU-bound) voice server.
@@ -227,6 +243,15 @@ export function VoiceView() {
       toast({ title: "Paste a direct audio link first", variant: "destructive" });
       return;
     }
+    const consentStatement = cloneConsentText.trim();
+    if (consentStatement && !cloneConsentBasis) {
+      toast({
+        title: "Pick who owns the voice",
+        description: "A consent statement needs its basis — “my own voice” or “I have the speaker's permission”.",
+        variant: "destructive",
+      });
+      return;
+    }
     setCloning(true);
     try {
       const fd = new FormData();
@@ -234,6 +259,10 @@ export function VoiceView() {
       else fd.append("url", cloneUrl.trim());
       if (cloneName.trim()) fd.append("name", cloneName.trim());
       if (cloneSampleText.trim()) fd.append("sampleText", cloneSampleText.trim());
+      if (consentStatement && cloneConsentBasis) {
+        fd.append("consentText", consentStatement);
+        fd.append("consentBasis", cloneConsentBasis);
+      }
       const res = await fetch("/api/voices/clone", { method: "POST", body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Voice cloning failed");
@@ -243,6 +272,8 @@ export function VoiceView() {
       setCloneUrl("");
       setCloneName("");
       setCloneSampleText("");
+      setCloneConsentBasis("");
+      setCloneConsentText("");
       if (data.audition?.pending && data.profile?.id) {
         setPendingAuditions((a) => [...a, data.profile.id]);
         pollAudition(data.profile.id);
@@ -809,6 +840,42 @@ export function VoiceView() {
               </div>
             </div>
 
+            {/* S121 consent ledger — recorded on the profile next to the sample */}
+            <div className="grid gap-3 sm:grid-cols-[180px_1fr]">
+              <div className="space-y-1.5">
+                <Label htmlFor="clone-consent-basis" className="text-xs text-muted-foreground">
+                  Consent basis
+                </Label>
+                <Select
+                  value={cloneConsentBasis || undefined}
+                  onValueChange={(v) => setCloneConsentBasis(v as "own_voice" | "speaker_permission")}
+                  disabled={cloning}
+                >
+                  <SelectTrigger id="clone-consent-basis" className="bg-white/5 h-9 text-xs w-full">
+                    <SelectValue placeholder="Not recorded" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="own_voice">My own voice</SelectItem>
+                    <SelectItem value="speaker_permission">I have the speaker's permission</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="clone-consent-text" className="text-xs text-muted-foreground">
+                  Consent statement (optional)
+                </Label>
+                <Input
+                  id="clone-consent-text"
+                  value={cloneConsentText}
+                  onChange={(e) => setCloneConsentText(e.target.value)}
+                  placeholder="e.g. “This is my own narration voice” — kept with the profile"
+                  className="bg-white/5 h-9 text-xs"
+                  disabled={cloning}
+                  maxLength={600}
+                />
+              </div>
+            </div>
+
             <Button
               onClick={doClone}
               disabled={cloning || (cloneMode === "upload" ? !cloneFile : !cloneUrl.trim())}
@@ -880,6 +947,12 @@ export function VoiceView() {
                     {p.sourceLabel ?? "sample"}
                     {p.durationSec ? ` · ${p.durationSec.toFixed(0)}s` : ""} ·{" "}
                     {PROVIDER_LABELS[p.provider] ?? p.provider}
+                    {p.hasConsent && p.consentBasis && (
+                      <span className="text-emerald-300/80">
+                        {" "}
+                        · consent: {p.consentBasis === "own_voice" ? "own voice" : "speaker permission"}
+                      </span>
+                    )}
                     {previewPending && (
                       <span className="text-amber-200/80"> · generating preview…</span>
                     )}
