@@ -144,6 +144,26 @@ import {
   sceneSegmentSec,
   splitNarrationAt,
 } from "../src/lib/tubeforge/clip-ops";
+import { ANIM_FRAME_BUDGET } from "../src/lib/tubeforge/anim/clock";
+import {
+  GRAPHICS_BUDGETS,
+  GRAPHICS_ELEMENT_KINDS,
+  GRAPHICS_FRAME_BUDGET,
+  GRAPHICS_VERSION,
+  legalMotions,
+  MOTION_KINDS_BY_ELEMENT,
+  parseGraphicsDoc,
+  validGraphicsId,
+  validateGraphicsDoc,
+  writeGraphicsDoc,
+  type GraphicsDoc,
+} from "../src/lib/tubeforge/graphics/types";
+import {
+  frameAt,
+  graphicsFrameCount,
+  GRAPHICS_MOTION_SEMANTICS,
+  type GraphicsFrameState,
+} from "../src/lib/tubeforge/graphics/frame";
 
 const execFileAsync = promisify(execFile);
 
@@ -15063,6 +15083,585 @@ await test("W7 seams: the render consumes the family + the sfx layer; the page s
   for (const pose of ["write", "draw", "point", "circle", "rest"]) {
     ok(html.includes(`data-pose="${pose}"`), `the ${pose} group is in the page`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// G1.1 — the GraphicsDoc grammar + validator (S120 §5). Pure units over the
+// closed v1 element set. Pins (Part B): the mixed doc round-trips
+// byte-identical, wall violations reject with NAMED walls, tolerant parse of
+// v-next fields, the id-charset law — plus the compatibility table, group
+// integrity, and time-sanity enforcement.
+// ---------------------------------------------------------------------------
+
+suiteStart("graphics — G1.1 the doc contract + validator");
+
+const G_SLOT: Record<string, string> = {
+  headline: "text", subhead: "text", bullet: "text", counter: "counter",
+  bar: "bar", barChart: "bar", icon: "icon", callout: "callout",
+  shape: "shape", group: "group",
+};
+
+function gPayload(kind: string): Record<string, unknown> {
+  switch (kind) {
+    case "headline": return { text: "Big title" };
+    case "subhead": return { text: "Sub title" };
+    case "bullet": return { text: "A point" };
+    case "counter": return { from: 0, to: 100, unit: "%", decimals: 0 };
+    case "bar":
+    case "barChart": return { data: [{ label: "a", value: 1 }, { label: "b", value: 2 }] };
+    case "icon": return { paths: ["M 0 0 L 8 8 L 16 0"] };
+    case "callout": return { text: "note", pointsAt: { x: 10, y: 20 } };
+    case "shape": return { kind: "rect", w: 120, h: 60 };
+    default: return { children: [] };
+  }
+}
+
+function gEl(id: string, kind: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id,
+    kind,
+    at: { x: 120, y: 96, scale: 1, rotateDeg: 0 },
+    [G_SLOT[kind]]: gPayload(kind),
+    enter: { kind: "fade", durationMs: 500, delayMs: 0, ease: "ease-out" },
+    ...extra,
+  };
+}
+
+function gScene(id: string, elements: unknown[], extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return { id, narration: "two short words", background: "#ffffff", elements, ...extra };
+}
+
+function gDoc(scenes: unknown[], extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return { version: GRAPHICS_VERSION, title: "g1.1 fixture", width: 1920, height: 1080, fps: 24, scenes, ...extra };
+}
+
+function mustParse(json: string, label: string): GraphicsDoc {
+  const d = parseGraphicsDoc(json);
+  if (d === null) throw new Error(`${label} — parseGraphicsDoc returned null`);
+  return d;
+}
+
+function mustValidate(raw: unknown, label: string): GraphicsDoc {
+  const r = validateGraphicsDoc(raw);
+  if (r.doc === null) throw new Error(`${label} — errors: ${r.errors.join(" | ")}`);
+  return r.doc;
+}
+
+function mustReject(r: { doc: GraphicsDoc | null; errors: string[] }, label: string): string[] {
+  if (r.doc !== null) throw new Error(`${label} — expected a rejection, got a doc`);
+  if (r.errors.length === 0) throw new Error(`${label} — rejected with no errors`);
+  return r.errors;
+}
+
+const MIXED_RAW = gDoc([
+  gScene("s1", [
+    gEl("h1", "headline", {
+      text: { text: "Big title", sizePx: 64, weight: 800, color: "#112233", align: "center" },
+      enter: { kind: "rise", durationMs: 600, delayMs: 0, ease: "ease-back" },
+      exit: { kind: "fade", durationMs: 400, delayMs: 3400, ease: "linear" },
+      opacity: 0.9,
+    }),
+    gEl("sh", "subhead", { enter: { kind: "slide", durationMs: 500, delayMs: 200, ease: "ease-in-out" } }),
+    gEl("bl", "bullet", { enter: { kind: "pop", durationMs: 300, delayMs: 400, ease: "pop" } }),
+    gEl("cn", "counter", {
+      enter: { kind: "count", durationMs: 1200, delayMs: 600, ease: "linear" },
+      emphasis: { kind: "pop", durationMs: 300, delayMs: 2200, ease: "pop" },
+    }),
+    gEl("br", "bar", { enter: { kind: "wipe", durationMs: 800, delayMs: 300, ease: "ease-out" } }),
+    gEl("bc", "barChart", { enter: { kind: "grow", durationMs: 900, delayMs: 300, ease: "ease-out" } }),
+    gEl("ic1", "icon", { enter: { kind: "draw", durationMs: 1000, delayMs: 500, ease: "linear" } }),
+    gEl("co", "callout", { enter: { kind: "rise", durationMs: 400, delayMs: 800, ease: "ease-out" } }),
+    gEl("sp", "shape", { enter: { kind: "grow", durationMs: 500, delayMs: 100, ease: "ease-out" } }),
+    gEl("grp", "group", { group: { children: ["h1", "ic1"] } }),
+  ]),
+]);
+
+await test("G1.1 the mixed v1 doc — every element kind — round-trips byte-identical", () => {
+  const doc1 = mustParse(JSON.stringify(MIXED_RAW), "the mixed doc");
+  eq(doc1.scenes[0]?.elements.length, 10, "all ten element kinds kept");
+  const json1 = writeGraphicsDoc(doc1);
+  const doc2 = mustParse(json1, "the written doc");
+  eq(writeGraphicsDoc(doc2), json1, "write→parse→write is byte-identical");
+});
+
+await test("G1.1 validation is deterministic — same input, same report, byte-identical", () => {
+  mustValidate(MIXED_RAW, "the mixed doc");
+  const a = validateGraphicsDoc(MIXED_RAW);
+  const b = validateGraphicsDoc(MIXED_RAW);
+  eq(JSON.stringify(a), JSON.stringify(b), "same input → same report");
+});
+
+await test("G1.1 a higher version parses with a warning (v-next loads in v1 readers)", () => {
+  const r = validateGraphicsDoc(gDoc([gScene("s1", [gEl("h1", "headline")])], { version: 2, futureField: 1 }));
+  ok(r.doc !== null, "the v-next doc loads — errors: " + r.errors.join(" | "));
+  ok(r.warnings.some((w) => w.includes("version 2")), "the version warning names the version");
+  ok(r.warnings.some((w) => w.includes('unknown field "futureField"')), "v-next doc fields drop with warnings");
+});
+
+await test("G1.1 a junk version shape is unreadable — errors + parse null", () => {
+  const noVersion = gDoc([gScene("s1", [gEl("h1", "headline")])]);
+  const { version: _baseVersion, ...versionless } = noVersion;
+  for (const bad of [{ version: "1" }, { version: 1.5 }, {}]) {
+    const raw = { ...versionless, ...bad };
+    const r = validateGraphicsDoc(raw);
+    mustReject(r, `version ${JSON.stringify(bad.version ?? "(absent)")}`);
+    eq(parseGraphicsDoc(JSON.stringify(raw)), null, "parseGraphicsDoc nulls on the wrong version shape");
+  }
+});
+
+await test("G1.1 the id-charset law rejects separator-carrying and malformed ids", () => {
+  for (const bad of ["a--b", "a::b", "-lead", "x".repeat(65), "sp ace", ""]) {
+    const r = validateGraphicsDoc(gDoc([gScene("s1", [gEl(bad, "headline")])]));
+    const errors = mustReject(r, `element id "${bad.slice(0, 12)}"`);
+    ok(errors.some((e) => e.includes("id law")), "the error names the id law");
+  }
+  const rScene = validateGraphicsDoc(gDoc([gScene("bad--scene", [gEl("h1", "headline")])]));
+  mustReject(rScene, "scene id with a separator");
+  ok(rScene.errors.some((e) => e.includes("id law")), "the law covers scene ids too");
+});
+
+await test("G1.1 validGraphicsId mirrors the whiteboard law exactly", () => {
+  eq(validGraphicsId("h1"), true, "plain");
+  eq(validGraphicsId("ok.id_1-2"), true, "charset");
+  eq(validGraphicsId("a--b"), false, "the -- separator ban");
+  eq(validGraphicsId("a::b"), false, "the :: separator ban");
+  eq(validGraphicsId("-lead"), false, "must start alphanumeric/underscore");
+  eq(validGraphicsId("x".repeat(65)), false, "the 64-char cap");
+  eq(validGraphicsId(""), false, "empty");
+});
+
+await test("G1.1 the elementsPerScene wall rejects with its name", () => {
+  const many = Array.from({ length: GRAPHICS_BUDGETS.elementsPerScene + 1 }, (_, i) => gEl(`e${i}`, "bullet"));
+  const errors = mustReject(validateGraphicsDoc(gDoc([gScene("s1", many)])), "33 elements");
+  ok(errors.some((e) => e.includes("elementsPerScene wall")), "the error names the wall");
+});
+
+await test("G1.1 the scenesPerProject wall rejects with its name", () => {
+  const scenes = Array.from({ length: GRAPHICS_BUDGETS.scenesPerProject + 1 }, (_, i) => gScene(`s${i}`, [gEl("h1", "headline")]));
+  const errors = mustReject(validateGraphicsDoc(gDoc(scenes)), "25 scenes");
+  ok(errors.some((e) => e.includes("scenesPerProject wall")), "the error names the wall");
+});
+
+await test("G1.1 the sceneDurationMsMax wall rejects with its name", () => {
+  const errors = mustReject(
+    validateGraphicsDoc(gDoc([gScene("s1", [gEl("h1", "headline")], { durationMs: GRAPHICS_BUDGETS.sceneDurationMsMax + 1000 })])),
+    "121s scene",
+  );
+  ok(errors.some((e) => e.includes("sceneDurationMsMax wall")), "the error names the wall");
+});
+
+await test("G1.1 the projectExplicitDurationMsMax wall rejects with its name", () => {
+  const scenes = Array.from({ length: 8 }, (_, i) =>
+    gScene(`s${i}`, [gEl("h1", "headline")], { durationMs: GRAPHICS_BUDGETS.sceneDurationMsMax }));
+  const errors = mustReject(validateGraphicsDoc(gDoc(scenes)), "8×120s = 960s > 900s");
+  ok(errors.some((e) => e.includes("projectExplicitDurationMsMax wall")), "the error names the wall");
+});
+
+await test("G1.1 the barDataMax wall rejects with its name", () => {
+  const rows = Array.from({ length: GRAPHICS_BUDGETS.barDataMax + 1 }, (_, i) => ({ label: `r${i}`, value: i }));
+  const errors = mustReject(validateGraphicsDoc(gDoc([gScene("s1", [gEl("br", "bar", { bar: { data: rows } })])])), "9 bar rows");
+  ok(errors.some((e) => e.includes("barDataMax wall")), "the error names the wall");
+});
+
+await test("G1.1 the iconPathCommandBudget wall rejects with its name; junk paths refuse", () => {
+  const big = `M0 0${" L1 1".repeat(512)}`;
+  const errors = mustReject(validateGraphicsDoc(gDoc([gScene("s1", [gEl("ic", "icon", { icon: { paths: [big] } })])])), "513 commands");
+  ok(errors.some((e) => e.includes("iconPathCommandBudget wall")), "the error names the wall");
+  const junk = validateGraphicsDoc(gDoc([gScene("s1", [gEl("ic2", "icon", { icon: { paths: ["!!!"] } })])]));
+  mustReject(junk, "a non-path");
+  ok(junk.errors.some((e) => e.includes("does not parse")), "countPathCommands is the unit of account");
+});
+
+await test("G1.1 the groupDepthMax wall rejects with its name", () => {
+  const errors = mustReject(validateGraphicsDoc(gDoc([gScene("s1", [
+    gEl("h1", "headline"),
+    gEl("g2", "group", { group: { children: ["h1"] } }),
+    gEl("g1", "group", { group: { children: ["g2"] } }),
+  ])])), "nested groups");
+  ok(errors.some((e) => e.includes("groupDepthMax wall")), "the error names the wall");
+});
+
+await test("G1.1 the compatibility table rejects cross-kind motions by name", () => {
+  const r1 = validateGraphicsDoc(gDoc([gScene("s1", [gEl("h1", "headline", { enter: { kind: "count", durationMs: 500, delayMs: 0, ease: "linear" } })])]));
+  const e1 = mustReject(r1, "count on a headline");
+  ok(e1.some((e) => e.includes('not legal on a "headline"')), "a count on a headline is a doc bug, not a renderer branch");
+  const r2 = validateGraphicsDoc(gDoc([gScene("s1", [gEl("sh", "subhead", { enter: { kind: "draw", durationMs: 500, delayMs: 0, ease: "linear" } })])]));
+  mustReject(r2, "draw on a subhead");
+  const clean = mustValidate(gDoc([gScene("s1", [
+    gEl("br", "bar", { enter: { kind: "wipe", durationMs: 500, delayMs: 0, ease: "ease-out" } }),
+    gEl("bc", "barChart", { enter: { kind: "grow", durationMs: 500, delayMs: 0, ease: "ease-out" } }),
+    gEl("ic", "icon", { enter: { kind: "draw", durationMs: 500, delayMs: 0, ease: "linear" } }),
+    gEl("cn", "counter", { enter: { kind: "count", durationMs: 500, delayMs: 0, ease: "linear" } }),
+    gEl("grp", "group", { group: { children: ["cn"] } }),
+  ])]), "the legal combos");
+  eq(clean.scenes[0]?.elements.length, 5, "legal combos all keep");
+});
+
+await test("G1.1 enter is required — an element that cannot enter has no reason to exist", () => {
+  const el = gEl("h1", "headline");
+  delete el.enter;
+  const errors = mustReject(validateGraphicsDoc(gDoc([gScene("s1", [el])])), "missing enter");
+  ok(errors.some((e) => e.includes("enter is required")), "the error names the enter slot");
+});
+
+await test("G1.1 unknown element kinds drop with warnings (the closed v1 set)", () => {
+  const doc = mustValidate(gDoc([gScene("s1", [gEl("h1", "headline"), gEl("m1", "marquee")])]), "mixed known/unknown kinds");
+  eq(doc.scenes[0]?.elements.length, 1, "the unknown kind dropped, the known kind kept");
+  const r = validateGraphicsDoc(gDoc([gScene("s1", [gEl("m1", "marquee")])]));
+  ok(r.warnings.some((w) => w.includes("unknown element kind")), "the warning explains the drop");
+});
+
+await test("G1.1 unknown fields drop with warnings at every level", () => {
+  const r = validateGraphicsDoc(gDoc(
+    [gScene("s1", [gEl("h1", "headline", { color2: "#ff0000" })], { board: "clean" })],
+    { futureDocField: true },
+  ));
+  ok(r.doc !== null, "unknown fields — the doc still parses: " + r.errors.join(" | "));
+  ok(r.warnings.some((w) => w.includes('unknown field "color2"')), "element level");
+  ok(r.warnings.some((w) => w.includes('unknown field "board"')), "scene level");
+  ok(r.warnings.some((w) => w.includes('unknown field "futureDocField"')), "doc level");
+});
+
+await test("G1.1 junk optional fields drop honestly; ranges clamp with warnings", () => {
+  const doc = mustValidate(gDoc([gScene("s1", [
+    gEl("h1", "headline", { text: { text: "T", sizePx: "x", weight: 5000, align: "middle" }, opacity: 2 }),
+  ])]), "junk optionals");
+  eq(doc.scenes[0]?.elements[0]?.text?.sizePx, undefined, "junk sizePx dropped — absent stays absent");
+  eq(doc.scenes[0]?.elements[0]?.text?.weight, 900, "weight 5000 clamps to 900");
+  eq(doc.scenes[0]?.elements[0]?.opacity, 1, "opacity 2 clamps to 1");
+  ok(doc.scenes[0]?.elements[0]?.text?.align === undefined, "junk align dropped");
+  const r = validateGraphicsDoc(gDoc([gScene("s1", [
+    gEl("h1", "headline", { text: { text: "T", weight: 5000 } }),
+  ])]));
+  ok(r.warnings.some((w) => w.includes("clamped")), "the clamp says so");
+});
+
+await test("G1.1 an absent payload for a kind that has one warns but never refuses", () => {
+  const el = gEl("h1", "headline");
+  delete el.text;
+  const doc = mustValidate(gDoc([gScene("s1", [el])]), "payloadless headline");
+  ok(doc.scenes[0]?.elements[0]?.text === undefined, "the payload stays absent");
+  const r = validateGraphicsDoc(gDoc([gScene("s1", [el])]));
+  ok(r.warnings.some((w) => w.includes("payload is absent")), "the composer-fallback note");
+});
+
+await test("G1.1 a payload parked under the wrong kind is ignored with a warning", () => {
+  const doc = mustValidate(gDoc([gScene("s1", [gEl("br", "bar", { text: { text: "stray" } })])]), "stray payload");
+  ok(doc.scenes[0]?.elements[0]?.text === undefined && doc.scenes[0]?.elements[0]?.bar !== undefined, "the stray payload is not on the doc");
+  const r = validateGraphicsDoc(gDoc([gScene("s1", [gEl("br", "bar", { text: { text: "stray" } })])]));
+  ok(r.warnings.some((w) => w.includes('a "text" payload on a "bar" is ignored')), "payload-per-kind enforced on read");
+});
+
+await test("G1.1 the counter shape: from < to, finite, decimals 0|1|2", () => {
+  const r1 = validateGraphicsDoc(gDoc([gScene("s1", [gEl("cn", "counter", { counter: { from: 100, to: 0 } })])]));
+  const e1 = mustReject(r1, "from ≥ to");
+  ok(e1.some((e) => e.includes("count-up law")), "the v1 count-up law names itself");
+  const r2 = validateGraphicsDoc(gDoc([gScene("s1", [gEl("cn", "counter", { counter: { from: "x", to: 10 } })])]));
+  mustReject(r2, "junk from");
+  const doc = mustValidate(gDoc([gScene("s1", [gEl("cn", "counter", { counter: { from: 0, to: 10, decimals: 3 } })])]), "junk decimals");
+  ok(doc.scenes[0]?.elements[0]?.counter?.decimals === undefined, "decimals 3 dropped");
+});
+
+await test("G1.1 the bar shape: 1..barDataMax rows, label + finite value ≥ 0", () => {
+  const empty = validateGraphicsDoc(gDoc([gScene("s1", [gEl("br", "bar", { bar: { data: [] } })])]));
+  const e1 = mustReject(empty, "empty data");
+  ok(e1.some((e) => e.includes("1..8")), "the row band names itself");
+  const junk = validateGraphicsDoc(gDoc([gScene("s1", [gEl("br", "bar", { bar: { data: [{ label: "a", value: "x" }] } })])]));
+  mustReject(junk, "junk row");
+  const neg = validateGraphicsDoc(gDoc([gScene("s1", [gEl("br", "bar", { bar: { data: [{ label: "a", value: -1 }] } })])]));
+  mustReject(neg, "negative value");
+});
+
+await test("G1.1 group integrity: missing child and self-reference reject; dupes dedupe with a warning", () => {
+  const missing = validateGraphicsDoc(gDoc([gScene("s1", [gEl("grp", "group", { group: { children: ["ghost"] } })])]));
+  mustReject(missing, "missing child");
+  const self = validateGraphicsDoc(gDoc([gScene("s1", [gEl("grp", "group", { group: { children: ["grp"] } })])]));
+  mustReject(self, "self-reference");
+  const doc = mustValidate(gDoc([gScene("s1", [
+    gEl("h1", "headline"),
+    gEl("grp", "group", { group: { children: ["h1", "h1"] } }),
+  ])]), "dupe children");
+  eq(doc.scenes[0]?.elements[1]?.group?.children.length, 1, "deduplicated");
+  const r = validateGraphicsDoc(gDoc([gScene("s1", [
+    gEl("h1", "headline"),
+    gEl("grp", "group", { group: { children: ["h1", "h1"] } }),
+  ])]));
+  ok(r.warnings.some((w) => w.includes("deduplicated")), "the dedupe warns");
+});
+
+await test("G1.1 time sanity: negative delay, zero clock, spans past the scene clock", () => {
+  const neg = validateGraphicsDoc(gDoc([gScene("s1", [gEl("h1", "headline", { enter: { kind: "fade", durationMs: 500, delayMs: -1, ease: "linear" } })])]));
+  const e1 = mustReject(neg, "negative delay");
+  ok(e1.some((e) => e.includes("delayMs")), "the error names delayMs");
+  const zeroScene = validateGraphicsDoc(gDoc([gScene("s1", [gEl("h1", "headline")], { durationMs: 0 })]));
+  mustReject(zeroScene, "zero scene clock");
+  const past = validateGraphicsDoc(gDoc([gScene("s1", [gEl("h1", "headline", { enter: { kind: "fade", durationMs: 500, delayMs: 5000, ease: "linear" } })])]));
+  const e3 = mustReject(past, "span past the clock");
+  ok(e3.some((e) => e.includes("past the scene clock")), "the span check names the clock");
+});
+
+await test("G1.1 the estimated clock (absent durationMs) uses the house 2.6-wps model", () => {
+  const words40 = Array.from({ length: 40 }, () => "word").join(" "); // ≈ 15385ms
+  const fits = mustValidate(gDoc([gScene("s1", [
+    gEl("h1", "headline", { enter: { kind: "fade", durationMs: 300, delayMs: 15000, ease: "linear" } }),
+  ], { narration: words40 })]), "15300ms fits the 40-word estimate");
+  eq(fits.scenes[0]?.elements.length, 1, "parses on the estimate");
+  const explicitShort = validateGraphicsDoc(gDoc([gScene("s1", [
+    gEl("h1", "headline", { enter: { kind: "fade", durationMs: 300, delayMs: 15000, ease: "linear" } }),
+  ], { narration: words40, durationMs: 5000 })]));
+  const e2 = mustReject(explicitShort, "the explicit clock overrides the estimate");
+  ok(e2.some((e) => e.includes("past the scene clock")), "15300ms > 5000ms — rejected");
+});
+
+await test("G1.1 fps ∈ {24, 30}; the surface must be a house size", () => {
+  const fps60 = validateGraphicsDoc(gDoc([gScene("s1", [gEl("h1", "headline")])], { fps: 60 }));
+  mustReject(fps60, "fps 60");
+  const oddSize = validateGraphicsDoc(gDoc([gScene("s1", [gEl("h1", "headline")])], { width: 1280, height: 720 }));
+  const e2 = mustReject(oddSize, "1280×720");
+  ok(e2.some((e) => e.includes("house surface")), "the surface check names the house sizes");
+  for (const [w, h] of [[1920, 1080], [1080, 1920], [1080, 1080]]) {
+    mustValidate(gDoc([gScene("s1", [gEl("h1", "headline")])], { width: w, height: h }), `${w}×${h} loads`);
+  }
+});
+
+await test("G1.1 a junk background refuses (never substituted); junk palette fields drop", () => {
+  const bg = validateGraphicsDoc(gDoc([gScene("s1", [gEl("h1", "headline")], { background: "white" })]));
+  const e1 = mustReject(bg, "junk background");
+  ok(e1.some((e) => e.includes("background")), "the scene canvas is a designed choice");
+  const doc = mustValidate(gDoc([gScene("s1", [
+    gEl("h1", "headline", { text: { text: "T", color: "#zzzzzz" } }),
+  ])]), "junk optional color");
+  ok(doc.scenes[0]?.elements[0]?.text?.color === undefined, "the dropped color is absent");
+  const r = validateGraphicsDoc(gDoc([gScene("s1", [
+    gEl("h1", "headline", { text: { text: "T", color: "#zzzzzz" } }),
+  ])]));
+  ok(r.warnings.some((w) => w.includes("not #rrggbb")), "the drop warns");
+});
+
+await test("G1.1 duplicate element ids reject (the group seam); duplicate scene ids reject (S87 tracks)", () => {
+  const dupEl = validateGraphicsDoc(gDoc([gScene("s1", [gEl("h1", "headline"), gEl("h1", "bullet")])]));
+  const e1 = mustReject(dupEl, "duplicate element id");
+  ok(e1.some((e) => e.includes("duplicate element id")), "named");
+  const dupScene = validateGraphicsDoc(gDoc([gScene("s1", [gEl("h1", "headline")]), gScene("s1", [gEl("h2", "bullet")])]));
+  mustReject(dupScene, "duplicate scene id");
+});
+
+await test("G1.1 one wall, two engines — GRAPHICS_FRAME_BUDGET is ANIM_FRAME_BUDGET", () => {
+  eq(GRAPHICS_FRAME_BUDGET, ANIM_FRAME_BUDGET, "re-exported, not re-declared");
+  eq(GRAPHICS_FRAME_BUDGET, 25_920, "25,920 frames");
+});
+
+await test("G1.1 the compatibility table is compile-total and closed", () => {
+  eq(Object.keys(MOTION_KINDS_BY_ELEMENT).length, 10, "every element kind has a row");
+  for (const m of Object.values(MOTION_KINDS_BY_ELEMENT).flat()) {
+    ok(["fade", "rise", "slide", "pop", "wipe", "count", "grow", "draw"].includes(m), `motion "${m}" is in the closed set`);
+  }
+  eq(MOTION_KINDS_BY_ELEMENT.headline.includes("count"), false, "no count on text kinds");
+});
+
+await test("G1.1 parseGraphicsDoc nulls on junk JSON and non-objects", () => {
+  eq(parseGraphicsDoc("{not json"), null, "syntax junk");
+  eq(parseGraphicsDoc("42"), null, "not an object");
+  eq(parseGraphicsDoc("[]"), null, "an array is not a doc");
+  eq(parseGraphicsDoc(null), null, "null in → null out");
+  eq(parseGraphicsDoc(undefined), null, "absent → null");
+});
+
+// ---------------------------------------------------------------------------
+// G1.2 — frame truth (Part B): frameAt is the ONE source of motion truth.
+// Pins: determinism (sweep hash over a fixed doc), the fixed composition
+// order (emphasis > exit > enter — applied last), element state never
+// non-finite outside motion windows, tween continuity at every motion
+// boundary, exact pre/post window states, scene-clock resolution.
+// ---------------------------------------------------------------------------
+
+suiteStart("graphics — G1.2 frame truth");
+
+const G2_DOC = mustParse(JSON.stringify(MIXED_RAW), "the mixed doc for G1.2");
+
+function g2ElById(state: GraphicsFrameState, id: string) {
+  const f = state.elements.find((e) => e.id === id);
+  if (f === undefined) throw new Error(`element "${id}" missing from the frame state`);
+  return f;
+}
+
+function g2Sweep(doc: GraphicsDoc, stepMs: number, upToMs: number): string[] {
+  const frames: string[] = [];
+  for (let t = 0; t <= upToMs; t += stepMs) frames.push(JSON.stringify(frameAt(doc, t)));
+  return frames;
+}
+
+await test("G1.2 the frame sweep is deterministic — same doc, same grid, byte-identical", () => {
+  const a = g2Sweep(G2_DOC, 50, 4000);
+  const b = g2Sweep(G2_DOC, 50, 4000);
+  eq(a.length, 81, "81 frames on the 50ms grid");
+  eq(a.join("|"), b.join("|"), "the sweep hash is byte-identical");
+});
+
+await test("G1.2 element state is never non-finite anywhere — the named pin", () => {
+  const checkFinite = (doc: GraphicsDoc, label: string) => {
+    for (let t = 0; t <= 3990; t += 97) { // prime step — no grid aliasing
+      const s = frameAt(doc, t);
+      ok(Number.isFinite(s.sceneTMs), `${label} t=${t} sceneTMs`);
+      for (const f of s.elements) {
+        ok(Number.isFinite(f.opacity) && f.opacity >= 0 && f.opacity <= 1, `${label} t=${t} ${f.id} opacity`);
+        ok(Number.isFinite(f.x) && Number.isFinite(f.y) && Number.isFinite(f.scale) && Number.isFinite(f.rotateDeg), `${label} t=${t} ${f.id} transform`);
+        ok(Number.isFinite(f.progress) && f.progress >= 0 && f.progress <= 1, `${label} t=${t} ${f.id} progress`);
+        if (f.counterValue !== undefined) ok(Number.isFinite(f.counterValue), `${label} t=${t} ${f.id} counter`);
+      }
+    }
+  };
+  checkFinite(G2_DOC, "mixed");
+  for (const kind of GRAPHICS_ELEMENT_KINDS) {
+    for (const motion of legalMotions(kind)) {
+      const motions = {
+        enter: { kind: motion, durationMs: 700, delayMs: 200, ease: "ease-back" },
+        exit: { kind: motion, durationMs: 600, delayMs: 2600, ease: "linear" },
+        emphasis: { kind: motion, durationMs: 500, delayMs: 1500, ease: "pop" },
+      };
+      const tested = gEl(`x-${kind}-${motion}`, kind, {
+        ...motions,
+        ...(kind === "group" ? { group: { children: ["base"] } } : {}),
+      });
+      const sceneEls = kind === "group" ? [gEl("base", "headline"), tested] : [tested];
+      const doc = mustValidate(gDoc([gScene("s1", sceneEls)]), `${kind}+${motion}`);
+      checkFinite(doc, `${kind}+${motion}`);
+    }
+  }
+});
+
+await test("G1.2 tween continuity — no discontinuity at any motion boundary", () => {
+  const bounds: number[] = [];
+  const sceneEls = G2_DOC.scenes[0]?.elements ?? [];
+  for (const el of sceneEls) {
+    for (const m of [el.enter, el.exit, el.emphasis]) {
+      if (m === undefined) continue;
+      bounds.push(m.delayMs, m.delayMs + m.durationMs);
+    }
+  }
+  ok(bounds.length >= 12, `${bounds.length} boundaries collected`);
+  for (const b of bounds) {
+    if (b < 1 || b > 3999) continue;
+    const minus = frameAt(G2_DOC, b - 1);
+    const plus = frameAt(G2_DOC, b + 1);
+    for (let i = 0; i < minus.elements.length; i++) {
+      const a = minus.elements[i];
+      const c = plus.elements[i];
+      ok(a !== undefined && c !== undefined, `element lists align at b=${b}`);
+      ok(Math.abs(a.opacity - c.opacity) <= 0.02, `b=${b} ${a.id} opacity Δ=${Math.abs(a.opacity - c.opacity).toFixed(4)}`);
+      ok(Math.abs(a.x - c.x) <= 2 && Math.abs(a.y - c.y) <= 2, `b=${b} ${a.id} offset Δ`);
+      ok(Math.abs(a.scale - c.scale) <= 0.02, `b=${b} ${a.id} scale Δ`);
+      ok(Math.abs(a.progress - c.progress) <= 0.03, `b=${b} ${a.id} progress Δ`);
+      if (a.counterValue !== undefined && c.counterValue !== undefined) {
+        ok(Math.abs(a.counterValue - c.counterValue) <= 1, `b=${b} ${a.id} counter Δ`);
+      }
+    }
+  }
+});
+
+await test("G1.2 pre-enter holds the start state; post-enter holds the placed state", () => {
+  const pre = g2ElById(frameAt(G2_DOC, 50), "sh"); // slide enter, delay 200
+  eq(pre.opacity, 0, "pre-enter: invisible");
+  eq(pre.x, 0, "pre-enter: the full slide offset (120 − 120)");
+  const placed = g2ElById(frameAt(G2_DOC, 2000), "sh");
+  eq(placed.opacity, 1, "placed: full opacity");
+  eq(placed.x, 120, "placed: at rest");
+  eq(placed.progress, 1, "placed: fully revealed");
+  eq(g2ElById(frameAt(G2_DOC, 2000), "h1").opacity, 0.9, "base opacity multiplies through");
+});
+
+await test("G1.2 the exit drains to its end state — fade out, un-reveal, count-back", () => {
+  eq(g2ElById(frameAt(G2_DOC, 3900), "h1").opacity, 0, "fade exit end: invisible");
+  const doc = mustValidate(gDoc([gScene("s1", [
+    gEl("br", "bar", {
+      enter: { kind: "wipe", durationMs: 500, delayMs: 0, ease: "linear" },
+      exit: { kind: "wipe", durationMs: 500, delayMs: 3000, ease: "linear" },
+    }),
+    gEl("cn", "counter", {
+      counter: { from: 25, to: 100 },
+      enter: { kind: "count", durationMs: 800, delayMs: 0, ease: "linear" },
+      exit: { kind: "count", durationMs: 600, delayMs: 3200, ease: "linear" },
+    }),
+  ])]), "exit drains");
+  eq(g2ElById(frameAt(doc, 3900), "br").progress, 0, "wipe exit end: un-revealed");
+  eq(g2ElById(frameAt(doc, 3900), "cn").counterValue, 25, "count exit end: drained to from");
+  const atStart = g2ElById(frameAt(doc, 3200), "cn").counterValue ?? 0;
+  const preStart = g2ElById(frameAt(doc, 3199), "cn").counterValue ?? 0;
+  ok(Math.abs(atStart - preStart) <= 0.1, `the drain starts from the captured value (Δ=${Math.abs(atStart - preStart)})`);
+});
+
+await test("G1.2 emphasis composes over the exit state (fixed order: enter → exit → emphasis)", () => {
+  const mk = (withEmphasis: boolean) => mustValidate(gDoc([gScene("s1", [
+    gEl("h1", "headline", {
+      enter: { kind: "fade", durationMs: 500, delayMs: 0, ease: "linear" },
+      exit: { kind: "fade", durationMs: 800, delayMs: 800, ease: "linear" },
+      ...(withEmphasis ? { emphasis: { kind: "fade", durationMs: 400, delayMs: 1000, ease: "linear" } } : {}),
+    }),
+  ])]), withEmphasis ? "overlap doc" : "no-emphasis doc");
+  const withEmph = g2ElById(frameAt(mk(true), 1200), "h1").opacity; // emphasis midpoint
+  const without = g2ElById(frameAt(mk(false), 1200), "h1").opacity;
+  eq(without, 0.5, "exit-only: 1 − 0.5");
+  ok(Math.abs(withEmph - without * (1 - GRAPHICS_MOTION_SEMANTICS.emphasisFadeDip)) < 1e-9,
+    `emphasis dips the exit state: ${withEmph} ≈ ${without} × ${1 - GRAPHICS_MOTION_SEMANTICS.emphasisFadeDip}`);
+});
+
+await test("G1.2 the doc clock resolves the active scene and clamps (never NaN)", () => {
+  const doc = mustValidate(gDoc([
+    gScene("s1", [gEl("a", "headline")], { durationMs: 3000 }),
+    gScene("s2", [gEl("b", "bullet")]),
+  ]), "two scenes");
+  eq(frameAt(doc, 1000).sceneId, "s1", "scene 1 mid");
+  eq(frameAt(doc, 1000).sceneTMs, 1000, "the scene-local clock");
+  eq(frameAt(doc, 3500).sceneId, "s2", "scene 2 after s1 ends");
+  eq(frameAt(doc, 3500).sceneTMs, 500, "local clock in scene 2");
+  const end = frameAt(doc, 999_999);
+  eq(end.sceneId, "s2", "beyond-total clamps to the last scene");
+  eq(end.sceneTMs, 4000, "clamped to the last scene's end (the 2.6-wps estimate)");
+  const neg = frameAt(doc, -50);
+  eq(neg.sceneId, "s1", "negative clamps to scene 1");
+  eq(neg.sceneTMs, 0, "at zero");
+});
+
+await test("G1.2 the progress channel defaults to 1 when no motion drives it", () => {
+  for (let t = 0; t <= 3800; t += 200) {
+    eq(g2ElById(frameAt(G2_DOC, t), "sh").progress, 1, `t=${t}`);
+  }
+});
+
+await test("G1.2 base opacity multiplies the motion factor", () => {
+  const doc = mustValidate(gDoc([gScene("s1", [
+    gEl("h1", "headline", { opacity: 0.5, enter: { kind: "fade", durationMs: 500, delayMs: 0, ease: "linear" } }),
+  ])]), "half-opacity");
+  eq(g2ElById(frameAt(doc, 250), "h1").opacity, 0.25, "0.5 × 0.5 mid-fade");
+});
+
+await test("G1.2 emphasis count pulses the pop channel and leaves the value untouched", () => {
+  const doc = mustValidate(gDoc([gScene("s1", [
+    gEl("cn", "counter", {
+      counter: { from: 0, to: 100 },
+      enter: { kind: "count", durationMs: 500, delayMs: 0, ease: "linear" },
+      emphasis: { kind: "count", durationMs: 400, delayMs: 1000, ease: "linear" },
+    }),
+  ])]), "emphasis count");
+  const mid = g2ElById(frameAt(doc, 1200), "cn");
+  eq(mid.counterValue, 100, "the value channel is untouched (no falsifying overshoot)");
+  ok(mid.scale > 1, `the pop channel pulses (scale=${mid.scale})`);
+  eq(g2ElById(frameAt(doc, 1600), "cn").scale, 1, "emphasis releases cleanly at the window edge");
+});
+
+await test("G1.2 graphicsFrameCount is the doc clock in frames at the doc fps", () => {
+  const doc = mustValidate(gDoc([gScene("s1", [gEl("a", "headline")], { durationMs: 3000 })]), "3s doc");
+  eq(graphicsFrameCount(doc), 72, "3000ms @ 24fps = 72 frames");
+});
+
+await test("G1.2 an empty doc is a caller bug — refused loudly, never fabricated", () => {
+  let threw = false;
+  try {
+    frameAt({ version: 1, title: "t", width: 1920, height: 1080, fps: 24, scenes: [] }, 0);
+  } catch {
+    threw = true;
+  }
+  eq(threw, true, "frameAt throws on scenes: []");
 });
 
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
