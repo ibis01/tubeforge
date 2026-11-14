@@ -159,6 +159,7 @@ import {
   type GraphicsDoc,
   type GraphicsScene,
 } from "../src/lib/tubeforge/graphics/types";
+import { scaffoldGraphicsDoc } from "../src/lib/tubeforge/graphics/planner";
 import {
   frameAt,
   graphicsFrameCount,
@@ -15866,7 +15867,421 @@ await test("G1.3 the surface drives the geometry — the same scene composes per
   ok(v3a.html.includes('data-len="960"'), "bar b: full");
 });
 
-console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
+// ---------------------------------------------------------------------------
+// G1.4 — the native scaffold planner + the LLM scaffold with per-element
+// degradation. Pins: determinism (byte-identical scaffold), validator-
+// clean output (every archetype), motion legality per the compatibility
+// table, the walls (scene budget, caps, count-up law), surface snapping,
+// and the LLM half: per-element normalization police with reported
+// drops, per-scene fallback, byte-identical degrade to the native doc.
+// ---------------------------------------------------------------------------
+
+suiteStart("graphics — G1.4 the native planner + the LLM scaffold");
+
+const G14_SCENES = [
+  { index: 1, title: "The Growth Engine", narration: "Every product grows through three forces: reach, retention, and revenue." },
+  { index: 2, title: "The conversion lift", narration: "Teams see conversion climb to 87 percent within the first quarter." },
+  { index: 3, title: "Why teams switch", narration: "First, the setup takes minutes. Next, the workflow runs itself. Finally, the results compound every week." },
+  { index: 4, title: "The market data", narration: "Compared with last year, 42 percent versus 87 percent share." },
+  { index: 5, title: "Start today", narration: "Check your first workflow now and see the difference yourself." },
+];
+
+function g14Native(): GraphicsDoc {
+  return scaffoldGraphicsDoc({ scenes: G14_SCENES, topic: "Growth" });
+}
+
+await test("G1.4 the native scaffold is deterministic and validator-clean", async () => {
+  const { scaffoldGraphicsDoc } = await import("../src/lib/tubeforge/graphics/planner");
+  const a = scaffoldGraphicsDoc({ scenes: G14_SCENES, topic: "Growth" });
+  const b = scaffoldGraphicsDoc({ scenes: G14_SCENES, topic: "Growth" });
+  eq(JSON.stringify(a), JSON.stringify(b), "same story → byte-identical doc");
+  eq(a.version, GRAPHICS_VERSION, "version first-class");
+  eq([a.width, a.height], [1920, 1080], "default surface 16:9");
+  eq(a.fps, 24, "house default fps");
+  const r = validateGraphicsDoc(JSON.parse(JSON.stringify(a)));
+  ok(r.doc !== null && r.errors.length === 0, `the scaffold validates clean: ${r.errors.join(" | ")}`);
+  ok(g14Native().scenes.length === 5, "all five story scenes carried");
+});
+
+await test("G1.4 the rule table routes the archetypes — stat / list / chart / opener / closer", async () => {
+  const doc = g14Native();
+  const byId = new Map(doc.scenes.map((s) => [s.id, s]));
+  const opener = byId.get("scene-1");
+  ok(opener !== undefined, "opener present");
+  eq(opener.elements.map((e) => e.kind), ["headline", "subhead", "icon"], "opener: title + kicker + icon accent");
+  const stat = byId.get("scene-2");
+  ok(stat !== undefined, "stat scene present");
+  const counter = stat.elements.find((e) => e.kind === "counter");
+  ok(counter !== undefined, "one number → a counter");
+  eq(counter.counter, { from: 0, to: 87, unit: "%" }, "count-up to the story's number, unit from the story");
+  const list = byId.get("scene-3");
+  ok(list !== undefined, "list scene present");
+  const bullets = list.elements.filter((e) => e.kind === "bullet");
+  eq(bullets.length, 3, "the enumeration feeds three bullets");
+  const chart = byId.get("scene-4");
+  ok(chart !== undefined, "chart scene present");
+  const barChart = chart.elements.find((e) => e.kind === "barChart");
+  ok(barChart !== undefined, "data cue + two numbers → a barChart");
+  eq(barChart.bar?.data, [{ label: "42 percent", value: 42 }, { label: "87 percent", value: 87 }], "the numbers BECOME the chart rows");
+  const closer = byId.get("scene-5");
+  ok(closer !== undefined, "closer present");
+  eq(closer.elements.map((e) => e.kind), ["headline", "subhead"], "closer: title + kicker");
+  const icon = opener.elements.find((e) => e.kind === "icon");
+  ok(icon !== undefined && icon.icon !== undefined, "the opener carries an icon payload");
+  eq(icon.icon.paths.length >= 1, true, "icon paths come from the library");
+});
+
+await test("G1.4 every scaffold motion is legal per kind and inside the scene clock", async () => {
+  const { estimateNarrationMs } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const doc = g14Native();
+  for (const scene of doc.scenes) {
+    const clock = estimateNarrationMs(scene.narration);
+    for (const el of scene.elements) {
+      ok(
+        legalMotions(el.kind).includes(el.enter.kind),
+        `${scene.id}/${el.id}: enter "${el.enter.kind}" is legal on "${el.kind}"`
+      );
+      ok(
+        el.enter.delayMs + el.enter.durationMs <= clock,
+        `${scene.id}/${el.id}: enter span ${el.enter.delayMs + el.enter.durationMs}ms fits the ${clock}ms scene clock`
+      );
+    }
+  }
+});
+
+await test("G1.4 the walls — an empty story and an over-budget story refuse", async () => {
+  const { scaffoldGraphicsDoc } = await import("../src/lib/tubeforge/graphics/planner");
+  const { GRAPHICS_BUDGETS } = await import("../src/lib/tubeforge/graphics/types");
+  let threw = false;
+  try {
+    scaffoldGraphicsDoc({ scenes: [], topic: "x" });
+  } catch {
+    threw = true;
+  }
+  ok(threw, "an empty story is a bug, not an empty doc");
+  const many = Array.from({ length: GRAPHICS_BUDGETS.scenesPerProject + 1 }, (_, i) => ({
+    index: i + 1,
+    title: `Scene ${i + 1}`,
+    narration: "A few plain words here.",
+  }));
+  threw = false;
+  try {
+    scaffoldGraphicsDoc({ scenes: many, topic: "x" });
+  } catch (err) {
+    threw = true;
+    ok(String(err).includes("scene project budget"), "the refusal names the wall");
+  }
+  ok(threw, "over the scene budget refuses — never a silent truncation");
+});
+
+await test("G1.4 surface snapping — caller geometry lands on a house surface", async () => {
+  const { scaffoldGraphicsDoc } = await import("../src/lib/tubeforge/graphics/planner");
+  eq([scaffoldGraphicsDoc({ scenes: G14_SCENES.slice(0, 1), topic: "t", width: 1280, height: 720 }).width,
+      scaffoldGraphicsDoc({ scenes: G14_SCENES.slice(0, 1), topic: "t", width: 1280, height: 720 }).height],
+     [1920, 1080], "1280×720 snaps to 16:9");
+  const sq = scaffoldGraphicsDoc({ scenes: G14_SCENES.slice(0, 1), topic: "t", width: 1000, height: 1000 });
+  eq([sq.width, sq.height], [1080, 1080], "1:1 snaps to 1:1");
+  const vertical = scaffoldGraphicsDoc({ scenes: G14_SCENES.slice(0, 1), topic: "t", width: 600, height: 1300 });
+  eq([vertical.width, vertical.height], [1080, 1920], "600×1300 snaps to 9:16");
+  const junk = scaffoldGraphicsDoc({ scenes: G14_SCENES.slice(0, 1), topic: "t", width: 500 });
+  eq([junk.width, junk.height], [1920, 1080], "junk geometry → the 16:9 default");
+  const r = validateGraphicsDoc(JSON.parse(JSON.stringify(vertical)));
+  ok(r.doc !== null && r.errors.length === 0, `a snapped scaffold validates: ${r.errors.join(" | ")}`);
+});
+
+await test("G1.4 the icon library parses — every path under the command budget", async () => {
+  const { countPathCommands } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const { GRAPHICS_BUDGETS } = await import("../src/lib/tubeforge/graphics/types");
+  const { GRAPHICS_ICON_LIBRARY } = await import("../src/lib/tubeforge/graphics/planner");
+  const ids = Object.keys(GRAPHICS_ICON_LIBRARY);
+  ok(ids.length >= 4, `the library is non-trivial (${ids.length} icons)`);
+  for (const id of ids) {
+    const icon = GRAPHICS_ICON_LIBRARY[id];
+    ok(icon !== undefined, `${id} exists in the library`);
+    ok(icon.paths.length >= 1, `${id} carries paths`);
+    for (const d of icon.paths) {
+      const commands = countPathCommands(d);
+      ok(commands > 0, `${id}: "${d.slice(0, 24)}" parses (${commands} commands)`);
+      ok(commands <= GRAPHICS_BUDGETS.iconPathCommandBudget, `${id} under the command budget`);
+    }
+  }
+});
+
+await test("G1.4 normalize polices the grammar — every drop reported, survivors clamped", async () => {
+  const { normalizeGraphicsProposals } = await import("../src/lib/tubeforge/graphics/llm-planner");
+  const out = normalizeGraphicsProposals(
+    [
+      {
+        scene: 1,
+        elements: [
+          { kind: "headline", text: "Model title", x: -50, y: 2000, scale: 99, rotateDeg: 720, enter: "rise" },
+          { kind: "counter", from: 50, to: 20 },
+          { kind: "banana" },
+          { kind: "icon", iconId: "ghost" },
+          { kind: "headline", text: "second line", id: "headline-1" },
+          { kind: "bullet", text: "   " },
+          { kind: "headline", text: "spin art", enter: "spin" },
+        ],
+      },
+      { scene: 9, elements: [{ kind: "headline", text: "nowhere" }] },
+      {
+        scene: 2,
+        elements: [
+          { kind: "barChart", data: [{ label: "", value: 1 }, { label: "ok", value: 5 }, { label: "neg", value: -3 }] },
+          { kind: "shape", shape: "triangle" },
+          { kind: "callout", text: "note", enter: "draw" },
+          { kind: "icon", paths: ["M 0 0 L 4 4"] },
+        ],
+      },
+    ],
+    { scenes: G14_SCENES, width: 1920, height: 1080 },
+  );
+  eq([...out.served.keys()].sort((a, b) => a - b), [1, 2], "scenes 1 + 2 served");
+  eq(out.fallback, [3, 4, 5], "unmentioned scenes fall back to the native table");
+  const s1 = out.served.get(1);
+  ok(s1 !== undefined, "scene 1 served");
+  eq(s1.elements.length, 2, "the headline survived twice (dup id renamed), the junk died");
+  const s1First = s1.elements[0];
+  const s1Second = s1.elements[1];
+  ok(s1First !== undefined && s1Second !== undefined, "both survivors present");
+  eq(s1First.id, "headline-1", "the first headline synthesized its id");
+  eq(s1Second.id, "headline-2", "the dupe id was re-keyed, not dropped");
+  eq(s1First.at, { x: 0, y: 1080, scale: 4, rotateDeg: 180 }, "the placement clamped onto the board");
+  eq(s1First.enter, { kind: "rise", durationMs: 600, delayMs: 0, ease: "ease-out" }, "a bare-kind enter rides the native defaults");
+  const s2 = out.served.get(2);
+  ok(s2 !== undefined, "scene 2 served");
+  eq(s2.elements.length, 2, "the chart (one clean row) and the raw-path icon survived");
+  const s2First = s2.elements[0];
+  ok(s2First !== undefined, "the chart survived");
+  eq(s2First.bar?.data, [{ label: "ok", value: 5 }], "junk bar rows dropped, the clean row kept");
+  const reasons = out.dropped.map((d) => d.reason).join(" | ");
+  for (const fragment of [
+    "count-up law",
+    "not in the closed motion set",
+    "not legal on a",
+    "not in the icon library",
+    "outside the story",
+    "bar rows require",
+    "shape kind must be",
+    'requires a non-empty "text"',
+  ]) {
+    ok(reasons.includes(fragment), `a drop names its reason: ${fragment}`);
+  }
+});
+
+await test("G1.4 normalize is pure — same proposals, same result, byte-identical", async () => {
+  const { normalizeGraphicsProposals } = await import("../src/lib/tubeforge/graphics/llm-planner");
+  const raw = [
+    { scene: 1, elements: [{ kind: "headline", text: "Hi", enter: { kind: "pop", durationMs: 300, delayMs: 100, ease: "pop" } }] },
+    { scene: 2, elements: [{ kind: "counter", from: 0, to: 10, enter: "count" }] },
+  ];
+  const a = normalizeGraphicsProposals(raw, { scenes: G14_SCENES, width: 1920, height: 1080 });
+  const b = normalizeGraphicsProposals(raw, { scenes: G14_SCENES, width: 1920, height: 1080 });
+  eq(JSON.stringify(a), JSON.stringify(b), "same input → same normalization");
+});
+
+await test("G1.4 the scene clock clamps overrunning motions and drops the unfittable", async () => {
+  const { normalizeGraphicsProposals } = await import("../src/lib/tubeforge/graphics/llm-planner");
+  const { estimateNarrationMs } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const scene2 = G14_SCENES[1];
+  ok(scene2 !== undefined, "fixture scene 2 present");
+  const clock = estimateNarrationMs(scene2.narration);
+  const out = normalizeGraphicsProposals(
+    [
+      {
+        scene: 2,
+        elements: [
+          { kind: "headline", text: "Long", enter: { kind: "rise", durationMs: 6000, delayMs: 0 } },
+          { kind: "bullet", text: "Late", enter: { kind: "slide", durationMs: 400, delayMs: clock - 100 } },
+          { kind: "callout", text: "Late exit", exit: { kind: "fade", durationMs: 400, delayMs: clock - 100 } },
+        ],
+      },
+    ],
+    { scenes: G14_SCENES, width: 1920, height: 1080 },
+  );
+  const s = out.served.get(2);
+  ok(s !== undefined, "the scene stays served");
+  const headline = s.elements.find((e) => e.id === "headline-1");
+  ok(headline !== undefined, "the clamped headline survived");
+  eq(headline.enter.durationMs, clock, "an over-long duration pulls back to the scene clock");
+  const bullets = s.elements.filter((e) => e.kind === "bullet");
+  eq(bullets.length, 0, "a motion that can never fit kills its element");
+  const callout = s.elements.find((e) => e.kind === "callout");
+  ok(callout !== undefined, "the callout survives its dead exit");
+  eq(callout.exit, undefined, "the unfittable exit slot dropped, the element stands");
+  ok(out.dropped.some((d) => /cannot fit the scene clock/.test(d.reason)), "both drops name the clock");
+});
+
+await test("G1.4 the group police — children must be accepted same-scene non-group elements", async () => {
+  const { normalizeGraphicsProposals } = await import("../src/lib/tubeforge/graphics/llm-planner");
+  const out = normalizeGraphicsProposals(
+    [
+      {
+        scene: 1,
+        elements: [
+          { kind: "headline", text: "A" },
+          { kind: "subhead", text: "B" },
+          { kind: "group", children: ["ghost", "subhead-1", "headline-1", "headline-1"] },
+          { kind: "group", children: ["ghost-only"] },
+        ],
+      },
+    ],
+    { scenes: G14_SCENES, width: 1920, height: 1080 },
+  );
+  const s = out.served.get(1);
+  ok(s !== undefined, "the scene stays served");
+  const groups = s.elements.filter((e) => e.kind === "group");
+  eq(groups.length, 1, "only the well-formed group survived");
+  const group = groups[0];
+  ok(group !== undefined, "the group present");
+  eq(group.group?.children, ["subhead-1", "headline-1"], "ghost/self/dup children dropped in order");
+  const reasons = out.dropped.map((d) => d.reason).join(" | ");
+  ok(reasons.includes("not an accepted element"), "the ghost child names its reason");
+  ok(reasons.includes("claimed twice"), "the duplicate child names its reason");
+  ok(reasons.includes("no valid children survived"), "a childless group dies with its reason");
+});
+
+await test("G1.4 the cap — over 6 elements per scene drops the extras and names the cap", async () => {
+  const { normalizeGraphicsProposals, GRAPHICS_PLANNER_ELEMENTS_PER_SCENE } = await import(
+    "../src/lib/tubeforge/graphics/llm-planner"
+  );
+  const out = normalizeGraphicsProposals(
+    [
+      {
+        scene: 1,
+        elements: Array.from({ length: GRAPHICS_PLANNER_ELEMENTS_PER_SCENE + 2 }, (_, i) => ({
+          kind: "bullet",
+          text: `point ${i + 1}`,
+        })),
+      },
+    ],
+    { scenes: G14_SCENES, width: 1920, height: 1080 },
+  );
+  const s = out.served.get(1);
+  ok(s !== undefined, "the scene stays served");
+  eq(s.elements.length, GRAPHICS_PLANNER_ELEMENTS_PER_SCENE, `capped at ${GRAPHICS_PLANNER_ELEMENTS_PER_SCENE}`);
+  const capped = out.dropped.filter((d) => /planner cap/.test(d.reason));
+  eq(capped.length, 2, "both extras dropped with the cap named");
+});
+
+await test("G1.4 compose — served scenes swap elements, unserved scenes pass byte-identical", async () => {
+  const { normalizeGraphicsProposals, composeGraphicsDoc } = await import("../src/lib/tubeforge/graphics/llm-planner");
+  const native = g14Native();
+  const { served } = normalizeGraphicsProposals(
+    [{ scene: 2, elements: [{ kind: "counter", from: 0, to: 50, unit: "%", enter: "count" }] }],
+    { scenes: G14_SCENES, width: native.width, height: native.height },
+  );
+  const composed = composeGraphicsDoc(native, G14_SCENES, served);
+  const c2 = composed.scenes[1];
+  ok(c2 !== undefined, "scene 2 present");
+  eq(c2.elements.length, 1, "the served scene carries the model's elements");
+  const nativeScene1 = native.scenes[0];
+  const nativeScene5 = native.scenes[4];
+  ok(nativeScene1 !== undefined && nativeScene5 !== undefined, "native scenes present");
+  eq(c2.narration, native.scenes[1]?.narration, "narration untouched — the clock stays the engine's");
+  eq(c2.background, "#ffffff", "background untouched");
+  eq(JSON.stringify(composed.scenes[0]), JSON.stringify(nativeScene1), "scene 1 passes through byte-identical");
+  eq(JSON.stringify(composed.scenes[4]), JSON.stringify(nativeScene5), "scene 5 passes through byte-identical");
+  const r = validateGraphicsDoc(JSON.parse(JSON.stringify(composed)));
+  ok(r.doc !== null && r.errors.length === 0, `the composed doc validates clean: ${r.errors.join(" | ")}`);
+});
+
+await test("G1.4 wrapper — a good reply composes an LLM doc that validates clean", async () => {
+  const { scaffoldGraphicsDocLlm } = await import("../src/lib/tubeforge/graphics/llm-planner");
+  const passThrough: import("../src/lib/tubeforge/whiteboard/llm-planner").PlannerCall = (_service, _label, fn) => fn();
+  const goodAsk = async () =>
+    JSON.stringify({
+      scenes: [
+        {
+          scene: 1,
+          elements: [
+            { kind: "headline", text: "The Growth Engine", x: 960, y: 420, enter: { kind: "rise", durationMs: 600, delayMs: 0, ease: "ease-back" } },
+            { kind: "subhead", text: "reach, retention, revenue", y: 600 },
+          ],
+        },
+        {
+          scene: 2,
+          elements: [
+            { kind: "counter", from: 0, to: 87, unit: "%", x: 960, y: 470, enter: "count" },
+            { kind: "subhead", text: "the conversion lift", y: 620 },
+          ],
+        },
+        {
+          scene: 3,
+          elements: [
+            { kind: "headline", text: "Why teams switch", y: 230 },
+            { kind: "bullet", text: "setup takes minutes", y: 450 },
+            { kind: "bullet", text: "the workflow runs itself", y: 620 },
+          ],
+        },
+      ],
+    });
+  const { doc, report } = await scaffoldGraphicsDocLlm({ scenes: G14_SCENES, topic: "Growth" }, { ask: goodAsk, call: passThrough });
+  eq(report.planner, "llm", "the honest planner label");
+  eq(report.servedScenes, 3, "three scenes served");
+  eq(report.fallbackScenes, [4, 5], "the untouched scenes honestly listed");
+  eq(report.degraded, false, "not degraded");
+  const r = validateGraphicsDoc(JSON.parse(JSON.stringify(doc)));
+  ok(r.doc !== null && r.errors.length === 0, `the LLM doc validates clean: ${r.errors.join(" | ")}`);
+  const docScene2 = doc.scenes[1];
+  ok(docScene2 !== undefined, "scene 2 present in the doc");
+  const counter = docScene2.elements.find((e) => e.kind === "counter");
+  ok(counter !== undefined, "the model's counter landed");
+  eq(counter.counter?.to, 87, "with the story's number");
+});
+
+await test("G1.4 wrapper — every failure degrades to the native doc, byte-identical, honestly labeled", async () => {
+  const { scaffoldGraphicsDocLlm } = await import("../src/lib/tubeforge/graphics/llm-planner");
+  const { scaffoldGraphicsDoc } = await import("../src/lib/tubeforge/graphics/planner");
+  const passThrough: import("../src/lib/tubeforge/whiteboard/llm-planner").PlannerCall = (_service, _label, fn) => fn();
+  const native = scaffoldGraphicsDoc({ scenes: G14_SCENES, topic: "Growth" });
+
+  // The gateway itself fails.
+  const dead = await scaffoldGraphicsDocLlm(
+    { scenes: G14_SCENES, topic: "Growth" },
+    { ask: async () => { throw new Error("429 too many requests"); }, call: passThrough }
+  );
+  eq(dead.report.planner, "native", "degraded honestly");
+  eq(dead.report.degraded, true, "the degraded flag stands");
+  eq(dead.report.servedScenes, 0, "nothing claimed as served");
+  ok(/429/.test(dead.report.degradeReason ?? ""), "the reason carries the failure");
+  eq(JSON.stringify(dead.doc), JSON.stringify(native), "the doc IS the native scaffold, byte-identical");
+
+  // Prose instead of JSON.
+  const prose = await scaffoldGraphicsDocLlm(
+    { scenes: G14_SCENES, topic: "Growth" },
+    { ask: async () => "I would rather not use JSON today, thanks.", call: passThrough }
+  );
+  eq(prose.report.degraded, true, "prose degrades");
+  eq(JSON.stringify(prose.doc), JSON.stringify(native), "prose → native doc, byte-identical");
+
+  // Structured but useless.
+  const wrongShape = await scaffoldGraphicsDocLlm(
+    { scenes: G14_SCENES, topic: "Growth" },
+    { ask: async () => JSON.stringify({ rows: [] }), call: passThrough }
+  );
+  eq(wrongShape.report.degraded, true, "a wrong-shape reply degrades after its retry");
+
+  // Structured, in-story, but every element junk → per-element degradation empties the board.
+  const allJunk = await scaffoldGraphicsDocLlm(
+    { scenes: G14_SCENES, topic: "Growth" },
+    {
+      ask: async () =>
+        JSON.stringify({
+          scenes: [
+            { scene: 1, elements: [{ kind: "banana" }] },
+            { scene: 2, elements: [{ kind: "counter", from: 9, to: 3 }] },
+          ],
+        }),
+      call: passThrough,
+    },
+  );
+  eq(allJunk.report.degraded, true, "an all-junk normalization degrades");
+  ok(/no scene was servable/.test(allJunk.report.degradeReason ?? ""), "the reason names the empty normalization");
+  eq(JSON.stringify(allJunk.doc), JSON.stringify(native), "all-junk → the native doc, byte-identical");
+  eq(allJunk.report.planner, "native", "labeled native — never presented as model work");
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

@@ -340,8 +340,10 @@ const CALLOUT_PAYLOAD_KEYS = new Set(["text", "pointsAt"]);
 const SHAPE_PAYLOAD_KEYS = new Set(["kind", "w", "h", "r", "stroke", "fill", "strokeWidth"]);
 const GROUP_PAYLOAD_KEYS = new Set(["children"]);
 
-/** The output-surface law: exactly the three house aspects' native sizes. */
-const SURFACES: ReadonlyArray<readonly [number, number]> = [
+/** The output-surface law: exactly the three house aspects' native sizes.
+ *  EXPORTED (the G1.4 planner snaps caller geometry onto this ONE table —
+ *  the validator and the planner share the law, never a second list). */
+export const GRAPHICS_SURFACES: ReadonlyArray<readonly [number, number]> = [
   [1920, 1080], // 16:9
   [1080, 1920], // 9:16
   [1080, 1080], // 1:1
@@ -917,10 +919,10 @@ function parseDoc(raw: unknown, warnings: string[], errors: string[]): GraphicsD
   }
   const width = num(raw.width);
   const height = num(raw.height);
-  const onSurface = SURFACES.some(([w, h]) => width === w && height === h);
+  const onSurface = GRAPHICS_SURFACES.some(([w, h]) => width === w && height === h);
   if (width === null || height === null || !onSurface) {
     errors.push(
-      `doc size ${String(raw.width)}×${String(raw.height)} is not a house surface (${SURFACES.map(([w, h]) => `${w}×${h}`).join(", ")})`,
+      `doc size ${String(raw.width)}×${String(raw.height)} is not a house surface (${GRAPHICS_SURFACES.map(([w, h]) => `${w}×${h}`).join(", ")})`,
     );
     return null;
   }
