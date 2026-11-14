@@ -97,6 +97,9 @@ export interface WhiteboardTracksOptions {
  *   engine's own doc (the project) stays the execution truth, the clip is
  *   the composition fact. Scene boundaries are the concat's hard cuts —
  *   transitionIn/Out stay null (no blend machinery between boards).
+ *   W6 — the board policy changes NONE of this: a continuous scene still
+ *   projects as ONE clip (the carried ink lives INSIDE the scene's frames,
+ *   resolved by the scheduler — the contract reads only the clock).
  * • AUDIO track — one clip per VO-carrying scene over the same window (the
  *   encoder pads VO to the scene duration, so the window IS the slot), plus
  *   ONE doc-spanning music-bed clip (`a-music`, sceneIndex null) when the

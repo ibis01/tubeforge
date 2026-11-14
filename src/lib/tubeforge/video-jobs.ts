@@ -2018,6 +2018,13 @@ export async function runWhiteboardJob(
         hasVideo: true,
         videoDuration: Math.round(durationSec * 10) / 10,
         error: null,
+        // W6 — the whiteboard final now records the S117 manifest (it
+        // never did — a latent staleness gap: a whiteboard video with
+        // revision history could not PROVE its assembly), and each entry
+        // stamps the board policy the render consumed (additive field).
+        renderManifest: JSON.stringify(
+          manifestOf(await resolveRenderAssembly(video), "whiteboard", result.boardModes)
+        ),
       },
     });
 

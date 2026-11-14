@@ -7806,7 +7806,10 @@ await test("S64 render: framePayload serializes the full frame state (the applie
   const project: WhiteboardProject = { title: "t", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 }, scenes: [WB_PLAIN] };
   const events = [{ type: "draw_path" as const, assetId: "a1", pathId: "p1", startMs: 0, durationMs: 1000 }];
   const p = JSON.parse(framePayload(frameAt(project, WB_PLAIN, events, geo, 500), 1920, 1080));
-  eq(Object.keys(p).sort(), ["camera", "colors", "draws", "hand", "height", "placements", "tMs", "texts", "width"]);
+  // W6 — the payload gained the carried layer (additive wire format): a
+  // clean scene serializes carried: null, and the applier skips it.
+  eq(Object.keys(p).sort(), ["camera", "carried", "colors", "draws", "hand", "height", "placements", "tMs", "texts", "width"]);
+  eq(p.carried, null, "a clean scene's carried layer is null on the wire");
   eq(p.width, 1920);
   eq(p.height, 1080);
   eq(p.tMs, 500);
@@ -14451,6 +14454,359 @@ await test("W4 voice anchors: the render seam and the caller are wired (compile-
   const vaSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/voice-anchors.ts", "utf8");
   ok(vaSrc.includes("wavChunkWindows"), "the bridge rides the same mapping");
   ok(!/function words\(/.test(vaSrc), "the bridge does not fork a tokenizer (beat-plan's words is the one source)");
+});
+
+// ---------------------------------------------------------------------------
+// W6 — the continuous canvas (S120 §3): the board policy, the carried ink,
+// the exit determinism, and the clean-mode byte-identity pins.
+// ---------------------------------------------------------------------------
+
+suiteStart("W6 continuous canvas — the board policy (S120 §3)");
+
+const W6_LIBRARY = {
+  assetIds: new Set(["a1", "a2", "a3"]),
+  pathIdsByAsset: new Map([
+    ["a1", new Set(["p1", "p2"])],
+    ["a2", new Set(["p1"])],
+    ["a3", new Set(["p1"])],
+  ]),
+  textIdsByAsset: new Map<string, Set<string>>(),
+};
+
+function W6_RAW_PROJECT(sceneBoard: unknown): Record<string, unknown> {
+  return {
+    title: "W6",
+    width: 1920,
+    height: 1080,
+    fps: 24,
+    scenes: [
+      {
+        id: "s1",
+        narration: "The first scene draws a heart.",
+        placements: [
+          { assetId: "a1", placement: { x: 100, y: 100, scale: 1, rotateDeg: 0 } },
+          { assetId: "a2", placement: { x: 300, y: 100, scale: 1, rotateDeg: 0 } },
+        ],
+        animations: [],
+        camera: [],
+      },
+      {
+        id: "s2",
+        narration: "The second scene carries it.",
+        placements: [
+          { assetId: "a3", placement: { x: 500, y: 100, scale: 1, rotateDeg: 0 } },
+        ],
+        animations: [],
+        camera: [],
+        ...(sceneBoard === undefined ? {} : { board: sceneBoard }),
+      },
+    ],
+  };
+}
+
+await test("W6 validator: the additive-parse law — no board field means a clean scene, unchanged", async () => {
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const raw = W6_RAW_PROJECT(undefined);
+  const { project, errors } = validateWhiteboardProject(raw, W6_LIBRARY);
+  ok(project !== null, "the board-less doc parses");
+  if (!project) return;
+  eq(errors, [], "no errors");
+  eq(project.scenes[0].board, undefined, "scene 1 has no board policy");
+  eq(project.scenes[1].board, undefined, "scene 2 has no board policy");
+  // Everything else about the scene is untouched.
+  eq(project.scenes[1].placements.length, 1, "scene 2's placements survive");
+  eq(project.scenes[1].narration, "The second scene carries it.", "narration survives");
+});
+
+await test("W6 validator: continuous boards round-trip every field", async () => {
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const board = { mode: "continuous", carryPlacements: ["a1"], exit: "fade", transitionMs: 800 };
+  const { project, errors } = validateWhiteboardProject(W6_RAW_PROJECT(board), W6_LIBRARY);
+  ok(project !== null, "a sane continuous doc parses");
+  if (!project) return;
+  eq(errors, [], "no errors");
+  eq(project.scenes[1].board, board, "the board policy round-trips exactly");
+  // Absent exit/carry fields read their documented defaults downstream.
+  const bare = validateWhiteboardProject(W6_RAW_PROJECT({ mode: "continuous" }), W6_LIBRARY);
+  ok(bare.project !== null, "a bare continuous doc parses");
+  if (bare.project) eq(bare.project.scenes[1].board, { mode: "continuous" }, "the bare policy round-trips (defaults are timing.ts's decision)");
+});
+
+await test("W6 validator: crafted board violations fire with readable reasons", async () => {
+  const { validateWhiteboardProject, BOARD_TRANSITION_MS_MAX } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const v = (board: unknown) => validateWhiteboardProject(W6_RAW_PROJECT(board), W6_LIBRARY);
+  let r = v({ exit: "fade" });
+  ok(r.project === null && r.errors.some((e) => e.includes("board must be")), "a modeless board is malformed");
+  r = v({ mode: "carry" });
+  ok(r.project === null && r.errors.some((e) => e.includes("board must be")), "an unknown mode is malformed");
+  r = v({ mode: "clean", exit: "fade" });
+  ok(r.project === null && r.errors.some((e) => e.includes("a clean board takes no carry/exit")), "clean + exit contradicts");
+  // The REAL first-scene check: a ONE-scene doc whose only scene is continuous.
+  const firstContinuous = validateWhiteboardProject(
+    { ...W6_RAW_PROJECT(undefined), scenes: [{ ...(W6_RAW_PROJECT(undefined).scenes[0] as Record<string, unknown>), board: { mode: "continuous" } }] },
+    W6_LIBRARY
+  );
+  ok(firstContinuous.project === null && firstContinuous.errors.some((e) => e.includes("first scene has no board to carry")), "the first scene cannot be continuous");
+  r = v({ mode: "continuous", carryPlacements: ["nope"] });
+  ok(r.project === null && r.errors.some((e) => e.includes("which the previous scene does not place")), "a carry name off the previous board is rejected");
+  r = v({ mode: "continuous", carryPlacements: ["a1", "a1"] });
+  ok(r.project === null && r.errors.some((e) => e.includes("twice")), "a duplicated carry name is rejected");
+  r = v({ mode: "continuous", transitionMs: BOARD_TRANSITION_MS_MAX + 1 });
+  ok(r.project === null && r.errors.some((e) => e.includes("board must be")), "a transition past the wall is rejected");
+  // carried + re-placed:
+  const rePlaced = validateWhiteboardProject(
+    {
+      ...W6_RAW_PROJECT(undefined),
+      scenes: [
+        W6_RAW_PROJECT(undefined).scenes[0],
+        {
+          ...(W6_RAW_PROJECT(undefined).scenes[1] as Record<string, unknown>),
+          board: { mode: "continuous" },
+          placements: [{ assetId: "a1", placement: { x: 900, y: 100, scale: 1, rotateDeg: 0 } }],
+        },
+      ],
+    },
+    W6_LIBRARY
+  );
+  ok(rePlaced.project === null && rePlaced.errors.some((e) => e.includes("carried AND re-placed")), "a carried asset cannot be re-placed");
+  // carried + animated:
+  const reAnimated = validateWhiteboardProject(
+    {
+      ...W6_RAW_PROJECT(undefined),
+      scenes: [
+        W6_RAW_PROJECT(undefined).scenes[0],
+        {
+          ...(W6_RAW_PROJECT(undefined).scenes[1] as Record<string, unknown>),
+          board: { mode: "continuous" },
+          animations: [{ type: "draw_path", assetId: "a2", pathId: "p1", startMs: 0, durationMs: 500 }],
+        },
+      ],
+    },
+    W6_LIBRARY
+  );
+  ok(reAnimated.project === null && reAnimated.errors.some((e) => e.includes("animation targets carried asset")), "a carried asset cannot be animated");
+});
+
+await test("W6 resolveCarriedInk: end-state placements, subset carry, color carry, defaults", async () => {
+  const { resolveCarriedInk } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const prev: WhiteboardScene = {
+    id: "prev",
+    narration: "Move the heart, reveal its fill.",
+    background: "#ffffff",
+    placements: [
+      { assetId: "a1", placement: { x: 100, y: 100, scale: 1, rotateDeg: 0 } },
+      { assetId: "a2", placement: { x: 900, y: 100, scale: 1, rotateDeg: 0 } },
+    ],
+    animations: [
+      // The heart slides right by its end clock; its fill reveals partway.
+      { type: "move_object", assetId: "a1", startMs: 0, durationMs: 4000, to: { x: 700, y: 100, scale: 1, rotateDeg: 0 } },
+      { type: "reveal_color", assetId: "a1", pathId: "p1", startMs: 0, durationMs: 2000 },
+      { type: "reveal_color", assetId: "a2", startMs: 9000, durationMs: 500 }, // never starts
+    ],
+    camera: [],
+  };
+  const board = { mode: "continuous" as const };
+  // All placements carry; the move_object COMPLETES at the prev end clock.
+  const plan = resolveCarriedInk(prev, 5000, board);
+  ok(plan !== null, "a continuous board resolves a plan");
+  if (!plan) return;
+  eq(plan.placements.get("a1"), { x: 700, y: 100, scale: 1, rotateDeg: 0 }, "the carried placement is the END-OF-PREVIOUS-SCENE one");
+  eq(plan.placements.get("a2"), { x: 900, y: 100, scale: 1, rotateDeg: 0 }, "unmoved placements carry as placed");
+  eq(plan.exit, "keep", "the default exit is keep");
+  eq(plan.transitionMs, 600, "the default transition is BOARD_EXIT_DEFAULT_MS");
+  eq([...plan.colors.entries()], [["a1::p1", 1]], "the completed reveal carries at 1; the unstarted reveal does not");
+  // Subset carry:
+  const sub = resolveCarriedInk(prev, 5000, { mode: "continuous", carryPlacements: ["a2"] });
+  ok(sub && sub.placements.size === 1 && sub.placements.has("a2"), "the named subset carries alone");
+  ok(sub && [...sub.colors.entries()].length === 0, "a non-carried asset's reveals do not ride");
+  // Partial reveal at the prev end clock carries its PARTIAL progress:
+  const partial = resolveCarriedInk(prev, 1000, board);
+  ok(partial && partial.colors.get("a1::p1") === 0.5, `a mid-reveal carries its partial progress (got ${partial?.colors.get("a1::p1")})`);
+  // Clean boards resolve null:
+  eq(resolveCarriedInk(prev, 5000, { mode: "clean" }), null, "a clean board carries nothing");
+  // Determinism:
+  eq(JSON.stringify(resolveCarriedInk(prev, 1234, { mode: "continuous", exit: "erase", transitionMs: 900 })), JSON.stringify(resolveCarriedInk(prev, 1234, { mode: "continuous", exit: "erase", transitionMs: 900 })), "double-run byte-identical");
+});
+
+await test("W6 carriedExitAt: keep is constant; fade/erase/pan are eased, deterministic, joint-continuous", async () => {
+  const { carriedExitAt } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const width = 1920;
+  const fade = { placements: new Map(), colors: new Map(), exit: "fade" as const, transitionMs: 600 };
+  const erase = { placements: new Map(), colors: new Map(), exit: "erase" as const, transitionMs: 600 };
+  const pan = { placements: new Map(), colors: new Map(), exit: "pan-away" as const, transitionMs: 600 };
+  const keep = { placements: new Map(), colors: new Map(), exit: "keep" as const, transitionMs: 600 };
+  // keep: constant identity at every t.
+  for (const t of [0, 300, 600, 10_000]) {
+    const s = carriedExitAt(keep, width, t);
+    eq(s, { opacity: 1, erase: 0, dx: 0, dy: 0 }, `keep at t=${t}`);
+  }
+  // fade: 1 at t=0, 0 at/after transitionMs, monotone between.
+  eq(carriedExitAt(fade, width, 0).opacity, 1, "fade starts fully visible");
+  eq(carriedExitAt(fade, width, 600).opacity, 0, "fade ends fully gone");
+  const mid = carriedExitAt(fade, width, 300).opacity;
+  ok(mid > 0.4 && mid < 0.6, `the eased midpoint sits near 0.5 (got ${mid})`);
+  ok(carriedExitAt(fade, width, 200).opacity > carriedExitAt(fade, width, 400).opacity, "fade is monotone");
+  // erase: the un-draw progress 0 → 1, opacity stays 1 (the DASH law hides it).
+  eq(carriedExitAt(erase, width, 0).erase, 0, "erase starts drawn");
+  eq(carriedExitAt(erase, width, 600).erase, 1, "erase ends un-drawn");
+  eq(carriedExitAt(erase, width, 300).opacity, 1, "erase never fades the group");
+  ok(carriedExitAt(erase, width, 200).erase < carriedExitAt(erase, width, 400).erase, "erase is monotone");
+  // pan: the layer slides LEFT off-board; opacity stays 1 (geometric exit).
+  eq(carriedExitAt(pan, width, 0).dx, 0, "pan starts at rest");
+  ok(carriedExitAt(pan, width, 600).dx <= -2 * width, "pan ends off-board");
+  eq(carriedExitAt(pan, width, 300).opacity, 1, "pan never fades");
+  // Joint continuity: the state at transitionMs-1 is close to the state at
+  // transitionMs (no teleport at the exit's own boundary).
+  const a = carriedExitAt(pan, width, 599);
+  const b = carriedExitAt(pan, width, 600);
+  ok(Math.abs(b.dx - a.dx) < width * 0.05, "pan's final step is continuous");
+  // Determinism: byte-identical double-run.
+  eq(JSON.stringify(carriedExitAt(fade, width, 250)), JSON.stringify(carriedExitAt(fade, width, 250)), "double-run byte-identical");
+});
+
+await test("W6 frameAt: the carried-state equality pin — frame 0 of scene K+1 contains exactly scene K's carried ink", async () => {
+  const { frameAt, resolveCarriedInk, buildGeometry } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const geo = buildGeometry([
+    { id: "a1", paths: [{ id: "p1", d: "M 0 0 L 100 0" }, { id: "p2", d: "M 0 10 L 50 10" }] },
+    { id: "a2", paths: [{ id: "p1", d: "M 0 0 L 30 30" }] },
+    { id: "a3", paths: [{ id: "p1", d: "M 0 0 L 10 10" }] },
+  ]);
+  const prev: WhiteboardScene = {
+    id: "s1",
+    narration: "Draw the heart.",
+    durationMs: 4000,
+    background: "#ffffff",
+    placements: [{ assetId: "a1", placement: { x: 100, y: 100, scale: 1, rotateDeg: 0 } }],
+    animations: [],
+    camera: [],
+  };
+  const scene: WhiteboardScene = {
+    id: "s2",
+    narration: "Add the lungs.",
+    durationMs: 4000,
+    background: "#ffffff",
+    placements: [{ assetId: "a3", placement: { x: 500, y: 100, scale: 1, rotateDeg: 0 } }],
+    animations: [],
+    camera: [],
+    board: { mode: "continuous" },
+  };
+  const project = { title: "W6", width: 1920, height: 1080, fps: 24, hand: { style: "marker" as const, scale: 1 }, scenes: [prev, scene] };
+  const boardPolicy = scene.board;
+  ok(boardPolicy != null, "the scene carries its board policy");
+  if (!boardPolicy) return;
+  const carry = resolveCarriedInk(prev, 4000, boardPolicy);
+  ok(carry !== null, "the carry resolves");
+  if (!carry) return;
+  const f0 = frameAt(project, scene, [], geo, 0, carry);
+  const carriedLayer = f0.carried;
+  ok(carriedLayer != null, "frame 0 carries a layer");
+  if (!carriedLayer) return;
+  // THE PIN: the carried placements at frame 0 ARE the previous scene's
+  // placements (no move_object → as placed), exactly.
+  eq([...carriedLayer.placements.entries()], [["a1", { x: 100, y: 100, scale: 1, rotateDeg: 0 }]], "frame 0's carried placements equal scene K's end state");
+  eq(carriedLayer.exit, { opacity: 1, erase: 0, dx: 0, dy: 0 }, "the exit is identity at frame 0");
+  // The carried ink rides the SAME maps, fully drawn:
+  eq(f0.draws.get("a1::p1"), 1, "the carried stroke is drawn");
+  eq(f0.draws.get("a1::p2"), 1, "the carried second stroke is drawn");
+  eq(f0.draws.get("a3::p1"), undefined, "the scene's OWN stroke is NOT pre-drawn (no schedule yet)");
+  eq(f0.placements.get("a1"), { x: 100, y: 100, scale: 1, rotateDeg: 0 }, "the carried placement sits in the placements map");
+  // Mid-exit (fade): the exit state moves, the carried ink stays drawn.
+  const fMid = frameAt(project, scene, [], geo, 300, { ...carry, exit: "fade", transitionMs: 600 });
+  ok(fMid.carried !== null && fMid.carried.exit.opacity < 1 && fMid.draws.get("a1::p1") === 1, "mid-fade: the layer dims while the ink stays drawn");
+  // Byte pin — the whole carried layer at frame 0, frozen:
+  eq(
+    JSON.stringify([...carriedLayer.placements.entries()]) + "|" + JSON.stringify(carriedLayer.exit),
+    '[["a1",{"x":100,"y":100,"scale":1,"rotateDeg":0}]]|{"opacity":1,"erase":0,"dx":0,"dy":0}',
+    "the carried frame-0 layer is byte-pinned"
+  );
+  // Clean scene: carried null, maps untouched (the additive law at the frame level).
+  const cleanScene: WhiteboardScene = { ...scene, board: undefined };
+  const clean = frameAt(project, cleanScene, [], geo, 0, null);
+  eq(clean.carried, null, "no carry plan → carried layer null");
+  ok(!clean.draws.has("a1::p1"), "a clean scene's draws carry no inherited keys");
+});
+
+await test("W6 wb-page: the carried layer renders UNDER the scene ink through the shared seam", async () => {
+  const { composeScene, framePayload } = await import("../src/lib/tubeforge/whiteboard/wb-page");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  const project = { title: "W6", width: 1920, height: 1080, fps: 24, hand: { style: "marker" as const, scale: 1 }, scenes: [] };
+  const scene: WhiteboardScene = {
+    id: "s2",
+    narration: "Add.",
+    durationMs: 4000,
+    background: "#ffffff",
+    placements: [{ assetId: "lungs", placement: { x: 500, y: 100, scale: 1, rotateDeg: 0 } }],
+    animations: [],
+    camera: [],
+  };
+  const carry = {
+    placements: new Map([["heart-main", { x: 100, y: 100, scale: 1, rotateDeg: 0 }]]),
+    colors: new Map<string, number>(),
+    exit: "keep" as const,
+    transitionMs: 600,
+  };
+  const composed = composeScene(scene, project, lib.assets, carry);
+  const heartIdx = composed.html.indexOf('id="g-heart-main"');
+  const lungsIdx = composed.html.indexOf('id="g-lungs"');
+  ok(heartIdx >= 0 && lungsIdx >= 0, "both groups exist");
+  ok(heartIdx < lungsIdx, "the carried group renders FIRST (under the scene ink)");
+  ok(composed.pathEls.has("heart-main::hm-outline"), "the carried paths register in the path index");
+  // Byte-identity: a clean compose (no carry) equals the pre-W6 compose.
+  const bare = composeScene(scene, project, lib.assets);
+  const explicitNull = composeScene(scene, project, lib.assets, null);
+  eq(bare.html, explicitNull.html, "carried: null is compose-identical to absent");
+  // The payload shape:
+  const frame = { tMs: 0, draws: new Map([["k", 1]]), texts: new Map(), colors: new Map(), placements: new Map(), carried: { placements: new Map([["a", { x: 1, y: 2, scale: 1, rotateDeg: 0 }]]), exit: { opacity: 1, erase: 0, dx: 0, dy: 0 } }, hand: { visible: false, x: 0, y: 0, angle: 0 }, camera: { cx: 0, cy: 0, scale: 1 } };
+  const payload = JSON.parse(framePayload(frame as never, 1920, 1080));
+  ok(payload.carried && payload.carried.placements[0][0] === "a", "the payload carries the carried layer");
+  const cleanPayload = JSON.parse(framePayload({ ...frame, carried: null } as never, 1920, 1080));
+  eq(cleanPayload.carried, null, "a clean frame's payload carries null");
+  // The applier handles the layer (source pin — the shared APPLY_FRAME_FN):
+  const { APPLY_FRAME_FN } = await import("../src/lib/tubeforge/whiteboard/wb-page");
+  ok(APPLY_FRAME_FN.includes("p.carried"), "the one applier knows the carried layer");
+  ok(APPLY_FRAME_FN.includes("L * ex.erase"), "erase rides the dash law's own numbers");
+});
+
+await test("W6 tracks: the board policy changes no clip (the no-grammar-change pin)", async () => {
+  const { whiteboardTracks } = await import("../src/lib/tubeforge/whiteboard/tracks");
+  const clean: WhiteboardProject = {
+    title: "t", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 },
+    scenes: [
+      { id: "scene-1", narration: "a", durationMs: 4000, background: "#ffffff", placements: [], animations: [], camera: [] },
+      { id: "scene-2", narration: "b", durationMs: 4000, background: "#ffffff", placements: [], animations: [], camera: [] },
+    ],
+  };
+  const continuous: WhiteboardProject = {
+    ...clean,
+    scenes: [clean.scenes[0], { ...clean.scenes[1], board: { mode: "continuous", exit: "fade", transitionMs: 500 } }],
+  };
+  const ms = [4000, 4000];
+  eq(
+    JSON.stringify(whiteboardTracks(continuous, ms, { voSceneIds: [], musicOn: false })),
+    JSON.stringify(whiteboardTracks(clean, ms, { voSceneIds: [], musicOn: false })),
+    "a continuous doc projects the exact same clips"
+  );
+});
+
+await test("W6 render seam + manifest: the carry wiring and the additive boardMode (compile-only pins)", async () => {
+  const fs = await import("node:fs");
+  const renderSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/render.ts", "utf8");
+  ok(renderSrc.includes("resolveCarriedInk"), "render.ts imports the carry resolver");
+  ok(/const carryPlan =[\s\S]*?resolveCarriedInk\(prevScene, sceneMs\[si - 1\], scene\.board\)/.test(renderSrc), "the loop resolves the carry from the PREVIOUS scene's clock");
+  ok(/composeScene\(scene, project, lib\.assets, carryPlan\)/.test(renderSrc), "the compose receives the carry plan");
+  ok(/frameAt\(project, scene, events, geometry, tMs, carryPlan\)/.test(renderSrc), "the frame plan receives the carry plan");
+  ok(renderSrc.includes("boardModes: project.scenes.map"), "the result carries per-scene board modes");
+  const asmSrc = fs.readFileSync("src/lib/tubeforge/render-assembly.ts", "utf8");
+  ok(asmSrc.includes("boardMode?:"), "AssemblyEntry carries the additive boardMode");
+  ok(/boardMode: typeof e\.boardMode === "string" \? e\.boardMode : undefined/.test(asmSrc), "the manifest parse tolerates both shapes");
+  const jobsSrc = fs.readFileSync("src/lib/tubeforge/video-jobs.ts", "utf8");
+  ok(/manifestOf\(await resolveRenderAssembly\(video\), "whiteboard", result\.boardModes\)/.test(jobsSrc), "the whiteboard final stamps its board modes into the S117 manifest");
+  // The editor rides the same resolver (the one-source law):
+  const canvasSrc = fs.readFileSync("src/components/tubeforge/whiteboard/wb-canvas.tsx", "utf8");
+  ok(canvasSrc.includes("resolveCarriedInk"), "the editor resolves the SAME carry plan");
+  ok(/composeScene\(rt\.scene, project, rt\.lib\.assets, rt\.carry\)/.test(canvasSrc), "the editor composes with the carry plan");
+  ok(/frameAt\(project, rt2\.scene, rt2\.events, rt2\.geometry, tMs, rt2\.carry\)/.test(canvasSrc), "the editor frames with the carry plan");
 });
 
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);

@@ -59,6 +59,12 @@ export interface AssemblyEntry {
   source: AssemblySource;
   /** The revisionVersion consumed (null only for the row source). */
   revisionVersion: number | null;
+  /** W6 — the board policy mode the render consumed for this scene
+   *  ("clean" | "continuous"). ADDITIVE observability on the manifest:
+   *  the staleness comparison ignores it (a comparison key would make a
+   *  board flip silently "fresh" — board changes invalidate rendered
+   *  artifacts through the doc-edit sweep instead). */
+  boardMode?: string;
 }
 
 /** The effective render inputs + the per-scene record. */
@@ -112,6 +118,9 @@ export function parseRenderManifest(json: string | null | undefined): RenderMani
       ? String(e.source)
       : "row") as AssemblySource,
     revisionVersion: num(e.revisionVersion),
+    // W6 — additive, tolerant: old manifests (and old writers) carry no
+    // boardMode; absent reads undefined, never a guess.
+    boardMode: typeof e.boardMode === "string" ? e.boardMode : undefined,
   }));
   return {
     schema: 1,
@@ -261,13 +270,23 @@ export async function resolveRenderAssembly(video: Video): Promise<RenderAssembl
   return { scenes, timeline, entries, changed };
 }
 
-/** Build the manifest a landed final render records. */
-export function manifestOf(assembly: RenderAssembly, mode: string): RenderManifest {
+/** Build the manifest a landed final render records. `boardModes` (W6)
+ *  stamps each scene's board policy additively — a manifest written before
+ *  W6 (or by another lane) stays field-absent, and the tolerant parse
+ *  reads both shapes. */
+export function manifestOf(
+  assembly: RenderAssembly,
+  mode: string,
+  boardModes?: readonly string[]
+): RenderManifest {
+  const entries: AssemblyEntry[] = assembly.entries.map((e, i) =>
+    boardModes && i < boardModes.length ? { ...e, boardMode: boardModes[i] } : e
+  );
   return {
     schema: 1,
     renderedAt: new Date().toISOString(),
     mode,
-    entries: assembly.entries,
+    entries,
   };
 }
 

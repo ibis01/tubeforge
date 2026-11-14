@@ -32,7 +32,14 @@ import {
 // schedule exactly as before — byte-for-byte (the slice-1 hard pin).
 import { sceneVoiceAnchors } from "./voice-anchors";
 import type { WordAnchors } from "./timing";
-import { buildGeometry, estimateProjectFrames, frameAt, WB_RENDER_FRAME_BUDGET, type FrameState } from "./timing";
+import {
+  buildGeometry,
+  estimateProjectFrames,
+  frameAt,
+  resolveCarriedInk,
+  WB_RENDER_FRAME_BUDGET,
+  type FrameState,
+} from "./timing";
 // W2 — the semantic beat compiler: the render seam schedules through the
 // same beatSceneEvents the editor preview runs (the one-source law).
 import { beatSceneEvents } from "./beat-plan";
@@ -43,7 +50,7 @@ import { beatSceneEvents } from "./beat-plan";
 import { framePlanClock, whiteboardTracks } from "./tracks";
 import { planFromTracks, type CompositionPlan } from "../composition-plan";
 import type { TimelineTrack } from "../timeline";
-import type { WhiteboardProject } from "./storyboard";
+import type { BoardMode, WhiteboardProject } from "./storyboard";
 
 const execFileP = promisify(execFile);
 
@@ -144,6 +151,9 @@ export interface WhiteboardRenderResult {
   tracks: TimelineTrack[];
   /** The composition plan derived FROM those tracks (origin "tracks"). */
   plan: CompositionPlan;
+  /** W6 — each scene's board mode in scene order (the S117 manifest
+   *  records it; additive observability). */
+  boardModes: BoardMode[];
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +369,17 @@ export async function renderWhiteboard(
       // anchorless scenes keep the estimator byte-for-byte.
       const events = beatSceneEvents(scene, durationMs, geometry, assetTags, anchorsBySceneId.get(scene.id));
       const frames = clock.scenes[si].frames;
+      // W6 — the carry plan: a continuous scene inherits the PREVIOUS
+      // scene's ink, resolved as DATA at the previous scene's own clock
+      // (the estimator's clamped value — the same one the frame budget
+      // and the tracks read). The carried ink rides the same compose and
+      // the same frame maps; clean scenes resolve null and take today's
+      // path byte-for-byte.
+      const prevScene = si > 0 ? project.scenes[si - 1] : null;
+      const carryPlan =
+        prevScene && scene.board?.mode === "continuous"
+          ? resolveCarriedInk(prevScene, sceneMs[si - 1], scene.board)
+          : null;
 
       // Per-scene page recycling (the S75 E10 receipt): ONE page held across
       // the whole project grew until the 4GB worker's OOM killer fired —
@@ -378,7 +399,7 @@ export async function renderWhiteboard(
       };
       try {
         opts.onProgress?.(`scene ${si + 1}/${project.scenes.length} ("${scene.id}"): composing`, si / project.scenes.length);
-      const composed = composeScene(scene, project, lib.assets);
+      const composed = composeScene(scene, project, lib.assets, carryPlan);
       await page.setContent(composed.html, { waitUntil: "load" });
       // Setup pass: defs root + the hand asset + dasharrays from OUR geometry
       // (the pure module owns the truth about every stroke length).
@@ -438,7 +459,7 @@ export async function renderWhiteboard(
       fs.mkdirSync(framesDir, { recursive: true });
       for (let f = 0; f < frames; f++) {
         const tMs = (f / project.fps) * 1000;
-        await apply(frameAt(project, scene, events, geometry, tMs));
+        await apply(frameAt(project, scene, events, geometry, tMs, carryPlan));
         await page.screenshot({
           path: path.join(framesDir, `f${String(f).padStart(5, "0")}.jpg`),
           type: "jpeg",
@@ -548,7 +569,7 @@ export async function renderWhiteboard(
     } else {
       await runFfmpeg(["-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", finalFile]);
     }
-    return { scenes: sceneFiles, file: finalFile, tracks, plan };
+    return { scenes: sceneFiles, file: finalFile, tracks, plan, boardModes: project.scenes.map((s) => s.board?.mode ?? "clean") };
   } finally {
     await browser.close();
   }

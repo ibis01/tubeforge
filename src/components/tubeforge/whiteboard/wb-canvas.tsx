@@ -35,6 +35,7 @@ import {
   cameraAt,
   frameAt,
   frameCount,
+  resolveCarriedInk,
   sceneDurationMs,
 } from "@/lib/tubeforge/whiteboard/timing";
 // W2 — the semantic beat compiler: the preview schedules through the same
@@ -95,7 +96,20 @@ function sceneRuntime(
   const assetTags = new Map<string, string[]>(
     [...lib.assets.values()].map((a) => [a.id, a.tags])
   );
-  return { lib, geometry, scene, durationMs, events: beatSceneEvents(scene, durationMs, geometry, assetTags) };
+  // W6 — the carry plan resolved EXACTLY like the render seam does: the
+  // previous scene's ink at its own clock (VO-measured when the editor
+  // knows it), through the same resolveCarriedInk — one source, no drift
+  // between what the preview shows and what the MP4 contains.
+  const prevScene = sceneIndex > 0 ? project.scenes[sceneIndex - 1] : null;
+  const carry =
+    prevScene && scene.board?.mode === "continuous"
+      ? resolveCarriedInk(
+          prevScene,
+          sceneDurationMs(prevScene, voMs?.[prevScene.id] ?? null),
+          scene.board
+        )
+      : null;
+  return { lib, geometry, scene, durationMs, events: beatSceneEvents(scene, durationMs, geometry, assetTags), carry };
 }
 
 /** Placement bbox corners in SCENE space: R(rot)·s·(u,v) + (x,y) over the
@@ -198,7 +212,7 @@ export default function WbCanvas({
     const iframe = iframeRef.current;
     if (!iframe) return;
     const rt = (runtimeRef.current ??= sceneRuntime(project, sceneIndex, voMs, uploadedAssets));
-    const composed = composeScene(rt.scene, project, rt.lib.assets);
+    const composed = composeScene(rt.scene, project, rt.lib.assets, rt.carry);
     const setup = () => {
       const doc = iframe.contentDocument;
       const win = iframe.contentWindow;
@@ -252,7 +266,7 @@ export default function WbCanvas({
       const rt2 = runtimeRef.current;
       const win = iframe.contentWindow;
       if (!rt2 || !win) return;
-      const frame = frameAt(project, rt2.scene, rt2.events, rt2.geometry, tMs);
+      const frame = frameAt(project, rt2.scene, rt2.events, rt2.geometry, tMs, rt2.carry);
       const payload = framePayload(frame, project.width, project.height);
       (win as unknown as { __wbApply?: (p: string) => boolean }).__wbApply?.(payload);
     };

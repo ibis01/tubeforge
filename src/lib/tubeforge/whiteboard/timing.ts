@@ -18,7 +18,14 @@ import {
   type PathSegment,
   type Placement,
 } from "./svg";
-import type { AnimationEvent, WhiteboardProject, WhiteboardScene } from "./storyboard";
+import {
+  BOARD_EXIT_DEFAULT_MS,
+  type AnimationEvent,
+  type BoardExit,
+  type BoardPolicy,
+  type WhiteboardProject,
+  type WhiteboardScene,
+} from "./storyboard";
 
 /** The house narration pace (words/sec) — the director lane's constant. */
 export const WORDS_PER_SEC = 2.6;
@@ -223,6 +230,10 @@ export interface FrameState {
   colors: Map<string, number>;
   /** assetId → animated placement (move_object applied). */
   placements: Map<string, Placement>;
+  /** W6 — the carried-ink layer (null = clean scene, no carry). The
+   *  carried ink rides the SAME maps above (injected fully drawn), so the
+   *  page's one applier needs no second machinery. */
+  carried: CarriedFrameLayer | null;
   hand: FrameHandState;
   camera: FrameCameraState;
 }
@@ -307,6 +318,117 @@ export function cameraAt(
   // breathing around the content framing (NOT the fallback drift).
   const breath = directedBreath(tMs);
   return { cx: state.cx + breath.dx, cy: state.cy + breath.dy, scale: state.scale };
+}
+
+// ---------------------------------------------------------------------------
+// W6 — the carried-ink layer (S120 §3): a continuous scene inherits the
+// previous scene's ink as DATA — the carry plan is resolved from the
+// PREVIOUS SCENE's placements (move_object applied at its end clock) and
+// rides the SAME frame maps the scene's own strokes use (draws/texts/
+// colors), so the page's one applier carries it with zero new machinery.
+// ---------------------------------------------------------------------------
+
+/** The carried ink PLAN for one scene (fixed for the scene's duration). */
+export interface CarriedInkPlan {
+  /** Carried placements keyed by the REAL assetId (a carried asset cannot
+   *  be re-placed — the validator pins that), each resolved to its
+   *  END-OF-PREVIOUS-SCENE placement. */
+  placements: Map<string, Placement>;
+  /** The previous scene's reveal_color state at ITS end clock (key →
+   *  progress), so fills carry AS SEEN. */
+  colors: Map<string, number>;
+  exit: BoardExit;
+  transitionMs: number;
+}
+
+/** The shared exit state, precomputed per frame (the applier stays dumb). */
+export interface CarriedExitState {
+  /** fade: 1 → 0. */
+  opacity: number;
+  /** erase: the un-draw progress 0 → 1 (the dash law runs backwards). */
+  erase: number;
+  /** pan-away offset in scene units (dx negative = off the left edge). */
+  dx: number;
+  dy: number;
+}
+
+/** The carried layer of one frame (null = this scene carries nothing). */
+export interface CarriedFrameLayer {
+  placements: Map<string, Placement>;
+  exit: CarriedExitState;
+}
+
+/** pan-away slides the layer by this multiple of the board width — two
+ *  widths clear any sane placement (content fully on-board, the studio's
+ *  and planner's invariant) without needing geometry at exit time. */
+const PAN_AWAY_BOARD_WIDTHS = 2;
+
+/**
+ * Resolve what scene K+1 inherits from scene K, PURE. `prevDurationMs` is
+ * the clock the previous scene actually ran (the estimator's clamped
+ * value — the same one the render loop and the editor preview use).
+ * Returns null for clean boards (the caller schedules exactly as before).
+ */
+export function resolveCarriedInk(
+  prev: WhiteboardScene,
+  prevDurationMs: number,
+  board: BoardPolicy
+): CarriedInkPlan | null {
+  if (board.mode !== "continuous") return null;
+  const wanted =
+    board.carryPlacements && board.carryPlacements.length > 0
+      ? new Set(board.carryPlacements)
+      : null; // null = every placement carries
+  const placements = new Map<string, Placement>();
+  for (const pl of prev.placements) {
+    if (wanted && !wanted.has(pl.assetId)) continue;
+    // The END-OF-PREVIOUS-SCENE placement: move_object runs to completion
+    // (placementAt clamps progress at the scene's own clock).
+    placements.set(pl.assetId, placementAt(prev, pl.assetId, pl.placement, prevDurationMs));
+  }
+  const colors = new Map<string, number>();
+  for (const e of prev.animations) {
+    if (e.type !== "reveal_color") continue;
+    const p = Math.max(0, Math.min(1, (prevDurationMs - e.startMs) / e.durationMs));
+    if (p <= 0) continue;
+    if (wanted && !wanted.has(e.assetId)) continue;
+    colors.set(`${e.assetId}${e.pathId ? "::" + e.pathId : ""}`, p);
+  }
+  return {
+    placements,
+    colors,
+    exit: board.exit ?? "keep",
+    transitionMs: board.transitionMs ?? BOARD_EXIT_DEFAULT_MS,
+  };
+}
+
+/**
+ * The exit state at scene time t (PURE, deterministic, continuous at both
+ * joints): fade unweights opacity, erase un-draws (dashoffset runs from 0
+ * back to each stroke's length — the ink retreats along the stroke),
+ * pan-away slides the layer off the left edge. All eased with the SAME
+ * easeInOut the camera and move_object ride — one easing vocabulary.
+ */
+export function carriedExitAt(
+  plan: CarriedInkPlan,
+  width: number,
+  tMs: number
+): CarriedExitState {
+  if (plan.exit === "keep") return { opacity: 1, erase: 0, dx: 0, dy: 0 };
+  const u = Math.max(0, Math.min(1, tMs / Math.max(1, plan.transitionMs)));
+  if (u >= 1) {
+    switch (plan.exit) {
+      case "fade": return { opacity: 0, erase: 0, dx: 0, dy: 0 };
+      case "erase": return { opacity: 1, erase: 1, dx: 0, dy: 0 };
+      default: return { opacity: 1, erase: 0, dx: -width * PAN_AWAY_BOARD_WIDTHS, dy: 0 };
+    }
+  }
+  const e = easeInOut(u);
+  switch (plan.exit) {
+    case "fade": return { opacity: 1 - e, erase: 0, dx: 0, dy: 0 };
+    case "erase": return { opacity: 1, erase: e, dx: 0, dy: 0 };
+    default: return { opacity: 1, erase: 0, dx: -width * PAN_AWAY_BOARD_WIDTHS * e, dy: 0 };
+  }
 }
 
 /** Placement at time t with move_object animations applied. */
@@ -428,13 +550,19 @@ export function handAt(
 // Text anchors (asset-space) — registered by assets.ts.
 export const TEXT_ANCHORS = new Map<string, { x: number; y: number; size: number }>();
 
-/** Compute one frame's full state. PURE. */
+/** Compute one frame's full state. PURE.
+ *
+ *  W6 — `carried` is the resolved carry plan (resolveCarriedInk); the
+ *  carried ink injects into the SAME maps the scene's own strokes use:
+ *  every path fully drawn, every text fully written, fills as the
+ *  previous scene left them. Absent/null → byte-for-byte today's frame. */
 export function frameAt(
   project: WhiteboardProject,
   scene: WhiteboardScene,
   events: AnimationEvent[],
   geometry: Map<string, AssetGeometry>,
-  tMs: number
+  tMs: number,
+  carried?: CarriedInkPlan | null
 ): FrameState {
   const draws = new Map<string, number>();
   const texts = new Map<string, number>();
@@ -449,12 +577,34 @@ export function frameAt(
   for (const pl of scene.placements) {
     placements.set(pl.assetId, placementAt(scene, pl.assetId, pl.placement, tMs));
   }
+  let carriedLayer: CarriedFrameLayer | null = null;
+  if (carried && carried.placements.size > 0) {
+    for (const [assetId, pl] of carried.placements) {
+      placements.set(assetId, pl);
+      // The scheduler's fill law draws EVERY drawable path of a placed
+      // asset by scene end (the W2/W4 schedules included), so carrying all
+      // of the asset's paths ≡ the previous scene's end visual.
+      const geo = geometry.get(assetId);
+      if (geo) for (const pathId of geo.paths.keys()) draws.set(`${assetId}::${pathId}`, 1);
+      for (const textId of TEXT_IDS_BY_ASSET.get(assetId) ?? []) {
+        texts.set(`${assetId}::text:${textId}`, 1);
+      }
+      for (const [k, v] of carried.colors) {
+        if (k === assetId || k.startsWith(assetId + "::")) colors.set(k, v);
+      }
+    }
+    carriedLayer = {
+      placements: carried.placements,
+      exit: carriedExitAt(carried, project.width, tMs),
+    };
+  }
   return {
     tMs,
     draws,
     texts,
     colors,
     placements,
+    carried: carriedLayer,
     hand: handAt(events, scene, geometry, tMs),
     camera: cameraAt(scene, project.width, project.height, tMs),
   };

@@ -12,8 +12,9 @@
 // page.evaluate); wb-canvas.tsx consumes it client-side (srcdoc iframe +
 // contentWindow.eval). One compose, one applier, two callers.
 import { HAND_TIP, type WhiteboardAsset } from "./assets";
-import type { FrameState } from "./timing";
+import type { CarriedInkPlan, FrameState } from "./timing";
 import type { WhiteboardProject, WhiteboardScene } from "./storyboard";
+import type { Placement } from "./svg";
 
 export interface ComposedScene {
   html: string;
@@ -23,30 +24,57 @@ export interface ComposedScene {
   textEls: Map<string, string>;
 }
 
+/** Render one placed asset into the page body + register its element ids
+ *  (the namespacing seam shared by the scene's placements and — W6 — the
+ *  carried ink, which uses the carried asset's REAL id: the validator
+ *  forbids re-placing a carried asset, so the ids stay unambiguous). */
+function renderPlacement(
+  assetId: string,
+  placement: Placement,
+  asset: WhiteboardAsset,
+  body: string[],
+  pathEls: Map<string, string>,
+  textEls: Map<string, string>
+): void {
+  const gid = `g-${assetId}`;
+  // Namespace inner ids so page-level lookups stay unambiguous.
+  const namespaced = asset.svg
+    .replace(/id="([^"]+)"/g, (_m, id: string) => `id="${assetId}--${id}"`)
+    .replace(/url\(#([^)]+)\)/g, (_m, id: string) => `url(#${assetId}--${id})`);
+  body.push(`<g id="${gid}" transform="translate(${placement.x} ${placement.y}) rotate(${placement.rotateDeg}) scale(${placement.scale})">${namespaced}</g>`);
+  for (const m of namespaced.matchAll(/<path\b[^>]*id="([^"]+)"/g)) {
+    pathEls.set(`${assetId}::${m[1].split("--")[1]}`, m[1]);
+  }
+  for (const m of namespaced.matchAll(/<text\b[^>]*id="([^"]+)"/g)) {
+    textEls.set(`${assetId}::text:${m[1].split("--")[1]}`, m[1]);
+  }
+}
+
 export function composeScene(
   scene: WhiteboardScene,
   project: WhiteboardProject,
-  assets: Map<string, WhiteboardAsset>
+  assets: Map<string, WhiteboardAsset>,
+  carried?: CarriedInkPlan | null
 ): ComposedScene {
   const pathEls = new Map<string, string>();
   const textEls = new Map<string, string>();
-  let body = "";
+  const bodyParts: string[] = [];
+  // W6 — carried ink renders FIRST (document order = z-order: the carried
+  // layer sits UNDER the scene's own ink), through the same namespacing
+  // and the same registration the scene's placements ride.
+  if (carried) {
+    for (const [assetId, pl] of carried.placements) {
+      const asset = assets.get(assetId);
+      if (!asset) continue;
+      renderPlacement(assetId, pl, asset, bodyParts, pathEls, textEls);
+    }
+  }
   for (const pl of scene.placements) {
     const asset = assets.get(pl.assetId);
     if (!asset) continue;
-    const gid = `g-${pl.assetId}`;
-    // Namespace inner ids so page-level lookups stay unambiguous.
-    const namespaced = asset.svg
-      .replace(/id="([^"]+)"/g, (_m, id: string) => `id="${pl.assetId}--${id}"`)
-      .replace(/url\(#([^)]+)\)/g, (_m, id: string) => `url(#${pl.assetId}--${id})`);
-    body += `<g id="${gid}" transform="translate(${pl.placement.x} ${pl.placement.y}) rotate(${pl.placement.rotateDeg}) scale(${pl.placement.scale})">${namespaced}</g>\n`;
-    for (const m of namespaced.matchAll(/<path\b[^>]*id="([^"]+)"/g)) {
-      pathEls.set(`${pl.assetId}::${m[1].split("--")[1]}`, m[1]);
-    }
-    for (const m of namespaced.matchAll(/<text\b[^>]*id="([^"]+)"/g)) {
-      textEls.set(`${pl.assetId}::text:${m[1].split("--")[1]}`, m[1]);
-    }
+    renderPlacement(pl.assetId, pl.placement, asset, bodyParts, pathEls, textEls);
   }
+  const body = bodyParts.join("\n") + "\n";
   const bg = scene.background === "#f8f5ee" ? "#f8f5ee" : "#ffffff";
   // The whiteboard surface: a subtle dot grid. Craft AND engineering —
   // a 99%-blank canvas cannot produce full-frame motion (the S64 freeze
@@ -76,6 +104,9 @@ export function framePayload(frame: FrameState, width: number, height: number): 
     texts: [...frame.texts.entries()],
     colors: [...frame.colors.entries()],
     placements: [...frame.placements.entries()],
+    carried: frame.carried
+      ? { placements: [...frame.carried.placements.entries()], exit: frame.carried.exit }
+      : null,
     hand: frame.hand,
     tMs: frame.tMs,
     width,
@@ -153,6 +184,27 @@ export const APPLY_FRAME_FN = `(payloadJson) => {
       ? [drawEl(key)].filter(Boolean)
       : Array.from(document.querySelectorAll("#g-" + key.replace(/[^a-zA-Z0-9_-]/g, "-") + " path"));
     for (const el of targets) el.style.fillOpacity = String(prog);
+  }
+  // W6 — the carried-ink layer: the carry plan owns these groups'
+  // transforms (placements + the pan-away offset), the fade's group
+  // opacity, and the erase's dashoffset override (applied LAST — after
+  // the draw loop above set them drawn — so the ink visibly retreats).
+  if (p.carried) {
+    const ex = p.carried.exit;
+    for (const [assetId, pl] of p.carried.placements) {
+      const g = document.getElementById("g-" + assetId);
+      if (!g) continue;
+      g.setAttribute("transform",
+        "translate(" + (pl.x + ex.dx) + " " + (pl.y + ex.dy) + ") rotate(" + pl.rotateDeg + ") scale(" + pl.scale + ")");
+      g.style.opacity = String(ex.opacity);
+      if (ex.erase > 0) {
+        const paths = g.querySelectorAll("path");
+        for (const el of paths) {
+          const L = Number(el.dataset.len || 0);
+          if (L > 0) el.setAttribute("stroke-dashoffset", String(L * ex.erase));
+        }
+      }
+    }
   }
   const hand = document.getElementById("hand");
   if (!p.hand.visible) {

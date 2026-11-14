@@ -79,6 +79,50 @@ export interface WhiteboardScene {
   placements: WhiteboardAssetPlacement[];
   animations: AnimationEvent[];
   camera: CameraEvent[];
+  /** W6 (S120 §3) — the board policy: how this scene relates to the board
+   *  the previous scene drew. ABSENT = a clean scene (today's hard wipe,
+   *  byte-for-byte — the additive-parse law). */
+  board?: BoardPolicy;
+}
+
+// ---------------------------------------------------------------------------
+// W6 — the board policy: scenes can CARRY the board (keep/fade/erase/
+// pan-away) instead of four hard board-wipes per video (the continuity
+// row the W1 baseline scored 1/5). The carried ink is DATA resolved from
+// the previous scene's placements at the render seam — never page residue
+// (per-scene chromium recycling stays untouched; the S75 OOM receipt is
+// the reason).
+// ---------------------------------------------------------------------------
+
+export type BoardMode = "clean" | "continuous";
+export type BoardExit = "keep" | "fade" | "erase" | "pan-away";
+
+export interface BoardPolicy {
+  /** "clean" = the hard wipe (default); "continuous" = inherit the
+   *  previous scene's ink at frame 0. */
+  mode: BoardMode;
+  /** Which of the PREVIOUS scene's placements carry forward (assetIds).
+   *  Absent/empty = every placement carries. */
+  carryPlacements?: string[];
+  /** How the carried ink leaves this scene's stage. Default "keep". */
+  exit?: BoardExit;
+  /** The exit transition's duration (ms). Default
+   *  BOARD_EXIT_DEFAULT_MS, bounded by BOARD_TRANSITION_MS_MAX. */
+  transitionMs?: number;
+}
+
+export const BOARD_EXITS: readonly BoardExit[] = ["keep", "fade", "erase", "pan-away"];
+export const BOARD_EXIT_DEFAULT_MS = 600;
+export const BOARD_TRANSITION_MS_MAX = 5000;
+
+function isBoardPolicy(v: unknown): v is BoardPolicy {
+  if (typeof v !== "object" || v === null) return false;
+  const b = v as Record<string, unknown>;
+  if (b.mode !== "clean" && b.mode !== "continuous") return false;
+  if (b.exit !== undefined && !BOARD_EXITS.includes(b.exit as BoardExit)) return false;
+  if (b.transitionMs !== undefined && (typeof b.transitionMs !== "number" || !(b.transitionMs > 0) || b.transitionMs > BOARD_TRANSITION_MS_MAX)) return false;
+  if (b.carryPlacements !== undefined && (!Array.isArray(b.carryPlacements) || b.carryPlacements.some((c) => typeof c !== "string"))) return false;
+  return true;
 }
 
 export interface WhiteboardProject {
@@ -218,6 +262,74 @@ export function validateWhiteboardProject(
       explicitDurationTotalMs += s.durationMs;
     }
     const background = s.background === "#f8f5ee" ? "#f8f5ee" : "#ffffff";
+    // W6 — the board policy, parsed BEFORE the placements so the carry
+    // integrity checks (below) can gate them. Tolerant-read law: a doc with
+    // no `board` field parses as a clean scene — everything else about the
+    // scene is unchanged.
+    let board: BoardPolicy | undefined;
+    if (s.board !== undefined) {
+      if (!isBoardPolicy(s.board)) {
+        errors.push(
+          `scene ${i + 1}: board must be { mode: "clean" | "continuous", carryPlacements?: string[], exit?: ${BOARD_EXITS.join("|")}, transitionMs?: (0, ${BOARD_TRANSITION_MS_MAX}] }`
+        );
+        continue;
+      }
+      const b = s.board as BoardPolicy;
+      if (b.mode === "clean") {
+        if (b.carryPlacements !== undefined || b.exit !== undefined || b.transitionMs !== undefined) {
+          errors.push(`scene ${i + 1}: a clean board takes no carry/exit fields — those belong to mode "continuous"`);
+          continue;
+        }
+      } else {
+        // continuous: the FIRST scene has no board to inherit.
+        if (i === 0) {
+          errors.push(`scene ${i + 1}: the first scene has no board to carry (mode "continuous" needs a previous scene)`);
+          continue;
+        }
+        if (b.exit !== undefined && b.transitionMs !== undefined && b.exit === "keep") {
+          errors.push(`scene ${i + 1}: a "keep" exit takes no transitionMs (nothing transitions)`);
+          continue;
+        }
+        // The carry's integrity against the PREVIOUS RAW scene: the named
+        // placements must exist there, and a carried asset may not be
+        // re-placed here (duplicate ink + ambiguous ids at the page seam).
+        const prevRaw = p.scenes[i - 1] as Record<string, unknown> | undefined;
+        const prevPlaced = new Set<string>(
+          (Array.isArray(prevRaw?.placements) ? (prevRaw.placements as Record<string, unknown>[]) : [])
+            .map((pl) => (typeof pl.assetId === "string" ? pl.assetId : ""))
+            .filter(Boolean)
+        );
+        const carryNames = Array.isArray(b.carryPlacements) ? (b.carryPlacements as string[]) : [];
+        if (new Set(carryNames).size !== carryNames.length) {
+          errors.push(`scene ${i + 1}: carryPlacements names an asset twice`);
+          continue;
+        }
+        let carryOk = true;
+        for (const name of carryNames) {
+          if (!prevPlaced.has(name)) {
+            errors.push(`scene ${i + 1}: carryPlacements names "${name.slice(0, 40)}", which the previous scene does not place`);
+            carryOk = false;
+          }
+        }
+        if (!carryOk) continue;
+        // The carried set (named subset, or ALL of the previous scene's
+        // placements) must not reappear in this scene's own placements —
+        // checked after placements parse, below.
+        board = { ...b };
+      }
+    }
+    const carriedAssets: Set<string> | null =
+      board?.mode === "continuous"
+        ? new Set(
+            board.carryPlacements && board.carryPlacements.length > 0
+              ? board.carryPlacements
+              : (Array.isArray((p.scenes[i - 1] as Record<string, unknown> | undefined)?.placements)
+                  ? ((p.scenes[i - 1] as Record<string, unknown>).placements as Record<string, unknown>[])
+                      .map((pl) => (typeof pl.assetId === "string" ? pl.assetId : ""))
+                      .filter(Boolean)
+                  : [])
+          )
+        : null;
     const placements: WhiteboardAssetPlacement[] = [];
     const seenAssets = new Set<string>();
     const rawPlacements = Array.isArray(s.placements) ? s.placements : [];
@@ -246,6 +358,17 @@ export function validateWhiteboardProject(
         order: typeof e.order === "number" ? e.order : undefined,
       });
     }
+    // W6 — a carried asset may not be re-placed in the scene that carries it
+    // (duplicate ink on the board, and the page's namespaced element ids
+    // would collide). The carried set is computed above from the carry
+    // names (or all of the previous scene's placements).
+    if (carriedAssets) {
+      for (const a of seenAssets) {
+        if (carriedAssets.has(a)) {
+          errors.push(`scene ${i + 1}: asset "${a}" is carried AND re-placed — carried ink must not be placed again (drop the placement or narrow carryPlacements)`);
+        }
+      }
+    }
     const animations: AnimationEvent[] = [];
     const rawAnimations = Array.isArray(s.animations) ? s.animations : [];
     if (rawAnimations.length > WB_BUDGETS.animationsPerScene) {
@@ -262,6 +385,13 @@ export function validateWhiteboardProject(
       }
       if (!validEventTimes(e)) {
         errors.push(`scene ${i + 1}: ${type} needs startMs ≥ 0 and durationMs > 0`);
+        continue;
+      }
+      // W6 — animations may not target a carried asset: the carried layer
+      // owns those elements' transforms and reveal state for the whole
+      // scene, so a draw/write/reveal/move would fight the carry plan.
+      if (carriedAssets?.has(String(e.assetId))) {
+        errors.push(`scene ${i + 1}: animation targets carried asset "${String(e.assetId)}" — carried ink is fully drawn at frame 0 and owned by the carry plan`);
         continue;
       }
       if (type === "draw_path") {
@@ -343,6 +473,7 @@ export function validateWhiteboardProject(
       placements,
       animations,
       camera,
+      board,
     });
   }
   if (errors.length > 0 || scenes.length === 0) return { project: null, errors };
