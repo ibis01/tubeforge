@@ -11,6 +11,7 @@
 // (see each viewBox); the scene places them via Placement.
 import { countPathCommands, sanitizeSvg } from "./svg";
 import { TEXT_CHARS_BY_ID, TEXT_IDS_BY_ASSET, TEXT_ANCHORS } from "./timing";
+import { applyGlyphTextMode } from "./text-draw";
 import { validWhiteboardId } from "./storyboard";
 import { validateAsset } from "./asset-validate";
 
@@ -41,6 +42,10 @@ export interface WhiteboardAsset {
   alts?: string[];
   /** Accessibility description (screen readers, alt text). */
   a11y?: string;
+  /** W4 slice 2: "glyph" replaces this asset's <text> elements with the
+   *  committed handwriting outlines at registration (the single-face law);
+   *  absent/"marker" keeps the marker wipe byte-for-byte. */
+  textMode?: "glyph" | "marker";
 }
 
 const A = (
@@ -48,7 +53,7 @@ const A = (
   viewBox: { w: number; h: number },
   tags: string[],
   svg: string,
-  meta: Partial<Pick<WhiteboardAsset, "role" | "penGroups" | "drawOrder" | "durWeight" | "framing" | "alts" | "a11y">> = {}
+  meta: Partial<Pick<WhiteboardAsset, "role" | "penGroups" | "drawOrder" | "durWeight" | "framing" | "alts" | "a11y" | "textMode">> = {}
 ): WhiteboardAsset => ({ id, viewBox, tags, svg: sanitizeSvg(svg), ...meta });
 
 // ---------------------------------------------------------------------------
@@ -252,6 +257,13 @@ export const ASSETS: WhiteboardAsset[] = [
     <path id="fs-arrow2" d="M 150 85 L 118 112" fill="none" stroke="#e63946" stroke-width="5" stroke-linecap="round"/>
     <path id="fs-head2" d="M 124 104 L 113 116 L 127 121" fill="none" stroke="#e63946" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
   `),
+  // W4 slice 2 — the glyph-mode home asset: its <text> becomes committed
+  // Caveat outlines at registration (the ONLY built-in that does), so the
+  // W1 benchmark assets keep the marker wipe byte-for-byte.
+  A("glyph-note", { w: 240, h: 120 }, ["generic", "note", "idea", "handwriting"], `
+    <path id="gn-line" d="M 28 96 C 70 90 152 90 212 94" fill="none" stroke="#1d3557" stroke-width="5" stroke-linecap="round"/>
+    <text id="gn-word" x="44" y="66" font-family="DejaVu Sans, sans-serif" font-size="52" fill="#1d3557" font-weight="bold">Idea</text>
+  `, { role: "emphasis", textMode: "glyph" }),
 ];
 
 /** The marker tip anchor of the drawing-hand asset (asset-space). */
@@ -377,7 +389,21 @@ export function loadLibrary(uploaded: WhiteboardAsset[] = []): {
   const warnings: { assetId: string; reasons: string[] }[] = [];
   const register = (a: WhiteboardAsset, origin: string): void => {
     if (assets.has(a.id)) throw new Error(`duplicate whiteboard asset id: ${a.id} (${origin})`);
-    const ex = extractAsset(a);
+    // W4 slice 2 — glyph mode is per-asset metadata: the transform swaps
+    // <text> for committed-outline paths BEFORE extraction, so geometry,
+    // the scheduler, the page and the camera all ride the ordinary path
+    // machinery. No metadata → the asset is byte-identical (the fallback law).
+    let effective = a;
+    if (a.textMode === "glyph") {
+      const glyph = applyGlyphTextMode(a.svg);
+      effective = { ...a, svg: glyph.svg };
+      // replaced texts leave ex.texts — re-register their anchors so
+      // checkReadability and the W5 framing policy still measure them
+      for (const t of glyph.replacedAnchors) {
+        TEXT_ANCHORS.set(`${a.id}::${t.id}`, { x: t.x, y: t.y, size: t.size });
+      }
+    }
+    const ex = extractAsset(effective);
     assets.set(a.id, a);
     extracted.set(a.id, ex);
     pathIdsByAsset.set(a.id, new Set(ex.paths.map((p) => p.id)));

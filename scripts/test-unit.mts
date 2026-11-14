@@ -14205,6 +14205,82 @@ await test("W4 glyphs: the layout math is exact — advance, y-flip, spacing, de
   eq(zero.size, 0, "a zero size is clamped, not NaN");
 });
 
+
+// ===========================================================================
+// W4 slice 2 step 2 — the glyph-mode consumer seam: per-asset textMode
+// metadata swaps <text> for committed-outline paths AT REGISTRATION, so
+// geometry, the scheduler, the page and the camera ride the ordinary path
+// machinery. The pins: transform determinism, the two-level honest
+// fallback (per-text + per-asset byte-identity), the S67 single-subpath law
+// surviving contour splitting, and draw_path-only scheduling end-to-end.
+// ===========================================================================
+
+await test("W4 glyph mode: the transform is deterministic and falls back honestly", async () => {
+  const { applyGlyphTextMode, textToGlyphPaths } = await import("../src/lib/tubeforge/whiteboard/text-draw");
+  const svg = '<text id="t1" x="10" y="50" font-size="40" fill="#123456">Hi</text>';
+  const a = applyGlyphTextMode(svg);
+  const b = applyGlyphTextMode(svg);
+  eq(JSON.stringify(a), JSON.stringify(b), "double-run byte-identical");
+  ok(!a.svg.includes("<text"), "covered text is replaced");
+  ok(a.svg.includes('<path id="t1-g0-'), "glyph paths carry the deterministic id law");
+  ok(a.svg.includes('fill="#123456"') && a.svg.includes('stroke="#123456"'), "the letter's own ink traces and fills");
+  eq(a.replacedAnchors.length, 1, "the replaced text's anchor is reported for readability");
+  // per-text fallback 1: uncovered chars keep the marker wipe untouched
+  const unk = '<text id="t2" x="10" y="50" font-size="40" fill="#123456">ok\u00e9</text>';
+  const r2 = applyGlyphTextMode(unk);
+  eq(r2.svg, unk, "an uncovered char keeps the <text> element byte-for-byte");
+  eq(r2.replacedAnchors.length, 0, "no anchor reported for the fallback");
+  // per-text fallback 2: fill="none" cannot animate a draw — marker wipe
+  const none = '<text id="t3" x="10" y="50" font-size="40" fill="none">Hi</text>';
+  eq(applyGlyphTextMode(none).svg, none, "a non-paint fill keeps the <text> element");
+  // text-anchor middle recenters the run deterministically
+  const mid = '<text id="t4" x="100" y="50" font-size="40" fill="#123456" text-anchor="middle">Hi</text>';
+  const r4 = applyGlyphTextMode(mid);
+  ok(!r4.svg.includes("<text"), "middle anchor still replaces");
+  const start = applyGlyphTextMode('<text id="t5" x="100" y="50" font-size="40" fill="#123456">Hi</text>');
+  const xOf = (svg: string) => Number(/d="M ?(-?[\d.]+)[ ,]/.exec(svg)?.[1]);
+  // the exact anchor law: the middle-anchored run sits width/2 left of the
+  // start-anchored one (the contour offset cancels — same glyphs, same pen)
+  const runWidth = textToGlyphPaths("Hi", { x: 0, y: 50, size: 40 }).width;
+  const shift = Math.round((xOf(start.svg) - xOf(r4.svg)) * 100) / 100;
+  eq(shift, Math.round((runWidth / 2) * 100) / 100, "middle anchor shifts the run left by exactly width/2");
+});
+
+await test("W4 glyph mode: registration end-to-end — paths not texts, draw_path not write_text, readability intact", async () => {
+  const { loadLibrary, ASSETS } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const { scheduleScene, buildGeometry } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const { checkReadability } = await import("../src/lib/tubeforge/whiteboard/text-draw");
+  const lib = loadLibrary();
+  const builtIn = lib.extracted.get("glyph-note");
+  ok(builtIn !== undefined, "the glyph-mode home asset is registered");
+  if (!builtIn) return;
+  ok(builtIn.texts.length === 0, "the replaced text is OUT of the text work list (no write_text)");
+  const glyphPaths = builtIn.paths.filter((p) => p.id.startsWith("gn-word-g"));
+  ok(glyphPaths.length >= 4, `the word became glyph contour paths (${glyphPaths.length})`);
+  for (const p of glyphPaths) ok(!p.id.includes("--"), "glyph ids respect the asset-namespace separator law");
+  // TEXT_ANCHORS still knows the replaced text — the readability law holds
+  const readable = checkReadability({ assetId: "glyph-note", textId: "gn-word", placementScale: 1 }, { zoom: 1 }, { width: 1920, sceneWidth: 1920 });
+  ok(readable.ok, `glyph text still passes the readability wall (${readable.renderedPx}px)`);
+  // scheduling: a scene placing the asset emits draw_path rows ONLY
+  const scene = {
+    id: "s", durationMs: 8000, background: "#ffffff",
+    placements: [{ assetId: "glyph-note", placement: { x: 500, y: 300, scale: 1.5, rotateDeg: 0 }, order: 0 }],
+    animations: [], camera: { mode: "static" as const }, beats: [],
+  };
+  const geo = buildGeometry([...lib.extracted.values()].map((ex) => ({ id: ex.asset.id, paths: ex.paths })));
+  const ev1 = scheduleScene(scene, 8000, geo);
+  const ev2 = scheduleScene(scene, 8000, geo);
+  eq(JSON.stringify(ev1), JSON.stringify(ev2), "scheduling is deterministic");
+  ok(ev1.some((e) => e.type === "draw_path" && e.assetId === "glyph-note" && e.pathId.startsWith("gn-word-g")), "the pen draws the glyph contours");
+  ok(!ev1.some((e) => e.type === "write_text" && e.assetId === "glyph-note"), "no write_text rows for the glyph asset");
+  ok(ev1.some((e) => e.type === "draw_path" && e.pathId === "gn-line"), "the underline draws as itself");
+  // the byte-identity law: a marker-mode asset is untouched
+  const markerAsset = ASSETS.find((a) => a.id === "title-hero");
+  ok(markerAsset !== undefined && markerAsset.textMode === undefined, "non-glyph assets carry no textMode");
+  const markerEx = lib.extracted.get("title-hero");
+  ok(markerEx !== undefined && markerEx.texts.length >= 1, "the marker wipe keeps its text elements");
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

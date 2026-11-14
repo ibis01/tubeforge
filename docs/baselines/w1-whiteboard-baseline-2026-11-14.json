@@ -1,0 +1,334 @@
+{
+  "stage": "W1",
+  "what": "whiteboard perceptual baseline — five fixed scene types × three aspects",
+  "definition": {
+    "module": "src/lib/tubeforge/whiteboard/benchmark-scenarios.ts",
+    "projectHashes": {
+      "16:9": "488237559e75adaa407fc7c42921f0b5ec91798f81f74e7c81c44b2cfacf7efa"
+    },
+    "fps": 24,
+    "totalDurationMs": 38000,
+    "sceneIds": [
+      "w1-title",
+      "w1-process",
+      "w1-comparison",
+      "w1-phrase",
+      "w1-conclusion"
+    ],
+    "spans": [
+      {
+        "id": "w1-title",
+        "kind": "title",
+        "startMs": 0,
+        "durationMs": 7500,
+        "endMs": 7500
+      },
+      {
+        "id": "w1-process",
+        "kind": "process diagram",
+        "startMs": 7500,
+        "durationMs": 8500,
+        "endMs": 16000
+      },
+      {
+        "id": "w1-comparison",
+        "kind": "comparison",
+        "startMs": 16000,
+        "durationMs": 8000,
+        "endMs": 24000
+      },
+      {
+        "id": "w1-phrase",
+        "kind": "handwritten key phrase",
+        "startMs": 24000,
+        "durationMs": 7000,
+        "endMs": 31000
+      },
+      {
+        "id": "w1-conclusion",
+        "kind": "conclusion",
+        "startMs": 31000,
+        "durationMs": 7000,
+        "endMs": 38000
+      }
+    ],
+    "narrations": {
+      "w1-title": "Your heart beats about one hundred thousand times every single day. Today, we draw how it keeps you alive.",
+      "w1-process": "Here is the loop. The right side pumps blood to the lungs to pick up oxygen. The left side then fires it out to the whole body.",
+      "w1-comparison": "An athlete's resting heart beats about forty times a minute. The average heart sits near seventy. Training makes every beat count.",
+      "w1-phrase": "If you remember one number, make it this one: sixty to one hundred beats every minute.",
+      "w1-conclusion": "Now you can draw the heart yourself. Sketch it, label it, and share the story."
+    }
+  },
+  "recordedAt": "2026-11-14T01:16:53.288Z",
+  "environment": {
+    "node": "v24.22.3",
+    "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+    "playwright": "Version 1.65.0",
+    "chromium": "chromium-1200, chromium-1254, chromium_headless_shell-1200, chromium_headless_shell-1254"
+  },
+  "aspects": {
+    "16:9": {
+      "aspect": "16:9",
+      "dim": "1920x1080",
+      "outDir": "validation/w1/aspect-16x9",
+      "durationSec": 38,
+      "decodedFrames": 912,
+      "expectedFrames": 912,
+      "renderWallMs": 80502,
+      "sceneReceipts": [
+        {
+          "id": "w1-title",
+          "frames": 180,
+          "durationMs": 7500
+        },
+        {
+          "id": "w1-process",
+          "frames": 204,
+          "durationMs": 8500
+        },
+        {
+          "id": "w1-comparison",
+          "frames": 192,
+          "durationMs": 8000
+        },
+        {
+          "id": "w1-phrase",
+          "frames": 168,
+          "durationMs": 7000
+        },
+        {
+          "id": "w1-conclusion",
+          "frames": 168,
+          "durationMs": 7000
+        }
+      ],
+      "samples": [
+        {
+          "id": "w1-title",
+          "kind": "title",
+          "tSec": 4.5,
+          "sha256": "1ff50db7357ecba0f86cc4555996e28510f8da81327389cb76147960220e8350",
+          "inkCoverage": 0.9503587962962963,
+          "darkRatio": 0.027802854938271605,
+          "meanLuma": 248.82898890774297
+        },
+        {
+          "id": "w1-process",
+          "kind": "process diagram",
+          "tSec": 12.6,
+          "sha256": "99ef6f795f5b8f90272483f961ebee41dcd8e897c476e7773b6da117402ecf4e",
+          "inkCoverage": 0.9665359760802469,
+          "darkRatio": 0.01169753086419753,
+          "meanLuma": 252.2533050634914
+        },
+        {
+          "id": "w1-comparison",
+          "kind": "comparison",
+          "tSec": 20.8,
+          "sha256": "14088dd32a34e6f1a3ef35e646b5275482aa2d44f216a591a3998ae3899375eb",
+          "inkCoverage": 0.9645630787037037,
+          "darkRatio": 0.013218074845679013,
+          "meanLuma": 251.76160259071094
+        },
+        {
+          "id": "w1-phrase",
+          "kind": "handwritten key phrase",
+          "tSec": 28.2,
+          "sha256": "f7c645aec8eb732bff1afcd02594f4acea5a6978e360ffc0958408b1d8beb663",
+          "inkCoverage": 0.9666893325617284,
+          "darkRatio": 0.011144868827160493,
+          "meanLuma": 252.36917178579228
+        },
+        {
+          "id": "w1-conclusion",
+          "kind": "conclusion",
+          "tSec": 35.2,
+          "sha256": "7b341c933f282b9d9637798a966bc53583f406a92925ba90cb296914677f4695",
+          "inkCoverage": 0.9680516975308642,
+          "darkRatio": 0.010064139660493828,
+          "meanLuma": 252.4929649993788
+        }
+      ],
+      "seams": [
+        {
+          "between": [
+            "w1-title",
+            "w1-process"
+          ],
+          "lastTSec": 7.438,
+          "firstTSec": 7.5,
+          "outgoing": {
+            "sha256": "46e1941007c796ebd3e55cd3e8347e7a2ed3036261eb8402f839e46b21367080",
+            "inkCoverage": 0.9485103202160494,
+            "darkRatio": 0.027762827932098767,
+            "meanLuma": 248.81767622261896
+          },
+          "incoming": {
+            "sha256": "cff3698c077df686a15b7f5c6a1a28554c4508b8ec22d660466642dbcb72b97f",
+            "inkCoverage": 0.9809929591049382,
+            "darkRatio": 0.0015928819444444445,
+            "meanLuma": 254.22759078045024
+          }
+        },
+        {
+          "between": [
+            "w1-process",
+            "w1-comparison"
+          ],
+          "lastTSec": 15.938,
+          "firstTSec": 16,
+          "outgoing": {
+            "sha256": "3ffcc0e336640f78acd79270410a4514e5dc8ef09b39bff061e8f16ccaeee8ff",
+            "inkCoverage": 0.9655758101851852,
+            "darkRatio": 0.01175877700617284,
+            "meanLuma": 252.2450942931367
+          },
+          "incoming": {
+            "sha256": "1aafa21d0e277e678964ee6250cbc6648d0eb82bfd58292ef87df1286c484631",
+            "inkCoverage": 0.9736332947530865,
+            "darkRatio": 0.0016001157407407407,
+            "meanLuma": 254.10540555102065
+          }
+        },
+        {
+          "between": [
+            "w1-comparison",
+            "w1-phrase"
+          ],
+          "lastTSec": 23.938,
+          "firstTSec": 24,
+          "outgoing": {
+            "sha256": "3e062706ac4b55d374b5f2a7afb4e899bfe664100044e75887a8976c1db15e24",
+            "inkCoverage": 0.9642414158950617,
+            "darkRatio": 0.013330922067901235,
+            "meanLuma": 251.72056503805834
+          },
+          "incoming": {
+            "sha256": "859f53ad54cf20708ff1889f2c84279e1632cfddd1c54eb824d32958a4d80c18",
+            "inkCoverage": 0.9735985725308642,
+            "darkRatio": 0.0016010802469135802,
+            "meanLuma": 254.10540368161588
+          }
+        },
+        {
+          "between": [
+            "w1-phrase",
+            "w1-conclusion"
+          ],
+          "lastTSec": 30.938,
+          "firstTSec": 31,
+          "outgoing": {
+            "sha256": "abd71b6a609cc07f80b19bc26a4ea5552d02a94e7061db6d5ebbf0034969504a",
+            "inkCoverage": 0.956889949845679,
+            "darkRatio": 0.019972993827160494,
+            "meanLuma": 250.70781205669573
+          },
+          "incoming": {
+            "sha256": "b9224474205bc56d7c41a55093f76cb397a7324273346585e76a3cd39a3714c9",
+            "inkCoverage": 0.9734837962962963,
+            "darkRatio": 0.001597704475308642,
+            "meanLuma": 254.10900839322952
+          }
+        }
+      ],
+      "qc": {
+        "overall": "(unreported)",
+        "checks": [
+          {
+            "id": "playable",
+            "status": "pass"
+          },
+          {
+            "id": "black-frames",
+            "status": "pass"
+          },
+          {
+            "id": "frozen-frames",
+            "status": "pass"
+          },
+          {
+            "id": "aspect",
+            "status": "pass"
+          },
+          {
+            "id": "loudness",
+            "status": "pass"
+          },
+          {
+            "id": "true-peak",
+            "status": "pass"
+          },
+          {
+            "id": "loudness-range",
+            "status": "pass"
+          },
+          {
+            "id": "dead-air",
+            "status": "pass"
+          },
+          {
+            "id": "static-shots",
+            "status": "pass"
+          },
+          {
+            "id": "flicker",
+            "status": "pass"
+          },
+          {
+            "id": "stutter",
+            "status": "pass"
+          },
+          {
+            "id": "cut-alignment",
+            "status": "unmeasured"
+          },
+          {
+            "id": "tail-fade",
+            "status": "pass"
+          }
+        ]
+      }
+    }
+  },
+  "determinismPin": {
+    "aspect": "16:9",
+    "runs": 2,
+    "sampleHashesIdentical": true,
+    "sceneFrameCountsIdentical": true,
+    "hashes": [
+      [
+        "1ff50db7357ecba0f86cc4555996e28510f8da81327389cb76147960220e8350",
+        "99ef6f795f5b8f90272483f961ebee41dcd8e897c476e7773b6da117402ecf4e",
+        "14088dd32a34e6f1a3ef35e646b5275482aa2d44f216a591a3998ae3899375eb",
+        "f7c645aec8eb732bff1afcd02594f4acea5a6978e360ffc0958408b1d8beb663",
+        "7b341c933f282b9d9637798a966bc53583f406a92925ba90cb296914677f4695"
+      ],
+      [
+        "1ff50db7357ecba0f86cc4555996e28510f8da81327389cb76147960220e8350",
+        "99ef6f795f5b8f90272483f961ebee41dcd8e897c476e7773b6da117402ecf4e",
+        "14088dd32a34e6f1a3ef35e646b5275482aa2d44f216a591a3998ae3899375eb",
+        "f7c645aec8eb732bff1afcd02594f4acea5a6978e360ffc0958408b1d8beb663",
+        "7b341c933f282b9d9637798a966bc53583f406a92925ba90cb296914677f4695"
+      ]
+    ]
+  },
+  "rubric": {
+    "doc": "docs/audits/w1-blind-rubric.md",
+    "dimensions": [
+      "stroke-naturalness",
+      "semantic-order",
+      "narration-alignment",
+      "camera-readability",
+      "hand-realism",
+      "continuity",
+      "text-readability",
+      "audio",
+      "comprehension"
+    ]
+  },
+  "gate": {
+    "passed": true,
+    "failures": []
+  }
+}

@@ -203,3 +203,76 @@ export function textToGlyphPaths(text: string, opts: GlyphLayoutOptions): GlyphL
     skipped,
   };
 }
+
+// ---------------------------------------------------------------------------
+// W4 slice 2 step 2 — the per-asset glyph-mode transform (the consumer seam).
+//
+// An asset that opts in (metadata `textMode: "glyph"`) has its <text>
+// elements REPLACED by committed-outline <path> elements at registration —
+// one path per glyph, deterministic ids "${textId}-g${i}-${contour}" — so EVERYTHING
+// downstream rides unchanged: buildGeometry sees ordinary paths,
+// scheduleScene emits draw_path rows (the pen lane), wb-page namespaces and
+// animates them through the existing draw law, and the W5 camera frames
+// their bboxes like any other stroke. The marker wipe stays the fallback at
+// TWO levels: per-text (uncovered chars, degenerate geometry, or a
+// non-paint fill — a stroke the dash law cannot animate would render an
+// invisible draw) and per-asset (no `textMode` metadata → the transform is
+// never applied — the byte-identity law for every existing asset).
+
+export interface GlyphModeResult {
+  /** The transformed SVG fragment (text elements swapped for glyph paths). */
+  svg: string;
+  /** Anchors of the REPLACED texts — the caller keeps registering them so
+   *  checkReadability and the W5 framing policy still see glyph text. */
+  replacedAnchors: { id: string; x: number; y: number; size: number }[];
+}
+
+/** A paint the dash law can animate: the glyph outline draws as the pen
+ *  trace in the letter's own ink, and the fill renders through the engine's
+ *  uniform fill law. "none" (or a missing fill) cannot show a draw — the
+ *  honest fallback is the marker wipe, not an invisible stroke. */
+function isPaint(fill: string | undefined): fill is string {
+  return fill !== undefined && fill !== "none" && fill.trim() !== "";
+}
+
+export function applyGlyphTextMode(svg: string): GlyphModeResult {
+  const replacedAnchors: GlyphModeResult["replacedAnchors"] = [];
+  const out = svg.replace(/<text\b([^>]*)>([^<]*)<\/text>/g, (full, attrs: string, contentRaw: string) => {
+    const content = contentRaw.trim();
+    const id = /\sid="([^"]+)"/.exec(attrs)?.[1];
+    const x = Number(/\sx="([-\d.]+)"/.exec(attrs)?.[1] ?? NaN);
+    const y = Number(/\sy="([-\d.]+)"/.exec(attrs)?.[1] ?? NaN);
+    const size = Number(/\sfont-size="([-\d.]+)"/.exec(attrs)?.[1] ?? NaN);
+    const fillRaw = /\sfill="([^"]*)"/.exec(attrs)?.[1];
+    const anchor = /\stext-anchor="([^"]*)"/.exec(attrs)?.[1] ?? "start";
+    if (!id || !content || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(size) || size <= 0) return full;
+    if (!isPaint(fillRaw)) return full; // no ink to trace → marker wipe keeps the look
+    // first pass at the origin measures the run (for non-start anchors)
+    const probe = textToGlyphPaths(content, { x: 0, y, size });
+    if (probe.skipped.length > 0 || probe.paths.length === 0) return full; // honest per-text fallback
+    let ox = x;
+    if (anchor === "middle") ox = x - probe.width / 2;
+    else if (anchor === "end") ox = x - probe.width;
+    const layout = textToGlyphPaths(content, { x: ox, y, size });
+    if (layout.skipped.length > 0 || layout.paths.length === 0) return full;
+    // The pen width: a thin marker proportional to the em (deterministic,
+    // clamped to sane pixels) — thick enough that the dash-offset draw is
+    // visible, thin enough not to fatten the outline.
+    const sw = Math.max(2, Math.round((size / 16) * 100) / 100);
+    // The S67 seam law: one path, ONE subpath — but filled faces contour
+    // letters in parts (the i's dot, the d's stem + bowl). Split every
+    // glyph's outline into its own pen-ridable path; the hand walks them
+    // in order exactly like a multi-stroke letter.
+    const glyphPaths = layout.paths
+      .flatMap((p, i) =>
+        (p.d.match(/M[^M]+/g) ?? []).map(
+          (contour, ci) =>
+            `<path id="${id}-g${i}-${ci}" d="${contour.trim()}" fill="${fillRaw}" stroke="${fillRaw}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>`
+        )
+      )
+      .join("");
+    replacedAnchors.push({ id, x, y, size });
+    return glyphPaths;
+  });
+  return { svg: out, replacedAnchors };
+}
