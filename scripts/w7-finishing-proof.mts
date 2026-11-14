@@ -154,12 +154,7 @@ async function main(): Promise<void> {
       worstJump = Math.max(worstJump, Math.hypot(cur.x - prev.x, cur.y - prev.y));
       prev = cur;
     }
-    const dist = Math.hypot(
-      handAt(events1, s1, geometry, gapEnd, roles as never).x - prev.x + handAt(events1, s1, geometry, gapEnd, roles as never).x - handAt(events1, s1, geometry, gapStart, roles as never).x,
-      0
-    );
     ok(worstJump < 60, `the real gap's per-frame jump stays bounded (worst ${worstJump.toFixed(2)}px, gap ${(gapEnd - gapStart).toFixed(0)}ms)`);
-    void dist;
   }
   ok(posesSeen.has("draw"), "the draw pose fired (role-less strokes)");
   ok(posesSeen.has("point"), "the point pose fired (arrow-curve is role arrow)");
