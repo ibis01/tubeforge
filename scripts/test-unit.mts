@@ -15281,6 +15281,41 @@ await test("S121 consent ledger: the basis vocabulary is closed", async () => {
   eq(legacy.consentBasis, null, "no basis is null, never guessed");
 });
 
+await test("S121 consent ledger: the clone flow's consent law (parseCloneConsent)", async () => {
+  const vc = await import("../src/lib/tubeforge/voice-clone");
+
+  // Both absent → no consent recorded, cloning never blocked.
+  const absent = vc.parseCloneConsent("", "");
+  ok(absent.ok && absent.consent === undefined, "absent consent → undefined, not an error");
+
+  // A statement without a basis is refused — a claim of right must NAME it.
+  const noBasis = vc.parseCloneConsent("This is my own narration voice", "");
+  ok(!noBasis.ok, "statement without basis is refused");
+  ok(!noBasis.ok && /consentBasis must be/.test(noBasis.error), "the refusal names the missing basis");
+
+  // An invalid basis is refused by name (the route 400s with this text).
+  const badBasis = vc.parseCloneConsent("some statement", "found_it_on_youtube");
+  ok(!badBasis.ok, "invalid basis refused");
+  ok(!badBasis.ok && badBasis.error === "consentBasis must be 'own_voice' or 'speaker_permission'",
+    "the error text is the route's 400 body");
+
+  // A basis without a statement records nothing auditable → refused.
+  const bareBasis = vc.parseCloneConsent("", "own_voice");
+  ok(!bareBasis.ok, "basis without statement refused");
+  ok(!bareBasis.ok && /consentText is required/.test(bareBasis.error), "the refusal names the missing statement");
+
+  // Both present + valid basis → the consent that lands on the profile,
+  // with the statement trimmed and length-capped.
+  const good = vc.parseCloneConsent("  Recorded with the speaker  ", "speaker_permission");
+  ok(good.ok && good.consent, "valid consent parsed");
+  eq(good.ok && good.consent.text, "Recorded with the speaker", "the statement is trimmed");
+  eq(good.ok && good.consent.basis, "speaker_permission", "the basis rides through typed");
+
+  // The oversized statement is capped (the row column is bounded).
+  const huge = vc.parseCloneConsent("x".repeat(3000), "own_voice");
+  ok(huge.ok && huge.consent && huge.consent.text.length === 2000, "the statement is capped at 2000 chars");
+});
+
 await test("S121 word-offset arithmetic: chunked audio shifts measured words by the measured chunk start", async () => {
   const verify = await import("../src/lib/tubeforge/verify");
   eq(verify.shiftAsrWord({ word: "hi", start: 1.2, end: 1.5 }, 25), { word: "hi", start: 26.2, end: 26.5 }, "second-chunk offset");
