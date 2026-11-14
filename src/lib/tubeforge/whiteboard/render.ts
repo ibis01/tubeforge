@@ -26,13 +26,13 @@ import {
   framePayload,
   APPLY_FRAME_FN,
 } from "./wb-page";
-import {
-  buildGeometry,
-  estimateProjectFrames,
-  frameAt,
-  WB_RENDER_FRAME_BUDGET,
-  type FrameState,
-} from "./timing";
+// W4 slice 3 — the captions lane's alignment feeds the spoken-window
+// schedule: per-scene VO → per-word anchors (voice-anchors.ts), the beat
+// plan's INPUT. Absent anchors (no VO, no speech structure, the flag off)
+// schedule exactly as before — byte-for-byte (the slice-1 hard pin).
+import { sceneVoiceAnchors } from "./voice-anchors";
+import type { WordAnchors } from "./timing";
+import { buildGeometry, estimateProjectFrames, frameAt, WB_RENDER_FRAME_BUDGET, type FrameState } from "./timing";
 // W2 — the semantic beat compiler: the render seam schedules through the
 // same beatSceneEvents the editor preview runs (the one-source law).
 import { beatSceneEvents } from "./beat-plan";
@@ -110,6 +110,13 @@ export interface RenderWhiteboardOptions {
   voFiles?: Map<string, string>;
   /** Music bed path (FLAC/WAV); mixed at -16 dB under the final assembly. */
   musicPath?: string;
+  /** W4 slice 3: build per-word voice anchors from each scene's VO (the
+   *  captions lane's alignment — detectSpeechRuns + the transcript cursor)
+   *  and let the beat plan schedule the strokes INSIDE the spoken window.
+   *  Absent/false keeps the estimator byte-for-byte; the ladder degrades
+   *  (no ASR → silence-run-refined narration timing; no runs → estimator)
+   *  and never fails a render. */
+  asrAnchors?: boolean;
   onProgress?: (label: string, fraction: number) => void;
   /** S69 (E9 Phase C): the video's UPLOADED assets, merged into the library
    *  by the same loadLibrary the built-ins ride — the render sees exactly
@@ -266,6 +273,34 @@ export async function renderWhiteboard(
     );
   }
 
+  // W4 slice 3 — the voice anchors: for every voiced scene, the captions
+  // lane's alignment (speech runs + the chunk cursor) becomes per-word
+  // spans the beat plan schedules inside. Built BEFORE chromium launches
+  // (the pre-flight owns every clock the loop reads); the ladder never
+  // throws — a scene that degrades just stays on the estimator.
+  const anchorsBySceneId = new Map<string, WordAnchors>();
+  if (opts.asrAnchors) {
+    for (const [si, scene] of project.scenes.entries()) {
+      const voPath = voResolved.get(scene.id);
+      const voMs = voMsBySceneId.get(scene.id);
+      if (!voPath || !voMs) continue;
+      try {
+        const anchors = await sceneVoiceAnchors({
+          narration: scene.narration,
+          voPath,
+          voDurationSec: voMs / 1000,
+          sceneDurationMs: sceneMs[si],
+          asr: true,
+        });
+        if (anchors) anchorsBySceneId.set(scene.id, anchors);
+      } catch {
+        // The ladder is contracted never to throw; this net is the honest
+        // floor — a failed alignment degrades to the estimator, not a dead
+        // render that already survived the frame-budget pre-flight.
+      }
+    }
+  }
+
   // S87 slice 3 — COMPOSE THROUGH THE CONTRACT. The frame plan maps onto
   // whiteboard-kind clips (the universal grammar), and the plan is read
   // back from those tracks through the same planFromTracks the compositor
@@ -319,7 +354,10 @@ export async function renderWhiteboard(
       // narration's sentences (the same beatSceneEvents the editor preview
       // runs — the one-source law). Explicit events stay senior inside;
       // a degenerate plan falls back to the fill law byte-for-byte.
-      const events = beatSceneEvents(scene, durationMs, geometry, assetTags);
+      // W4 slice 3 — voiced scenes with sane anchors ride the SPOKEN
+      // window (the strokes land on the words that introduce them);
+      // anchorless scenes keep the estimator byte-for-byte.
+      const events = beatSceneEvents(scene, durationMs, geometry, assetTags, anchorsBySceneId.get(scene.id));
       const frames = clock.scenes[si].frames;
 
       // Per-scene page recycling (the S75 E10 receipt): ONE page held across

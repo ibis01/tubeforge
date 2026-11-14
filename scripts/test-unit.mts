@@ -13487,8 +13487,9 @@ await test("W2: the seams and the one-source constants are wired (source pins)",
   const renderSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/render.ts", "utf8");
   const canvasSrc = fs.readFileSync("src/components/tubeforge/whiteboard/wb-canvas.tsx", "utf8");
   ok(
-    renderSrc.includes("beatSceneEvents(scene, durationMs, geometry, assetTags)"),
-    "the renderer schedules through beatSceneEvents (the one-source law)"
+    renderSrc.includes("beatSceneEvents(scene, durationMs, geometry, assetTags") &&
+      renderSrc.includes("anchorsBySceneId.get(scene.id)"),
+    "the renderer schedules through beatSceneEvents (the one-source law; W4 adds the spoken-window anchors)"
   );
   ok(
     canvasSrc.includes("beatSceneEvents(scene, durationMs, geometry, assetTags)"),
@@ -14314,6 +14315,142 @@ await test("W4 glyph mode: the PAGE seam rides the transformed svg — the conto
   };
   const markerComposed = composeScene(markerScene, { title: "t", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 }, scenes: [markerScene] }, lib.assets);
   ok((markerComposed.textEls.get("title-hero::text:th-line1") ?? "") !== "", "the marker card's text element survives in the page index");
+});
+
+// ---------- suite: W4 slice 3 — the captions lane's alignment becomes the spoken schedule ----------
+
+suiteStart("W4 slice 3 — voice anchors: the captions lane's clock, the beat plan's strokes");
+
+await test("W4 voice anchors: the count contract — the bridge's word stream IS the beat plan's tokenization", async () => {
+  const { buildVoiceAnchors } = await import("../src/lib/tubeforge/whiteboard/voice-anchors");
+  const { captionChunks } = await import("../src/lib/tubeforge/captions");
+  const { splitSentences, words } = await import("../src/lib/tubeforge/whiteboard/beat-plan");
+  // Hyphens split, decimals survive as two tokens, apostrophes ride along —
+  // the two tokenizations must still agree on the COUNT.
+  const narration = "The state-of-the-art pump costs $6.5 million. It's the heart's twin, isn't it?";
+  const chunks = captionChunks(narration);
+  const bridgeCount = chunks.reduce((a, c) => a + words(c.text).length, 0);
+  const beatCount = splitSentences(narration).reduce((a, s) => a + words(s).length, 0);
+  eq(bridgeCount, beatCount, `the chunk-token sum equals the beat tokenization (${bridgeCount} vs ${beatCount})`);
+  eq(bridgeCount > 0, true, "the fixture is non-trivial");
+  // The pure core refuses a degenerate stream instead of guessing.
+  eq(buildVoiceAnchors({ narration: "", chunks, ends: [1], totalWords: 1, runs: [{ start: 0, end: 1 }], sceneDurationMs: 5000 }), null, "empty narration → null");
+  eq(buildVoiceAnchors({ narration, chunks: [], ends: [], totalWords: 3, runs: [{ start: 0, end: 1 }], sceneDurationMs: 5000 }), null, "no chunks → null");
+  eq(buildVoiceAnchors({ narration, chunks, ends: [1], totalWords: 3, runs: [{ start: 0, end: 1 }], sceneDurationMs: 5000 }), null, "ends shorter than chunks → null");
+  eq(buildVoiceAnchors({ narration, chunks, ends: [3, 2], totalWords: 3, runs: [{ start: 0, end: 1 }], sceneDurationMs: 5000 }), null, "non-monotonic ends → null");
+  eq(buildVoiceAnchors({ narration, chunks, ends: [1, 2], totalWords: 0, runs: [{ start: 0, end: 1 }], sceneDurationMs: 5000 }), null, "zero word stream → null");
+  eq(buildVoiceAnchors({ narration, chunks, ends: [1, 2], totalWords: 2, runs: [], sceneDurationMs: 5000 }), null, "no speech runs → null");
+});
+
+await test("W4 voice anchors: exact spans — the chunk windows ride wavChunkWindows, the words slice them evenly", async () => {
+  const { buildVoiceAnchors } = await import("../src/lib/tubeforge/whiteboard/voice-anchors");
+  const { captionChunks, wavChunkWindows } = await import("../src/lib/tubeforge/captions");
+  const { words } = await import("../src/lib/tubeforge/whiteboard/beat-plan");
+  const narration = "The heart pumps. Blood returns home.";
+  const chunks = captionChunks(narration);
+  eq(chunks.length, 2, "two caption chunks");
+  const ends = [3, 6]; // the narration cursor (3 words per chunk)
+  const runs = [
+    { start: 0.5, end: 2.0 },
+    { start: 3.0, end: 4.0 },
+  ];
+  const anchors = buildVoiceAnchors({ narration, chunks, ends, totalWords: 6, runs, sceneDurationMs: 6000 });
+  ok(anchors !== null, "the fixture builds anchors");
+  if (!anchors) return;
+  // The chunk windows come from the SHARED mapping (one chunk↔clock law
+  // with the caption cues).
+  const windows = wavChunkWindows(ends, 6, runs);
+  eq(JSON.stringify(windows), JSON.stringify([{ startSec: 0.5, endSec: 1.75 }, { startSec: 2.0, endSec: 4.0 }]), "the fixture's chunk windows are the hand-computed ones");
+  const counts = chunks.map((c) => words(c.text).length);
+  eq(JSON.stringify(counts), JSON.stringify([3, 3]), "three beat tokens per chunk");
+  eq(anchors.byWord.length, 6, "one span per narration word");
+  eq(anchors.byWord.map((w) => w.index), [0, 1, 2, 3, 4, 5], "indexes are sequential");
+  // Word k of chunk i: an even slice of the chunk window (ms, rounded).
+  const c0 = anchors.byWord.slice(0, 3);
+  const c1 = anchors.byWord.slice(3);
+  eq(c0[0].startMs, 500, "chunk 1 starts on its window's start");
+  eq(c0[0].endMs, 917, "the first slice ends at +1250/3 ms (rounded)");
+  eq(c0[2].endMs, 1750, "chunk 1's last word ends on the window's end");
+  eq(c1[0].startMs, 2000, "chunk 2 starts on ITS window's start (the run gap is the pause)");
+  eq(c1[2].endMs, 4000, "chunk 2 ends on its window's end");
+  // Contiguity inside a chunk; monotonicity across chunks (the beat plan's
+  // windows-march-forward law holds by construction).
+  for (let i = 1; i < anchors.byWord.length; i++) {
+    ok(anchors.byWord[i].startMs >= anchors.byWord[i - 1].endMs - 1, `word ${i} does not start before word ${i - 1} ends`);
+  }
+  // Determinism: the same inputs, byte-identical output.
+  eq(
+    JSON.stringify(buildVoiceAnchors({ narration, chunks, ends, totalWords: 6, runs, sceneDurationMs: 6000 })),
+    JSON.stringify(anchors),
+    "two calls, byte-identical anchors"
+  );
+  // The envelope fits the clock it was built against; a shorter clock clips,
+  // and a clock too short for the words degrades to null (the estimator keeps it).
+  eq(anchorEnvelopeOk(anchors, 6000), true, "the envelope sits inside the scene clock");
+  eq(
+    buildVoiceAnchors({ narration, chunks, ends, totalWords: 6, runs, sceneDurationMs: 700 }),
+    null,
+    "a clock that cannot hold the spans degrades to null"
+  );
+});
+
+function anchorEnvelopeOk(anchors: { byWord: { startMs: number; endMs: number }[] }, clockMs: number): boolean {
+  const env = anchors.byWord.reduce((a, w) => ({ start: Math.min(a.start, w.startMs), end: Math.max(a.end, w.endMs) }), { start: Infinity, end: -Infinity });
+  return env.start >= 0 && env.end <= clockMs - 1;
+}
+
+await test("W4 voice anchors → the beat plan: the strokes move onto the spoken window", async () => {
+  const { buildVoiceAnchors } = await import("../src/lib/tubeforge/whiteboard/voice-anchors");
+  const { captionChunks } = await import("../src/lib/tubeforge/captions");
+  const { beatSceneEvents } = await import("../src/lib/tubeforge/whiteboard/beat-plan");
+  const { buildGeometry } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const geo = buildGeometry([{ id: "a1", paths: [{ id: "p1", d: "M 0 0 L 100 0" }, { id: "p2", d: "M 0 0 L 10 0" }] }]);
+  const tags = new Map([["a1", ["generic"]]]);
+  const narration = "The heart pumps. Blood returns home.";
+  const chunks = captionChunks(narration);
+  const anchors = buildVoiceAnchors({
+    narration, chunks, ends: [3, 6], totalWords: 6,
+    runs: [{ start: 0.5, end: 2.0 }, { start: 3.0, end: 4.0 }],
+    sceneDurationMs: 8000,
+  });
+  ok(anchors !== null, "the fixture builds anchors");
+  if (!anchors) return;
+  const scene = {
+    id: "s", narration, durationMs: 8000, background: "#ffffff" as const,
+    placements: [{ assetId: "a1", placement: { x: 100, y: 100, scale: 1, rotateDeg: 0 }, order: 0 }],
+    animations: [], camera: [], beats: [],
+  };
+  const withAnchors = beatSceneEvents(scene, 8000, geo, tags, anchors);
+  const without = beatSceneEvents(scene, 8000, geo, tags);
+  ok(JSON.stringify(withAnchors) !== JSON.stringify(without), "the anchors actually move the clock (not byte-identical to the estimator)");
+  const first = withAnchors.reduce((a, e) => Math.min(a, e.startMs), Infinity);
+  const last = withAnchors.reduce((a, e) => Math.max(a, e.startMs + e.durationMs), -Infinity);
+  ok(first >= 500 && first <= 760, `the first stroke starts inside the spoken window (got ${first}, window starts at 500)`);
+  // The beat plan fills the ASSIGNED SENTENCE's spoken window — the single
+  // placement mentions "heart" (sentence 1), so the draws fill [500, 1750].
+  ok(last >= 1700 && last <= 1800, `the draw fills the assigned sentence's spoken window (got ${last}, sentence window ends at 1750)`);
+  ok(first > without.reduce((a, e) => Math.min(a, e.startMs), Infinity), "the anchored start lands AFTER the estimator's lead-in (the visual waits for the voice)");
+});
+
+await test("W4 voice anchors: the render seam and the caller are wired (compile-only source pins)", async () => {
+  const fs = await import("node:fs");
+  // The render job builds the anchors pre-flight and feeds the beat plan.
+  const renderSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/render.ts", "utf8");
+  ok(renderSrc.includes('import { sceneVoiceAnchors } from "./voice-anchors"'), "render.ts imports the ladder");
+  ok(renderSrc.includes("anchorsBySceneId"), "render.ts carries the per-scene anchors map");
+  ok(/beatSceneEvents\(scene,\s*durationMs,\s*geometry,\s*assetTags,\s*anchorsBySceneId\.get\(scene\.id\)\)/.test(renderSrc), "the beat plan receives the scene's anchors");
+  // The lane caller opts in on BOTH paths (preview + full render).
+  const jobsSrc = fs.readFileSync("src/lib/tubeforge/video-jobs.ts", "utf8");
+  const calls = jobsSrc.match(/renderWhiteboard\((\w+),\s*\{[^}]*\}\)/gs) ?? [];
+  ok(calls.length >= 2, `both whiteboard render call sites found (${calls.length})`);
+  for (const c of calls) ok(/asrAnchors:\s*true/.test(c), "the caller opts into the voice anchors");
+  // The captions lane's shared mapping is the one source both read.
+  const capSrc = fs.readFileSync("src/lib/tubeforge/captions.ts", "utf8");
+  ok(capSrc.includes("export function wavChunkWindows"), "wavChunkWindows is the exported chunk↔clock mapping");
+  ok(capSrc.includes("const windows = wavChunkWindows(ends, totalWords, runs);"), "buildSmartSrt rides the shared mapping (the refactor holds)");
+  const vaSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/voice-anchors.ts", "utf8");
+  ok(vaSrc.includes("wavChunkWindows"), "the bridge rides the same mapping");
+  ok(!/function words\(/.test(vaSrc), "the bridge does not fork a tokenizer (beat-plan's words is the one source)");
 });
 
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);

@@ -51,7 +51,6 @@ import { bedExpression, ORIGINAL_LIBRARY } from "../src/lib/tubeforge/music";
 
 const execFileP = promisify(execFile);
 const OUT_DIR = path.resolve("validation/w1");
-const BASELINE_DIR = path.resolve("docs/baselines");
 
 interface FrameStats {
   sha256: string;
@@ -302,7 +301,6 @@ async function main(): Promise<void> {
   const blind = !args.includes("--no-blind");
 
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  fs.mkdirSync(BASELINE_DIR, { recursive: true });
   const bedPath = path.join(OUT_DIR, "bed.flac");
   await synthBed(bedPath, w1TotalDurationMs() / 1000);
 
@@ -414,8 +412,11 @@ async function main(): Promise<void> {
     failures.push("determinism pin: 16:9 frame hashes DIVERGED between runs");
 
   // ---------------------------------------------------------------------------
-  // The baseline record.
-  // ---------------------------------------------------------------------------
+  // The dated receipt is a LOCAL artifact (the 535c90e law, now structural):
+  // it lands in gitignored validation/w1/ so a local run can never shadow
+  // the FROZEN committed baseline (docs/baselines/w1-whiteboard-baseline-
+  // 2026-11-13.json) — the S75 source pin reads the latest baseline-* in
+  // docs/baselines/, and a dated file written there once broke it.
   const today = new Date().toISOString().slice(0, 10);
   const baseline = {
     stage: "W1",
@@ -447,7 +448,8 @@ async function main(): Promise<void> {
     },
     gate: { passed: failures.length === 0, failures },
   };
-  const baselinePath = path.join(BASELINE_DIR, `w1-whiteboard-baseline-${today}.json`);
+  const baselinePath = path.join(OUT_DIR, `w1-whiteboard-baseline-${today}.json`);
+  fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.writeFileSync(baselinePath, JSON.stringify(baseline, null, 2));
 
   console.log(`\n[w1] baseline: ${path.relative(process.cwd(), baselinePath)}`);

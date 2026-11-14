@@ -97,7 +97,11 @@ export function splitSentences(narration: string): string[] {
   return out.length > 0 ? out : [text];
 }
 
-function words(s: string): string[] {
+/** The narration tokenizer — the ANCHOR INDEX SPACE's law: the W4 voice
+ *  anchors (voice-anchors.ts) index words in exactly this tokenization, so
+ *  the beat windows' per-sentence slices line up with the anchor list.
+ *  Exported (not duplicated) — one tokenizer, two consumers. */
+export function words(s: string): string[] {
   return s.toLowerCase().split(/[^a-z0-9']+/).filter(Boolean);
 }
 

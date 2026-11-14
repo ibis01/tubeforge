@@ -97,7 +97,11 @@ export interface CaptionChunk {
   words: string[];
 }
 
-function tokenizeKeepAll(text: string): string[] {
+/** The captions lane's word tokenizer (kept-all form: hyphens survive). The
+ *  ASR transcript stream and the chunk word stream are tokenized here —
+ *  the greedy cursor compares like with like. W4: exported for the
+ *  whiteboard lane's voice-anchor ladder (one tokenizer, two consumers). */
+export function tokenizeKeepAll(text: string): string[] {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9'\s-]/g, " ")
@@ -163,8 +167,12 @@ export function captionChunks(narration: string): CaptionChunk[] {
  * transcript: a greedy forward cursor matches chunk words to transcript
  * tokens (tolerating small skips for ASR mishears). Returns the transcript
  * token count each chunk ends at.
+ *
+ * W4: exported for the whiteboard lane's voice anchors — the SAME greedy
+ * cursor positions the whiteboard's spoken-window schedule (one alignment,
+ * two consumers).
  */
-function chunkEndPositionsByTranscript(
+export function chunkEndPositionsByTranscript(
   chunks: CaptionChunk[],
   transcriptTokens: string[]
 ): number[] {
@@ -190,8 +198,9 @@ function chunkEndPositionsByTranscript(
   return ends;
 }
 
-/** Word positions from the narration itself (fallback when ASR is off/failed). */
-function chunkEndPositionsByNarration(chunks: CaptionChunk[]): number[] {
+/** Word positions from the narration itself (fallback when ASR is off/failed).
+ *  W4: exported for the whiteboard lane's voice anchors. */
+export function chunkEndPositionsByNarration(chunks: CaptionChunk[]): number[] {
   const ends: number[] = [];
   let count = 0;
   for (const chunk of chunks) {
@@ -204,8 +213,9 @@ function chunkEndPositionsByNarration(chunks: CaptionChunk[]): number[] {
 /**
  * Map a spoken-word position (0..totalWords) onto scene-WAV time by spreading
  * the word stream across the detected speech runs proportional to run length.
+ * W4: exported for the whiteboard lane's voice anchors.
  */
-function wordPosToTime(pos: number, totalWords: number, runs: SpeechRun[]): number {
+export function wordPosToTime(pos: number, totalWords: number, runs: SpeechRun[]): number {
   if (runs.length === 0) return 0;
   const totalRunSec = runs.reduce((a, r) => a + (r.end - r.start), 0);
   const posFrac = totalWords > 0 ? Math.min(Math.max(pos / totalWords, 0), 1) : 0;
@@ -225,8 +235,9 @@ function wordPosToTime(pos: number, totalWords: number, runs: SpeechRun[]): numb
  * uniform speaking rate, which drifts around pauses — but a pause IS a
  * phrase boundary, so cue starts that land near one should sit exactly on
  * it. This measurably tightens perceived subtitle↔voice sync.
+ * W4: exported for the whiteboard lane's voice anchors.
  */
-function snapToPause(t: number, runs: SpeechRun[], maxShift = 0.45): number {
+export function snapToPause(t: number, runs: SpeechRun[], maxShift = 0.45): number {
   let best = t;
   let bestD = maxShift;
   for (const r of runs) {
@@ -239,6 +250,26 @@ function snapToPause(t: number, runs: SpeechRun[], maxShift = 0.45): number {
     }
   }
   return best;
+}
+
+/**
+ * The chunk windows in scene-WAV time — the ONE chunk↔clock mapping both
+ * caption cues (buildSmartSrt) and the whiteboard's per-word voice anchors
+ * (whiteboard/voice-anchors.ts) read. Chunk i spans spoken positions
+ * (ends[i-1], ends[i]]; each window starts snapped to a real pause when one
+ * is close and never runs shorter than 0.4s. Pure — unit-pinned.
+ */
+export function wavChunkWindows(
+  ends: number[],
+  totalWords: number,
+  runs: SpeechRun[]
+): { startSec: number; endSec: number }[] {
+  const startPos = ends.map((_, i) => (i === 0 ? 0 : ends[i - 1]));
+  return ends.map((end, i) => {
+    const startSec = snapToPause(wordPosToTime(startPos[i], totalWords, runs), runs);
+    const endSec = Math.max(wordPosToTime(end, totalWords, runs), startSec + 0.4);
+    return { startSec, endSec };
+  });
 }
 
 // ---------- SRT ----------
@@ -408,16 +439,14 @@ export async function buildSmartSrt(
       totalWords = ends[ends.length - 1];
     }
 
-    // Back-translate chunk word positions into scene-WAV times.
-    // Chunk i spans spoken positions (ends[i-1], ends[i]] — same monotonic
-    // mapping as the end positions, so consecutive cues naturally abut.
-    const startPos = ends.map((_, i) => (i === 0 ? 0 : ends[i - 1]));
+    // Back-translate chunk word positions into scene-WAV times — through the
+    // SHARED wavChunkWindows mapping (the whiteboard's voice anchors read the
+    // same windows; one chunk↔clock law, two consumers).
+    const windows = wavChunkWindows(ends, totalWords, runs);
 
     chunks.forEach((chunk, ci) => {
-      // Proportional position, then snap to a real pause when one is close —
-      // boundaries that sit on silence are exactly where the voice moves on.
-      const wavStart = snapToPause(wordPosToTime(startPos[ci], totalWords, runs), runs);
-      const wavEnd = Math.max(wordPosToTime(ends[ci], totalWords, runs), wavStart + 0.4);
+      const { startSec: wavStart, endSec: rawWavEnd } = windows[ci];
+      const wavEnd = rawWavEnd;
 
       // Cues lead the voice by 80 ms (captions that appear a beat early read
       // as in-sync; captions that lag read as broken). Never slip back past

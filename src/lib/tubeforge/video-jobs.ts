@@ -1927,6 +1927,7 @@ export async function runWhiteboardJob(
       const result = await renderWhiteboard(previewProject, {
         outDir,
         voFiles,
+        asrAnchors: true,
         onProgress: wbProgressGuard(entityId),
         uploadedAssets,
       });
@@ -1976,6 +1977,7 @@ export async function runWhiteboardJob(
       outDir,
       voFiles,
       musicPath: musicPath ?? undefined,
+      asrAnchors: true,
       onProgress: wbProgressGuard(entityId),
       uploadedAssets,
     });
