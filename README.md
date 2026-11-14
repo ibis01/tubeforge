@@ -9,7 +9,8 @@ standard + the content-policy visual scan under a restricted policy), and
 publishes to a connected YouTube channel — all inside a multi-user web
 application with metered AI spending and Stripe billing underneath.
 
-**Status:** S-series stage S118 (2026-11-13). The production loop is
+**Status:** S-series stage S120 + the W-track at W5 (2026-11-14); CI is 8/8
+green on `main` with the 572-test unit battery. The production loop is
 feature-complete, and the production-readiness arc (S99–S108) closed every
 reliability gate with CI evidence — clean-clone bootstrap, queue leases +
 fencing, atomic storage admission, shared rate limiting + trusted-proxy IP law,
@@ -19,7 +20,17 @@ the operator's call (2026-11-13)**, and its first feature track — scene-level
 editing & repair — is COMPLETE (S111 reconciliation → S112 revision foundation
 → S113 dependency map + provenance → S114 scene previews → S115 repair + cost
 authorization → S116 scene QC + approval → S117 approved-only assembly → S118
-UX + hardening; runbook: docs/runbooks/scene-editing.md). The entry queue remains staging provisioning → launch drills →
+UX + hardening; runbook: docs/runbooks/scene-editing.md). S119 restored the
+explicit-whiteboard click's lane contract, and S120 opened the complete
+2D-animation programme
+([`docs/design/s120-2d-animation-roadmap.md`](docs/design/s120-2d-animation-roadmap.md)):
+the VideoScribe-like W-track has landed W1 (the perceptual baseline benchmark),
+W2 (the semantic beat compiler — strokes land on the sentences that introduce
+them), W3 (the stroke-authored asset validator; 26 validated assets), W4 slice 1
+(word anchors ride the spoken clock), Stage S (the shared animation substrate
+the coming engines consume), and W5 (the content-driven camera director); W4
+slices 2–3 (glyph-outline text mode, ASR captions wiring), W6 (continuous
+canvas) and W7 (the finishing layer) remain. The entry queue remains staging provisioning → launch drills →
 release candidate (see
 [`docs/production-readiness.md`](docs/production-readiness.md)). On top of the
 studio, the **Whiteboard Engine** (the native, $0-per-render creative mode —
@@ -38,7 +49,11 @@ landed) are in the tree.
   hand-drawing engine (drawing, hand, camera phases) whose storyboard comes
   from a native keyword planner, or an LLM planner that degrades per-scene to
   the native one through the same budget choke point, and whose pixels cost
-  $0 — local Chromium + ffmpeg, no generation API. It renders to the standard
+  $0 — local Chromium + ffmpeg, no generation API. Its choreography is
+  semantic since W2 (strokes land on the sentences that introduce them, ride
+  the spoken clock when word anchors exist) and content-framed since W5 (the
+  camera director keys each beat; the calibrated drift stays as the motion
+  floor). It renders to the standard
   `final.mp4`, through the unchanged QC battery and ship gate. See
   [`WHITEBOARD_ENGINE_DESIGN.md`](WHITEBOARD_ENGINE_DESIGN.md).
 - **Creator Intelligence** — hook/script scoring, title+thumbnail pairing
@@ -54,9 +69,12 @@ landed) are in the tree.
 - **The money** — Stripe checkout + customer portal, signature-verified
   webhooks (fail-closed), a transactional microCredit ledger with
   crash-durable reservations, versioned pricing, and a hard spend ceiling.
-- **The evidence discipline** — every stage S1→S74 shipped with a unit probe
-  and/or route-e2e script under `scripts/` so its claims can be re-verified
-  mechanically. See the S-series index in [`TASKS.md`](TASKS.md).
+- **The evidence discipline** — every stage ships with mechanical evidence
+  re-runnable from `scripts/` (unit probes, route-e2e scripts and, for the
+  animation track, the W1 frame-hash harness and the QC batteries) so its
+  claims can be re-verified mechanically. The S-series index in
+  [`TASKS.md`](TASKS.md) covers S1→S65; the living receipt trail through
+  S120 and the W-track is [`worklog.md`](worklog.md).
 
 ## Quickstart (local, SQLite)
 
@@ -120,7 +138,7 @@ runner stalls — see the worklog's CI-flake receipts).
 | [`SECURITY.md`](SECURITY.md) | security requirements + audit findings |
 | [`ROADMAP.md`](ROADMAP.md) / [`MASTER_PLAN.md`](MASTER_PLAN.md) | the original development programme (Stages 1–7, all closed at the code level) + the Post-Stage-7 2.0 tracks (Whiteboard, Creator Intelligence, the shared quality systems) |
 | [`WHITEBOARD_ENGINE_DESIGN.md`](WHITEBOARD_ENGINE_DESIGN.md) | the Whiteboard Engine's laws, budgets, and the E0–E12 milestone matrix |
-| [`TASKS.md`](TASKS.md) | task ledgers per stage **+ the S-series index (S1→S74) and the S47 integrity ledger** |
+| [`TASKS.md`](TASKS.md) | task ledgers per stage **+ the S-series drift-closure index (S1→S65) and the S47 integrity ledger** — the living trail through S120 and the W-track is `worklog.md` |
 | [`RISK_REGISTER.md`](RISK_REGISTER.md) | technical debt and risk register |
 | `worklog.md` | the audit-trail worklog — every stage's final gate, in order |
 

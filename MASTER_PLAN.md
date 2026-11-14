@@ -1,7 +1,24 @@
 # TubeForge — Master Plan
 
-**Status:** Stage 1 audit complete. Stage 1 implementation in progress.
-**Last updated:** 2026-11-01
+> **Where this document stands (2026-11-14).** This is the ORIGINAL November
+> 2026 programme, preserved as the historical record of how the build was
+> scoped — it does NOT track current reality. The living status is
+> [`worklog.md`](worklog.md) (every stage's final gate, in order) plus the
+> S-series index in [`TASKS.md`](TASKS.md). The short version of where the
+> code actually is: Stages 1–7 of this plan are closed at the code level;
+> the production-readiness arc (S99–S108) closed every reliability gate with
+> CI evidence (clean-clone bootstrap, queue leases + fencing, atomic storage
+> admission, shared rate limiting, nonce CSP, the Docker production smoke,
+> measured restore drills); scene-level editing & repair (S111–S118) is
+> complete; and the 2D-animation programme
+> ([`docs/design/s120-2d-animation-roadmap.md`](docs/design/s120-2d-animation-roadmap.md))
+> is in progress — W1–W5 and the Stage-S animation substrate are landed
+> (semantic beat compiler, stroke validator, word anchors, camera director),
+> with W4 slices 2–3, W6 and W7 remaining. CI runs eight gates on every push
+> to `main` and is green (572-test unit battery at W5).
+
+**Original status (2026-11-01):** Stage 1 audit complete. Stage 1
+implementation in progress.
 
 ---
 
