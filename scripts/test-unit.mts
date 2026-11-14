@@ -147,8 +147,10 @@ import {
 import { ANIM_FRAME_BUDGET } from "../src/lib/tubeforge/anim/clock";
 import {
   GRAPHICS_BUDGETS,
+  GRAPHICS_ELEMENT_KINDS,
   GRAPHICS_FRAME_BUDGET,
   GRAPHICS_VERSION,
+  legalMotions,
   MOTION_KINDS_BY_ELEMENT,
   parseGraphicsDoc,
   validGraphicsId,
@@ -156,6 +158,12 @@ import {
   writeGraphicsDoc,
   type GraphicsDoc,
 } from "../src/lib/tubeforge/graphics/types";
+import {
+  frameAt,
+  graphicsFrameCount,
+  GRAPHICS_MOTION_SEMANTICS,
+  type GraphicsFrameState,
+} from "../src/lib/tubeforge/graphics/frame";
 
 const execFileAsync = promisify(execFile);
 
@@ -15457,6 +15465,203 @@ await test("G1.1 parseGraphicsDoc nulls on junk JSON and non-objects", () => {
   eq(parseGraphicsDoc("[]"), null, "an array is not a doc");
   eq(parseGraphicsDoc(null), null, "null in → null out");
   eq(parseGraphicsDoc(undefined), null, "absent → null");
+});
+
+// ---------------------------------------------------------------------------
+// G1.2 — frame truth (Part B): frameAt is the ONE source of motion truth.
+// Pins: determinism (sweep hash over a fixed doc), the fixed composition
+// order (emphasis > exit > enter — applied last), element state never
+// non-finite outside motion windows, tween continuity at every motion
+// boundary, exact pre/post window states, scene-clock resolution.
+// ---------------------------------------------------------------------------
+
+suiteStart("graphics — G1.2 frame truth");
+
+const G2_DOC = mustParse(JSON.stringify(MIXED_RAW), "the mixed doc for G1.2");
+
+function g2ElById(state: GraphicsFrameState, id: string) {
+  const f = state.elements.find((e) => e.id === id);
+  if (f === undefined) throw new Error(`element "${id}" missing from the frame state`);
+  return f;
+}
+
+function g2Sweep(doc: GraphicsDoc, stepMs: number, upToMs: number): string[] {
+  const frames: string[] = [];
+  for (let t = 0; t <= upToMs; t += stepMs) frames.push(JSON.stringify(frameAt(doc, t)));
+  return frames;
+}
+
+await test("G1.2 the frame sweep is deterministic — same doc, same grid, byte-identical", () => {
+  const a = g2Sweep(G2_DOC, 50, 4000);
+  const b = g2Sweep(G2_DOC, 50, 4000);
+  eq(a.length, 81, "81 frames on the 50ms grid");
+  eq(a.join("|"), b.join("|"), "the sweep hash is byte-identical");
+});
+
+await test("G1.2 element state is never non-finite anywhere — the named pin", () => {
+  const checkFinite = (doc: GraphicsDoc, label: string) => {
+    for (let t = 0; t <= 3990; t += 97) { // prime step — no grid aliasing
+      const s = frameAt(doc, t);
+      ok(Number.isFinite(s.sceneTMs), `${label} t=${t} sceneTMs`);
+      for (const f of s.elements) {
+        ok(Number.isFinite(f.opacity) && f.opacity >= 0 && f.opacity <= 1, `${label} t=${t} ${f.id} opacity`);
+        ok(Number.isFinite(f.x) && Number.isFinite(f.y) && Number.isFinite(f.scale) && Number.isFinite(f.rotateDeg), `${label} t=${t} ${f.id} transform`);
+        ok(Number.isFinite(f.progress) && f.progress >= 0 && f.progress <= 1, `${label} t=${t} ${f.id} progress`);
+        if (f.counterValue !== undefined) ok(Number.isFinite(f.counterValue), `${label} t=${t} ${f.id} counter`);
+      }
+    }
+  };
+  checkFinite(G2_DOC, "mixed");
+  for (const kind of GRAPHICS_ELEMENT_KINDS) {
+    for (const motion of legalMotions(kind)) {
+      const motions = {
+        enter: { kind: motion, durationMs: 700, delayMs: 200, ease: "ease-back" },
+        exit: { kind: motion, durationMs: 600, delayMs: 2600, ease: "linear" },
+        emphasis: { kind: motion, durationMs: 500, delayMs: 1500, ease: "pop" },
+      };
+      const tested = gEl(`x-${kind}-${motion}`, kind, {
+        ...motions,
+        ...(kind === "group" ? { group: { children: ["base"] } } : {}),
+      });
+      const sceneEls = kind === "group" ? [gEl("base", "headline"), tested] : [tested];
+      const doc = mustValidate(gDoc([gScene("s1", sceneEls)]), `${kind}+${motion}`);
+      checkFinite(doc, `${kind}+${motion}`);
+    }
+  }
+});
+
+await test("G1.2 tween continuity — no discontinuity at any motion boundary", () => {
+  const bounds: number[] = [];
+  const sceneEls = G2_DOC.scenes[0]?.elements ?? [];
+  for (const el of sceneEls) {
+    for (const m of [el.enter, el.exit, el.emphasis]) {
+      if (m === undefined) continue;
+      bounds.push(m.delayMs, m.delayMs + m.durationMs);
+    }
+  }
+  ok(bounds.length >= 12, `${bounds.length} boundaries collected`);
+  for (const b of bounds) {
+    if (b < 1 || b > 3999) continue;
+    const minus = frameAt(G2_DOC, b - 1);
+    const plus = frameAt(G2_DOC, b + 1);
+    for (let i = 0; i < minus.elements.length; i++) {
+      const a = minus.elements[i];
+      const c = plus.elements[i];
+      ok(a !== undefined && c !== undefined, `element lists align at b=${b}`);
+      ok(Math.abs(a.opacity - c.opacity) <= 0.02, `b=${b} ${a.id} opacity Δ=${Math.abs(a.opacity - c.opacity).toFixed(4)}`);
+      ok(Math.abs(a.x - c.x) <= 2 && Math.abs(a.y - c.y) <= 2, `b=${b} ${a.id} offset Δ`);
+      ok(Math.abs(a.scale - c.scale) <= 0.02, `b=${b} ${a.id} scale Δ`);
+      ok(Math.abs(a.progress - c.progress) <= 0.03, `b=${b} ${a.id} progress Δ`);
+      if (a.counterValue !== undefined && c.counterValue !== undefined) {
+        ok(Math.abs(a.counterValue - c.counterValue) <= 1, `b=${b} ${a.id} counter Δ`);
+      }
+    }
+  }
+});
+
+await test("G1.2 pre-enter holds the start state; post-enter holds the placed state", () => {
+  const pre = g2ElById(frameAt(G2_DOC, 50), "sh"); // slide enter, delay 200
+  eq(pre.opacity, 0, "pre-enter: invisible");
+  eq(pre.x, 0, "pre-enter: the full slide offset (120 − 120)");
+  const placed = g2ElById(frameAt(G2_DOC, 2000), "sh");
+  eq(placed.opacity, 1, "placed: full opacity");
+  eq(placed.x, 120, "placed: at rest");
+  eq(placed.progress, 1, "placed: fully revealed");
+  eq(g2ElById(frameAt(G2_DOC, 2000), "h1").opacity, 0.9, "base opacity multiplies through");
+});
+
+await test("G1.2 the exit drains to its end state — fade out, un-reveal, count-back", () => {
+  eq(g2ElById(frameAt(G2_DOC, 3900), "h1").opacity, 0, "fade exit end: invisible");
+  const doc = mustValidate(gDoc([gScene("s1", [
+    gEl("br", "bar", {
+      enter: { kind: "wipe", durationMs: 500, delayMs: 0, ease: "linear" },
+      exit: { kind: "wipe", durationMs: 500, delayMs: 3000, ease: "linear" },
+    }),
+    gEl("cn", "counter", {
+      counter: { from: 25, to: 100 },
+      enter: { kind: "count", durationMs: 800, delayMs: 0, ease: "linear" },
+      exit: { kind: "count", durationMs: 600, delayMs: 3200, ease: "linear" },
+    }),
+  ])]), "exit drains");
+  eq(g2ElById(frameAt(doc, 3900), "br").progress, 0, "wipe exit end: un-revealed");
+  eq(g2ElById(frameAt(doc, 3900), "cn").counterValue, 25, "count exit end: drained to from");
+  const atStart = g2ElById(frameAt(doc, 3200), "cn").counterValue ?? 0;
+  const preStart = g2ElById(frameAt(doc, 3199), "cn").counterValue ?? 0;
+  ok(Math.abs(atStart - preStart) <= 0.1, `the drain starts from the captured value (Δ=${Math.abs(atStart - preStart)})`);
+});
+
+await test("G1.2 emphasis composes over the exit state (fixed order: enter → exit → emphasis)", () => {
+  const mk = (withEmphasis: boolean) => mustValidate(gDoc([gScene("s1", [
+    gEl("h1", "headline", {
+      enter: { kind: "fade", durationMs: 500, delayMs: 0, ease: "linear" },
+      exit: { kind: "fade", durationMs: 800, delayMs: 800, ease: "linear" },
+      ...(withEmphasis ? { emphasis: { kind: "fade", durationMs: 400, delayMs: 1000, ease: "linear" } } : {}),
+    }),
+  ])]), withEmphasis ? "overlap doc" : "no-emphasis doc");
+  const withEmph = g2ElById(frameAt(mk(true), 1200), "h1").opacity; // emphasis midpoint
+  const without = g2ElById(frameAt(mk(false), 1200), "h1").opacity;
+  eq(without, 0.5, "exit-only: 1 − 0.5");
+  ok(Math.abs(withEmph - without * (1 - GRAPHICS_MOTION_SEMANTICS.emphasisFadeDip)) < 1e-9,
+    `emphasis dips the exit state: ${withEmph} ≈ ${without} × ${1 - GRAPHICS_MOTION_SEMANTICS.emphasisFadeDip}`);
+});
+
+await test("G1.2 the doc clock resolves the active scene and clamps (never NaN)", () => {
+  const doc = mustValidate(gDoc([
+    gScene("s1", [gEl("a", "headline")], { durationMs: 3000 }),
+    gScene("s2", [gEl("b", "bullet")]),
+  ]), "two scenes");
+  eq(frameAt(doc, 1000).sceneId, "s1", "scene 1 mid");
+  eq(frameAt(doc, 1000).sceneTMs, 1000, "the scene-local clock");
+  eq(frameAt(doc, 3500).sceneId, "s2", "scene 2 after s1 ends");
+  eq(frameAt(doc, 3500).sceneTMs, 500, "local clock in scene 2");
+  const end = frameAt(doc, 999_999);
+  eq(end.sceneId, "s2", "beyond-total clamps to the last scene");
+  eq(end.sceneTMs, 4000, "clamped to the last scene's end (the 2.6-wps estimate)");
+  const neg = frameAt(doc, -50);
+  eq(neg.sceneId, "s1", "negative clamps to scene 1");
+  eq(neg.sceneTMs, 0, "at zero");
+});
+
+await test("G1.2 the progress channel defaults to 1 when no motion drives it", () => {
+  for (let t = 0; t <= 3800; t += 200) {
+    eq(g2ElById(frameAt(G2_DOC, t), "sh").progress, 1, `t=${t}`);
+  }
+});
+
+await test("G1.2 base opacity multiplies the motion factor", () => {
+  const doc = mustValidate(gDoc([gScene("s1", [
+    gEl("h1", "headline", { opacity: 0.5, enter: { kind: "fade", durationMs: 500, delayMs: 0, ease: "linear" } }),
+  ])]), "half-opacity");
+  eq(g2ElById(frameAt(doc, 250), "h1").opacity, 0.25, "0.5 × 0.5 mid-fade");
+});
+
+await test("G1.2 emphasis count pulses the pop channel and leaves the value untouched", () => {
+  const doc = mustValidate(gDoc([gScene("s1", [
+    gEl("cn", "counter", {
+      counter: { from: 0, to: 100 },
+      enter: { kind: "count", durationMs: 500, delayMs: 0, ease: "linear" },
+      emphasis: { kind: "count", durationMs: 400, delayMs: 1000, ease: "linear" },
+    }),
+  ])]), "emphasis count");
+  const mid = g2ElById(frameAt(doc, 1200), "cn");
+  eq(mid.counterValue, 100, "the value channel is untouched (no falsifying overshoot)");
+  ok(mid.scale > 1, `the pop channel pulses (scale=${mid.scale})`);
+  eq(g2ElById(frameAt(doc, 1600), "cn").scale, 1, "emphasis releases cleanly at the window edge");
+});
+
+await test("G1.2 graphicsFrameCount is the doc clock in frames at the doc fps", () => {
+  const doc = mustValidate(gDoc([gScene("s1", [gEl("a", "headline")], { durationMs: 3000 })]), "3s doc");
+  eq(graphicsFrameCount(doc), 72, "3000ms @ 24fps = 72 frames");
+});
+
+await test("G1.2 an empty doc is a caller bug — refused loudly, never fabricated", () => {
+  let threw = false;
+  try {
+    frameAt({ version: 1, title: "t", width: 1920, height: 1080, fps: 24, scenes: [] }, 0);
+  } catch {
+    threw = true;
+  }
+  eq(threw, true, "frameAt throws on scenes: []");
 });
 
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
