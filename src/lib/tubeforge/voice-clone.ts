@@ -54,18 +54,36 @@ export interface VoiceProfileDTO {
   sourceLabel: string | null;
   durationSec: number | null;
   hasAudition: boolean;
+  /** S121 consent ledger — has the uploader recorded a basis claim? */
+  hasConsent: boolean;
+  consentBasis: string | null;
   createdAt: string;
 }
 
 /** Providers that can clone a voice from an uploaded sample.
- *  zhipu    — the sample goes to the Zhipu GLM-TTS-Clone platform
- *  selfhost — the (normalized) sample is stored on the VoiceProfile row and
- *             re-sent to the user's voice_server.py on every synthesis */
-export const CLONE_PROVIDERS = ["zhipu", "selfhost"] as const;
+ *  zhipu       — the sample goes to the Zhipu GLM-TTS-Clone platform
+ *  selfhost    — the (normalized) sample is stored on the VoiceProfile row and
+ *                re-sent to the user's voice_server.py on every synthesis
+ *  voicestudio — S121 — the sample registers with the user's VoiceStudio
+ *                server (ref_audio → an 8-hex profile id stored on the row as
+ *                remoteVoiceId); the sample is ALSO kept locally so the row
+ *                stays speakable after re-cloning/re-registration. */
+export const CLONE_PROVIDERS = ["zhipu", "selfhost", "voicestudio"] as const;
 export type CloneProvider = (typeof CLONE_PROVIDERS)[number];
 
 export function isCloneProvider(provider: string): provider is CloneProvider {
   return (CLONE_PROVIDERS as readonly string[]).includes(provider);
+}
+
+/** S121 — the consent vocabulary a clone MUST carry (the VoiceStudio-verified
+ *  model, adopted as TubeForge policy: a clone record states WHOSE voice it
+ *  is and on what basis the uploader claims the right to clone it). The
+ *  vocabulary is CLOSED — anything else is refused by name. */
+export const CONSENT_BASES = ["own_voice", "speaker_permission"] as const;
+export type ConsentBasis = (typeof CONSENT_BASES)[number];
+
+export function isConsentBasis(v: string): v is ConsentBasis {
+  return (CONSENT_BASES as readonly string[]).includes(v);
 }
 
 /**
@@ -87,8 +105,9 @@ export function isCloneProvider(provider: string): provider is CloneProvider {
 export async function pickCloneProvider(): Promise<{
   provider: CloneProvider;
   /** "ready" — fully configured, "needs-setup" — clone works but synth will
-   *  fail until URL/key are supplied, "zhipu-ready" — zhipu key present. */
-  status: "ready" | "needs-setup" | "zhipu-ready";
+   *  fail until URL/key are supplied, "zhipu-ready" / "voicestudio-ready" —
+   *  the respective platform/server is configured. */
+  status: "ready" | "needs-setup" | "zhipu-ready" | "voicestudio-ready";
   /** Human-readable reason for the status, surfaced in the UI. */
   hint: string;
 }> {
@@ -111,6 +130,16 @@ export async function pickCloneProvider(): Promise<{
       hint: "Clones use your Zhipu GLM-TTS account.",
     };
   }
+  // S121 — a configured VoiceStudio server can register the sample (ref_audio
+  // → an 8-hex profile id) and speak every registered voice.
+  const vsCred = await getProviderCredential("tts", "voicestudio");
+  if (vsCred?.baseUrl?.trim() || vsCred?.apiKey?.trim()) {
+    return {
+      provider: "voicestudio",
+      status: "voicestudio-ready",
+      hint: "Clones register with your VoiceStudio server.",
+    };
+  }
   // The operator's shared voice server: clone + synthesize work with zero
   // per-user setup (sandbox / self-hosted deployments).
   if (sharedVoiceServer()) {
@@ -129,6 +158,23 @@ export async function pickCloneProvider(): Promise<{
       "The clone is saved now — paste your self-hosted server URL + key to synthesize, " +
       "or add a Zhipu GLM-TTS key.",
   };
+}
+
+/** The server-registered voice id for a cloned voice (S121 — VoiceStudio
+ *  rows carry the server's own 8-hex profile id in remoteVoiceId; zhipu rows
+ *  speak their providerVoiceId directly). Null when the row predates the
+ *  field or the voice isn't a stored clone. */
+export async function voiceProfileRemoteVoiceId(voiceId: string): Promise<string | null> {
+  try {
+    const row = await db.voiceProfile.findFirst({
+      where: { providerVoiceId: voiceId },
+      select: { provider: true, remoteVoiceId: true },
+    });
+    if (!row || row.provider !== "voicestudio") return null;
+    return row.remoteVoiceId ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -164,6 +210,8 @@ export function toVoiceProfileDTO(row: {
   sourceLabel: string | null;
   durationSec: number | null;
   auditionWav: string | null;
+  consentText?: string | null;
+  consentBasis?: string | null;
   createdAt: Date;
 }): VoiceProfileDTO {
   return {
@@ -174,6 +222,10 @@ export function toVoiceProfileDTO(row: {
     sourceLabel: row.sourceLabel,
     durationSec: row.durationSec,
     hasAudition: Boolean(row.auditionWav),
+    // S121 consent ledger — the recorded basis claim (null = not recorded;
+    // legacy rows keep null and the ledger grows as users fill it in).
+    hasConsent: Boolean(row.consentText),
+    consentBasis: row.consentBasis ?? null,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -466,6 +518,9 @@ function scheduleBackgroundAudition(opts: {
 /**
  * Clone a voice from an uploaded file or a direct audio URL.
  * Throws readable errors — routes surface them straight to the UI.
+ * S121: opts.consent records WHOSE voice this is and the basis of the
+ * uploader's claim (the consent ledger — fail-open: an absent consent stays
+ * null, cloning is never blocked by it).
  */
 export async function cloneVoice(opts: {
   source: { kind: "upload"; buffer: Buffer; filename: string } | { kind: "url"; url: string };
@@ -473,8 +528,10 @@ export async function cloneVoice(opts: {
   sampleText?: string; // optional transcript of the sample (improves fidelity)
   auditionText?: string; // what the clone-time preview says
   provider: CloneProvider; // which clone pipeline to use
+  consent?: { text: string; basis: string }; // S121 consent ledger
 }): Promise<CloneResult> {
   if (opts.provider === "selfhost") return cloneVoiceSelfhost(opts);
+  if (opts.provider === "voicestudio") return cloneVoiceVoicestudio(opts);
   const { baseUrl, key } = await zhipuConfig();
 
   // 1) Obtain + prepare the sample.
@@ -553,7 +610,7 @@ export async function cloneVoice(opts: {
     }
   }
 
-  // 5) Persist the profile.
+  // 5) Persist the profile — S121: the consent ledger rides every clone.
   const cloneCtx = currentCtx();
   if (!cloneCtx) throw new Error("Voice cloning requires a signed-in user");
   const row = await db.voiceProfile.create({
@@ -565,6 +622,15 @@ export async function cloneVoice(opts: {
       sourceLabel,
       durationSec,
       auditionWav: auditionWav ? auditionWav.toString("base64") : null,
+      // S121 consent ledger — every clone records WHOSE voice it is and the
+      // uploader's basis claim (fail-open: an absent consent stays null).
+      ...(opts.consent
+        ? {
+            consentText: opts.consent.text.slice(0, 2000),
+            consentBasis: opts.consent.basis,
+            consentRecordedAt: new Date(),
+          }
+        : {}),
     },
   });
 
@@ -589,11 +655,106 @@ export async function cloneSynthesisAvailable(voiceId: string): Promise<boolean>
       const cred = await getProviderCredential("tts", "selfhost");
       return Boolean(cred?.baseUrl?.trim() || sharedVoiceServer());
     }
+    if (row.provider === "voicestudio") {
+      // S121 — speakable when the server is configured (its registration id
+      // rides the row; the speech call carries the server's own voice id).
+      const cred = await getProviderCredential("tts", "voicestudio");
+      return Boolean(cred?.baseUrl?.trim() || cred?.apiKey?.trim());
+    }
     const zhipu = await getProviderCredential("tts", "zhipu");
     return Boolean(zhipu?.apiKey?.trim());
   } catch {
     return false;
   }
+}
+
+/**
+ * S121 — the VoiceStudio clone path: the normalized sample registers with
+ * the user's server (the audited voice-profiles API: ref_audio upload → an
+ * 8-hex profile id) and the row stores that id in remoteVoiceId. The sample
+ * is ALSO kept locally (sampleWav) so the row survives server re-registration
+ * and can be re-registered later. The clone FAILS READABLY when no server is
+ * configured — unlike selfhost, there is no "clone now, configure later":
+ * registration IS the clone. Best-effort background audition skipped (the
+ * server's own voice page previews it). The consent ledger rides here too.
+ */
+async function cloneVoiceVoicestudio(opts: {
+  source: { kind: "upload"; buffer: Buffer; filename: string } | { kind: "url"; url: string };
+  name?: string;
+  sampleText?: string;
+  consent?: { text: string; basis: string };
+}): Promise<CloneResult> {
+  const cred = await getProviderCredential("tts", "voicestudio");
+  const meta = providerMeta("tts", "voicestudio");
+  const baseUrl = cred?.baseUrl?.trim() || meta?.defaultBaseUrl || "http://127.0.0.1:3900";
+  const key = cred?.apiKey?.trim();
+  if (!cred?.baseUrl?.trim() && !key)
+    throw new Error(
+      "VoiceStudio cloning needs your server — paste its URL (+ key for remote hosts) under Settings → AI Providers → Voiceover"
+    );
+
+  let raw: Buffer;
+  let sourceLabel: string;
+  if (opts.source.kind === "upload") {
+    raw = opts.source.buffer;
+    sourceLabel = opts.source.filename.slice(0, 80) || "uploaded sample";
+  } else {
+    if (!isValidSampleUrl(opts.source.url))
+      throw new Error("That is not a valid http(s) audio link");
+    const dl = await downloadSample(opts.source.url);
+    raw = dl.buffer;
+    sourceLabel = dl.filename;
+  }
+
+  const extMatch = /\.[a-z0-9]{1,5}$/i.exec(sourceLabel);
+  const { wav, durationSec } = await prepareSample(raw, extMatch?.[0] ?? ".bin");
+  const name = cleanCloneName(opts.name ?? "", sourceLabel);
+
+  const cloneCtx = currentCtx();
+  if (!cloneCtx) throw new Error("Voice cloning requires a signed-in user");
+
+  // Register with the server: multipart ref_audio → the audited voice
+  // profile id (8-hex). A refusal here surfaces the server's own message.
+  const headers: Record<string, string> = {};
+  if (key) headers.Authorization = `Bearer ${key}`;
+  const form = new FormData();
+  form.append("ref_audio", new Blob([new Uint8Array(wav)], { type: "audio/wav" }), "reference.wav");
+  form.append("name", name.slice(0, 60));
+  const register = await providerFetchJson<{ id?: string; detail?: string }>(
+    "VoiceStudio voice registration",
+    joinUrl(baseUrl, "profiles"),
+    { method: "POST", headers, body: form },
+    { capability: "tts" },
+  );
+  const remoteVoiceId = register.id?.trim() || null;
+  if (!remoteVoiceId)
+    throw new Error(
+      `VoiceStudio did not return a profile id${register.detail ? ` (${register.detail.slice(0, 160)})` : ""}`
+    );
+
+  const row = await db.voiceProfile.create({
+    data: {
+      organizationId: cloneCtx.organizationId,
+      name,
+      provider: "voicestudio",
+      providerVoiceId: `voice_clone_vs_${Date.now().toString(36)}${randomUUID().slice(0, 6)}`,
+      sourceLabel,
+      durationSec,
+      sampleWav: wav.toString("base64"),
+      auditionWav: null,
+      // S121 — the server's 8-hex profile id: the voice value spoken on the
+      // wire (voicestudioTts passes the server's voice ids verbatim).
+      remoteVoiceId,
+      ...(opts.consent
+        ? {
+            consentText: opts.consent.text.slice(0, 2000),
+            consentBasis: opts.consent.basis,
+            consentRecordedAt: new Date(),
+          }
+        : {}),
+    },
+  });
+  return { profile: toVoiceProfileDTO(row), auditionWav: null, auditionPending: false };
 }
 
 /**
@@ -614,6 +775,7 @@ async function cloneVoiceSelfhost(opts: {
   source: { kind: "upload"; buffer: Buffer; filename: string } | { kind: "url"; url: string };
   name?: string;
   auditionText?: string;
+  consent?: { text: string; basis: string }; // S121 consent ledger
 }): Promise<CloneResult> {
   let raw: Buffer;
   let sourceLabel: string;
@@ -644,6 +806,14 @@ async function cloneVoiceSelfhost(opts: {
       durationSec,
       sampleWav: wav.toString("base64"),
       auditionWav: null,
+      // S121 consent ledger — same law as every clone path.
+      ...(opts.consent
+        ? {
+            consentText: opts.consent.text.slice(0, 2000),
+            consentBasis: opts.consent.basis,
+            consentRecordedAt: new Date(),
+          }
+        : {}),
     },
   });
 

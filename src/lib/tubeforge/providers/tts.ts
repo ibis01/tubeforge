@@ -6,6 +6,11 @@
 //   heygen  → HeyGen Voice (api.heygen.com/v3, free tier)
 //   openai  → POST {baseUrl}/audio/speech (tts-1 / tts-1-hd / gpt-4o-mini-tts,
 //             response_format "wav" so downstream WAV merging keeps working)
+//   voicestudio → S121 — the USER-MANAGED VoiceStudio server's OpenAI-
+//             compatible API: POST {baseUrl}/v1/audio/speech. Voices pass
+//             through VERBATIM (the server owns the catalog — ids, names and
+//             OpenAI aliases all answer); model = the engine id. The AGPL
+//             app stays a separate service; TubeForge talks the wire only.
 //
 // Voices are sanitized to the provider's catalog so a video saved with a Z.ai
 // voice keeps working after switching to OpenAI (falls back to "alloy").
@@ -19,7 +24,7 @@ import {
 import { providerMeta, OPENAI_VOICES, type ProviderId } from "./registry";
 import { VOICES } from "../types";
 import { joinUrl, providerFetch, ProviderHttpError } from "./http";
-import { getSampleWavByVoiceId, voiceProfileProvider } from "../voice-clone";
+import { getSampleWavByVoiceId, voiceProfileProvider, voiceProfileRemoteVoiceId } from "../voice-clone";
 import { applyPronunciations, loadPronunciations } from "../pronounce";
 import { selfhostEndpoint, sharedVoiceServer } from "../shared-voice";
 
@@ -52,6 +57,14 @@ export function voiceCatalog(provider: ProviderId, model = "") {
       : [...OPENAI_VOICES];
     return list.map((v) => ({ id: v.id, label: v.label }));
   }
+  if (provider === "voicestudio") {
+    // S121 — the ALIAS catalog: the server owns the real catalog (its
+    // /v1/audio/voices answers ids + names); TubeForge serves the OpenAI
+    // voice aliases the audited speech schema accepts, so pickers offer
+    // honest values without a live probe. Any other id still passes through
+    // verbatim (sanitizeVoice below never rewrites a voicestudio voice).
+    return OPENAI_VOICES.map((v) => ({ id: v.id, label: v.label }));
+  }
   // zai + zhipu share the same 7 studio voices; zhipu additionally accepts
   // cloned ids (appended to the catalog by the API layer, which can hit the DB).
   return VOICES.map((v) => ({ id: v.id, label: v.label }));
@@ -71,6 +84,7 @@ export function sanitizeVoice(
     isClonedVoiceId(voice)
   )
     return voice;
+  if (provider === "voicestudio") return voice; // verbatim — the server owns the catalog
   const catalog = voiceCatalog(provider, model);
   return catalog.some((v) => v.id === voice) ? voice : catalog[0].id;
 }
@@ -119,10 +133,19 @@ export async function ttsSynthesize(
       // a clear "configure the self-hosted server URL+key" error, or fall
       // back to a stock voice on the active provider.
     }
+    // S121 — a VoiceStudio clone speaks its SERVER-registered profile id (the
+    // row's remoteVoiceId), never the local voice_clone_vs_… alias.
+    if (ownerProvider === "voicestudio") {
+      const remote = await voiceProfileRemoteVoiceId(request.voice);
+      if (remote) request = { ...request, voice: remote };
+    }
   }
 
   if (config.provider === "openai") {
     return openaiTts(request, config);
+  }
+  if (config.provider === "voicestudio") {
+    return voicestudioTts(request, config);
   }
   if (config.provider === "zhipu") {
     return zhipuTts(request, config);
@@ -279,6 +302,50 @@ export async function heygenTts(
 
   const buffer = Buffer.from(new Uint8Array(await response.arrayBuffer()));
   if (buffer.length < 44) throw new Error("HeyGen TTS returned empty audio");
+  return buffer;
+}
+
+// ---------- VoiceStudio (the user's own server — S121) ----------
+
+/** S121 — the VoiceStudio lane: the user's own server, OpenAI-compatible
+ *  speech (audited schema: model = the engine id, input ≤4096, voice id/name/
+ *  alias, speed 0.25–4.0, response_format wav). Loopback servers run keyless;
+ *  a saved key rides Bearer for remote deployments. The engine-license law
+ *  (omnivoice can never bill by silence) is enforced in model-license-policy
+ *  at the PRICING layer — the adapter speaks whatever the user's server runs.
+ *  Exported for the S121 pin suite — called with a caller-built config so
+ *  the pins run with no DB and no tenant context. */
+export async function voicestudioTts(
+  req: TtsRequest,
+  config: CapabilityConfig,
+): Promise<Buffer> {
+  const meta = providerMeta("tts", "voicestudio");
+  const baseUrl = config.baseUrl?.trim() || meta?.defaultBaseUrl || "http://127.0.0.1:3900";
+  const key = config.apiKey?.trim();
+  const model = config.model?.trim() || "voxcpm2"; // the permissive recommended lane
+  const voice = req.voice; // VERBATIM — ids, names and aliases all answer
+
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (key) headers.Authorization = `Bearer ${key}`;
+
+  const response = await providerFetch(
+    "VoiceStudio TTS",
+    joinUrl(baseUrl, "v1/audio/speech"),
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        input: req.input.slice(0, 4096), // the audited input cap
+        voice,
+        speed: Math.min(4, Math.max(0.25, req.speed || 1)), // the audited speed range
+        response_format: "wav", // downstream WAV merging depends on it
+      }),
+    },
+    { capability: "tts" },
+  );
+  const buffer = Buffer.from(new Uint8Array(await response.arrayBuffer()));
+  if (buffer.length < 44) throw new Error("VoiceStudio TTS returned empty audio");
   return buffer;
 }
 

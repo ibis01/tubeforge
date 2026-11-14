@@ -43,6 +43,7 @@ import {
   Loader2,
   Zap,
   Mic,
+  AudioLines,
   ImageIcon,
   ShieldCheck,
   Gauge,
@@ -242,6 +243,15 @@ export function SettingsView() {
       hasKey: false,
       maskedKey: "",
     },
+    asr: {
+      provider: "voicestudio",
+      baseUrl: "",
+      apiKey: "",
+      model: "",
+      visionModel: "",
+      hasKey: false,
+      maskedKey: "",
+    },
     image: {
       provider: "zai",
       baseUrl: "",
@@ -315,6 +325,7 @@ export function SettingsView() {
       setProv((f) => ({
         chat: { ...f.chat, ...(d.capabilities?.chat ?? {}), apiKey: "" },
         tts: { ...f.tts, ...(d.capabilities?.tts ?? {}), apiKey: "" },
+        asr: { ...f.asr, ...(d.capabilities?.asr ?? {}), apiKey: "" },
         image: { ...f.image, ...(d.capabilities?.image ?? {}), apiKey: "" },
         video: { ...f.video, ...(d.capabilities?.video ?? {}), apiKey: "" },
       }));
@@ -475,7 +486,7 @@ export function SettingsView() {
       }
 
       // 3) AI Providers — per-capability overrides
-      for (const cap of ["chat", "tts", "image", "video"] as CapabilityId[]) {
+      for (const cap of ["chat", "tts", "asr", "image", "video"] as CapabilityId[]) {
         const row = prov[cap];
         const res = await fetch("/api/settings/ai", {
           method: "PUT",
@@ -632,7 +643,7 @@ export function SettingsView() {
         }
       }
 
-      for (const cap of ["chat", "tts", "image", "video"] as CapabilityId[]) {
+      for (const cap of ["chat", "tts", "asr", "image", "video"] as CapabilityId[]) {
         const row = prov[cap];
         const res = await fetch("/api/settings/ai", {
           method: "PUT",
@@ -956,7 +967,7 @@ export function SettingsView() {
 
         {/* Per-task provider rows */}
         <div className="mt-4 space-y-3">
-          {(["chat", "tts", "image", "video"] as CapabilityId[]).map((cap) => {
+          {(["chat", "tts", "asr", "image", "video"] as CapabilityId[]).map((cap) => {
             const row = prov[cap];
             const meta = CAPABILITY_META[cap];
             const providers = PROVIDERS_BY_CAPABILITY[cap];
@@ -968,9 +979,11 @@ export function SettingsView() {
                 ? PenLine
                 : cap === "tts"
                   ? Mic
-                  : cap === "image"
-                    ? ImageIcon
-                    : Clapperboard;
+                  : cap === "asr"
+                    ? AudioLines
+                    : cap === "image"
+                      ? ImageIcon
+                      : Clapperboard;
             const test = provTests[cap];
             const chatRow = prov.chat;
             const canCopyChat =

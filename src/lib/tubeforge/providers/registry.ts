@@ -3,7 +3,7 @@
 
 import { CHAT_MODELS } from "../types";
 
-export type CapabilityId = "chat" | "tts" | "image" | "video";
+export type CapabilityId = "chat" | "tts" | "asr" | "image" | "video";
 
 export type ProviderKind = "zai" | "openai" | "anthropic" | "gemini" | "native";
 export type ProviderId = string;
@@ -164,6 +164,27 @@ export const TTS_PROVIDERS: ProviderMeta[] = [
     note: "7 built-in studio voices.",
   },
   {
+    id: "voicestudio",
+    kind: "native",
+    label: "VoiceStudio (self-hosted)",
+    defaultBaseUrl: "http://127.0.0.1:3900",
+    keyUrl: "https://github.com/debpalash/VoiceStudio",
+    models: [
+      // S121 — the audited engine hints carry the LICENSE verdicts (the
+      // unverified-pricing law's sibling): an engine whose weights forbid
+      // commercial use never reaches a paying render by silence — see
+      // model-license-policy.ts (fail-closed) + docs/design/
+      // s121-integration-roadmap.md. omnivoice is VoiceStudio's DEFAULT
+      // engine and its weights are CC-BY-NC; the Apache/MIT engines below
+      // are the permissive lanes.
+      { id: "voxcpm2", hint: "Apache-2.0 — commercial-OK (recommended)" },
+      { id: "cosyvoice", hint: "Apache-2.0 — commercial-OK" },
+      { id: "kittentts", hint: "Apache-2.0, CPU-only — commercial-OK" },
+      { id: "omnivoice", hint: "the default engine — CC-BY-NC weights, non-commercial" },
+    ],
+    note: "Your own VoiceStudio server (OpenAI-compatible API, default port 3900). Loopback servers need no key; remote ones take the OMNIVOICE_API_KEY as the API key. The AGPL app stays a separate service you run — TubeForge never bundles it.",
+  },
+  {
     id: "zhipu",
     kind: "native",
     label: "Zhipu GLM-TTS (voice cloning)",
@@ -216,6 +237,47 @@ export const TTS_PROVIDERS: ProviderMeta[] = [
     defaultBaseUrl: "https://api.elevenlabs.io/v1",
     keyUrl: "https://elevenlabs.io/app/settings/api-keys",
     models: [{ id: "eleven_multilingual_v2" }, { id: "eleven_turbo_v2_5" }],
+  },
+];
+
+// ───────────────────────────── ASR ─────────────────────────────
+// S121 — transcription is its OWN capability (it historically rode the tts
+// capability; the asr setting FOLLOWS tts until an ai.asr row is saved, so
+// today's behavior is the default and nothing breaks when it is unset).
+export const ASR_PROVIDERS: ProviderMeta[] = [
+  {
+    id: "voicestudio",
+    kind: "native",
+    label: "VoiceStudio (self-hosted)",
+    defaultBaseUrl: "http://127.0.0.1:3900",
+    keyUrl: "https://github.com/debpalash/VoiceStudio",
+    models: [
+      // S121 — whisperx is VoiceStudio's primary ASR engine and the only one
+      // whose word timestamps were verified to wav2vec2 forced-alignment
+      // precision (±10-30 ms). moonshine emits NO timestamps — word-level
+      // work silently degrades to the silence ladder when it is active.
+      { id: "whisperx", hint: "verified word timestamps (±10-30 ms) — recommended" },
+      { id: "faster-whisper", hint: "word timestamps" },
+      { id: "moonshine", hint: "CPU-friendly, NO word timestamps" },
+    ],
+    note: "Word-level timestamps (verbose_json + word granularity) upgrade captions and the whiteboard anchors from derived to MEASURED timing. Same server as the VoiceStudio TTS row.",
+  },
+  {
+    id: "openai",
+    kind: "openai",
+    label: "OpenAI Whisper",
+    defaultBaseUrl: "https://api.openai.com/v1",
+    keyUrl: "https://platform.openai.com/api-keys",
+    models: [{ id: "whisper-1", hint: "word timestamps via verbose_json" }],
+  },
+  {
+    id: "zai",
+    kind: "zai",
+    label: "Z.ai ASR",
+    defaultBaseUrl: "https://api.z.ai/api/paas/v4",
+    keyUrl: "https://z.ai/model-api",
+    models: [],
+    note: "The bundled SDK transcription — no word timestamps (the silence ladder covers timing).",
   },
 ];
 
@@ -471,6 +533,7 @@ export const VIDEO_PROVIDERS: ProviderMeta[] = [
 export const PROVIDERS_BY_CAPABILITY: Record<CapabilityId, ProviderMeta[]> = {
   chat: CHAT_PROVIDERS,
   tts: TTS_PROVIDERS,
+  asr: ASR_PROVIDERS,
   image: IMAGE_PROVIDERS,
   video: VIDEO_PROVIDERS,
 };
@@ -488,6 +551,11 @@ export const CAPABILITY_META: Record<
     label: "Voiceover",
     icon: "Mic",
     desc: "Text-to-speech narration (and audio transcription)",
+  },
+  asr: {
+    label: "Transcription",
+    icon: "AudioLines",
+    desc: "Word-timed ASR for captions, anchors and narration checks (follows the voiceover provider until set)",
   },
   image: {
     label: "Artwork",

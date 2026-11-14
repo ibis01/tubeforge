@@ -28,6 +28,7 @@ export interface CapabilityConfig {
 const CAPABILITY_KEYS: Record<CapabilityId, string> = {
   chat: "ai.chat",
   tts: "ai.tts",
+  asr: "ai.asr",
   image: "ai.image",
   video: "ai.video",
 };
@@ -94,6 +95,21 @@ export async function getCapability(
   capability: CapabilityId,
   overrides?: Partial<CapabilityConfig>,
 ): Promise<CapabilityConfig> {
+  // S121 — the asr capability FOLLOWS the tts capability until an ai.asr row
+  // is saved: the historical transcription-rode-TTS behavior IS the default.
+  // One inheritance point (here), one way out (save an ai.asr row) — callers
+  // never branch on "is asr configured". Byte-identical behavior when unset.
+  // (The probe is outside getCapability's own try/catch on purpose: a missing
+  // tenant context must land on the tts answer, never throw through here.)
+  if (capability === "asr") {
+    let savedRow: string | null = null;
+    try {
+      savedRow = (await getUserSettings([CAPABILITY_KEYS.asr])).get(CAPABILITY_KEYS.asr) ?? null;
+    } catch {
+      savedRow = null; // no tenant context / DB hiccup → follow tts
+    }
+    if (!savedRow) return getCapability("tts", overrides);
+  }
   const config = defaultFor(capability);
   try {
     const legacy = await readLegacyZai();
