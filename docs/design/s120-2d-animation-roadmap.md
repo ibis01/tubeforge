@@ -1,6 +1,6 @@
 # S120 — The complete 2D animation system (file-by-file roadmap)
 
-**Status:** PLANNED — the roadmap stage. No product code is changed by this document. Ground truth verified 2026-11-13 against HEAD `e387287` (W2, "the semantic beat compiler"): full reads of the reconciliation record, the S87 design, the W1 rubric, `beat-plan.ts`, `timing.ts`, `types.ts`, `render-lane.ts`, and the engine module inventory (755 tracked files). It reconciles the external capability audit (delivered 2026-11-13) against the live tree and supersedes the audit's framing where it drifted from the repo's own records.
+**Status:** W3–W7 LANDED — the whiteboard finishing track (§3) is complete on main, and Stage S (the shared `anim/` substrate) landed with it. The open items below are: the blind re-scores (§4), G1 (motion graphics — open as PRs #14–#17), K1 (the 2D character rig), C2-ext, R, X. Original ground truth verified 2026-11-13 against HEAD `e387287` (W2, "the semantic beat compiler"): full reads of the reconciliation record, the S87 design, the W1 rubric, `beat-plan.ts`, `timing.ts`, `types.ts`, `render-lane.ts`, and the engine module inventory (755 tracked files). It reconciles the external capability audit (delivered 2026-11-13) against the live tree and supersedes the audit's framing where it drifted from the repo's own records. RECONCILED 2026-11-14 against HEAD `37796ce`: W3 `381e534`, W4 slices `c818f75` → `d45faed`, W5 `e6fafe6`, W6 `712e0e5`, W7 `b871e01` + `37796ce`, Stage S `14b67fe` — receipts in `docs/audits/w3-asset-validator.md` … `w7-finishing-layer.md`, proofs in `scripts/wN-*-proof.mts`. The per-stage specs below are now records of shipped code.
 
 **The question it answers:** "What exactly does it take to grow the whiteboard engine into a complete 2D animation studio — motion graphics, real character animation, cinematic depth — without a second renderer and without forking the composition truth?"
 
@@ -46,7 +46,7 @@ These are recorded in the repo (WHITEBOARD_ENGINE_DESIGN.md §1, s87 §0, whiteb
 | --- | --- | --- |
 | AI Director (chooses the style) | `director.ts` + `director-plan.ts` (19-field shot schema, 8 production profiles, M1/M2 landed) — but it directs ONE style family (cinematic Ken Burns/i2v/stock/slides) | Add per-scene engine/style selection (`engine` field) + router mapping (Stage R) |
 | Shared Animation Timeline | S87 contract CLOSED: `timeline.ts` (8 track kinds), `composition-plan.ts`, `render-lane.ts`, whiteboard `tracks.ts` | Engines G1/K1 emit tracks (like `whiteboard/tracks.ts`); schema-3 persisted engine-authored tracks for cross-engine videos (Stage X) |
-| Whiteboard W1–W7 | W1 (benchmark + rubric), W2 (beat compiler) landed; W3–W7 specced in reconciliation §9 | Execute W3–W7 (Stages W3–W7) |
+| Whiteboard W1–W7 | W1–W7 ALL LANDED — W3 `381e534`; W4 slices `c818f75`, `5fbd134`, `d5afb69`, `41b7416`, `d45faed`; W5 `e6fafe6`; W6 `712e0e5`; W7 `b871e01`, `37796ce`; Stage S substrate `14b67fe` | Blind re-score kits per stage (§4) — scheduled, not yet executed |
 | Motion Graphics | Nothing (closest: `slides.ts` — static designed PNGs + camera push; no element-level animation) | Build G1 (Stage G1) |
 | Character Animation | S93 camera-breath rig + pose sheets + i2v lane; no skeletons/lip-sync | Build K1 (Stage K1) |
 | Cinematic 2D | The deepest subsystem: `motion.ts` (11 moves, zoompan compilation), `shots.ts` (M2 per-shot engine), `transitions.ts` (15 xfades) | Vocabulary extension, not plumbing (Stage C2-ext) |
@@ -57,6 +57,21 @@ These are recorded in the repo (WHITEBOARD_ENGINE_DESIGN.md §1, s87 §0, whiteb
 ## 3. Stage specs — whiteboard finishing track (W3–W7)
 
 Each stage lands with unit pins, all gates green, CI-green push. Order is the repo's own (reconciliation §9). Nothing requires a Prisma migration until W6's manifest fields (JSON columns only).
+
+**Status reconciliation (2026-11-14, HEAD `37796ce`) — every stage in this section is LANDED:**
+
+| Stage | Landing commit(s) | Receipt | Proof |
+| --- | --- | --- | --- |
+| W3 stroke-authored assets + validator | `381e534` | `docs/audits/w3-asset-validator.md` | the validator battery in `scripts/test-unit.mts`; built-ins gated at upload |
+| W4 slice 1 — word anchors are inputs | `c818f75` | `docs/audits/w4-word-anchors.md` | the W4 battery in `scripts/test-unit.mts` |
+| W4 slice 2 — glyph text + layout | `5fbd134`, `d5afb69`, `41b7416` | `docs/audits/w4-glyph-text.md` | `scripts/w4-glyph-proof.mts` (the proof caught the page seam — the fix landed in the same slice) |
+| W4 slice 3 — anchors drive the spoken schedule | `d45faed` | `docs/audits/w4-voice-anchors.md` | `scripts/w4-anchors-proof.mts` |
+| W5 — content-driven camera director | `e6fafe6` | `docs/audits/w5-camera-director.md` | `scripts/w5-camera-proof.mts` (drift demotion + QC proof in one slice) |
+| W6 — continuous canvas | `712e0e5` | `docs/audits/w6-continuous-canvas.md` | the W6 battery in `scripts/test-unit.mts` (590 tests); clean-mode byte-identity: W1 identity gate 912/912 frames, determinism hashes identical |
+| W7 — finishing layer | `b871e01`, `37796ce` | `docs/audits/w7-finishing-layer.md` | `scripts/w7-finishing-proof.mts` (real-engine run: travel worst 25.3px/frame, all four poses fire, loudness −16.4 LUFS inside the contract); 597 tests |
+| Stage S — shared animation substrate | `14b67fe` | `src/lib/tubeforge/anim/{easing,keyframe,clock}.ts` | the one easing table, one keyframe law, one clock |
+
+Honest deltas the landing receipts record: carry depth is ONE scene (no keep-chain propagation — future work); the W1 baseline frames moved by design in W7 (the pen no longer teleports); the blind re-score kits (§4) are still scheduled, not executed.
 
 ### W3 — Stroke-authored assets + validator
 **Objective:** enforce the single-subpath/no-teleport law that is today convention-only (a multi-subpath path renders a teleporting pen with no gate firing).
