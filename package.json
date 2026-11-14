@@ -9,7 +9,7 @@
     "dev:daemon": "python3 scripts/daemonize.py scripts/next-daemon.log npm exec -- next dev -p 3000 -H 0.0.0.0",
     "build": "rm -rf .next/standalone && next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
     "start": "NODE_ENV=production node .next/standalone/server.js",
-    "lint": "eslint .",
+    "lint": "node --stack-size=8000 node_modules/eslint/bin/eslint.js .",
     "typecheck": "tsc --noEmit",
     "postinstall": "node scripts/postinstall.mjs",
     "setup": "node scripts/postinstall.mjs",
