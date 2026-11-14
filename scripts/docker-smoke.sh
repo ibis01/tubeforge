@@ -26,7 +26,12 @@
 #   node:20-bookworm-slim + postgres:16-alpine → pulled from the ECR Public
 #     library mirror (public.ecr.aws/docker/library/…) and tagged locally to
 #     the names the Dockerfile / compose expect, so the build and compose
-#     find them in the local cache and never contact Hub;
+#     find them in the local cache and never contact Hub. 2026-11-14
+#     (run 43531489543): ECR Public throttles GitHub's SHARED runner IP
+#     pools too — "toomanyrequests: Rate exceeded" on the postgres pull
+#     seconds after the node pull succeeded from the same IP. The pulls
+#     now retry with escalating backoff (the throttle is per-IP and
+#     short-lived; a later attempt from the same pool usually lands).
 #   MinIO → a HOST process instead: dl.min.io is 410 Gone (MinIO retired
 #     the community binaries), so the S3-compatible store is SeaweedFS 3.96
 #     pinned from GitHub releases, with the containers talking S3 to it
@@ -61,7 +66,19 @@ for pair in \
     continue
   fi
   echo "[smoke] pulling $2 from the ECR Public mirror"
-  docker pull "$1"
+  PULL_OK=false
+  for ATTEMPT in 1 2 3 4; do
+    if docker pull "$1"; then PULL_OK=true; break; fi
+    if [ "$ATTEMPT" -lt 4 ]; then
+      BACKOFF=$((ATTEMPT * 20))
+      echo "[smoke] pull attempt $ATTEMPT failed — ECR Public throttles shared runner IPs; retrying in ${BACKOFF}s"
+      sleep "$BACKOFF"
+    fi
+  done
+  if [ "$PULL_OK" != true ]; then
+    echo "[smoke] FAIL: the ECR Public mirror kept rate-limiting the $1 pull after 4 attempts"
+    exit 1
+  fi
   docker tag "$1" "$2"
 done
 

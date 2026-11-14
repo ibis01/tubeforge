@@ -14036,7 +14036,7 @@ await test("W5 director: deterministic; a ≤1-beat scene returns [] (the drift 
 });
 
 await test("W5 policies: crafted violations fire with readable reasons; the director's own keys pass", async () => {
-  const { cameraPolicies, CAMERA_MIN_TRAVEL_MS, CAMERA_MAX_ZOOM_PER_SEC } = await import("../src/lib/tubeforge/whiteboard/camera-director");
+  const { cameraPolicies, CAMERA_MAX_ZOOM_PER_SEC } = await import("../src/lib/tubeforge/whiteboard/camera-director");
   const keys = [
     { cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 },
     { cx: 1400, cy: 540, scale: 1, startMs: 5000, durationMs: 100 },
