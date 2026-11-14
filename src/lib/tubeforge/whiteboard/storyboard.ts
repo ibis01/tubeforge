@@ -12,6 +12,8 @@ import type { Placement } from "./svg";
 import { cameraPolicies } from "./camera-director";
 
 export type HandStyle = "marker" | "pencil" | "chalk";
+/** W7 — which hand holds the tool (additive; absent = right, today). */
+export type HandSide = "left" | "right";
 
 /** Where an asset lives in the scene. */
 export interface WhiteboardAssetPlacement {
@@ -130,7 +132,10 @@ export interface WhiteboardProject {
   width: number;
   height: number;
   fps: number;
-  hand: { style: HandStyle; scale: number };
+  hand: { style: HandStyle; scale: number; /** W7 — absent = right. */ side?: HandSide };
+  /** W7 — optional whiteboard SFX (pen strokes, page turns). OFF by
+   *  default (decision §10.4); audio-only, frames never depend on it. */
+  sfxOn?: boolean;
   scenes: WhiteboardScene[];
 }
 
@@ -489,6 +494,10 @@ export function validateWhiteboardProject(
     typeof p.hand === "object" && p.hand !== null && (p.hand as Record<string, unknown>).style === "pencil"
       ? "pencil"
       : (p.hand as Record<string, unknown>)?.style === "chalk" ? "chalk" : "marker";
+  const handSide: HandSide | undefined =
+    typeof p.hand === "object" && p.hand !== null && (p.hand as Record<string, unknown>).side === "left"
+      ? "left"
+      : undefined;
 
   return {
     project: {
@@ -496,7 +505,9 @@ export function validateWhiteboardProject(
       width: projW,
       height: projH,
       fps: typeof p.fps === "number" && p.fps >= 12 && p.fps <= 60 ? Math.round(p.fps) : 24,
-      hand: { style: handStyle, scale: handScale },
+      hand: { style: handStyle, scale: handScale, ...(handSide ? { side: handSide } : {}) },
+      // Strict boolean write: absent/false reads off; anything else is not on.
+      ...(p.sfxOn === true ? { sfxOn: true } : {}),
       scenes,
     },
     errors: [],

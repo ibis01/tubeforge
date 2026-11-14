@@ -63,7 +63,34 @@ const A = (
 const HEART_OUTLINE =
   "M 100 62 C 74 26, 24 44, 24 94 C 24 136, 62 162, 100 184 C 138 162, 176 136, 176 94 C 176 44, 126 26, 100 62 Z";
 
-export const ASSETS: WhiteboardAsset[] = [
+// W7 — the tool hands as named consts: the LEFT mirrors derive from these
+// (one art source, zero drift), and the style map selects among them.
+const ASSET_HAND_MARKER = A("hand-marker", { w: 140, h: 170 }, ["hand", "marker"], `
+  <path id="hd-nib" d="M 70 150 L 60 126 L 80 126 Z" fill="#1d3557" stroke="none"/>
+  <path id="hd-body" d="M 60 126 L 80 126 L 82 66 L 58 66 Z" fill="#e63946" stroke="#1d3557" stroke-width="3"/>
+  <path id="hd-band" d="M 58 66 L 82 66 L 84 50 L 56 50 Z" fill="#1d3557" stroke="none"/>
+  <path id="hd-cap" d="M 56 50 L 84 50 L 84 38 L 56 38 Z" fill="#457b9d" stroke="#1d3557" stroke-width="3"/>
+  <path id="hd-fingers" d="M 82 118 C 108 110, 118 82, 108 56 C 102 40, 88 34, 78 38 L 80 52 C 94 52, 100 66, 98 82 C 96 98, 90 106, 82 104 Z" fill="#f1faee" stroke="#1d3557" stroke-width="3.5"/>
+  <path id="hd-thumb" d="M 60 106 C 46 102, 38 88, 46 78 C 51 71, 60 72, 64 78" fill="none" stroke="#1d3557" stroke-width="3.5" stroke-linecap="round"/>
+  <path id="hd-palm" d="M 84 52 C 96 54, 102 62, 100 72" fill="none" stroke="#1d3557" stroke-width="3" stroke-linecap="round"/>
+`);
+const ASSET_HAND_PENCIL = A("hand-pencil", { w: 140, h: 170 }, ["hand", "pencil"], `
+  <path id="hp-tip" d="M 70 150 L 62 132 L 78 132 Z" fill="#1d3557" stroke="none"/>
+  <path id="hp-wood" d="M 62 132 L 78 132 L 84 112 L 56 112 Z" fill="#e9c46a" stroke="#1d3557" stroke-width="3"/>
+  <path id="hp-body" d="M 56 112 L 84 112 L 86 46 L 54 46 Z" fill="#f4a261" stroke="#1d3557" stroke-width="3"/>
+  <path id="hp-ferrule" d="M 54 46 L 86 46 L 88 34 L 52 34 Z" fill="#457b9d" stroke="none"/>
+  <path id="hp-eraser" d="M 52 34 L 88 34 L 88 24 L 52 24 Z" fill="#e76f51" stroke="#1d3557" stroke-width="3"/>
+  <path id="hp-fingers" d="M 82 118 C 108 110, 118 82, 108 56 C 102 40, 88 34, 78 38 L 80 52 C 94 52, 100 66, 98 82 C 96 98, 90 106, 82 104 Z" fill="#f1faee" stroke="#1d3557" stroke-width="3.5"/>
+  <path id="hp-thumb" d="M 60 106 C 46 102, 38 88, 46 78 C 51 71, 60 72, 64 78" fill="none" stroke="#1d3557" stroke-width="3.5" stroke-linecap="round"/>
+`);
+const ASSET_HAND_CHALK = A("hand-chalk", { w: 140, h: 170 }, ["hand", "chalk"], `
+  <path id="hk-tip" d="M 70 150 L 62 134 L 78 134 Z" fill="#f1faee" stroke="#1d3557" stroke-width="2.5"/>
+  <path id="hk-stick" d="M 62 134 L 78 134 L 84 58 L 56 58 Z" fill="#f1faee" stroke="#1d3557" stroke-width="3"/>
+  <path id="hk-fingers" d="M 82 118 C 108 110, 118 82, 108 56 C 102 40, 88 34, 78 38 L 80 52 C 94 52, 100 66, 98 82 C 96 98, 90 106, 82 104 Z" fill="#f1faee" stroke="#1d3557" stroke-width="3.5"/>
+  <path id="hk-thumb" d="M 60 106 C 46 102, 38 88, 46 78 C 51 71, 60 72, 64 78" fill="none" stroke="#1d3557" stroke-width="3.5" stroke-linecap="round"/>
+`);
+
+const BASE_ASSETS: WhiteboardAsset[] = [
   A("heart-main", { w: 200, h: 200 }, ["science", "heart", "benchmark"], `
     <path id="hm-outline" d="${HEART_OUTLINE}" fill="#e63946" fill-opacity="0" stroke="#1d3557" stroke-width="5" stroke-linecap="round"/>
     <path id="hm-aorta" d="M 96 44 C 92 22, 112 8, 130 16 C 148 24, 150 46, 136 56" fill="none" stroke="#1d3557" stroke-width="4.5" stroke-linecap="round"/>
@@ -186,15 +213,19 @@ export const ASSETS: WhiteboardAsset[] = [
   // TIP lands on the path point (asset inner translate −tip) and applies a
   // gentle fixed tilt + wobble — the hand FOLLOWS the true path point at
   // every frame (the plan's hard requirement); the tilt is aesthetic only.
-  A("hand-marker", { w: 140, h: 170 }, ["hand", "marker"], `
-    <path id="hd-nib" d="M 70 150 L 60 126 L 80 126 Z" fill="#1d3557" stroke="none"/>
-    <path id="hd-body" d="M 60 126 L 80 126 L 82 66 L 58 66 Z" fill="#e63946" stroke="#1d3557" stroke-width="3"/>
-    <path id="hd-band" d="M 58 66 L 82 66 L 84 50 L 56 50 Z" fill="#1d3557" stroke="none"/>
-    <path id="hd-cap" d="M 56 50 L 84 50 L 84 38 L 56 38 Z" fill="#457b9d" stroke="#1d3557" stroke-width="3"/>
-    <path id="hd-fingers" d="M 82 118 C 108 110, 118 82, 108 56 C 102 40, 88 34, 78 38 L 80 52 C 94 52, 100 66, 98 82 C 96 98, 90 106, 82 104 Z" fill="#f1faee" stroke="#1d3557" stroke-width="3.5"/>
-    <path id="hd-thumb" d="M 60 106 C 46 102, 38 88, 46 78 C 51 71, 60 72, 64 78" fill="none" stroke="#1d3557" stroke-width="3.5" stroke-linecap="round"/>
-    <path id="hd-palm" d="M 84 52 C 96 54, 102 62, 100 72" fill="none" stroke="#1d3557" stroke-width="3" stroke-linecap="round"/>
-  `),
+  ASSET_HAND_MARKER,
+
+  // ---------------------------------------------------------------------------
+  // W7 — the hand family (S120 §3 W7): style variants (pencil, chalk) and
+  // the pose sub-assets (point for arrow/emphasis strokes, rest for the
+  // scene tail). Every hand shares ONE tip anchor — HAND_TIP (70, 150) —
+  // so the page's inner translate and the plan's follow math stay
+  // style/pose-agnostic. All art: single-subpath paths (the teleport
+  // law), house stroke colors, tag "hand" (the drawing-agent exemption).
+  // The LEFT-hand mirrors of the tool hands register below, derived.
+  // ---------------------------------------------------------------------------
+  ASSET_HAND_PENCIL,
+  ASSET_HAND_CHALK,
 
   // ---------------------------------------------------------------------------
   // W3 — the extended starter pack: education / business / science /
@@ -266,8 +297,89 @@ export const ASSETS: WhiteboardAsset[] = [
   `, { role: "emphasis", textMode: "glyph" }),
 ];
 
-/** The marker tip anchor of the drawing-hand asset (asset-space). */
+/** The marker tip anchor of the drawing-hand assets (asset-space). Every
+ *  hand in the W7 family is AUTHORED to share this anchor — the tool tip,
+ *  the pointing fingertip, the resting fingertip all contact the board at
+ *  (70, 150) — so the page's inner translate and the plan's follow math
+ *  stay style/pose-agnostic. A future pose needing a different contact
+ *  point registers its own entry in HAND_TIPS (extending, never forking). */
 export const HAND_TIP = { x: 70, y: 150 } as const;
+
+// ---------------------------------------------------------------------------
+// W7 — the hand family registration: style variants, pose sub-assets, and
+// the LEFT-hand mirrors derived mechanically (one art source — a mirrored
+// clone can never drift from its right-hand original).
+// ---------------------------------------------------------------------------
+
+/** The pose a hand asset renders for (W7). write/draw ride the style
+ *  asset; point/circle ride hand-point; rest rides hand-rest. Selected by
+ *  the W3 role metadata of the ACTIVE stroke (pose mapping in timing.ts). */
+export type HandPose = "write" | "draw" | "point" | "circle" | "rest";
+
+/** Which hand asset id a project's `hand.style` (and side) selects. */
+export const HAND_ASSET_BY_STYLE: Record<"marker" | "pencil" | "chalk", string> = {
+  marker: "hand-marker",
+  pencil: "hand-pencil",
+  chalk: "hand-chalk",
+};
+
+/** W7 — the page's tool hand for a project's style + side: the LEFT
+ *  variants are the mirrored per-asset clones (one art source), so the
+ *  side resolves to a DIFFERENT asset id, never a transform hack. */
+export function handAssetIdFor(style: "marker" | "pencil" | "chalk", side?: "left" | "right"): string {
+  const base = HAND_ASSET_BY_STYLE[style];
+  return side === "left" ? `${base}-l` : base;
+}
+
+/** Mirrored LEFT variant of a hand asset: the same art wrapped in a
+ *  mirror group (the tip is the box's horizontal center, so the anchor
+ *  survives the flip), tags extended with "left". Derived at module init
+ *  — one art source, zero drift. */
+function leftHandVariant(a: WhiteboardAsset, id: string): WhiteboardAsset {
+  return {
+    ...a,
+    id,
+    tags: [...a.tags, "left"],
+    svg: `<g transform="translate(${a.viewBox.w} 0) scale(-1 1)">${a.svg}</g>`,
+  };
+}
+
+const HAND_POSE_POINT = A("hand-point", { w: 140, h: 170 }, ["hand", "point"], `
+  <path id="hq-finger" d="M 64 150 C 60 134, 60 120, 62 110 C 64 102, 78 102, 78 110 L 76 150 Z" fill="#f1faee" stroke="#1d3557" stroke-width="3.5"/>
+  <path id="hq-fist" d="M 58 118 C 40 118, 34 92, 48 76 C 58 64, 88 64, 98 76 C 110 90, 106 116, 92 124 C 84 128, 68 128, 58 118 Z" fill="#f1faee" stroke="#1d3557" stroke-width="3.5"/>
+  <path id="hq-cuff" d="M 42 88 C 38 68, 40 54, 48 44 C 64 34, 84 34, 98 44 C 104 54, 104 70, 100 86" fill="#457b9d" stroke="#1d3557" stroke-width="3"/>
+`);
+const HAND_POSE_REST = A("hand-rest", { w: 140, h: 170 }, ["hand", "rest"], `
+  <path id="hr-palm" d="M 48 150 C 42 128, 42 104, 50 88 C 58 74, 82 72, 92 84 C 102 96, 102 122, 96 142 C 94 150, 88 154, 80 154 L 56 154 Z" fill="#f1faee" stroke="#1d3557" stroke-width="3.5"/>
+  <path id="hr-index" d="M 52 92 C 48 106, 48 128, 52 148" fill="none" stroke="#1d3557" stroke-width="3" stroke-linecap="round"/>
+  <path id="hr-middle" d="M 66 88 C 62 106, 62 130, 66 150" fill="none" stroke="#1d3557" stroke-width="3" stroke-linecap="round"/>
+  <path id="hr-ring" d="M 80 92 C 78 108, 78 130, 82 148" fill="none" stroke="#1d3557" stroke-width="3" stroke-linecap="round"/>
+  <path id="hr-cuff" d="M 46 96 C 40 78, 44 60, 54 50 C 70 38, 90 40, 100 52 C 106 62, 106 76, 102 88" fill="#457b9d" stroke="#1d3557" stroke-width="3"/>
+`);
+
+/** The named tip points, extending HAND_TIP: hand-asset id → tip. Every
+ *  current entry IS HAND_TIP (the family's shared anchor); the map exists
+ *  so a future pose with its own contact point registers here instead of
+ *  forking the follow math. */
+export const HAND_TIPS: Record<string, { x: number; y: number }> = {
+  "hand-marker": { ...HAND_TIP },
+  "hand-pencil": { ...HAND_TIP },
+  "hand-chalk": { ...HAND_TIP },
+  "hand-marker-l": { ...HAND_TIP },
+  "hand-pencil-l": { ...HAND_TIP },
+  "hand-chalk-l": { ...HAND_TIP },
+  "hand-point": { ...HAND_TIP },
+  "hand-rest": { ...HAND_TIP },
+};
+
+export const ASSETS: WhiteboardAsset[] = [
+  ...BASE_ASSETS,
+  leftHandVariant(ASSET_HAND_MARKER, "hand-marker-l"),
+  leftHandVariant(ASSET_HAND_PENCIL, "hand-pencil-l"),
+  leftHandVariant(ASSET_HAND_CHALK, "hand-chalk-l"),
+  HAND_POSE_POINT,
+  HAND_POSE_REST,
+];
 
 // ---------------------------------------------------------------------------
 // Extraction + registration

@@ -7814,7 +7814,9 @@ await test("S64 render: framePayload serializes the full frame state (the applie
   eq(p.height, 1080);
   eq(p.tMs, 500);
   eq(p.draws, [["a1::p1", 0.5]]);
-  eq(p.hand, { visible: true, x: 50, y: 0, angle: 0 });
+  // W7 — the hand gained pose + scale (additive wire format): the pose
+  // drives the page's grip groups, the scale is the pen-lift breathe.
+  eq(p.hand, { visible: true, x: 50, y: 0, angle: 0, pose: "draw", scale: 1 });
 });
 
 await test("S64 render: the applier resolves frame-plan keys through the registered id maps (the namespace seam)", async () => {
@@ -9276,7 +9278,9 @@ await test("S75: the assembly MIXES the narration — the voice track must reach
   // already said the intent ("ducks to 0.16 UNDER the voice").
   const renderSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/render.ts", "utf8");
   ok(
-    renderSrc.includes("[0:a][bed]amix=inputs=2:duration=first:normalize=0[a]"),
+    // W7 — the amix went template-shaped (the SFX arm widens it to 3
+    // inputs); the voice and the bed still lead the mix at normalize=0.
+    /\[0:a\]\[bed\][\s\S]{0,140}amix=inputs=\$\{sfxFile \? 3 : 2\}:duration=first:normalize=0\[a\]/.test(renderSrc),
     "the assembly lost the voice+bed amix (narration would be dropped from final.mp4)"
   );
   ok(
@@ -14795,7 +14799,7 @@ await test("W6 render seam + manifest: the carry wiring and the additive boardMo
   ok(renderSrc.includes("resolveCarriedInk"), "render.ts imports the carry resolver");
   ok(/const carryPlan =[\s\S]*?resolveCarriedInk\(prevScene, sceneMs\[si - 1\], scene\.board\)/.test(renderSrc), "the loop resolves the carry from the PREVIOUS scene's clock");
   ok(/composeScene\(scene, project, lib\.assets, carryPlan\)/.test(renderSrc), "the compose receives the carry plan");
-  ok(/frameAt\(project, scene, events, geometry, tMs, carryPlan\)/.test(renderSrc), "the frame plan receives the carry plan");
+  ok(/frameAt\(project, scene, events, geometry, tMs, carryPlan, assetRoles\)/.test(renderSrc), "the frame plan receives the carry plan (and the W7 roles)");
   ok(renderSrc.includes("boardModes: project.scenes.map"), "the result carries per-scene board modes");
   const asmSrc = fs.readFileSync("src/lib/tubeforge/render-assembly.ts", "utf8");
   ok(asmSrc.includes("boardMode?:"), "AssemblyEntry carries the additive boardMode");
@@ -14806,9 +14810,262 @@ await test("W6 render seam + manifest: the carry wiring and the additive boardMo
   const canvasSrc = fs.readFileSync("src/components/tubeforge/whiteboard/wb-canvas.tsx", "utf8");
   ok(canvasSrc.includes("resolveCarriedInk"), "the editor resolves the SAME carry plan");
   ok(/composeScene\(rt\.scene, project, rt\.lib\.assets, rt\.carry\)/.test(canvasSrc), "the editor composes with the carry plan");
-  ok(/frameAt\(project, rt2\.scene, rt2\.events, rt2\.geometry, tMs, rt2\.carry\)/.test(canvasSrc), "the editor frames with the carry plan");
+  ok(/frameAt\(project, rt2\.scene, rt2\.events, rt2\.geometry, tMs, rt2\.carry, rt2\.roles\)/.test(canvasSrc), "the editor frames with the carry plan (and the W7 roles)");
 });
 
+
+// ---------------------------------------------------------------------------
+// W7 — the finishing layer (S120 §3): the hand family + poses, the pen-up
+// travel, the SFX recipes + the pure cue plan, and the editor round-trip.
+// ---------------------------------------------------------------------------
+
+suiteStart("W7 finishing layer — the hand family, travel, poses (S120 §3)");
+
+await test("W7 hand family: all eight register through the validator; the left mirrors derive from one art source", async () => {
+  const { loadLibrary, HAND_TIPS, HAND_TIP, handAssetIdFor } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  for (const id of ["hand-marker", "hand-pencil", "hand-chalk", "hand-marker-l", "hand-pencil-l", "hand-chalk-l", "hand-point", "hand-rest"]) {
+    ok(lib.assets.has(id), `${id} registers`);
+  }
+  ok(lib.warnings.length === 0, "no hand asset was validator-excluded");
+  // The left variant IS the right art mirrored (one source): its svg wraps
+  // the original in a mirror group; the tags carry "left".
+  const marker = lib.assets.get("hand-marker");
+  const markerL = lib.assets.get("hand-marker-l");
+  ok(marker && markerL, "both marker hands present");
+  if (marker && markerL) {
+    ok(markerL.svg.includes("scale(-1 1)") && markerL.svg.includes(marker.svg.trim()), "the left art is the right art mirrored");
+    ok(markerL.tags.includes("left"), "the left variant tags itself");
+  }
+  // Every hand shares the ONE tip anchor (the follow math stays pose-blind).
+  for (const [id, tip] of Object.entries(HAND_TIPS)) {
+    eq(tip, { x: HAND_TIP.x, y: HAND_TIP.y }, `${id} rides HAND_TIP`);
+  }
+  // The style+side selector resolves per-asset ids (never a transform hack).
+  eq(handAssetIdFor("marker"), "hand-marker");
+  eq(handAssetIdFor("marker", "left"), "hand-marker-l");
+  eq(handAssetIdFor("pencil", "left"), "hand-pencil-l");
+  eq(handAssetIdFor("chalk"), "hand-chalk");
+});
+
+await test("W7 pen-up travel: the hand crosses the gap visibly, joint-continuous, bounded, holding the next tool", async () => {
+  const { handAt, buildGeometry, HAND_TRAVEL_LIFT } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const geo = buildGeometry([
+    { id: "a1", paths: [{ id: "p1", d: "M 0 0 L 100 0" }] },
+    { id: "a2", paths: [{ id: "p1", d: "M 200 200 L 300 200" }] },
+  ]);
+  const scene: WhiteboardScene = {
+    id: "s",
+    narration: "two strokes far apart",
+    background: "#ffffff",
+    placements: [
+      { assetId: "a1", placement: { x: 0, y: 0, scale: 1, rotateDeg: 0 } },
+      { assetId: "a2", placement: { x: 0, y: 0, scale: 1, rotateDeg: 0 } },
+    ],
+    animations: [],
+    camera: [],
+  };
+  const events: AnimationEvent[] = [
+    { type: "draw_path", assetId: "a1", pathId: "p1", startMs: 0, durationMs: 1000 },
+    { type: "draw_path", assetId: "a2", pathId: "p1", startMs: 1400, durationMs: 1000 },
+  ];
+  const roles = new Map([["a2", "arrow" as const]]);
+  // THE OLD SHAPE IS GONE: inside the gap the hand is VISIBLE (travel).
+  const gapMid = handAt(events, scene, geo, 1200, roles);
+  ok(gapMid.visible, "the pen no longer teleports — it travels");
+  eq(gapMid.pose, "point", "the travel holds the NEXT stroke's pose (the W3 role maps arrow → point)");
+  // Joint continuity at the START of the gap: exactly stroke A's end point.
+  const joint = handAt(events, scene, geo, 1000, roles);
+  approx(joint.x, 100, 1e-9, "the travel starts at stroke A's end");
+  approx(joint.y, 0, 1e-9);
+  approx(joint.scale, 1, 1e-9, "no lift at the joint");
+  // The travel end converges on stroke B's start; the ACTIVE branch takes
+  // over at gapEnd — one millisecond apart, the positions must agree.
+  const before = handAt(events, scene, geo, 1399, roles);
+  const after = handAt(events, scene, geo, 1400, roles);
+  ok(Math.hypot(before.x - after.x, before.y - after.y) < 2, `the travel lands on stroke B's start (Δ=${Math.hypot(before.x - after.x, before.y - after.y).toFixed(3)})`);
+  // NO TELEPORT: consecutive samples' deltas are bounded by the eased
+  // geometry (≤ 1.5× the per-ms slide + the lift's per-ms rise + slack).
+  const dist = Math.hypot(200 - 100, 200 - 0);
+  const gapMs = 400;
+  let worst = 0;
+  let prev = handAt(events, scene, geo, 1000, roles);
+  for (let t = 1001; t <= 1399; t++) {
+    const cur = handAt(events, scene, geo, t, roles);
+    const d = Math.hypot(cur.x - prev.x, cur.y - prev.y);
+    if (d > worst) worst = d;
+    prev = cur;
+  }
+  const bound = (1.5 * dist) / gapMs + (2 * HAND_TRAVEL_LIFT) / gapMs + 1;
+  ok(worst <= bound, `no inter-stroke jump exceeds the geometry bound (worst ${worst.toFixed(3)} ≤ ${bound.toFixed(3)})`);
+  // The lift bump actually lifts (mid-gap y is ABOVE the straight line).
+  const lineY = 0 + (200 - 0) * 0.5;
+  ok(gapMid.y < lineY, `the pen lifts above the straight-line path (${gapMid.y.toFixed(1)} < ${lineY})`);
+  ok(gapMid.scale > 1, "the lift breathes the scale up");
+  // Determinism: byte-identical double-run.
+  eq(JSON.stringify(handAt(events, scene, geo, 1200, roles)), JSON.stringify(handAt(events, scene, geo, 1200, roles)), "double-run byte-identical");
+});
+
+await test("W7 poses: role metadata selects the grip; text writes; the tail rests", async () => {
+  const { handAt, buildGeometry } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const geo = buildGeometry([
+    { id: "plain", paths: [{ id: "p1", d: "M 0 0 L 10 0" }] },
+    { id: "lbl", paths: [{ id: "p1", d: "M 0 0 L 10 0" }] },
+    { id: "emp", paths: [{ id: "p1", d: "M 0 0 L 10 0" }] },
+  ]);
+  const scene: WhiteboardScene = {
+    id: "s",
+    narration: "poses",
+    background: "#ffffff",
+    placements: [
+      { assetId: "plain", placement: { x: 0, y: 0, scale: 1, rotateDeg: 0 } },
+      { assetId: "lbl", placement: { x: 0, y: 0, scale: 1, rotateDeg: 0 } },
+      { assetId: "emp", placement: { x: 0, y: 0, scale: 1, rotateDeg: 0 } },
+    ],
+    animations: [],
+    camera: [],
+  };
+  const roles = new Map<string, "outline" | "label" | "emphasis" | "arrow" | "fill">([
+    ["lbl", "label"],
+    ["emp", "emphasis"],
+  ]);
+  const mk = (assetId: string, type: "draw_path" | "write_text" = "draw_path"): AnimationEvent[] =>
+    type === "draw_path"
+      ? [{ type: "draw_path", assetId, pathId: "p1", startMs: 0, durationMs: 1000 }]
+      : [{ type: "write_text", assetId, textId: "t1", startMs: 0, durationMs: 1000 }];
+  eq(handAt(mk("plain"), scene, geo, 500, roles).pose, "draw", "role-less strokes draw");
+  eq(handAt(mk("lbl"), scene, geo, 500, roles).pose, "write", "label strokes write");
+  eq(handAt(mk("emp"), scene, geo, 500, roles).pose, "circle", "emphasis strokes circle");
+  // Text writes regardless of role (the pen IS writing).
+  eq(handAt(mk("plain", "write_text"), scene, geo, 500, roles).pose, "write", "text targets write");
+  // The tail (after the last stroke) rests; the entry holds the first pose.
+  const tail = handAt(mk("plain"), scene, geo, 1500, roles);
+  eq(tail.pose, "rest", "the hold rests the hand");
+  ok(tail.visible, "the tail stays visible (the S64 receipt holds)");
+  const entry = handAt(mk("emp"), scene, geo, 200, roles);
+  eq(entry.pose, "circle", "the entry carries the first stroke's pose");
+  // No roles map: the defaults still hold (the tolerant-read law).
+  eq(handAt(mk("lbl"), scene, geo, 500).pose, "draw", "without roles the default grip applies");
+});
+
+await test("W7 board policy extras: hand.side and sfxOn round-trip (the editor's new fields survive)", async () => {
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const lib = { assetIds: new Set(["a1"]), pathIdsByAsset: new Map([["a1", new Set(["p1"])]]), textIdsByAsset: new Map() };
+  const raw = {
+    title: "t", width: 1920, height: 1080, fps: 24,
+    hand: { style: "pencil", scale: 2, side: "left" },
+    sfxOn: true,
+    scenes: [{ id: "s", narration: "n", placements: [], animations: [], camera: [] }],
+  };
+  const r = validateWhiteboardProject(raw, lib);
+  ok(r.project !== null, "the W7 doc parses");
+  if (!r.project) return;
+  eq(r.project.hand, { style: "pencil", scale: 2, side: "left" }, "the hand fields round-trip");
+  eq(r.project.sfxOn, true, "sfxOn round-trips");
+  // Absent = right hand, sfx off (the additive-parse law).
+  const bare = validateWhiteboardProject({ ...raw, hand: { style: "marker", scale: 1 }, sfxOn: false }, lib);
+  ok(bare.project !== null);
+  if (bare.project) {
+    eq(bare.project.hand, { style: "marker", scale: 1 }, "side absent reads absent (right)");
+    eq(bare.project.sfxOn, undefined, "sfxOn false reads off");
+  }
+});
+
+suiteStart("W7 finishing layer — the whiteboard SFX (recipes + the pure cue plan)");
+
+await test("W7 sfx recipes: the four whiteboard kinds synthesize real wavs; the director catalog is untouched", async () => {
+  const { ensureSfx, WB_SFX_KINDS } = await import("../src/lib/tubeforge/sfx");
+  const { SFX_KINDS } = await import("../src/lib/tubeforge/types");
+  eq([...WB_SFX_KINDS], ["pen-stroke", "pen-stop", "page-turn", "pop"], "the whiteboard kind set");
+  for (const k of WB_SFX_KINDS) {
+    ok(!(SFX_KINDS as readonly string[]).includes(k), `${k} stays OUT of the director lane's catalog`);
+  }
+  // One REAL synthesis through ffmpeg (the same path production rides):
+  const p = await ensureSfx("pen-stroke");
+  ok(p !== null, "pen-stroke synthesizes");
+  if (p) {
+    const st = await import("node:fs");
+    ok(st.statSync(p).size > 1000, "the synthesized wav has real bytes");
+  }
+  eq(await ensureSfx("nope"), null, "unknown kinds return null (the recipe law)");
+});
+
+await test("W7 cue plan: pop opens, page-turns mark the wipes, pen-stops need a hearable gap, the cap keeps the accents", async () => {
+  const { planSceneSfxCues, whiteboardSfxCues, WB_SFX_CUES_MAX_PER_SCENE } = await import("../src/lib/tubeforge/whiteboard/sfx-plan");
+  // First scene: the opening pop; strokes cue pen-stroke; the long hold
+  // after the last stroke earns a pen-stop.
+  const first = planSceneSfxCues({ isFirstScene: true, boardClean: true, durationMs: 6000 }, [
+    { type: "draw_path", assetId: "a", pathId: "p", startMs: 400, durationMs: 1000 },
+    { type: "draw_path", assetId: "a", pathId: "p2", startMs: 1530, durationMs: 1000 },
+  ]);
+  eq(first[0], { kind: "pop", atMs: 0, sceneIndex: 0 }, "the opening pop");
+  ok(first.some((c) => c.kind === "pen-stroke" && c.atMs === 400), "stroke 1 touchdown");
+  ok(first.some((c) => c.kind === "pen-stroke" && c.atMs === 1530), "stroke 2 touchdown");
+  // Gap 1300→1530 = 230ms < PEN_STOP_MIN_GAP_MS: NO pen-stop (no flutter);
+  // the final hold 2530→6000 = 3470ms: pen-stop YES.
+  ok(!first.some((c) => c.kind === "pen-stop" && c.atMs === 1300), "a 230ms lift stays silent");
+  ok(first.some((c) => c.kind === "pen-stop" && c.atMs === 2530), "the long hold gets the lift tick");
+  // A later CLEAN scene opens with the page-turn; a CONTINUOUS one does not.
+  const clean = planSceneSfxCues({ isFirstScene: false, boardClean: true, durationMs: 4000 }, []);
+  eq(clean, [{ kind: "page-turn", atMs: 0, sceneIndex: -1 }], "the wipe is a page event");
+  const cont = planSceneSfxCues({ isFirstScene: false, boardClean: false, durationMs: 4000 }, []);
+  eq(cont, [], "a continuous scene carries — no page event");
+  // The cap: 60 strokes → 120 raw cues → capped at 48, and the pop survives.
+  const many = Array.from({ length: 60 }, (_, i) => ({ type: "draw_path" as const, assetId: "a", pathId: "p", startMs: i * 90, durationMs: 80 }));
+  const capped = planSceneSfxCues({ isFirstScene: true, boardClean: true, durationMs: 8000 }, many);
+  eq(capped.length, WB_SFX_CUES_MAX_PER_SCENE, "the amix wall holds");
+  eq(capped[0].kind, "pop", "the accents survive the cap");
+  // Determinism.
+  eq(JSON.stringify(planSceneSfxCues({ isFirstScene: true, boardClean: true, durationMs: 6000 }, many)), JSON.stringify(planSceneSfxCues({ isFirstScene: true, boardClean: true, durationMs: 6000 }, many)), "double-run byte-identical");
+  // The project plan: ABSOLUTE times on the shared clock, per-scene stamps.
+  const proj: WhiteboardProject = {
+    title: "t", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 },
+    scenes: [
+      { id: "s1", narration: "a", durationMs: 4000, background: "#ffffff", placements: [], animations: [], camera: [] },
+      { id: "s2", narration: "b", durationMs: 4000, background: "#ffffff", placements: [], animations: [], camera: [] },
+    ],
+  };
+  const clock = { scenes: [{ frames: 96, deliveredSec: 4, startSec: 0, endSec: 4 }, { frames: 96, deliveredSec: 4, startSec: 4, endSec: 8 }] };
+  const plan = whiteboardSfxCues(proj, clock, [[], [{ type: "draw_path", assetId: "a", pathId: "p", startMs: 500, durationMs: 500 }]]);
+  ok(plan.cues.some((c) => c.kind === "page-turn" && c.atMs === 4000 && c.sceneIndex === 1), "the scene-2 wipe sits at its ABSOLUTE clock time");
+  ok(plan.startMsByScene[1] === 4000, "the scene offsets ride the clock");
+  let threw = false;
+  try { whiteboardSfxCues(proj, { scenes: [clock.scenes[0]] }, [[], []]); } catch { threw = true; }
+  ok(threw, "a clock/project disagreement refuses loudly");
+});
+
+await test("W7 seams: the render consumes the family + the sfx layer; the page shows the pose groups (compile-only pins)", async () => {
+  const fs = await import("node:fs");
+  const renderSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/render.ts", "utf8");
+  ok(renderSrc.includes("handAssetIdFor(project.hand.style, project.hand.side)"), "the tool hand resolves per style+side");
+  ok(renderSrc.includes("assetRoles"), "the pose selector's roles map is built");
+  ok(/frameAt\(project, scene, events, geometry, tMs, carryPlan, assetRoles\)/.test(renderSrc), "the frame plan receives the roles");
+  ok(renderSrc.includes("whiteboardSfxCues"), "the SFX cue plan feeds the render");
+  ok(renderSrc.includes("project.sfxOn"), "the SFX layer reads the doc's own flag");
+  ok(renderSrc.includes("buildSceneSfxFile"), "the per-scene assembler exists");
+  ok(renderSrc.includes('amix=inputs=${sfxFile ? 3 : 2}'), "the bed+VO+SFX three-way mix exists");
+  const pageSrc = fs.readFileSync("src/lib/tubeforge/whiteboard/wb-page.ts", "utf8");
+  ok(pageSrc.includes('data-pose="write"') && pageSrc.includes('data-pose="rest"'), "the page carries all pose groups");
+  ok(pageSrc.includes("p.hand.pose"), "the applier toggles poses per frame");
+  ok(pageSrc.includes("p.hand.scale"), "the applier multiplies the pose's lift scale");
+  const canvasSrc = fs.readFileSync("src/components/tubeforge/whiteboard/wb-canvas.tsx", "utf8");
+  ok(canvasSrc.includes("handAssetIdFor"), "the editor embeds the SAME hand family");
+  const studioSrc = fs.readFileSync("src/components/tubeforge/whiteboard/whiteboard-studio.tsx", "utf8");
+  ok(studioSrc.includes("Board — what this scene inherits"), "the studio surfaces the board policy");
+  ok(studioSrc.includes("Pen SFX"), "the studio surfaces the SFX toggle");
+  ok(studioSrc.includes("handAssetIdFor") === false, "no stray imports in the studio");
+  // The composed page for any scene carries the pose skeleton.
+  const { composeScene } = await import("../src/lib/tubeforge/whiteboard/wb-page");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const proj: WhiteboardProject = { title: "t", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 }, scenes: [] };
+  const scene: WhiteboardScene = { id: "s", narration: "n", durationMs: 4000, background: "#ffffff", placements: [], animations: [], camera: [] };
+  const html = composeScene(scene, proj, loadLibrary().assets).html;
+  for (const pose of ["write", "draw", "point", "circle", "rest"]) {
+    ok(html.includes(`data-pose="${pose}"`), `the ${pose} group is in the page`);
+  }
+});
+
+console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

@@ -15,6 +15,14 @@
 //   boom   — pitch-dropping sine + shaped noise attack (reveals, openers)
 //   riser  — filtered noise crescendo with a dark tonal undertow (tension)
 //   sting  — cinematic braam: dissonant low pair + sub drop (twists, rehooks)
+//
+// W7 — the WHITEBOARD kinds (S120 §3 W7, decision §10.4: OFF by default,
+// event-driven, mixed under the existing bed/VO chain):
+//   pen-stroke — a soft shaped-noise scratch (the pen touching down)
+//   pen-stop   — a darker, shorter tick (the pen lifting)
+//   page-turn  — an airy swish (the board wipe between clean scenes)
+//   pop        — a LOW thump (180→70 Hz — the removed 880 Hz UI blip,
+//                redesigned to the catalog's taste bar; scene-open accent)
 
 import { execFile } from "child_process";
 import fs from "fs";
@@ -67,7 +75,44 @@ const RECIPES: Record<string, string> = {
     "lowpass=f=700,volume=0.9[bow];",
     "[braam][sub][bow]amix=inputs=3:duration=longest:normalize=0",
   ].join(""),
+  // W7 — pen-stroke: a soft scratch, shaped noise, nothing bright. Short
+  // (180ms) so it accents the touchdown without faking continuous foley.
+  "pen-stroke": [
+    "anoisesrc=color=pink:r=48000:amplitude=0.5:duration=0.18,",
+    "highpass=f=150,lowpass=f=900,",
+    "afade=t=in:d=0.02,afade=t=out:st=0.06:d=0.12,",
+    "volume=1.6",
+  ].join(""),
+  // W7 — pen-stop: the lift tick — darker and shorter than the stroke.
+  "pen-stop": [
+    "anoisesrc=color=brown:r=48000:amplitude=0.4:duration=0.09,",
+    "lowpass=f=500,",
+    "afade=t=in:d=0.01,afade=t=out:st=0.03:d=0.06,",
+    "volume=1.4",
+  ].join(""),
+  // W7 — page-turn: the board wipe's airy swish (half a second, low-mid).
+  "page-turn": [
+    "anoisesrc=color=pink:r=48000:amplitude=0.7:duration=0.5,",
+    "lowpass=f=1800,",
+    "afade=t=in:d=0.12,afade=t=out:st=0.2:d=0.3,",
+    "volume=1.5",
+  ].join(""),
+  // W7 — pop: the REDESIGNED low thump (the removed 880 Hz blip violated
+  // the taste bar; this one is a 180→70 Hz drop with a dark noise tap).
+  pop: [
+    "aevalsrc='0.6*sin(2*PI*(180-110*min(t/0.12\\,1))*t)*exp(-22*t)':d=0.16,",
+    "volume=1.2[body];",
+    "anoisesrc=color=brown:r=48000:amplitude=0.3:duration=0.03,",
+    "lowpass=f=600,volume=0.8[tap];",
+    "[body][tap]amix=inputs=2:duration=longest:normalize=0",
+  ].join(""),
 };
+
+/** W7 — the whiteboard SFX kinds (the recipe table above; NOT in the
+ *  director lane's SFX_KINDS — the whiteboard engine consumes them
+ *  directly and the prompt validation's vocabulary is unchanged). */
+export const WB_SFX_KINDS = ["pen-stroke", "pen-stop", "page-turn", "pop"] as const;
+export type WbSfxKind = (typeof WB_SFX_KINDS)[number];
 
 /**
  * Return the path to a synthesized SFX wav, rendering it on first use.

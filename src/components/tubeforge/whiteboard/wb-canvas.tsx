@@ -28,7 +28,7 @@
 // is the studio's form work — the canvas stays the frame-plan mirror.
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { loadLibrary, type WhiteboardAsset } from "@/lib/tubeforge/whiteboard/assets";
+import { handAssetIdFor, loadLibrary, type AssetRole, type WhiteboardAsset } from "@/lib/tubeforge/whiteboard/assets";
 import { composeScene, framePayload, APPLY_FRAME_FN } from "@/lib/tubeforge/whiteboard/wb-page";
 import {
   buildGeometry,
@@ -96,6 +96,11 @@ function sceneRuntime(
   const assetTags = new Map<string, string[]>(
     [...lib.assets.values()].map((a) => [a.id, a.tags])
   );
+  // W7 — the pose selector's vocabulary (the same build the renderer makes).
+  const roles = new Map<string, AssetRole>();
+  for (const a of lib.assets.values()) {
+    if (a.role) roles.set(a.id, a.role);
+  }
   // W6 — the carry plan resolved EXACTLY like the render seam does: the
   // previous scene's ink at its own clock (VO-measured when the editor
   // knows it), through the same resolveCarriedInk — one source, no drift
@@ -109,7 +114,7 @@ function sceneRuntime(
           scene.board
         )
       : null;
-  return { lib, geometry, scene, durationMs, events: beatSceneEvents(scene, durationMs, geometry, assetTags), carry };
+  return { lib, geometry, scene, durationMs, events: beatSceneEvents(scene, durationMs, geometry, assetTags), carry, roles };
 }
 
 /** Placement bbox corners in SCENE space: R(rot)·s·(u,v) + (x,y) over the
@@ -218,16 +223,29 @@ export default function WbCanvas({
       const win = iframe.contentWindow;
       if (!doc || !win) return;
       // The same three setup passes render.ts runs inside chromium:
-      // (1) defs root + hand asset + scale, (2) the plan-key → element-id
-      // maps, (3) per-path dasharrays from OUR geometry.
+      // (1) defs root + the hand pose groups + scale, (2) the plan-key →
+      // element-id maps, (3) per-path dasharrays from OUR geometry.
       const board = doc.getElementById("board");
-      const handAssetEl = doc.getElementById("hand-asset");
       const hand = doc.getElementById("hand");
-      if (!board || !handAssetEl || !hand) return;
+      if (!board || !hand) return;
       const defs = doc.createElementNS("http://www.w3.org/2000/svg", "defs");
       defs.id = "defs-root";
       board.appendChild(defs);
-      handAssetEl.innerHTML = rt.lib.assets.get("hand-marker")?.svg ?? "";
+      // W7 — the pose groups (the project's style + side picks the tool).
+      const toolHand = rt.lib.assets.get(handAssetIdFor(project.hand.style, project.hand.side));
+      const pointHand = rt.lib.assets.get("hand-point");
+      const restHand = rt.lib.assets.get("hand-rest");
+      const hands: Record<string, string> = {
+        write: toolHand?.svg ?? "",
+        draw: toolHand?.svg ?? "",
+        point: pointHand?.svg ?? "",
+        circle: pointHand?.svg ?? "",
+        rest: restHand?.svg ?? "",
+      };
+      for (const [pose, svg] of Object.entries(hands)) {
+        const el = hand.querySelector(`[data-pose="${pose}"]`);
+        if (el) el.innerHTML = svg;
+      }
       hand.setAttribute("data-scale", String(project.hand.scale));
       const w = win as unknown as {
         __wbDraw?: Map<string, string>;
@@ -266,7 +284,7 @@ export default function WbCanvas({
       const rt2 = runtimeRef.current;
       const win = iframe.contentWindow;
       if (!rt2 || !win) return;
-      const frame = frameAt(project, rt2.scene, rt2.events, rt2.geometry, tMs, rt2.carry);
+      const frame = frameAt(project, rt2.scene, rt2.events, rt2.geometry, tMs, rt2.carry, rt2.roles);
       const payload = framePayload(frame, project.width, project.height);
       (win as unknown as { __wbApply?: (p: string) => boolean }).__wbApply?.(payload);
     };

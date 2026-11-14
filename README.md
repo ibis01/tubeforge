@@ -9,8 +9,8 @@ standard + the content-policy visual scan under a restricted policy), and
 publishes to a connected YouTube channel — all inside a multi-user web
 application with metered AI spending and Stripe billing underneath.
 
-**Status:** S-series stage S120 + the W-track at W5 with W4 COMPLETE (2026-11-14); CI is 8/8
-green on `main` with the 581-test unit battery. The production loop is
+**Status:** S-series stage S120 + the W-track at W7 with W6+W7 LANDED (2026-11-14) — the whiteboard finishing track W1–W7 is COMPLETE; CI is 8/8
+green on `main` with the 597-test unit battery. The production loop is
 feature-complete, and the production-readiness arc (S99–S108) closed every
 reliability gate with CI evidence — clean-clone bootstrap, queue leases +
 fencing, atomic storage admission, shared rate limiting + trusted-proxy IP law,
@@ -31,9 +31,13 @@ them), W3 (the stroke-authored asset validator; 26 validated assets), W4
 Caveat glyph outlines riding the pen lane with a pixel-verified page seam, and
 the captions lane's alignment driving per-word anchors), Stage S (the shared
 animation substrate
-the coming engines consume), and W5 (the content-driven camera director);
-W6 (continuous
-canvas) and W7 (the finishing layer) remain. The entry queue remains staging provisioning → launch drills →
+the coming engines consume), W5 (the content-driven camera director), W6 (the
+continuous canvas — scenes carry the board with keep/fade/erase/pan-away
+exits, the carried ink riding the one applier, byte-identical clean mode), and
+W7 (the finishing layer — the hand family with per-asset left mirrors and
+role-driven poses, the pen-up travel that ended the vanish-reappear teleport,
+and the optional whiteboard SFX mixed under the −16 LUFS contract, off by
+default). The blind re-scores and the operator-side staging drills remain. The entry queue remains staging provisioning → launch drills →
 release candidate (see
 [`docs/production-readiness.md`](docs/production-readiness.md)). On top of the
 studio, the **Whiteboard Engine** (the native, $0-per-render creative mode —

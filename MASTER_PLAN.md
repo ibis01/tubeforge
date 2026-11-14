@@ -12,11 +12,13 @@
 > measured restore drills); scene-level editing & repair (S111–S118) is
 > complete; and the 2D-animation programme
 > ([`docs/design/s120-2d-animation-roadmap.md`](docs/design/s120-2d-animation-roadmap.md))
-> is in progress — W1–W5 are landed WITH W4 complete (the spoken-window
-> schedule, the glyph-outline text mode, and the captions-lane voice anchors;
-> plus the Stage-S animation substrate and the camera director), with W6 and
-> W7 remaining. CI runs eight gates on every push
-> to `main` and is green (581-test unit battery).
+> is in progress — W1–W7 are LANDED (the spoken-window schedule, the
+> glyph-outline text mode, the captions-lane voice anchors, the Stage-S
+> animation substrate, the camera director, the continuous canvas, and the
+> finishing layer: the hand family/travel/poses + the optional whiteboard
+> SFX), closing the whiteboard finishing track; the blind re-scores and the
+> G1 motion-graphics engine are the roadmap's next gates. CI runs eight gates
+> on every push to `main` and is green (597-test unit battery).
 
 **Original status (2026-11-01):** Stage 1 audit complete. Stage 1
 implementation in progress.

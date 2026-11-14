@@ -17,8 +17,12 @@ import path from "node:path";
 import { promisify } from "util";
 
 import type { WhiteboardAsset } from "./assets";
-import { loadLibrary } from "./assets";
+import { handAssetIdFor, loadLibrary, type AssetRole } from "./assets";
 import { LUFS_PASS_WINDOW, measureLoudness, normalizationFilter } from "../audiomix";
+import { ensureSfx } from "../sfx";
+// W7 — the cue planner (PURE): the SFX event mapping rides the SAME
+// frame-quantized clock the tracks and the render loop read.
+import { whiteboardSfxCues, type SfxCue } from "./sfx-plan";
 // S67 — the compose/applier seam lives in wb-page.ts (PURE), shared with the
 // editor's playback canvas — the design §5 one-source law in both directions.
 import {
@@ -50,9 +54,20 @@ import { beatSceneEvents } from "./beat-plan";
 import { framePlanClock, whiteboardTracks } from "./tracks";
 import { planFromTracks, type CompositionPlan } from "../composition-plan";
 import type { TimelineTrack } from "../timeline";
-import type { BoardMode, WhiteboardProject } from "./storyboard";
+import type { AnimationEvent, BoardMode, WhiteboardProject } from "./storyboard";
 
 const execFileP = promisify(execFile);
+
+/** W7 — the per-kind mix gains for the whiteboard SFX layer. The recipes
+ *  already decay fast and dark; these keep the accents UNDER the voice
+ *  (the −16 LUFS window the unchanged QC gate enforces is the judge —
+ *  the loudness proof rides the real battery). */
+const WB_SFX_MIX_GAIN: Record<SfxCue["kind"], number> = {
+  "pen-stroke": 0.35,
+  "pen-stop": 0.3,
+  "page-turn": 0.5,
+  pop: 0.5,
+};
 
 /**
  * S76 — the VO-slot loudness contract, enforced at the engine boundary.
@@ -98,6 +113,62 @@ export async function normalizeVoSlot(
     { maxBuffer: 32 * 1024 * 1024 },
   );
   return outPath;
+}
+
+/** W7 — render one scene's SFX layer to a 48 kHz stereo PCM16 wav of the
+ *  scene's exact delivered duration (concat-homogeneous with its siblings).
+ *  Cue times are ABSOLUTE composition-clock ms; `sceneOffsetMs` re-bases
+ *  them to the scene's own clock. Every cue rides adelay + a per-kind mix
+ *  gain, amixed at normalize=0 (no hidden divider) and padded to the
+ *  scene's exact length. Deterministic: same cues → same file. */
+async function buildSceneSfxFile(
+  cues: SfxCue[],
+  sceneOffsetMs: number,
+  durSec: number,
+  outPath: string
+): Promise<void> {
+  const silent = async (): Promise<void> => {
+    await runFfmpeg([
+      "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+      "-t", durSec.toFixed(3), "-c:a", "pcm_s16le", outPath,
+    ]);
+  };
+  const kindPaths = new Map<string, string>();
+  for (const c of cues) {
+    if (kindPaths.has(c.kind)) continue;
+    const p = await ensureSfx(c.kind);
+    if (!p) continue; // unknown kind — skip silently (the recipe law)
+    kindPaths.set(c.kind, p);
+  }
+  const inputs: string[] = [];
+  const chains: string[] = [];
+  const mixLabels: string[] = [];
+  let idx = 0;
+  for (const c of cues) {
+    const src = kindPaths.get(c.kind);
+    if (!src) continue;
+    inputs.push("-i", src);
+    const relMs = Math.max(0, Math.round(c.atMs - sceneOffsetMs));
+    chains.push(`[${idx}:a]adelay=${relMs}:all=1,volume=${WB_SFX_MIX_GAIN[c.kind]}[c${idx}]`);
+    mixLabels.push(`[c${idx}]`);
+    idx++;
+  }
+  if (idx === 0) {
+    await silent();
+    return;
+  }
+  const filter =
+    chains.join(";") + ";" +
+    mixLabels.join("") +
+    `amix=inputs=${idx}:normalize=0:duration=longest,apad=whole_dur=${durSec.toFixed(3)}[a]`;
+  await runFfmpeg([
+    ...inputs,
+    "-filter_complex", filter,
+    "-map", "[a]",
+    "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
+    "-t", durSec.toFixed(3),
+    outPath,
+  ]);
 }
 
 /**
@@ -341,13 +412,28 @@ export async function renderWhiteboard(
   const geometry = buildGeometry(
     [...lib.extracted.entries()].map(([id, ex]) => ({ id, paths: ex.paths }))
   );
-  const handAsset = lib.assets.get("hand-marker");
-  if (!handAsset) throw new Error("hand-marker asset missing from the library");
+  // W7 — the pose selector's vocabulary: the W3 role metadata per asset
+  // (the hand's pose rides the ACTIVE stroke's asset role).
+  const assetRoles = new Map<string, AssetRole>();
+  for (const a of lib.assets.values()) {
+    if (a.role) assetRoles.set(a.id, a.role);
+  }
+  // W7 — the hand family: the project's style + side picks the tool hand
+  // (per-asset left mirrors); the pose sub-assets ride alongside.
+  const toolHand = lib.assets.get(handAssetIdFor(project.hand.style, project.hand.side));
+  const pointHand = lib.assets.get("hand-point");
+  const restHand = lib.assets.get("hand-rest");
+  if (!toolHand || !pointHand || !restHand) {
+    throw new Error("the hand family is missing from the library");
+  }
 
   fs.mkdirSync(opts.outDir, { recursive: true });
   const browser = await chromium.launch({ headless: true, args: [...WB_CHROMIUM_LAUNCH_ARGS] });
 
   const sceneFiles: SceneRenderResult[] = [];
+  // W7 — the per-scene schedules (the SFX cue planner reads them after the
+  // loop; the frame plan itself is untouched — SFX never affects frames).
+  const eventsByScene: AnimationEvent[][] = [];
   try {
     for (let si = 0; si < project.scenes.length; si++) {
       const scene = project.scenes[si];
@@ -368,6 +454,7 @@ export async function renderWhiteboard(
       // window (the strokes land on the words that introduce them);
       // anchorless scenes keep the estimator byte-for-byte.
       const events = beatSceneEvents(scene, durationMs, geometry, assetTags, anchorsBySceneId.get(scene.id));
+      eventsByScene.push(events);
       const frames = clock.scenes[si].frames;
       // W6 — the carry plan: a continuous scene inherits the PREVIOUS
       // scene's ink, resolved as DATA at the previous scene's own clock
@@ -401,21 +488,32 @@ export async function renderWhiteboard(
         opts.onProgress?.(`scene ${si + 1}/${project.scenes.length} ("${scene.id}"): composing`, si / project.scenes.length);
       const composed = composeScene(scene, project, lib.assets, carryPlan);
       await page.setContent(composed.html, { waitUntil: "load" });
-      // Setup pass: defs root + the hand asset + dasharrays from OUR geometry
-      // (the pure module owns the truth about every stroke length).
+      // Setup pass: defs root + the hand pose groups + dasharrays from OUR
+      // geometry (the pure module owns the truth about every stroke length).
       await page.evaluate(
-        ({ handSvg, handScale }) => {
+        ({ hands, handScale }) => {
           const board = document.getElementById("board");
-          const handAssetEl = document.getElementById("hand-asset");
           const hand = document.getElementById("hand");
-          if (!board || !handAssetEl || !hand) return;
+          if (!board || !hand) return;
           const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
           defs.id = "defs-root";
           board.appendChild(defs);
-          handAssetEl.innerHTML = handSvg;
+          for (const [pose, svg] of Object.entries(hands)) {
+            const el = hand.querySelector(`[data-pose="${pose}"]`);
+            if (el) el.innerHTML = svg;
+          }
           hand.setAttribute("data-scale", String(handScale));
         },
-        { handSvg: handAsset.svg, handScale: project.hand.scale }
+        {
+          hands: {
+            write: toolHand.svg,
+            draw: toolHand.svg,
+            point: pointHand.svg,
+            circle: pointHand.svg,
+            rest: restHand.svg,
+          },
+          handScale: project.hand.scale,
+        }
       );
       // Register the frame-plan-key → element-id maps the applier resolves
       // through (fresh per scene — setContent resets the JS context).
@@ -459,7 +557,7 @@ export async function renderWhiteboard(
       fs.mkdirSync(framesDir, { recursive: true });
       for (let f = 0; f < frames; f++) {
         const tMs = (f / project.fps) * 1000;
-        await apply(frameAt(project, scene, events, geometry, tMs, carryPlan));
+        await apply(frameAt(project, scene, events, geometry, tMs, carryPlan, assetRoles));
         await page.screenshot({
           path: path.join(framesDir, `f${String(f).padStart(5, "0")}.jpg`),
           type: "jpeg",
@@ -532,6 +630,40 @@ export async function renderWhiteboard(
     }
     const listFile = path.join(opts.outDir, "concat.txt");
     fs.writeFileSync(listFile, sceneFiles.map((s) => `file '${path.resolve(s.file)}'`).join("\n") + "\n");
+
+    // W7 — the SFX layer (project.sfxOn, decision §10.4): the cue plan is
+    // PURE over the SAME clock the picture used; the layer assembles per
+    // scene (the amix graph's wall), concats, and rides the final mix
+    // under the unchanged contract. Audio-only — frames never depend on it.
+    let sfxFile: string | null = null;
+    if (project.sfxOn) {
+      const { cues, startMsByScene } = whiteboardSfxCues(project, clock, eventsByScene);
+      const sfxDir = path.join(opts.outDir, "sfx");
+      fs.mkdirSync(sfxDir, { recursive: true });
+      const parts: string[] = [];
+      for (let i = 0; i < project.scenes.length; i++) {
+        const part = path.join(sfxDir, `sfx-${i + 1}.wav`);
+        await buildSceneSfxFile(
+          cues.filter((c) => c.sceneIndex === i),
+          startMsByScene[i],
+          clock.scenes[i].deliveredSec,
+          part
+        );
+        parts.push(part);
+      }
+      sfxFile = path.join(opts.outDir, "sfx.wav");
+      await runFfmpeg([
+        ...parts.flatMap((p) => ["-i", p]),
+        "-filter_complex", `concat=n=${parts.length}:v=0:a=1[a]`,
+        "-map", "[a]", "-c:a", "pcm_s16le",
+        sfxFile,
+      ]);
+    }
+    // The SFX input joins LAST (music stays index 1 — the bed chain's
+    // labels below are built off the input order, so the SFX label moves).
+    const sfxArgs = sfxFile ? ["-i", sfxFile] : [];
+    const sfxLabel = opts.musicPath ? "[2:a]" : "[1:a]";
+
     if (opts.musicPath) {
       // Bed gain: with narration the bed ducks to 0.16 UNDER THE VOICE; a
       // SOLO bed (no VO this run — the gateway outage) carries the program
@@ -553,10 +685,16 @@ export async function renderWhiteboard(
         "-y",
         "-f", "concat", "-safe", "0", "-i", listFile,
         "-stream_loop", "-1", "-t", totalSec.toFixed(3), "-i", opts.musicPath,
+        ...sfxArgs,
         "-filter_complex",
           anyVoAudio
-            ? "[0:v]format=yuv420p[v];" + bedChain + "[bed];[0:a][bed]amix=inputs=2:duration=first:normalize=0[a]"
-            : "[0:v]format=yuv420p[v];" + bedChain + "[a]",
+            ? // W7 — the SFX layer amixes in under the same normalize=0 law.
+              "[0:v]format=yuv420p[v];" + bedChain + "[bed];[0:a][bed]" +
+                (sfxFile ? sfxLabel : "") +
+                `amix=inputs=${sfxFile ? 3 : 2}:duration=first:normalize=0[a]`
+            : sfxFile
+              ? "[0:v]format=yuv420p[v];" + bedChain + "[bed];[bed]" + sfxLabel + "amix=inputs=2:duration=first:normalize=0[a]"
+              : "[0:v]format=yuv420p[v];" + bedChain + "[a]",
         "-map", "[v]", "-map", "[a]",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
         "-c:a", "aac", "-b:a", "160k",
@@ -564,6 +702,23 @@ export async function renderWhiteboard(
         // frame at the assembly boundary — 1623 planned, 1622 delivered).
         // Every stream is already bounded: the bed by -t above, the mix by
         // amix duration=first, the video by the concat's own length.
+        finalFile,
+      ]);
+    } else if (sfxFile) {
+      // W7 — no bed, SFX on: with VO the layer amixes under the voice;
+      // silent drafts map the layer directly (its levels are already tuned).
+      await runFfmpeg([
+        "-y",
+        "-f", "concat", "-safe", "0", "-i", listFile,
+        ...sfxArgs,
+        "-filter_complex",
+          anyVoAudio
+            ? "[0:v]format=yuv420p[v];[0:a]" + sfxLabel + "amix=inputs=2:duration=first:normalize=0[a]"
+            : "[0:v]format=yuv420p[v]",
+        "-map", "[v]",
+        ...(!anyVoAudio ? ["-map", sfxLabel] : ["-map", "[a]"]),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+        "-c:a", "aac", "-b:a", "160k",
         finalFile,
       ]);
     } else {

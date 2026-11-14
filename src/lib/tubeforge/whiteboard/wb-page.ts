@@ -92,7 +92,7 @@ export function composeScene(
     <g id="camera"><rect x="${-project.width}" y="${-project.height}" width="${project.width * 3}" height="${project.height * 3}" fill="${bg}"/>
     <rect x="${-project.width}" y="${-project.height}" width="${project.width * 3}" height="${project.height * 3}" fill="url(#paper-dots)"/>
 ${body}
-    <g id="hand" style="display:none"><g id="hand-inner" transform="translate(${-HAND_TIP.x} ${-HAND_TIP.y})"><g id="hand-asset"></g></g></g>
+    <g id="hand" style="display:none"><g id="hand-inner" transform="translate(${-HAND_TIP.x} ${-HAND_TIP.y})"><g data-pose="write" id="hp-write"></g><g data-pose="draw" id="hp-draw"></g><g data-pose="point" id="hp-point"></g><g data-pose="circle" id="hp-circle"></g><g data-pose="rest" id="hp-rest"></g></g></g>
     </g>
   </svg></body></html>`;
   return { html, pathEls, textEls };
@@ -206,15 +206,24 @@ export const APPLY_FRAME_FN = `(payloadJson) => {
       }
     }
   }
+  // W7 — the pose groups: write/draw show the style hand (the setup embeds
+  // the project's chosen tool hand — marker/pencil/chalk, left/right — in
+  // BOTH groups); point/circle the pointing sub-asset; rest the open hand.
+  // The tips share HAND_TIP, so the inner translate stays constant across
+  // poses; the pose's per-frame scale multiplies the project's hand scale.
   const hand = document.getElementById("hand");
   if (!p.hand.visible) {
     hand.style.display = "none";
   } else {
     hand.style.display = "";
     const wob = 5 * Math.sin(p.tMs / 210.0);
-    const s = hand.dataset.scale || "1";
+    const s = (Number(hand.dataset.scale || "1")) * (p.hand.scale || 1);
     hand.setAttribute("transform",
       "translate(" + p.hand.x + " " + p.hand.y + ") rotate(" + (-32 + wob) + ") scale(" + s + ")");
+    const poses = hand.querySelectorAll("[data-pose]");
+    for (const g of poses) {
+      g.style.display = g.getAttribute("data-pose") === p.hand.pose ? "" : "none";
+    }
   }
   return true;
 }`;

@@ -161,6 +161,13 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
     [sceneIndex]
   );
 
+  // W7 — whole-doc mutations (the hand + SFX controls): same immutable,
+  // all-mark-dirty discipline as mutateScene, at the project level.
+  const mutateProject = useCallback((fn: (p: WhiteboardProject) => WhiteboardProject) => {
+    setBuffer((p) => (p ? fn(p) : p));
+    setDirty(true);
+  }, []);
+
   const addPlacement = (assetId: string) => {
     if (!project || !scene) return;
     if (scene.placements.some((pl) => pl.assetId === assetId)) {
@@ -515,6 +522,11 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
   const sceneCount = project.scenes.length;
   const placedAssets = scene.placements;
   const selEntry = selAsset ? libraryById.get(selAsset) : null;
+  // W6/W7 — the board panel's derived view: the policy ONLY when it is a
+  // continuous one (the narrows keep the JSX free of non-null assertions),
+  // and the previous scene's placements (what a carry would inherit).
+  const sceneBoard = scene.board?.mode === "continuous" ? scene.board : null;
+  const prevScenePlacements = sceneIndex > 0 ? project.scenes[sceneIndex - 1].placements : [];
 
   return (
     <div className="space-y-3">
@@ -887,6 +899,151 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
             <button onClick={addCameraKey} disabled={scene.camera.length >= (data?.budgets.cameraKeysPerScene ?? 32)} className={`${btnFaint} mt-1.5`}>
               + camera key
             </button>
+          </div>
+
+          {/* W6 — the board policy: carry the previous scene's ink instead of
+              the hard wipe. Scene 1 has nothing to carry (the validator
+              rejects it there, so the control disables itself). */}
+          <div>
+            <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-white/40">
+              Board — what this scene inherits from scene {sceneIndex}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={scene.board?.mode ?? "clean"}
+                disabled={sceneIndex === 0}
+                onChange={(e) => {
+                  const mode = e.target.value as "clean" | "continuous";
+                  mutateScene((s) => ({
+                    ...s,
+                    board: mode === "clean" ? undefined : { ...(s.board ?? {}), mode },
+                  }));
+                }}
+                className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs"
+              >
+                <option value="clean">Hard wipe (clean board)</option>
+                <option value="continuous">Carry the board (continuous)</option>
+              </select>
+              {sceneBoard && (
+                <>
+                  <select
+                    value={sceneBoard.exit ?? "keep"}
+                    onChange={(e) =>
+                      mutateScene((s) => ({
+                        ...s,
+                        board: {
+                          mode: "continuous",
+                          ...(s.board?.carryPlacements ? { carryPlacements: s.board.carryPlacements } : {}),
+                          ...(s.board?.transitionMs ? { transitionMs: s.board.transitionMs } : {}),
+                          exit: e.target.value as "keep" | "fade" | "erase" | "pan-away",
+                        },
+                      }))
+                    }
+                    className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs"
+                  >
+                    <option value="keep">carried ink: stays</option>
+                    <option value="fade">fades out</option>
+                    <option value="erase">erases (un-draws)</option>
+                    <option value="pan-away">pans away</option>
+                  </select>
+                  {sceneBoard.exit !== undefined && sceneBoard.exit !== "keep" && (
+                    <label className="flex items-center gap-1 text-xs text-white/50">
+                      ms
+                      <input
+                        type="number"
+                        min={100}
+                        max={5000}
+                        step={100}
+                        value={sceneBoard.transitionMs ?? 600}
+                        onChange={(e) =>
+                          mutateScene((s) => ({
+                            ...s,
+                            board: {
+                              mode: "continuous",
+                              ...(s.board?.carryPlacements ? { carryPlacements: s.board.carryPlacements } : {}),
+                              ...(s.board?.exit ? { exit: s.board.exit } : {}),
+                              transitionMs: Math.min(5000, Math.max(100, Number(e.target.value) || 600)),
+                            },
+                          }))
+                        }
+                        className={`${inputCls} w-20`}
+                      />
+                    </label>
+                  )}
+                </>
+              )}
+            </div>
+            {scene.board?.mode === "continuous" && sceneIndex > 0 && (
+              <p className="mt-1.5 text-[11px] text-white/40">
+                Carrying: {prevScenePlacements.length === 0 ? "nothing (the previous scene is empty)" : "all placements"}
+                {prevScenePlacements.length > 0 && " — an asset carried here cannot be placed or animated in this scene"}
+              </p>
+            )}
+            {sceneIndex === 0 && (
+              <p className="mt-1.5 text-[11px] text-white/40">The first scene always starts on a clean board.</p>
+            )}
+          </div>
+
+          {/* W7 — hand + sound: the tool hand, its side, and the optional
+              whiteboard SFX (off by default; audio-only). */}
+          <div>
+            <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-white/40">
+              Hand &amp; sound — the drawing hand and the pen foley
+            </p>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <select
+                value={project.hand.style}
+                onChange={(e) =>
+                  mutateProject((p) => ({ ...p, hand: { ...p.hand, style: e.target.value as "marker" | "pencil" | "chalk" } }))
+                }
+                className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs"
+                aria-label="Hand style"
+              >
+                <option value="marker">Marker</option>
+                <option value="pencil">Pencil</option>
+                <option value="chalk">Chalk</option>
+              </select>
+              <select
+                value={project.hand.side ?? "right"}
+                onChange={(e) =>
+                  mutateProject((p) => ({
+                    ...p,
+                    hand: { ...p.hand, ...(e.target.value === "left" ? { side: "left" as const } : { side: undefined }) },
+                  }))
+                }
+                className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs"
+                aria-label="Hand side"
+              >
+                <option value="right">Right hand</option>
+                <option value="left">Left hand</option>
+              </select>
+              <label className="flex items-center gap-1 text-white/50">
+                scale
+                <input
+                  type="number"
+                  min={0.2}
+                  max={4}
+                  step={0.1}
+                  value={project.hand.scale}
+                  onChange={(e) =>
+                    mutateProject((p) => ({
+                      ...p,
+                      hand: { ...p.hand, scale: Math.min(4, Math.max(0.2, Number(e.target.value) || 1)) },
+                    }))
+                  }
+                  className={`${inputCls} w-16`}
+                />
+              </label>
+              <label className="flex cursor-pointer items-center gap-1.5 text-white/60">
+                <input
+                  type="checkbox"
+                  checked={project.sfxOn === true}
+                  onChange={(e) => mutateProject((p) => ({ ...p, ...(e.target.checked ? { sfxOn: true } : { sfxOn: undefined }) }))}
+                  className="accent-white"
+                />
+                Pen SFX (strokes, page turns — off by default)
+              </label>
+            </div>
           </div>
 
           {/* save bar */}

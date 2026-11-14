@@ -26,6 +26,9 @@ import {
   type WhiteboardProject,
   type WhiteboardScene,
 } from "./storyboard";
+// Type-only: erased at runtime, so the timing ← assets cycle cannot exist
+// (assets.ts imports this module's text registries at init).
+import type { AssetRole, HandPose } from "./assets";
 
 /** The house narration pace (words/sec) — the director lane's constant. */
 export const WORDS_PER_SEC = 2.6;
@@ -211,6 +214,12 @@ export interface FrameHandState {
   y: number;
   /** Pen rotation (radians) — path tangent + placement rotation. */
   angle: number;
+  /** W7 — the pose: which hand sub-asset the page shows (write/draw ride
+   *  the style hand; point/circle ride hand-point; rest rides hand-rest). */
+  pose: HandPose;
+  /** W7 — per-frame scale multiplier (the pen-lift breathe; 1 = none).
+   *  The applier multiplies it with the project's hand.scale. */
+  scale: number;
 }
 
 export interface FrameCameraState {
@@ -454,66 +463,61 @@ export function placementAt(
   return pl;
 }
 
-/** The pen state at time t: follow the ACTIVE stroke; rest (wobbling)
- *  during the lead-in before the first stroke and the hold after the last.
- *  The S64 freeze receipts: a hidden pen leaves those stretches
- *  pixel-identical and the QC frozen-frames lens fires. Inter-stroke gaps
- *  stay hidden — the pen-lift mask for travel teleports. */
+/** The pen state at time t: follow the ACTIVE stroke; glide in before the
+ *  first stroke; TRAVEL between strokes (W7 — the hand follows the path
+ *  between a stroke's end and the next stroke's start instead of vanish-
+ *  reappear: an eased lerp with a pen-lift bump, bounded by the two
+ *  endpoints by construction); rest (wobbling) after the last. The S64
+ *  freeze receipts: a hidden pen leaves stretches pixel-identical and the
+ *  QC frozen-frames lens fires.
+ *
+ *  W7 poses: selected by the W3 role metadata of the target stroke
+ *  (label → write, arrow → point, emphasis → circle, else draw; text
+ *  targets write) — `roles` maps assetId → AssetRole (the library build).
+ *  Determinism: same events + roles, byte-identical state. */
 export function handAt(
   events: AnimationEvent[],
   scene: WhiteboardScene,
   geometry: Map<string, AssetGeometry>,
-  tMs: number
+  tMs: number,
+  roles?: Map<string, AssetRole>
 ): FrameHandState {
-  const hidden: FrameHandState = { visible: false, x: 0, y: 0, angle: 0 };
+  const hidden: FrameHandState = { visible: false, x: 0, y: 0, angle: 0, pose: "rest", scale: 1 };
   type PenEvent = Extract<AnimationEvent, { type: "draw_path" | "write_text" }>;
   const pen: PenEvent[] = [];
   for (const e of events) {
     if (e.type === "draw_path" || e.type === "write_text") pen.push(e);
   }
   if (pen.length === 0) return hidden;
+  // Chronological order for the gap scan (stable: startMs, then duration).
+  const ordered = [...pen].sort((a, b) => a.startMs - b.startMs || a.durationMs - b.durationMs);
 
-  // The ACTIVE stroke: the most recently started one with progress in [0,1).
-  let active: PenEvent | null = null;
-  for (const e of pen) {
-    const p = (tMs - e.startMs) / e.durationMs;
-    if (p >= 0 && p < 1 && (!active || e.startMs >= active.startMs)) active = e;
-  }
+  const poseOf = (e: PenEvent): HandPose => {
+    if (e.type === "write_text") return "write";
+    const role = roles?.get(e.assetId);
+    if (role === "label") return "write";
+    if (role === "arrow") return "point";
+    if (role === "emphasis") return "circle";
+    return "draw"; // outline, fill, and role-less assets
+  };
 
-  const first = pen.reduce((a, b) => (a.startMs <= b.startMs ? a : b));
-  const last = pen.reduce((a, b) => (a.startMs + a.durationMs >= b.startMs + b.durationMs ? a : b));
-
-  let target: PenEvent;
-  let progress: number;
-  if (active) {
-    target = active;
-    progress = (tMs - active.startMs) / active.durationMs;
-  } else if (tMs <= first.startMs) {
-    target = first;
-    progress = 0;
-  } else if (tMs >= last.startMs + last.durationMs) {
-    target = last;
-    progress = 1;
-  } else {
-    return hidden;
-  }
-
-  const placement = scene.placements.find((pl) => pl.assetId === target.assetId)?.placement;
-  const base = placement ? placementAt(scene, target.assetId, placement, tMs) : { x: 0, y: 0, scale: 1, rotateDeg: 0 };
-
-  const positionOf = (p: number): FrameHandState => {
-    if (target.type === "write_text") {
+  // The pen-tip state on ONE stroke at progress p — the SAME evaluation the
+  // active branch and the travel endpoints ride (one follow math).
+  const strokePoint = (e: PenEvent, p: number): FrameHandState | null => {
+    const placement = scene.placements.find((pl) => pl.assetId === e.assetId)?.placement;
+    const base = placement ? placementAt(scene, e.assetId, placement, tMs) : { x: 0, y: 0, scale: 1, rotateDeg: 0 };
+    if (e.type === "write_text") {
       // The pen rides the text baseline: measured bbox is a renderer concern;
       // the plan approximates with the character-count width model.
-      const chars = TEXT_CHARS_BY_ID.get(`${target.assetId}::${target.textId}`) ?? 12;
+      const chars = TEXT_CHARS_BY_ID.get(`${e.assetId}::${e.textId}`) ?? 12;
       const widthUnits = chars * 11; // ≈ DejaVu Sans 32px average advance at asset scale
-      const anchor = TEXT_ANCHORS.get(`${target.assetId}::${target.textId}`) ?? { x: 20, y: 40, size: 32 };
+      const anchor = TEXT_ANCHORS.get(`${e.assetId}::${e.textId}`) ?? { x: 20, y: 40, size: 32 };
       const local = { x: anchor.x + widthUnits * p, y: anchor.y };
       const pt = transformPoint(local, base);
-      return { visible: true, x: pt.x, y: pt.y, angle: (base.rotateDeg * Math.PI) / 180 };
+      return { visible: true, x: pt.x, y: pt.y, angle: (base.rotateDeg * Math.PI) / 180, pose: poseOf(e), scale: 1 };
     }
-    const segs = geometry.get(target.assetId)?.paths.get(target.pathId);
-    if (!segs) return hidden;
+    const segs = geometry.get(e.assetId)?.paths.get(e.pathId);
+    if (!segs) return null;
     const s = sampleAtLength(segs, p * totalLength(segs));
     const pt = transformPoint(s.point, base);
     return {
@@ -521,13 +525,61 @@ export function handAt(
       x: pt.x,
       y: pt.y,
       angle: s.angle + (base.rotateDeg * Math.PI) / 180,
+      pose: poseOf(e),
+      scale: 1,
     };
   };
 
-  if (active) return positionOf(progress);
+  // The ACTIVE stroke: the most recently started one with progress in [0,1).
+  let active: PenEvent | null = null;
+  for (const e of ordered) {
+    const p = (tMs - e.startMs) / e.durationMs;
+    if (p >= 0 && p < 1 && (!active || e.startMs >= active.startMs)) active = e;
+  }
+
+  const first = ordered[0];
+  const last = pen.reduce((a, b) => (a.startMs + a.durationMs >= b.startMs + b.durationMs ? a : b));
+
+  if (active) {
+    const s = strokePoint(active, (tMs - active.startMs) / active.durationMs);
+    return s ?? hidden;
+  }
+
+  // W7 — PEN-UP TRAVEL: the window between a stroke's end and the next
+  // stroke's start (where the old plan hid the pen — the vanish-reappear
+  // teleport). The hand crosses the gap on an eased line between the two
+  // stroke endpoints, with a sine pen-lift bump (y up, slight scale) that
+  // is ZERO at both joints — the tip never teleports, and the whole path
+  // sits inside the two endpoints' bounding box minus the lift.
+  for (let i = 0; i < ordered.length - 1; i++) {
+    const a = ordered[i];
+    const b = ordered[i + 1];
+    const gapStart = a.startMs + a.durationMs;
+    const gapEnd = b.startMs;
+    if (gapEnd <= gapStart || tMs < gapStart || tMs >= gapEnd) continue;
+    const from = strokePoint(a, 1);
+    const to = strokePoint(b, 0);
+    if (!from || !to) return hidden; // degenerate geometry keeps the old mask
+    const u = (tMs - gapStart) / (gapEnd - gapStart);
+    const g = easeInOut(Math.max(0, Math.min(1, u)));
+    const lift = Math.sin(Math.PI * u);
+    // Shortest-path angle lerp (tangents can wrap ±π between strokes).
+    let dAngle = (to.angle - from.angle) % (Math.PI * 2);
+    if (dAngle > Math.PI) dAngle -= Math.PI * 2;
+    if (dAngle < -Math.PI) dAngle += Math.PI * 2;
+    return {
+      visible: true,
+      x: from.x + (to.x - from.x) * g,
+      y: from.y + (to.y - from.y) * g - HAND_TRAVEL_LIFT * lift,
+      angle: from.angle + dAngle * g,
+      pose: poseOf(b), // the hand arrives holding the next stroke's tool
+      scale: 1 + HAND_TRAVEL_SCALE_BUMP * lift,
+    };
+  }
 
   if (tMs <= first.startMs) {
-    const rest = positionOf(0);
+    const rest = strokePoint(first, 0);
+    if (!rest) return hidden;
     if (first.startMs > 0) {
       // The pen ENTERS the frame fast and decelerates into the first
       // stroke (ease-out) — the scene-open receipt: a resting pen on an
@@ -535,17 +587,21 @@ export function handAt(
       const u = 1 - Math.pow(1 - Math.max(0, Math.min(1, tMs / first.startMs)), 2);
       const entryX = Math.min(1860, rest.x + 420);
       const entryY = Math.max(60, rest.y - 240);
-      return {
-        visible: true,
-        x: entryX + (rest.x - entryX) * u,
-        y: entryY + (rest.y - entryY) * u,
-        angle: rest.angle,
-      };
+      return { visible: true, x: entryX + (rest.x - entryX) * u, y: entryY + (rest.y - entryY) * u, angle: rest.angle, pose: rest.pose, scale: 1 };
     }
     return rest;
   }
-  return positionOf(1);
+  const tail = strokePoint(last, 1);
+  // W7 — the tail holds the REST pose (the open hand, tool lowered): the
+  // hold's micro-motion keeps the lens fed while the grip visibly relaxes.
+  return tail ? { ...tail, pose: "rest" } : hidden;
 }
+
+// W7 — the pen-lift bump during inter-stroke travel: the tip rises this
+// many scene units at mid-gap (zero at both joints — the sine keeps the
+// continuity) and the hand grows by this scale fraction while lifted.
+export const HAND_TRAVEL_LIFT = 26;
+export const HAND_TRAVEL_SCALE_BUMP = 0.05;
 
 // Text anchors (asset-space) — registered by assets.ts.
 export const TEXT_ANCHORS = new Map<string, { x: number; y: number; size: number }>();
@@ -562,7 +618,8 @@ export function frameAt(
   events: AnimationEvent[],
   geometry: Map<string, AssetGeometry>,
   tMs: number,
-  carried?: CarriedInkPlan | null
+  carried?: CarriedInkPlan | null,
+  roles?: Map<string, AssetRole>
 ): FrameState {
   const draws = new Map<string, number>();
   const texts = new Map<string, number>();
@@ -605,7 +662,7 @@ export function frameAt(
     colors,
     placements,
     carried: carriedLayer,
-    hand: handAt(events, scene, geometry, tMs),
+    hand: handAt(events, scene, geometry, tMs, roles),
     camera: cameraAt(scene, project.width, project.height, tMs),
   };
 }
