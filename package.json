@@ -34,6 +34,7 @@
     "test:storage": "node --import tsx scripts/test-storage.mts",
     "test:rate": "node --import tsx scripts/test-rate-limit.mts",
     "test:scene-revisions": "node --import tsx scripts/test-scene-revisions.mts",
+    "test:voicestudio": "node --import tsx scripts/test-voicestudio-adapter.mts",
     "test:drill": "node --import tsx scripts/restore-drill.mts",
     "smoke:docker": "bash scripts/docker-smoke.sh",
     "alert:probe": "node --import tsx scripts/alert-probe.mts",
