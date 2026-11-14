@@ -115,3 +115,12 @@ preview/venv/
 /validation/
 # S67 — sandbox proof artifacts (the proof SCRIPT is committed; its rendered mp4s/frames are not)
 /scratch/
+
+# W1 harness receipts: the harness writes its DATED local receipt here on
+# every run (the W2/W3/W5 convention is to run the gate, then leave it
+# uncommitted). The frozen W1 BEFORE-picture is the ONLY committed baseline;
+# the pin reads the latest w1-whiteboard-baseline-*.json in the tree and
+# expects all three aspects — a partial (single-aspect) local run must never
+# land. A deliberate re-baseline updates the exception below on purpose.
+docs/baselines/w1-whiteboard-baseline-*.json
+!docs/baselines/w1-whiteboard-baseline-2026-11-13.json
