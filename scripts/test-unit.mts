@@ -15640,6 +15640,42 @@ await test("S121 P2 anim/gait: the phase rides world distance, never the camera"
   ok(threw, "a zero stride is refused");
 });
 
+// ---------- suite: S121 P3/P4 — the dub client builders and the license policy ----------
+
+suiteStart("S121 P3/P4 — the dub client builders and the license policy");
+
+await test("S121 P3/P4: the dub client builders and the license policy table", async () => {
+  const dub = await import("../src/lib/tubeforge/providers/voicestudio-extra");
+  const lic = await import("../src/lib/tubeforge/providers/model-license-policy");
+  // dubUrl laws
+  ok(dub.dubUrl("http://127.0.0.1:3900/", "/dub/upload").endsWith("/dub/upload"), "the upload route joins cleanly");
+  ok(dub.dubUrl("http://127.0.0.1:3900", "/dub/transcribe", "abc123").includes("/dub/transcribe/abc123"), "the poll route carries the job id");
+  let threw = false;
+  try { dub.dubUrl("", "/dub/upload"); } catch { threw = true; }
+  ok(threw, "a blank base url is refused");
+  threw = false;
+  try { dub.dubUrl("http://127.0.0.1:3900", "/dub/transcribe"); } catch { threw = true; }
+  ok(threw, "a poll route without a job id is refused");
+  // auth headers: loopback never carries one; blank key never carries one
+  eq(JSON.stringify(dub.dubAuthHeaders("http://127.0.0.1:3900", "secret")), "{}", "loopback no header");
+  eq(JSON.stringify(dub.dubAuthHeaders("https://vs.example.com", "")), "{}", "blank key no header");
+  eq(dub.dubAuthHeaders("https://vs.example.com", "sk").Authorization, "Bearer sk", "a remote key rides Bearer");
+  // job id: three payload shapes, null never guessed
+  eq(dub.parseDubJobId({ job_id: "j1" }), "j1", "shape 1");
+  eq(dub.parseDubJobId({ id: "j2" }), "j2", "shape 2");
+  eq(dub.parseDubJobId({ job: { id: "j3" } }), "j3", "shape 3");
+  eq(dub.parseDubJobId({ job_id: 42 }), null, "a number id is not guessed");
+  eq(dub.parseDubJobId("junk"), null, "junk is null");
+  // the license table
+  eq(lic.isCommercialSafe("voxcpm2"), true, "a permissive engine is safe");
+  eq(lic.isCommercialSafe(" omnivoice "), false, "the NC default engine is refused (case/space tolerant)");
+  eq(lic.isCommercialSafe("OMNIVOICE"), false, "case tolerance on the NC row too");
+  eq(lic.isCommercialSafe("totally-new-engine"), false, "an unknown engine fails closed");
+  eq(lic.isCommercialSafe("faster-whisper"), true, "the ASR table is explicit");
+  eq(lic.isCommercialSafe("pyannote"), false, "the gated diarizer is not safe by omission");
+  ok(lic.licenseGateRefusal("omnivoice").includes("omnivoice"), "the refusal names the engine");
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
