@@ -9,6 +9,7 @@
 // an event with an identity, a start and a duration — the timeline editor
 // (later phase) edits exactly these.
 import type { Placement } from "./svg";
+import { cameraPolicies } from "./camera-director";
 
 export type HandStyle = "marker" | "pencil" | "chalk";
 
@@ -316,9 +317,23 @@ export function validateWhiteboardProject(
       }
       camera.push({ cx: e.cx, cy: e.cy, scale: e.scale, startMs: e.startMs, durationMs: e.durationMs });
     }
-    if (camera.length === 0)
-      camera.push({ cx: projW / 2, cy: projH / 2, scale: 1, startMs: 0, durationMs: 0 });
+    // W5: a cameraless scene stays EMPTY — the drift fallback (the
+    // no-camera-keys law, timing.ts cameraAt) owns the motion. The old
+    // dimension-aware center key insertion is gone: it would silently
+    // DEMOTE the drift (an inserted key counts as authored work) and
+    // freeze the W1 baseline's calibrated motion. The render-time
+    // fallback centers on the project's own dimensions anyway — the
+    // same numbers, one source.
     camera.sort((a, b) => a.startMs - b.startMs);
+    // W5 — the camera policies: authored keys are CHECKED, never silently
+    // clamped (the spec: an invalid CameraEvent[] is a validation error).
+    // A cameraless scene has nothing to check; the drift fallback's
+    // motion is the scheduler's own calibrated behavior.
+    if (camera.length > 0) {
+      for (const v of cameraPolicies(camera, animations, projW, projH)) {
+        errors.push(`scene ${i + 1}: ${v.reason}`);
+      }
+    }
     scenes.push({
       id,
       narration: s.narration,

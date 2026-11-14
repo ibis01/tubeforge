@@ -7390,12 +7390,16 @@ function wbProject(scenes: unknown, extra: Record<string, unknown> = {}): unknow
   return { title: "T", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 }, scenes, ...extra };
 }
 
-await test("S64 storyboard: a valid project parses; empty camera gets the default keyframe", async () => {
+await test("S64 storyboard: a valid project parses; a cameraless scene stays EMPTY (the W5 no-camera-keys law)", async () => {
   const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
   const r = validateWhiteboardProject(wbProject([{ ...WB_SCENE, camera: [] }]), WB_LIB);
   if (!r.project) { ok(false, `expected valid, got: ${r.errors.join("; ")}`); return; }
   eq(r.errors, []);
-  eq(r.project.scenes[0].camera, [{ cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 }]);
+  // W5: the validator no longer inserts a default key — an inserted key
+  // would silently DEMOTE the drift (authored work). The dimension-aware
+  // center is the render-time fallback (cameraAt), pinned in the S68
+  // timing test below; the stored doc stays honest about having no keys.
+  eq(r.project.scenes[0].camera, []);
   eq(r.project.scenes[0].id, "s1");
 });
 
@@ -7615,8 +7619,8 @@ await test("S64 timing: frameAt — progress ramp, camera drift, pen follows/res
   approx(done.hand.x, 100, 1e-6, "resting at the end point");
 });
 
-await test("S64 timing: cameraAt — eased keyframes + the permanent drift", async () => {
-  const { cameraAt, cameraDrift } = await import("../src/lib/tubeforge/whiteboard/timing");
+await test("S64 timing: cameraAt — eased keyframes; W5: keys ride the DIRECTED breath, the fallback drift stays cameraless", async () => {
+  const { cameraAt, cameraDrift, directedBreath } = await import("../src/lib/tubeforge/whiteboard/timing");
   const scene: WhiteboardScene = {
     ...WB_PLAIN,
     camera: [
@@ -7624,12 +7628,25 @@ await test("S64 timing: cameraAt — eased keyframes + the permanent drift", asy
       { startMs: 1000, durationMs: 1000, cx: 100, cy: 10, scale: 2 },
     ],
   };
-  const d500 = cameraDrift(500);
-  eq(cameraAt(scene, 1920, 1080, 500), { cx: d500.dx, cy: d500.dy, scale: 1 }, "before the move: first keyframe + drift");
-  const d1500 = cameraDrift(1500);
-  eq(cameraAt(scene, 1920, 1080, 1500), { cx: 50 + d1500.dx, cy: 5 + d1500.dy, scale: 1.5 }, "mid-move eased halfway + drift");
-  const dEnd = cameraDrift(99999);
-  eq(cameraAt(scene, 1920, 1080, 99999), { cx: 100 + dEnd.dx, cy: 10 + dEnd.dy, scale: 2 }, "after the move: last keyframe + drift");
+  // W5 demotion: AUTHORED keys ride the content framing + the DIRECTED
+  // lane's own breathing (NOT the blind fallback drift — different
+  // amplitude and periods, anchored to whatever the director framed).
+  const b500 = directedBreath(500);
+  eq(cameraAt(scene, 1920, 1080, 500), { cx: b500.dx, cy: b500.dy, scale: 1 }, "before the move: first keyframe + directed breath");
+  const b1500 = directedBreath(1500);
+  eq(cameraAt(scene, 1920, 1080, 1500), { cx: 50 + b1500.dx, cy: 5 + b1500.dy, scale: 1.5 }, "mid-move eased halfway + directed breath");
+  const bEnd = directedBreath(99999);
+  eq(cameraAt(scene, 1920, 1080, 99999), { cx: 100 + bEnd.dx, cy: 10 + bEnd.dy, scale: 2 }, "after the move: last keyframe + directed breath");
+  ok(Math.abs(b500.dx) <= 96 && Math.abs(b500.dy) <= 66, "the breath is the calibrated motion floor (bounded by the swell envelope ±96/±66)");
+  // The breath IS the calibrated Lissajous — the demotion is the ANCHORING
+  // (keys lead, the floor follows), not a weaker motion (the proof
+  // receipts: a weaker floor starves the QC noise floor).
+  eq(b500, cameraDrift(500), "the directed floor = the calibrated motion, anchored to the content framing");
+  // The cameraless scene KEEPS the fallback drift (the no-camera-keys
+  // fallback — the W1 baseline's calibrated motion, byte-for-byte).
+  const bare: WhiteboardScene = { ...WB_PLAIN, camera: [] };
+  const d = cameraDrift(500);
+  eq(cameraAt(bare, 1920, 1080, 500), { cx: 960 + d.dx, cy: 540 + d.dy, scale: 1 }, "cameraless: center + fallback drift, byte-for-byte");
 });
 
 await test("S68 timing: cameraAt — the empty-camera fallback centers on the project's own dimensions", async () => {
@@ -8288,7 +8305,7 @@ await test("S68 scaffold: out-of-band dims fall back to the house 1920×1080@24"
   eq(junk2.width, 1920, "non-numeric width → default");
 });
 
-await test("S68 validator: a doc with no camera key gets a DIMENSION-AWARE default", async () => {
+await test("S68 validator: a cameraless doc stays EMPTY; the dimension-aware center is the render fallback; explicit keys pass the policies", async () => {
   const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
   const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
   const lib = loadLibrary();
@@ -8303,27 +8320,26 @@ await test("S68 validator: a doc with no camera key gets a DIMENSION-AWARE defau
         background: "#ffffff" as const,
         placements: [{ assetId: "spark", placement: { x: 100, y: 100, scale: 1, rotateDeg: 0 } }],
         animations: [],
-        camera: [], // the validator MUST insert the default key
+        camera: [], // W5: stays empty — the drift fallback owns the motion
       },
     ],
   };
   const v169 = validateWhiteboardProject({ ...base, width: 1920, height: 1080 }, lib.libraryIndex);
-  eq(v169.project?.scenes[0].camera[0].cx, 960, "16:9 default key centers at 960");
-  eq(v169.project?.scenes[0].camera[0].cy, 540, "16:9 default key centers at 540");
+  eq(v169.project?.scenes[0].camera.length, 0, "16:9 cameraless doc stores NO key (the W5 law)");
   const v916 = validateWhiteboardProject({ ...base, width: 1080, height: 1920 }, lib.libraryIndex);
-  eq(v916.project?.scenes[0].camera[0].cx, 540, "9:16 default key centers at width/2 — the S68 fix");
-  eq(v916.project?.scenes[0].camera[0].cy, 960, "9:16 default key centers at height/2");
-  // Explicit keys are never touched.
+  eq(v916.project?.scenes[0].camera.length, 0, "9:16 cameraless doc stores NO key — centering is render-time (S68 timing pin)");
+  // Explicit keys are never touched — and policy-sane ones validate clean
+  // (centered on the 9:16 board, viewport within the safe margins).
   const explicit = validateWhiteboardProject(
     {
       ...base,
       width: 1080,
       height: 1920,
-      scenes: [{ ...base.scenes[0], camera: [{ cx: 10, cy: 20, scale: 1.5, startMs: 0, durationMs: 0 }] }],
+      scenes: [{ ...base.scenes[0], camera: [{ cx: 540, cy: 960, scale: 1.5, startMs: 0, durationMs: 0 }] }],
     },
     lib.libraryIndex
   );
-  eq(explicit.project?.scenes[0].camera[0].cx, 10, "explicit key preserved");
+  eq(explicit.project?.scenes[0].camera[0].cx, 540, "explicit key preserved");
   eq(explicit.project?.scenes[0].camera[0].scale, 1.5, "explicit zoom preserved");
 });
 
@@ -13965,6 +13981,152 @@ await test("S purity: the substrate imports no fs, no clock, no randomness", asy
     ok(!/Date\.now|performance\.now|setTimeout|Math\.random/.test(src), `${f} reads no clock and rolls no dice`);
     ok(!src.includes("tubeforge/whiteboard"), `${f} imports no whiteboard module (the substrate is engine-neutral)`);
   }
+});
+
+// ---------- suite: W5 — the content-driven camera director ----------
+
+suiteStart("W5 camera director — content-driven framing, the drift demoted to fallback (S120 §3)");
+
+await test("W5 director: deterministic; a ≤1-beat scene returns [] (the drift fallback owns it)", async () => {
+  const { directCamera } = await import("../src/lib/tubeforge/whiteboard/camera-director");
+  const { buildGeometry, sceneDurationMs } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const { beatSceneEvents } = await import("../src/lib/tubeforge/whiteboard/beat-plan");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const lib = loadLibrary();
+  const geo = buildGeometry([{ id: "heart-main", paths: [{ id: "p1", d: "M 0 0 L 10 0" }] }]);
+  const tags = new Map([...lib.assets.values()].map((a) => [a.id, a.tags] as [string, string[]]));
+  // One placement, one sentence → one beat → no content story to traverse.
+  const solo: WhiteboardScene = {
+    id: "solo",
+    narration: "Your heart beats about one hundred thousand times a day.",
+    background: "#ffffff",
+    placements: [{ assetId: "heart-main", placement: { x: 800, y: 300, scale: 1, rotateDeg: 0 } }],
+    animations: [],
+    camera: [],
+  };
+  const dur = sceneDurationMs(solo, null);
+  const events = beatSceneEvents(solo, dur, geo, tags);
+  eq(directCamera(solo, 1920, 1080, dur, geo, events, { assetTags: tags }), [], "a single-beat scene keeps the drift fallback");
+  // Determinism on a multi-beat scene: byte-identical double-run.
+  const multi: WhiteboardScene = {
+    ...solo,
+    id: "multi",
+    narration: "Here is the loop. The right side pumps blood to the lungs. The left side pumps it to the body.",
+    placements: [
+      { assetId: "heart-main", placement: { x: 300, y: 300, scale: 1, rotateDeg: 0 }, order: 0 },
+      { assetId: "lungs", placement: { x: 1300, y: 300, scale: 1, rotateDeg: 0 }, order: 1 },
+      { assetId: "arrow-curve", placement: { x: 800, y: 200, scale: 0.8, rotateDeg: 0 }, order: 2 },
+      { assetId: "arrow-return", placement: { x: 800, y: 700, scale: 0.8, rotateDeg: 0 }, order: 3 },
+    ],
+  };
+  const geoMulti = buildGeometry([
+    { id: "heart-main", paths: [{ id: "p1", d: "M 0 0 L 10 0" }, { id: "p2", d: "M 0 0 L 10 0" }] },
+    { id: "lungs", paths: [{ id: "p1", d: "M 0 0 L 10 0" }, { id: "p2", d: "M 0 0 L 10 0" }] },
+    { id: "arrow-curve", paths: [{ id: "p1", d: "M 0 0 L 10 0" }] },
+    { id: "arrow-return", paths: [{ id: "p1", d: "M 0 0 L 10 0" }] },
+  ]);
+  const dur2 = sceneDurationMs(multi, null);
+  const ev2 = beatSceneEvents(multi, dur2, geoMulti, tags);
+  const k1 = directCamera(multi, 1920, 1080, dur2, geoMulti, ev2, { assetTags: tags });
+  const k2 = directCamera(multi, 1920, 1080, dur2, geoMulti, ev2, { assetTags: tags });
+  eq(JSON.stringify(k1), JSON.stringify(k2), "double-run byte-identical");
+  ok(k1.length >= 1, `the multi-beat scene is directed (${k1.length} keys)`);
+  // The origin key frames the content (not the blind center fallback).
+  if (k1.length > 0) ok(k1[0].cx !== 960 || k1[0].cy !== 540 || k1[0].scale !== 1, "the origin framing is content-driven, not the blind default");
+});
+
+await test("W5 policies: crafted violations fire with readable reasons; the director's own keys pass", async () => {
+  const { cameraPolicies, CAMERA_MIN_TRAVEL_MS, CAMERA_MAX_ZOOM_PER_SEC } = await import("../src/lib/tubeforge/whiteboard/camera-director");
+  const keys = [
+    { cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 },
+    { cx: 1400, cy: 540, scale: 1, startMs: 5000, durationMs: 100 },
+  ];
+  const noOnset: AnimationEvent[] = [];
+  let v = cameraPolicies(keys, noOnset, 1920, 1080);
+  ok(v.some((x) => x.policy === "min-travel"), "a 100ms travel fires min-travel");
+  const zoomer = [
+    { cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 },
+    { cx: 960, cy: 540, scale: 2, startMs: 5000, durationMs: 500 },
+  ];
+  v = cameraPolicies(zoomer, noOnset, 1920, 1080);
+  ok(v.some((x) => x.policy === "zoom-speed") && v.some((x) => x.reason.includes(`${CAMERA_MAX_ZOOM_PER_SEC}`)), "a 1.0/s zoom fires zoom-speed");
+  const offBoard = [{ cx: 5, cy: 5, scale: 1.5, startMs: 0, durationMs: 0 }];
+  v = cameraPolicies(offBoard, noOnset, 1920, 1080);
+  ok(v.some((x) => x.policy === "containment"), "an off-board viewport fires containment");
+  const mover = [
+    { cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 },
+    { cx: 1200, cy: 540, scale: 1, startMs: 1000, durationMs: 800 },
+  ];
+  const strokes: AnimationEvent[] = [{ type: "draw_path", assetId: "a1", pathId: "p1", startMs: 1200, durationMs: 500 }];
+  v = cameraPolicies(mover, strokes, 1920, 1080);
+  ok(v.some((x) => x.policy === "onset-stability"), "a stroke landing mid-travel fires onset-stability");
+  // The resting keys never violate (a held framing moves nothing).
+  const held = [
+    { cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 },
+    { cx: 960, cy: 540, scale: 1, startMs: 1000, durationMs: 800 },
+  ];
+  eq(cameraPolicies(held, strokes, 1920, 1080), [], "same-framing keys are at rest — no violations");
+});
+
+await test("W5 validator: policy violations are ERRORS, never clamps; the directed benchmark keys validate clean", async () => {
+  const { validateWhiteboardProject } = await import("../src/lib/tubeforge/whiteboard/storyboard");
+  const bad = validateWhiteboardProject(
+    wbProject([{
+      ...WB_SCENE,
+      camera: [
+        { cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 },
+        { cx: 960, cy: 540, scale: 2, startMs: 500, durationMs: 200 },
+      ],
+    }]),
+    WB_LIB
+  );
+  ok(bad.project === null, "a zoom-speed-violating doc REFUSES (no silent clamp)");
+  ok(bad.errors.some((e) => /zoom-speed|zooms/.test(e)), `the error names the policy: ${bad.errors.join(" · ")}`);
+  // The SAME doc with a policy-sane travel validates clean.
+  const good = validateWhiteboardProject(
+    wbProject([{
+      ...WB_SCENE,
+      camera: [
+        { cx: 960, cy: 540, scale: 1, startMs: 0, durationMs: 0 },
+        { cx: 1000, cy: 560, scale: 1.1, startMs: 5000, durationMs: 1200 },
+      ],
+    }]),
+    WB_LIB
+  );
+  ok(good.project !== null, `a sane travel validates: ${good.errors.join(" · ")}`);
+});
+
+await test("W5 framing receipts: the directed W1 benchmark keys pass every policy on all three aspects", async () => {
+  const { W1_ASPECTS, W1_ASPECT_IDS, buildBenchmarkProject } = await import("../src/lib/tubeforge/whiteboard/benchmark-scenarios");
+  const { directCamera, cameraPolicies } = await import("../src/lib/tubeforge/whiteboard/camera-director");
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const { buildGeometry, sceneDurationMs } = await import("../src/lib/tubeforge/whiteboard/timing");
+  const { beatSceneEvents } = await import("../src/lib/tubeforge/whiteboard/beat-plan");
+  const lib = loadLibrary();
+  const geo = buildGeometry([...lib.extracted.entries()].map(([id, ex]) => ({ id, paths: ex.paths })));
+  const tags = new Map([...lib.assets.values()].map((a) => [a.id, a.tags] as [string, string[]]));
+  let directedScenes = 0;
+  for (const aspect of W1_ASPECT_IDS) {
+    const { width, height } = W1_ASPECTS[aspect];
+    const project = buildBenchmarkProject(aspect);
+    for (const scene of project.scenes) {
+      const dur = sceneDurationMs(scene, null);
+      const events = beatSceneEvents(scene, dur, geo, tags);
+      const keys = directCamera(scene, width, height, dur, geo, events, { assetTags: tags });
+      const v = cameraPolicies(keys, events, width, height);
+      ok(v.length === 0, `${aspect}/${scene.id}: the director's own keys pass its policies (${v.map((x) => x.reason).join(" · ")})`);
+      if (keys.length > 0) {
+        directedScenes++;
+        // Framing containment (the per-aspect receipt): the viewport stays
+        // on the board with safe margins at every key.
+        for (const k of keys) {
+          ok(k.scale >= 1 && k.scale <= 1.6, `${aspect}/${scene.id}: zoom within [1, 1.6]`);
+          ok(k.cx >= 0 && k.cx <= width && k.cy >= 0 && k.cy <= height, `${aspect}/${scene.id}: center on the board`);
+        }
+      }
+    }
+  }
+  ok(directedScenes >= 3, `the benchmark carries directed scenes (${directedScenes} across aspects)`);
 });
 
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);

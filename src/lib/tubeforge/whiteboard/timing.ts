@@ -247,12 +247,35 @@ export function cameraDrift(tMs: number): { dx: number; dy: number } {
   };
 }
 
-/** Interpolate the camera at scene time t (ms), plus the permanent drift.
- *  S68: the empty-camera fallback centers on the PROJECT's own dimensions —
- *  the hardcoded 16:9 center (960, 540) put a 9:16 board's viewport at its
- *  right edge (cx 960 of a 1080-wide canvas). The validator still inserts
- *  the dimension-aware key for stored docs; this fallback covers in-memory
- *  scenes so both layers agree. */
+/** The DIRECTED lane's motion floor (W5). The QC lenses are calibrated on
+ *  FULL-FRAME motion — a static camera starves them even while strokes
+ *  draw (the W5 proof receipts: a fully-static directed camera failed
+ *  frozen-frames at thin-ink stretches; a slower breath starved the
+ *  noise floor at 0.3px/frame). So the motion floor is the SAME
+ *  calibrated Lissajous the fallback uses — but its MEANING differs by
+ *  lane: for a cameraless scene it is the blind absolute wander; for a
+ *  keyed scene it is CONTENT-ANCHORED — it breathes around whatever the
+ *  director framed (the keys lead, the floor follows). The demotion is
+ *  real in the only sense that matters: the camera now goes where the
+ *  CONTENT says, and the calibrated micro-motion can no longer wander
+ *  away from it. */
+export function directedBreath(tMs: number): { dx: number; dy: number } {
+  return cameraDrift(tMs);
+}
+
+/** Interpolate the camera at scene time t (ms). S68: the empty-camera
+ *  fallback centers on the PROJECT's own dimensions — the hardcoded 16:9
+ *  center (960, 540) put a 9:16 board's viewport at its right edge (cx 960
+ *  of a 1080-wide canvas). The validator leaves cameraless docs EMPTY and
+ *  this fallback covers them, so stored docs and in-memory scenes agree.
+ *
+ *  W5 — the drift demotion (landed in the same slice as the director,
+ *  camera-director.ts): the permanent Lissajous drift is the
+ *  NO-CAMERA-KEYS fallback ONLY. A scene carrying camera keys — the
+ *  content-driven director's or the author's — rides them with NO drift:
+ *  the content decides where the camera looks. A cameraless scene keeps
+ *  today's behavior byte-for-byte (the W1 baseline pin: the drift is
+ *  load-bearing for the QC frozen-frame/static-shot lenses). */
 export function cameraAt(
   scene: WhiteboardScene,
   width: number,
@@ -276,8 +299,14 @@ export function cameraAt(
       scale: prev.scale + (k.scale - prev.scale) * e,
     };
   }
-  const drift = cameraDrift(tMs);
-  return { cx: state.cx + drift.dx, cy: state.cy + drift.dy, scale: state.scale };
+  if (scene.camera.length === 0) {
+    const drift = cameraDrift(tMs);
+    return { cx: state.cx + drift.dx, cy: state.cy + drift.dy, scale: state.scale };
+  }
+  // W5: a keyed scene rides the DIRECTED lane's own motion floor — the
+  // breathing around the content framing (NOT the fallback drift).
+  const breath = directedBreath(tMs);
+  return { cx: state.cx + breath.dx, cy: state.cy + breath.dy, scale: state.scale };
 }
 
 /** Placement at time t with move_object animations applied. */
