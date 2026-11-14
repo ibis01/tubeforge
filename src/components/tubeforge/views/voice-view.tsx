@@ -93,7 +93,14 @@ export function VoiceView() {
 
   // Pronunciation overrides (T-4.11) — the map is applied SERVER-side at the
   // synthesis choke point; this UI only edits the list and tests the result.
+  // pronSeq is the staleness guard: the mount-time GET must never clobber a
+  // save that completed after the GET was ISSUED (the flake receipt ×2 —
+  // runs 43535951606 + 43543703468: under a slow cold compile the GET
+  // resolves late and wiped the just-added entry; a real user adding a word
+  // quickly after page load loses it the same way). Every save bumps the
+  // generation; a load applies only if its generation is still current.
   const [pronEntries, setPronEntries] = useState<{ from: string; to: string }[]>([]);
+  const pronSeq = useRef(0);
   const [pronFrom, setPronFrom] = useState("");
   const [pronTo, setPronTo] = useState("");
   const [pronSaving, setPronSaving] = useState(false);
@@ -127,9 +134,16 @@ export function VoiceView() {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setDefaultVoice(d?.settings?.defaultVoice ?? null))
       .catch(() => {});
+    // The generation is captured at ISSUE time: a save landing mid-flight
+    // bumps pronSeq, and this read's late resolution then sees a newer
+    // generation and stands down (single-threaded — no other window).
+    const pronLoadSeq = ++pronSeq.current;
     fetch("/api/voices/pronunciations", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => setPronEntries(d?.entries ?? []))
+      .then((d) => {
+        if (pronSeq.current !== pronLoadSeq) return; // a save won — this read is stale
+        setPronEntries(d?.entries ?? []);
+      })
       .catch(() => {});
   }, [loadProfiles]);
 
@@ -315,6 +329,7 @@ export function VoiceView() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Could not save");
+      pronSeq.current += 1; // invalidate every load issued before this save
       setPronEntries(data.entries ?? next);
       toast({ title: okTitle });
     } catch (e) {
