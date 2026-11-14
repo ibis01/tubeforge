@@ -15066,6 +15066,245 @@ await test("W7 seams: the render consumes the family + the sfx layer; the page s
 });
 
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
+// ---------- suite: S121 P0 — the VoiceStudio optional provider + measured word timing ----------
+
+suiteStart("S121 P0 — the VoiceStudio optional provider + measured word timing");
+
+await test("S121 voice passthrough: a VoiceStudio voice reaches the server verbatim; the alias catalog is served", async () => {
+  const tts = await import("../src/lib/tubeforge/providers/tts");
+  const reg = await import("../src/lib/tubeforge/providers/registry");
+  // The registry rows exist and carry the license verdicts in their hints.
+  const vsTts = reg.providerMeta("tts", "voicestudio");
+  ok(vsTts, "the voicestudio TTS row exists");
+  ok(vsTts?.defaultBaseUrl.includes("3900"), "the default points at the audited port 3900");
+  ok(
+    (vsTts?.models ?? []).some((m) => /CC-BY-NC|non-commercial/i.test(m.hint ?? "")),
+    "the omnivoice hint carries its CC-BY-NC verdict",
+  );
+  ok(reg.providerMeta("asr", "voicestudio"), "the voicestudio ASR row exists");
+  ok(reg.CAPABILITY_META.asr, "the asr capability has UI metadata");
+  // The catalog is the OpenAI ALIAS set (the server owns the real one).
+  const catalog = tts.voiceCatalog("voicestudio");
+  ok(catalog.some((v) => v.id === "alloy"), "the alias catalog serves the OpenAI aliases");
+  // Passthrough: any voice survives sanitization verbatim.
+  eq(tts.sanitizeVoice("voicestudio", "8f1a2b3c"), "8f1a2b3c", "a server voice id rides verbatim");
+  eq(tts.sanitizeVoice("voicestudio", "narrator-deep"), "narrator-deep", "a named voice rides verbatim");
+  eq(tts.sanitizeVoice("voicestudio", "alloy"), "alloy", "an alias rides verbatim");
+});
+
+await test("S121 detailed ASR: support table, verbose_json parsing, the wire form", async () => {
+  const asr = await import("../src/lib/tubeforge/providers/asr");
+  // The support table — the pure law.
+  eq(asr.asrSupportsWordTimestamps("voicestudio"), true, "voicestudio serves words");
+  eq(asr.asrSupportsWordTimestamps("openai"), true, "openai serves words");
+  eq(asr.asrSupportsWordTimestamps("zai"), false, "zai answers text only");
+  eq(asr.asrSupportsWordTimestamps("unknown-provider"), false, "unknown providers never make the detailed call");
+  // The wire form — the fields ARE the contract with both servers.
+  const form = asr.buildAsrDetailedForm(Buffer.alloc(64), "whisperx");
+  eq(form.get("response_format"), "verbose_json", "response_format is verbose_json");
+  eq(form.get("timestamp_granularities[]"), "word", "the word granularity rides");
+  eq(form.get("model"), "whisperx", "the model rides");
+  ok(form.get("file") instanceof File, "the chunk rides as a file");
+  // The parse — flat words, nested segment words, the untimed-token skip.
+  const flat = asr.parseVerboseJsonWords({
+    text: "hello world",
+    words: [
+      { word: "hello", start: 0, end: 0.5 },
+      { word: "world", start: 0.6, end: 1.0 },
+    ],
+  });
+  eq(flat.words.length, 2, "flat words parse");
+  eq(flat.text, "hello world", "the text rides");
+  const nested = asr.parseVerboseJsonWords({
+    text: "a b",
+    segments: [{ words: [{ word: "a", start: 0, end: 0.2 }] }, { words: [{ word: "b", start: 0.3, end: 0.5 }] }],
+  });
+  eq(nested.words.length, 2, "segment-nested words flatten");
+  // Parity with VoiceStudio's _openai_words: untimed tokens are SKIPPED.
+  const skipped = asr.parseVerboseJsonWords({
+    text: "one two three",
+    words: [
+      { word: "one", start: 0, end: 0.1 },
+      { word: "two" }, // no timestamps
+      { word: "three", start: 0.2 }, // half-timed
+      { word: "junk", start: NaN, end: 1 }, // non-finite
+      { word: "back", start: 1, end: 0 }, // backwards
+      "not-an-object",
+    ],
+  });
+  eq(skipped.words.length, 1, "every untimed/degenerate token is skipped");
+  eq(skipped.words[0].word, "one", "the timed survivor is intact");
+  // The error mapping — every documented status class, OpenAI-shaped bodies first.
+  eq(
+    asr.asrErrorText("VoiceStudio", 403, JSON.stringify({ error: { message: "license not accepted" } })).includes("license not accepted"),
+    true,
+    "the server's own message rides the 403",
+  );
+  ok(asr.asrErrorText("VoiceStudio", 400, "{}").includes("400"), "400 maps");
+  ok(asr.asrErrorText("VoiceStudio", 429, "{}").includes("429"), "429 maps");
+  ok(asr.asrErrorText("VoiceStudio", 503, "{}").includes("503"), "503 maps");
+  ok(/license/i.test(asr.asrErrorText("VoiceStudio", 403, "{}")), "403 names the license gate");
+  // The 503 retry ladder: pure, bounded.
+  eq(asr.shouldRetryAsr(503, 0), true, "a first 503 retries");
+  eq(asr.shouldRetryAsr(503, 3), false, "the ladder is bounded");
+  eq(asr.shouldRetryAsr(400, 0), false, "a 400 never retries");
+  eq(asr.asrTimeoutMs() >= 1000, true, "the asr timeout row is wired");
+  // The typed signal.
+  let typed = false;
+  try {
+    throw new asr.AsrWordsUnsupportedError("zai");
+  } catch (err) {
+    typed = err instanceof Error && err.name === "AsrWordsUnsupportedError";
+  }
+  ok(typed, "AsrWordsUnsupportedError is a typed ladder signal");
+});
+
+await test("S121 measured captions: token stream, measured chunk windows, the laws hold", async () => {
+  const captions = await import("../src/lib/tubeforge/captions");
+  // Clean spans: each chunk's window IS its words' measured span.
+  const words = [
+    { word: "one", start: 0.1, end: 0.3 },
+    { word: "two", start: 0.3, end: 0.5 },
+    { word: "three", start: 1.1, end: 1.4 },
+    { word: "four", start: 1.4, end: 1.6 },
+  ];
+  const windows = captions.chunkWindowsFromWordTimes(words, [2, 4]);
+  ok(windows, "clean spans build windows");
+  eq(JSON.stringify(windows), JSON.stringify([{ startSec: 0.1, endSec: 0.5 }, { startSec: 1.1, endSec: 1.6 }]), "the windows are the measured spans verbatim");
+  // The 0.4 s floor extends, never shrinks measured truth.
+  const tiny = captions.chunkWindowsFromWordTimes(
+    [
+      { word: "hi", start: 2.0, end: 2.05 },
+      { word: "there", start: 2.06, end: 2.1 },
+    ],
+    [2]
+  );
+  ok(tiny && tiny[0].endSec >= 2.4, "a too-short measured span is extended to the floor (endSec = startSec + 0.4 by construction)");
+  ok(tiny && tiny[0].startSec === 2.0, "the floor extends the END, never shifts the measured start");
+  // The non-overlap law: a drifted cursor clamps the window forward — the
+  // measured truth is never allowed to overlap, and the stream stays monotone.
+  const drifted = captions.chunkWindowsFromWordTimes(
+    [
+      { word: "a", start: 0.0, end: 0.5 },
+      { word: "b", start: 0.1, end: 0.4 },
+    ],
+    [2, 2] // chunk 2 re-reaches the same words (drift) — clamped, never overlapping
+  );
+  ok(drifted !== null, "a drifted cursor clamps instead of guessing");
+  if (drifted) {
+    ok(drifted[0].endSec <= drifted[1].startSec, "window 2 never overlaps window 1");
+    ok(drifted[1].startSec >= 0.4, "the clamp lands on window 1's end");
+    ok(drifted[1].endSec >= drifted[1].startSec, "the clamped window still holds");
+  }
+  // Empty streams refuse.
+  eq(captions.chunkWindowsFromWordTimes([], [1]), null, "no words → null");
+  eq(captions.chunkWindowsFromWordTimes(words, []), null, "no ends → null");
+  // The greedy cursor still works over the measured token stream.
+  const chunks = captions.captionChunks("one two. three four.");
+  const tokens = words.map((w) => captions.tokenizeKeepAll(w.word)[0] ?? w.word);
+  const ends = captions.chunkEndPositionsByTranscript(chunks, tokens);
+  eq(ends.length, chunks.length, "the cursor answers one end per chunk");
+  ok(ends.every((e, i) => e > (i === 0 ? 0 : ends[i - 1])), "the ends march forward");
+});
+
+await test("S121 measured anchors: per-word measured spans land; the proportional baseline is byte-identical when the rung is absent", async () => {
+  const { buildVoiceAnchors } = await import("../src/lib/tubeforge/whiteboard/voice-anchors");
+  const { captionChunks } = await import("../src/lib/tubeforge/captions");
+  const { words } = await import("../src/lib/tubeforge/whiteboard/beat-plan");
+  const narration = "The heart pumps. Blood returns home.";
+  const chunks = captionChunks(narration);
+  const counts = chunks.map((c) => words(c.text).length);
+  eq(JSON.stringify(counts), JSON.stringify([3, 3]), "three beat tokens per chunk");
+  const ends = [3, 6];
+  const runs = [{ start: 0.5, end: 2.0 }, { start: 3.0, end: 4.0 }];
+
+  // RUNG ABSENT — the baseline is byte-identical to the pre-S121 mapping.
+  const baseline = buildVoiceAnchors({ narration, chunks, ends, totalWords: 6, runs, sceneDurationMs: 6000 });
+  ok(baseline !== null, "the baseline builds");
+  const baseline2 = buildVoiceAnchors({ narration, chunks, ends, totalWords: 6, runs, sceneDurationMs: 6000, measuredWindows: null, measuredWordSpansMs: null });
+  eq(JSON.stringify(baseline), JSON.stringify(baseline2), "explicit null rungs are byte-identical to the absent rung");
+
+  // RUNG 1 — the measured windows spread across the beat words.
+  const measured = buildVoiceAnchors({
+    narration, chunks, ends, totalWords: 6, runs, sceneDurationMs: 6000,
+    measuredWindows: [{ startSec: 0.50, endSec: 1.75 }, { startSec: 2.00, endSec: 4.00 }],
+  });
+  ok(measured !== null, "the measured rung builds");
+  if (!measured || !baseline) return;
+  eq(measured.byWord.length, 6, "one span per narration word");
+  eq(measured.byWord[0].startMs, 500, "the first word starts on the MEASURED window's start");
+  eq(measured.byWord[2].endMs, 1750, "the chunk's last word ends on the measured window's end");
+  eq(measured.byWord[3].startMs, 2000, "chunk 2 rides ITS measured window");
+  // 1:1 measured spans win when the counts match exactly.
+  const spans = buildVoiceAnchors({
+    narration, chunks, ends, totalWords: 6, runs, sceneDurationMs: 6000,
+    measuredWindows: [{ startSec: 0.5, endSec: 1.75 }, { startSec: 2.0, endSec: 4.0 }],
+    measuredWordSpansMs: [
+      [{ startMs: 505, endMs: 700 }, { startMs: 710, endMs: 900 }, { startMs: 910, endMs: 1750 }],
+      [{ startMs: 2000, endMs: 2500 }, { startMs: 2510, endMs: 3000 }, { startMs: 3100, endMs: 4000 }],
+    ],
+  });
+  ok(spans !== null, "the 1:1 spans build");
+  if (!spans) return;
+  eq(spans.byWord[0].startMs, 505, "the 1:1 span rides verbatim (clamped into the clock)");
+  eq(spans.byWord[3].startMs, 2000, "chunk 2's 1:1 span rides verbatim");
+  // Determinism.
+  eq(
+    JSON.stringify(buildVoiceAnchors({ narration, chunks, ends, totalWords: 6, runs, sceneDurationMs: 6000, measuredWindows: [{ startSec: 0.5, endSec: 1.75 }, { startSec: 2.0, endSec: 4.0 }] })),
+    JSON.stringify(measured),
+    "the measured mapping is byte-identical across calls"
+  );
+});
+
+await test("S121 consent ledger: the basis vocabulary is closed", async () => {
+  const vc = await import("../src/lib/tubeforge/voice-clone");
+  ok(vc.isConsentBasis("own_voice"), "own_voice accepted");
+  ok(vc.isConsentBasis("speaker_permission"), "speaker_permission accepted");
+  ok(!vc.isConsentBasis("found_it_on_youtube"), "anything else is refused");
+  ok(!vc.isConsentBasis(""), "empty is refused");
+  eq(vc.CONSENT_BASES.length, 2, "the vocabulary stays closed");
+  ok(vc.CLONE_PROVIDERS.includes("voicestudio"), "voicestudio clones are a registered lane");
+  const dto = vc.toVoiceProfileDTO({
+    id: "r1", name: "n", provider: "voicestudio", providerVoiceId: "voice_clone_vs_x",
+    sourceLabel: "s.wav", durationSec: 4.2, auditionWav: null,
+    consentText: "This is my own narration voice", consentBasis: "own_voice",
+    createdAt: new Date(0),
+  });
+  eq(dto.hasConsent, true, "a recorded statement marks the ledger");
+  eq(dto.consentBasis, "own_voice", "the basis rides the DTO");
+  const legacy = vc.toVoiceProfileDTO({
+    id: "r2", name: "n", provider: "selfhost", providerVoiceId: "voice_clone_sh_x",
+    sourceLabel: null, durationSec: null, auditionWav: "aGk=",
+    createdAt: new Date(0),
+  });
+  eq(legacy.hasConsent, false, "legacy rows keep the ledger open (null)");
+  eq(legacy.consentBasis, null, "no basis is null, never guessed");
+});
+
+await test("S121 word-offset arithmetic: chunked audio shifts measured words by the measured chunk start", async () => {
+  const verify = await import("../src/lib/tubeforge/verify");
+  eq(verify.shiftAsrWord({ word: "hi", start: 1.2, end: 1.5 }, 25), { word: "hi", start: 26.2, end: 26.5 }, "second-chunk offset");
+  eq(verify.shiftAsrWord({ word: "hi", start: 0, end: 0.3 }, 0), { word: "hi", start: 0, end: 0.3 }, "zero offset is identity");
+  eq(verify.shiftAsrWord({ word: "w", start: 0.5, end: 0.8 }, 25.37), { word: "w", start: 25.87, end: 26.17 }, "a MEASURED (non-integer) chunk start shifts exactly");
+});
+
+await test("S121 settings: the asr capability follows tts until an ai.asr row is saved", async () => {
+  const score = await import("../src/lib/tubeforge/provider-score");
+  // The registry sync law holds with the new capability (priorsComplete pins
+  // every capability incl. asr — the priors table has the ASR rows).
+  ok(score.priorsComplete(), "every registry provider has a priors row (asr included)");
+  ok(score.priorsFor("asr", "voicestudio").fit > 0.9, "the voicestudio ASR prior exists");
+  // The inheritance: reading the asr capability with no ai.asr row returns
+  // the tts answer — one inheritance point, byte-identical behavior unset.
+  const settings = await import("../src/lib/tubeforge/providers/settings");
+  const ttsCfg = await settings.getCapability("tts");
+  const asrCfg = await settings.getCapability("asr");
+  eq(asrCfg.provider, ttsCfg.provider, "unset asr rides the tts provider");
+  eq(asrCfg.model ?? "", ttsCfg.model ?? "", "unset asr rides the tts model");
+  eq(asrCfg.baseUrl ?? "", ttsCfg.baseUrl ?? "", "unset asr rides the tts base URL");
+  // The ai.asr key is the one way out (the saved row wins).
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

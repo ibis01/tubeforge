@@ -112,6 +112,76 @@ async function asrOnce(filePath: string): Promise<string> {
 const ASR_CHUNK_SEC = 25;
 
 /**
+ * S121 — shift one ASR word by a chunk's absolute start (seconds). PURE and
+ * unit-pinned: chunked audio's word times are chunk-relative; the measured
+ * ladder shifts each chunk's words by that chunk's MEASURED start — never an
+ * assumed 25.000 s.
+ */
+export function shiftAsrWord(
+  word: { word: string; start: number; end: number },
+  offsetSec: number,
+): { word: string; start: number; end: number } {
+  return {
+    word: word.word,
+    start: word.start + offsetSec,
+    end: word.end + offsetSec,
+  };
+}
+
+/**
+ * S121 — the detailed pass over ANY-length audio: same chunking law as
+ * transcribe() (≤25 s WAV segments), but each chunk rides the DETAILED ASR
+ * pass and its word timestamps are shifted by the chunk's MEASURED start
+ * (probed per chunk file — a chunk's real length is never assumed). Throws
+ * AsrWordsUnsupportedError (typed) when the configured provider cannot serve
+ * words — the alignment ladder catches it and degrades; other errors
+ * propagate as usual (the ladder catches everything anyway).
+ */
+export async function transcribeWords(
+  filePath: string
+): Promise<{ text: string; words: { word: string; start: number; end: number }[] }> {
+  const { asrTranscribeDetailed } = await import(
+    "./providers/asr"
+  );
+  const durationSec = await probeDurationSec(filePath);
+  if (durationSec <= 28) {
+    const buffer = fs.readFileSync(filePath);
+    const detailed = await asrTranscribeDetailed(buffer);
+    return { text: detailed.text, words: detailed.words };
+  }
+
+  const chunkDir = `${filePath}.chunks-${Date.now()}`;
+  fs.mkdirSync(chunkDir, { recursive: true });
+  try {
+    await execFileAsync("ffmpeg", [
+      "-y", "-i", filePath,
+      "-vn", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
+      "-f", "segment", "-segment_time", String(ASR_CHUNK_SEC),
+      path.join(chunkDir, "chunk-%03d.wav"),
+    ]);
+    const chunks = fs.readdirSync(chunkDir).sort();
+    if (chunks.length === 0) throw new Error("audio chunking produced no files");
+
+    const texts: string[] = [];
+    const words: { word: string; start: number; end: number }[] = [];
+    let measuredStart = 0; // the cumulative MEASURED start of the current chunk
+    for (const [i, chunk] of chunks.entries()) {
+      const chunkPath = path.join(chunkDir, chunk);
+      const chunkDur = await probeDurationSec(chunkPath); // MEASURED, never assumed
+      if (i > 0) await new Promise((r) => setTimeout(r, 1500)); // pace ASR calls
+      const buffer = fs.readFileSync(chunkPath);
+      const detailed = await asrTranscribeDetailed(buffer);
+      texts.push(detailed.text);
+      for (const w of detailed.words) words.push(shiftAsrWord(w, measuredStart));
+      measuredStart += chunkDur;
+    }
+    return { text: texts.join(" "), words };
+  } finally {
+    fs.rmSync(chunkDir, { recursive: true, force: true });
+  }
+}
+
+/**
  * Transcribe any-length audio: long files are split into ≤25s WAV chunks
  * (upstream accepts only WAV/WebM) with ffmpeg's segment muxer, each chunk
  * is ASR'd, transcripts joined.

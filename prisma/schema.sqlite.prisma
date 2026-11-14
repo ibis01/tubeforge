@@ -727,6 +727,17 @@ model VoiceProfile {
   durationSec     Float? // length of the source sample
   auditionWav     String? // base64 WAV returned by the clone call (short preview)
   sampleWav       String? // base64 normalized sample — self-hosted clones re-send it per synthesis
+  // S121 — external voice services (VoiceStudio) + the consent ledger.
+  // remoteVoiceId: the provider-native voice id (e.g. a VoiceStudio 8-hex
+  // profile id) — the value spoken on the wire when the local alias rides.
+  remoteVoiceId   String?
+  // The consent ledger: WHOSE voice this is and on what basis the uploader
+  // claims the right to clone it (the VoiceStudio-verified vocabulary —
+  // "own_voice" | "speaker_permission"). Fail-open: legacy rows keep null;
+  // the ledger grows as users fill it in, it never blocks a clone.
+  consentText      String?   // the uploader's consent statement (who owns the voice)
+  consentRecordedAt DateTime?
+  consentBasis     String?   // "own_voice" | "speaker_permission" — the VoiceStudio-verified vocabulary
   isActive        Boolean      @default(true)
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt

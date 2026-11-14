@@ -14,7 +14,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/tubeforge/tenant";
 import { getCapability } from "@/lib/tubeforge/providers/settings";
-import { cloneVoice, isCloneProvider, pickCloneProvider } from "@/lib/tubeforge/voice-clone";
+import { cloneVoice, isCloneProvider, isConsentBasis, pickCloneProvider } from "@/lib/tubeforge/voice-clone";
 import { errorText } from "@/lib/tubeforge/redact";
 
 export async function POST(req: NextRequest) {
@@ -36,6 +36,8 @@ export async function POST(req: NextRequest) {
       provider = "selfhost";
     } else if (active.provider === "zhipu" && active.apiKey?.trim()) {
       provider = "zhipu";
+    } else if (active.provider === "voicestudio" && (active.baseUrl?.trim() || active.apiKey?.trim())) {
+      provider = "voicestudio";
     }
   }
 
@@ -57,6 +59,24 @@ export async function POST(req: NextRequest) {
   const auditionText =
     typeof form.get("auditionText") === "string" ? String(form.get("auditionText")) : "";
 
+  // S121 consent ledger — the uploader records WHOSE voice this is and the
+  // basis of their claim. Optional today (legacy rows have null), persisted
+  // on every clone when supplied; the UI prompts for it next to the upload.
+  const consentText =
+    typeof form.get("consentText") === "string" ? String(form.get("consentText")).trim() : "";
+  const consentBasisRaw =
+    typeof form.get("consentBasis") === "string" ? String(form.get("consentBasis")).trim() : "";
+  if (consentText && !isConsentBasis(consentBasisRaw)) {
+    return NextResponse.json(
+      { error: "consentBasis must be 'own_voice' or 'speaker_permission'" },
+      { status: 400 }
+    );
+  }
+  const consent =
+    consentText && isConsentBasis(consentBasisRaw)
+      ? { text: consentText, basis: consentBasisRaw }
+      : undefined;
+
   if (!(file instanceof File) && typeof url !== "string")
     return NextResponse.json(
       { error: "Attach the voice sample as 'file', or pass a direct audio link as 'url'" },
@@ -77,6 +97,7 @@ export async function POST(req: NextRequest) {
       sampleText,
       auditionText,
       provider,
+      consent,
     });
     return NextResponse.json({
       ok: true,

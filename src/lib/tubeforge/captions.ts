@@ -24,7 +24,7 @@ import path from "path";
 import { promisify } from "util";
 import type { Scene } from "./types";
 import { sceneWavFile } from "./story";
-import { transcribe } from "./verify";
+import { transcribe, transcribeWords } from "./verify";
 
 const execFileAsync = promisify(execFile);
 
@@ -272,6 +272,51 @@ export function wavChunkWindows(
   });
 }
 
+// ---------- S121 — the measured rung's chunk windows ----------
+
+/** An ASR word timestamp (absolute seconds inside the scene WAV). */
+export interface AsrWordSpan {
+  word: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * S121 RUNG 1 — the MEASURED chunk windows: instead of spreading the word
+ * stream proportionally across the speech runs, each chunk's window is the
+ * measured span of the words the transcript cursor assigned to it. The laws
+ * of wavChunkWindows carry over unchanged (unit-pinned):
+ *   • a window never runs shorter than 0.4 s (extended, never shrunk — the
+ *     measured truth is the floor, not a target);
+ *   • windows NEVER overlap (a cursor drift clamps the start forward);
+ *   • the output is monotone.
+ * Null when the word stream cannot hold the chunks (drift lost a whole
+ * chunk's words) — the caller degrades to the proportional rung, byte-identical.
+ * Pure — unit-pinned.
+ */
+export function chunkWindowsFromWordTimes(
+  words: AsrWordSpan[],
+  ends: number[]
+): { startSec: number; endSec: number }[] | null {
+  if (words.length === 0 || ends.length === 0) return null;
+  const windows: { startSec: number; endSec: number }[] = [];
+  let prevEnd = -1;
+  for (let i = 0; i < ends.length; i++) {
+    const startIdx = Math.min(i === 0 ? 0 : ends[i - 1], words.length - 1);
+    const endIdx = Math.min(ends[i] - 1, words.length - 1);
+    if (endIdx < startIdx) return null; // the cursor lost this chunk's words
+    const first = words[startIdx];
+    const last = words[endIdx];
+    if (!first || !last) return null;
+    let startSec = Math.min(first.start, last.end);
+    const endSec = Math.max(last.end, startSec + 0.4); // the 0.4 s floor
+    if (i > 0 && startSec < prevEnd) startSec = prevEnd; // the non-overlap law
+    windows.push({ startSec, endSec });
+    prevEnd = endSec;
+  }
+  return windows;
+}
+
 // ---------- SRT ----------
 
 function srtTime(sec: number): string {
@@ -419,6 +464,46 @@ export async function buildSmartSrt(
     if (opts.asr) {
       try {
         opts.onProgress?.(`Syncing captions for scene ${scene.index} (ASR)`);
+        // S121 RUNG 1 — the MEASURED pass first: word timestamps decide where
+        // chunks sit (the whisperx ±10-30 ms class). Anything that refuses —
+        // a provider without word support (typed signal), a server hiccup,
+        // a word stream that can't hold the chunks — degrades to RUNG 2
+        // below, byte-identical: the ladder never fails a render.
+        let measured: { text: string; words: AsrWordSpan[] } | null = null;
+        try {
+          const detailed = await transcribeWords(wavPath);
+          if (detailed.words.length > 0) measured = detailed;
+        } catch {
+          measured = null; // typed unsupported / transient error → rung 2
+        }
+
+        if (measured) {
+          const tokens = measured.words.map(
+            (w) => tokenizeKeepAll(w.word)[0] ?? w.word.trim().toLowerCase()
+          );
+          const measuredEnds = chunkEndPositionsByTranscript(chunks, tokens);
+          const measuredWindows = chunkWindowsFromWordTimes(measured.words, measuredEnds);
+          if (measuredWindows) {
+            const windows = measuredWindows;
+            chunks.forEach((chunk, ci) => {
+              const { startSec: wavStart, endSec: rawWavEnd } = windows[ci];
+              const globalStart = Math.max(
+                segment.start + 0.02,
+                segment.start + LEAD_SEC + wavStart - 0.08
+              );
+              const rawEnd = segment.start + LEAD_SEC + Math.max(rawWavEnd, wavStart + 0.4);
+              cues.push({
+                start: globalStart,
+                end: Math.min(rawEnd, segment.start + segment.duration),
+                text: chunk.text,
+              });
+            });
+            method = "asr";
+            continue;
+          }
+          // windows null → fall through to the proportional rung below.
+        }
+
         const transcript = await transcribe(wavPath);
         const transcriptTokens = tokenizeKeepAll(transcript);
         if (transcriptTokens.length >= chunks[0].words.length) {

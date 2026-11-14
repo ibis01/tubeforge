@@ -42,7 +42,7 @@ import { imageTestFreeLane } from "@/lib/tubeforge/providers/registry";
 import { errorText } from "@/lib/tubeforge/redact";
 import { imageToVideo } from "@/lib/tubeforge/providers/video";
 
-const CAPABILITIES: CapabilityId[] = ["chat", "tts", "image", "video"];
+const CAPABILITIES: CapabilityId[] = ["chat", "tts", "asr", "image", "video"];
 
 /** 1x1 transparent PNG — enough bytes to exercise a vision/edit wire call. */
 const TINY_PNG_BASE64 =
@@ -283,6 +283,57 @@ export async function POST(req: NextRequest) {
           reply: `Spoke ${(buffer.length / 1024).toFixed(0)} KB of WAV`,
           latencyMs: Date.now() - started,
         });
+      }
+      case "asr": {
+        // S121 — the transcription probe is an AUTH probe, not a synthesis:
+        // a real test would need audio to transcribe (and could bill). The
+        // wire-capable providers answer GET /models with the same key the
+        // detailed pass carries — a 200 certifies the credential + base URL.
+        const cfg = await getCapability("asr", overrides);
+        if (cfg.provider === "zai") {
+          return NextResponse.json({
+            ok: true,
+            capability: "asr",
+            reply: "Z.ai ASR rides the shared Z.ai key — no separate probe (no word timestamps; the silence ladder covers timing)",
+            latencyMs: Date.now() - started,
+          });
+        }
+        const meta = cfg.provider === "voicestudio"
+          ? PROVIDERS_BY_CAPABILITY.asr.find((p) => p.id === "voicestudio")
+          : PROVIDERS_BY_CAPABILITY.asr.find((p) => p.id === "openai");
+        const baseUrl =
+          cfg.baseUrl?.trim() ||
+          meta?.defaultBaseUrl ||
+          (cfg.provider === "voicestudio" ? "http://127.0.0.1:3900" : "https://api.openai.com/v1");
+        const key = cfg.apiKey?.trim();
+        const probeUrl = cfg.provider === "voicestudio"
+          ? `${baseUrl.replace(/\/+$/, "")}/v1/models`
+          : `${baseUrl.replace(/\/+$/, "")}/models`;
+        const headers: Record<string, string> = {};
+        if (key) headers.Authorization = `Bearer ${key}`;
+        try {
+          const res = await fetch(probeUrl, { headers, signal: AbortSignal.timeout(10_000) });
+          if (!res.ok) {
+            const text = await res.text().catch(() => "");
+            return NextResponse.json({
+              ok: false,
+              capability: "asr",
+              error: `Transcription probe failed (HTTP ${res.status}): ${text.slice(0, 160)}`,
+            }, { status: 200 });
+          }
+          return NextResponse.json({
+            ok: true,
+            capability: "asr",
+            reply: `Transcription credential accepted by ${cfg.provider === "voicestudio" ? "your VoiceStudio server" : "the OpenAI-compatible endpoint"} — word timestamps ride the detailed pass`,
+            latencyMs: Date.now() - started,
+          });
+        } catch (err) {
+          return NextResponse.json({
+            ok: false,
+            capability: "asr",
+            error: `The transcription endpoint is unreachable: ${err instanceof Error ? err.message : String(err)}`,
+          }, { status: 200 });
+        }
       }
       case "image":
       case "imageEdit": {

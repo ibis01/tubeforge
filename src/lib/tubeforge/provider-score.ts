@@ -74,11 +74,24 @@ const CHAT_PRIORS: Record<string, ProviderPriors> = {
 /** TTS priors — fit is dominated by voice CLONING support. */
 const TTS_PRIORS: Record<string, ProviderPriors> = {
   zai: { quality: 0.78, latency: 0.85, fit: 0.8 }, // 7 studio voices, zero setup
+  // S121 — the user's own VoiceStudio server: expressive multi-engine TTS
+  // (20+ engines), zero marginal cost, user-controlled hardware. Priors are
+  // STARTING BELIEFS per the file header; the audited engine quality spread
+  // (voxcpm2/cosyvoice permissive lanes) drives them.
+  voicestudio: { quality: 0.85, latency: 0.45, fit: 0.88 },
   zhipu: { quality: 0.88, latency: 0.75, fit: 0.95 }, // the cloning lane
   heygen: { quality: 0.76, latency: 0.88, fit: 0.72 }, // free turbo lane; public voice ids, no clone-from-sample
   selfhost: { quality: 0.7, latency: 0.3, fit: 0.85 }, // free forever, CPU speed, cloning
   openai: { quality: 0.82, latency: 0.85, fit: 0.78 },
   elevenlabs: { quality: 0.95, latency: 0.8, fit: 0.9 },
+};
+
+/** S121 — ASR priors: fit is dominated by WORD-TIMESTAMP support (the
+ *  measured alignment rung's whole point). */
+const ASR_PRIORS: Record<string, ProviderPriors> = {
+  voicestudio: { quality: 0.85, latency: 0.5, fit: 0.95 }, // verbose_json word timestamps
+  openai: { quality: 0.82, latency: 0.75, fit: 0.8 }, // whisper-1 word granularity
+  zai: { quality: 0.78, latency: 0.85, fit: 0.6 }, // no word timestamps — the silence ladder covers timing
 };
 
 /** Image priors — fit is dominated by identity-locked EDIT support. */
@@ -120,6 +133,7 @@ const VIDEO_PRIORS: Record<string, ProviderPriors> = {
 const PRIORS_BY_CAPABILITY: Record<CapabilityId, Record<string, ProviderPriors>> = {
   chat: CHAT_PRIORS,
   tts: TTS_PRIORS,
+  asr: ASR_PRIORS,
   image: IMAGE_PRIORS,
   video: VIDEO_PRIORS,
 };

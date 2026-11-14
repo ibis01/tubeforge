@@ -20,13 +20,14 @@
 import type { SpeechRun } from "../captions";
 import {
   captionChunks,
-  chunkEndPositionsByNarration,
   chunkEndPositionsByTranscript,
+  chunkEndPositionsByNarration,
+  chunkWindowsFromWordTimes,
   detectSpeechRuns,
   tokenizeKeepAll,
   wavChunkWindows,
 } from "../captions";
-import { transcribe } from "../verify";
+import { transcribe, transcribeWords } from "../verify";
 import { anchorEnvelope, type WordAnchors } from "./timing";
 import { words } from "./beat-plan";
 
@@ -48,6 +49,15 @@ export interface BuildVoiceAnchorsInput {
   runs: SpeechRun[];
   /** The scene's clock (ms) — spans are clamped inside it. */
   sceneDurationMs: number;
+  /** S121 RUNG 1 — the MEASURED chunk windows (seconds, absolute in the
+   *  scene WAV) from the detailed ASR pass. Absent/null → the proportional
+   *  baseline below runs BYTE-IDENTICAL (the slice-1 hard pin). */
+  measuredWindows?: { startSec: number; endSec: number }[] | null;
+  /** S121 RUNG 1 — per-chunk per-beat-word measured spans (ms), either
+   *  mapped 1:1 onto each chunk's beat words (when the chunk's measured
+   *  word count matches) or exactly counts[i] entries. Absent → the
+   *  chunk's measured window spreads across its beat words. */
+  measuredWordSpansMs?: { startMs: number; endMs: number }[][] | null;
 }
 
 /**
@@ -67,7 +77,16 @@ export interface BuildVoiceAnchorsInput {
  * degrades — it never corrupts the choreography.
  */
 export function buildVoiceAnchors(input: BuildVoiceAnchorsInput): WordAnchors | null {
-  const { narration, chunks, ends, totalWords, runs, sceneDurationMs } = input;
+  const {
+    narration,
+    chunks,
+    ends,
+    totalWords,
+    runs,
+    sceneDurationMs,
+    measuredWindows,
+    measuredWordSpansMs,
+  } = input;
   if (!narration || narration.trim() === "") return null;
   if (chunks.length === 0 || ends.length !== chunks.length) return null;
   if (!(totalWords > 0) || runs.length === 0) return null;
@@ -98,6 +117,37 @@ export function buildVoiceAnchors(input: BuildVoiceAnchorsInput): WordAnchors | 
       // it still owned a window; skip its span, keep the stream contiguous.
       continue;
     }
+    // S121 RUNG 1 — the MEASURED spans win when present: per-beat-word spans
+    // mapped 1:1 (exactly counts[i] entries) or the chunk's measured window
+    // spread across its beat words. The scene clock still clamps (and a
+    // clock that cannot hold a span degrades to null — the measured truth
+    // never overruns the render).
+    const spans = measuredWordSpansMs?.[i];
+    const measuredWindow = measuredWindows?.[i];
+    if (spans && spans.length === count) {
+      for (let k = 0; k < count; k++) {
+        const wStart = Math.min(Math.max(0, Math.round(spans[k].startMs)), sceneDurationMs - 1);
+        const wEnd = Math.min(Math.max(0, Math.round(spans[k].endMs)), sceneDurationMs - 1);
+        if (!(wEnd > wStart)) return null;
+        byWord.push({ index, startMs: wStart, endMs: wEnd });
+        index += 1;
+      }
+      continue;
+    }
+    if (measuredWindow && measuredWindow.endSec > measuredWindow.startSec) {
+      const startMs = measuredWindow.startSec * 1000;
+      const durMs = (measuredWindow.endSec - measuredWindow.startSec) * 1000;
+      for (let k = 0; k < count; k++) {
+        const wStart = Math.min(Math.round(startMs + (durMs * k) / count), sceneDurationMs - 1);
+        const wEnd = Math.min(Math.round(startMs + (durMs * (k + 1)) / count), sceneDurationMs - 1);
+        if (!(wEnd > wStart)) return null;
+        byWord.push({ index, startMs: wStart, endMs: wEnd });
+        index += 1;
+      }
+      continue;
+    }
+    // The proportional baseline (rung 2) — BYTE-IDENTICAL when the measured
+    // rung is absent.
     const startSec = windows[i].startSec;
     const endSec = windows[i].endSec;
     if (!(endSec > startSec)) return null;
@@ -155,6 +205,65 @@ export async function sceneVoiceAnchors(args: SceneVoiceAnchorsArgs): Promise<Wo
   if (runs.length === 0) return null;
   const chunks = captionChunks(narration);
   if (chunks.length === 0) return null;
+
+  // S121 RUNG 1 — the MEASURED ladder: the detailed ASR pass answers with
+  // per-word timestamps; the transcript cursor assigns chunks to words; the
+  // chunk windows come from the MEASURED word times and each chunk's beat
+  // words ride its measured words 1:1 (equal counts) or proportionally
+  // inside the measured window. Anything that refuses — a provider without
+  // word support (the typed signal), a server hiccup, a word stream that
+  // cannot hold the chunks — falls through to the historical ladder below,
+  // BYTE-IDENTICAL: the rung upgrades, it never breaks.
+  if (args.asr) {
+    try {
+      const detailed = await transcribeWords(args.voPath);
+      if (detailed.words.length > 0) {
+        const tokens: string[] = detailed.words.map(
+          (w) => tokenizeKeepAll(w.word)[0] ?? w.word.trim().toLowerCase()
+        );
+        if (tokens.length >= chunks[0].words.length) {
+          const measuredEnds = chunkEndPositionsByTranscript(chunks, tokens);
+          const measuredWindows = chunkWindowsFromWordTimes(detailed.words, measuredEnds);
+          if (measuredWindows) {
+            // Per-chunk per-beat-word spans: 1:1 when the chunk's measured
+            // word count matches its beat count, else proportional inside
+            // the chunk's measured window.
+            const spans: { startMs: number; endMs: number }[][] = [];
+            for (let i = 0; i < chunks.length; i++) {
+              const beatCount = words(chunks[i].text ?? "").length;
+              const startIdx = Math.min(i === 0 ? 0 : measuredEnds[i - 1], detailed.words.length - 1);
+              const endIdx = Math.min(measuredEnds[i] - 1, detailed.words.length - 1);
+              const chunkWords = beatCount > 0 && endIdx >= startIdx
+                ? detailed.words.slice(startIdx, endIdx + 1)
+                : [];
+              if (chunkWords.length === beatCount) {
+                spans.push(
+                  chunkWords.map((w) => ({
+                    startMs: w.start * 1000,
+                    endMs: w.end * 1000,
+                  }))
+                );
+              } else {
+                spans.push([]); // no 1:1 — the window path spreads instead
+              }
+            }
+            return buildVoiceAnchors({
+              narration,
+              chunks,
+              ends: measuredEnds,
+              totalWords: Math.max(tokens.length, measuredEnds[measuredEnds.length - 1]),
+              runs,
+              sceneDurationMs: args.sceneDurationMs,
+              measuredWindows,
+              measuredWordSpansMs: spans,
+            });
+          }
+        }
+      }
+    } catch {
+      // The typed unsupported signal / transient error → the historical rung.
+    }
+  }
 
   // The captions lane's own ladder (buildSmartSrt, verbatim shape):
   // transcript cursor when the ASR pass answers with enough tokens, the
