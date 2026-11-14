@@ -32,6 +32,7 @@ import { aiCall } from "./budget";
 import { llmVision } from "./llm";
 import { parseJsonLoose, videoDir } from "./ai";
 import { parseScenes } from "./story";
+import { parsePlan, sceneScaleMotionFindings, type SceneScaleMotionFinding } from "./director-plan";
 import { verdictFromScore, parseConsistencyReport } from "./visual-consistency";
 import { sampleFramesEvenly, VISUAL_SCAN_FRAMES } from "./visual-qc";
 import { errorText } from "./redact";
@@ -139,6 +140,27 @@ export function dimensionFromChecks(
     };
   }
   return { ...base, status: "pass" }; // everything measured and passed
+}
+
+/**
+ * S121 P1 — the plan-time scene-scale-motion findings ride the motion
+ * dimension's issues: the human reviewer sees the mismatch (an ACTING claim
+ * that only moves the frame) without the status being touched by it — the
+ * findings are ADVISORY, nothing auto-changes a plan. The 6-issue cap holds.
+ * PURE.
+ */
+export function motionDimensionWithFindings(
+  motion: CriticDimension,
+  findings: SceneScaleMotionFinding[]
+): CriticDimension {
+  if (findings.length === 0) return motion;
+  return {
+    ...motion,
+    issues: [
+      ...motion.issues,
+      ...findings.map((f) => `scene ${f.sceneIndex}: ${f.reason}`),
+    ].slice(0, 6),
+  };
 }
 
 /** The consistency row from the stored VCE report: the WORST checked
@@ -346,6 +368,7 @@ export async function runVideoCritic(videoId: string): Promise<CriticReport> {
       scenes: true,
       consistency: true,
       qcReport: true,
+      shotList: true,
     },
   });
   if (!video) throw new Error("Video not found");
@@ -363,7 +386,16 @@ export async function runVideoCritic(videoId: string): Promise<CriticReport> {
   const checks: QcCheck[] = qc?.checks ?? [];
   if (!qc) unavailable.push("qc: no stored QC report — run the QC battery first");
   for (const id of ["technical", "motion", "audio"] as const) {
-    dimensions.push(dimensionFromChecks(id, checks));
+    let dimension = dimensionFromChecks(id, checks);
+    // S121 P1 — the plan's scene-scale-motion findings ride the motion row.
+    if (id === "motion" && video.shotList) {
+      const plan = parsePlan(video.shotList);
+      if (plan) {
+        const findings = plan.scenes.flatMap((s) => sceneScaleMotionFindings(s));
+        dimension = motionDimensionWithFindings(dimension, findings);
+      }
+    }
+    dimensions.push(dimension);
   }
 
   // 2. The consistency row — from the stored VCE report.

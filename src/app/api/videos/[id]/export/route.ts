@@ -11,7 +11,7 @@ import { resolveMusicForVideo, isMusicEnabledForVideo, musicBedActive } from "@/
 import { docMusicPick } from "@/lib/tubeforge/studio-doc";
 import { parseTimeline } from "@/lib/tubeforge/timeline";
 import { getApprovedAudioMap } from "@/lib/tubeforge/director-plan";
-import { applyQcPolicy, parseQcReport, qcEnforcementMode, qcOverrideValid } from "@/lib/tubeforge/qc-policy";
+import { applyQcPolicy, overrideNoteText, parseQcReport, qcEnforcementMode, qcOverrideEvidenceValid, stampOverrideNote } from "@/lib/tubeforge/qc-policy";
 import { renderStaleness } from "@/lib/tubeforge/render-assembly";
 import * as storage from "@/lib/tubeforge/storage";
 
@@ -44,7 +44,9 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   // script-only exports (no render) have nothing to measure.
   const qcReport = video.hasVideo ? parseQcReport(video.qcReport) : null;
   const gate = applyQcPolicy(qcReport, { mode: qcEnforcementMode() });
-  const overrideOk = qcOverrideValid(video, qcReport);
+  // S121 P1 — the override must cover the report's CONTENT (the stamped
+  // evidence hash), not just its checkedAt anchor.
+  const overrideOk = qcOverrideEvidenceValid(video, qcReport);
   if (video.hasVideo && gate.blocked && !overrideOk) {
     return NextResponse.json(
       {
@@ -147,7 +149,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       // bundle months later sees that it shipped on a human's explicit
       // acceptance, which findings, and why.
       video.hasVideo && overrideOk && video.qcOverrideNote
-        ? `QC OVERRIDE: shipped on accepted findings — ${video.qcOverrideNote} (accepted ${
+        ? `QC OVERRIDE: shipped on accepted findings — ${overrideNoteText(video.qcOverrideNote)} (accepted ${
             video.qcOverrideAt ? video.qcOverrideAt.toISOString() : "unknown time"
           } for the report checked at ${qcReport?.checkedAt ?? "unknown"})`
         : ``,
@@ -410,7 +412,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     where: { id },
     data: {
       qcOverrideAt: new Date(),
-      qcOverrideNote: note,
+      // S121 P1 — the note is stamped with the accepted report's EVIDENCE
+      // hash: the override covers WHAT the human accepted, not just WHEN.
+      qcOverrideNote: stampOverrideNote(note, report),
       qcOverrideForCheckedAt: report.checkedAt,
     },
   });

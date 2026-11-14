@@ -20,10 +20,10 @@
 import type { SpeechRun } from "../captions";
 import {
   captionChunks,
-  chunkEndPositionsByTranscript,
   chunkEndPositionsByNarration,
-  chunkWindowsFromWordTimes,
+  chunkEndPositionsByTranscript,
   detectSpeechRuns,
+  measuredAlignment,
   tokenizeKeepAll,
   wavChunkWindows,
 } from "../captions";
@@ -207,57 +207,52 @@ export async function sceneVoiceAnchors(args: SceneVoiceAnchorsArgs): Promise<Wo
   if (chunks.length === 0) return null;
 
   // S121 RUNG 1 — the MEASURED ladder: the detailed ASR pass answers with
-  // per-word timestamps; the transcript cursor assigns chunks to words; the
-  // chunk windows come from the MEASURED word times and each chunk's beat
-  // words ride its measured words 1:1 (equal counts) or proportionally
-  // inside the measured window. Anything that refuses — a provider without
-  // word support (the typed signal), a server hiccup, a word stream that
-  // cannot hold the chunks — falls through to the historical ladder below,
-  // BYTE-IDENTICAL: the rung upgrades, it never breaks.
+  // per-word timestamps and the ONE measured alignment (measuredAlignment —
+  // the caption cues' own computation, the one-alignment law) places every
+  // chunk. Each chunk's beat words ride its measured words 1:1 (equal
+  // counts) or proportionally inside the measured window. Anything that
+  // refuses — a provider without word support (the typed signal), a server
+  // hiccup, a word stream that cannot hold the chunks — falls through to the
+  // historical ladder below, BYTE-IDENTICAL: the rung upgrades, it never
+  // breaks.
   if (args.asr) {
     try {
       const detailed = await transcribeWords(args.voPath);
       if (detailed.words.length > 0) {
-        const tokens: string[] = detailed.words.map(
-          (w) => tokenizeKeepAll(w.word)[0] ?? w.word.trim().toLowerCase()
-        );
-        if (tokens.length >= chunks[0].words.length) {
-          const measuredEnds = chunkEndPositionsByTranscript(chunks, tokens);
-          const measuredWindows = chunkWindowsFromWordTimes(detailed.words, measuredEnds);
-          if (measuredWindows) {
-            // Per-chunk per-beat-word spans: 1:1 when the chunk's measured
-            // word count matches its beat count, else proportional inside
-            // the chunk's measured window.
-            const spans: { startMs: number; endMs: number }[][] = [];
-            for (let i = 0; i < chunks.length; i++) {
-              const beatCount = words(chunks[i].text ?? "").length;
-              const startIdx = Math.min(i === 0 ? 0 : measuredEnds[i - 1], detailed.words.length - 1);
-              const endIdx = Math.min(measuredEnds[i] - 1, detailed.words.length - 1);
-              const chunkWords = beatCount > 0 && endIdx >= startIdx
-                ? detailed.words.slice(startIdx, endIdx + 1)
-                : [];
-              if (chunkWords.length === beatCount) {
-                spans.push(
-                  chunkWords.map((w) => ({
-                    startMs: w.start * 1000,
-                    endMs: w.end * 1000,
-                  }))
-                );
-              } else {
-                spans.push([]); // no 1:1 — the window path spreads instead
-              }
+        const aligned = measuredAlignment(chunks, detailed.words);
+        if (aligned) {
+          // Per-chunk per-beat-word spans: 1:1 when the chunk's measured
+          // word count matches its beat count, else proportional inside
+          // the chunk's measured window.
+          const spans: { startMs: number; endMs: number }[][] = [];
+          for (let i = 0; i < chunks.length; i++) {
+            const beatCount = words(chunks[i].text ?? "").length;
+            const startIdx = Math.min(i === 0 ? 0 : aligned.ends[i - 1], detailed.words.length - 1);
+            const endIdx = Math.min(aligned.ends[i] - 1, detailed.words.length - 1);
+            const chunkWords = beatCount > 0 && endIdx >= startIdx
+              ? detailed.words.slice(startIdx, endIdx + 1)
+              : [];
+            if (chunkWords.length === beatCount) {
+              spans.push(
+                chunkWords.map((w) => ({
+                  startMs: w.start * 1000,
+                  endMs: w.end * 1000,
+                }))
+              );
+            } else {
+              spans.push([]); // no 1:1 — the window path spreads instead
             }
-            return buildVoiceAnchors({
-              narration,
-              chunks,
-              ends: measuredEnds,
-              totalWords: Math.max(tokens.length, measuredEnds[measuredEnds.length - 1]),
-              runs,
-              sceneDurationMs: args.sceneDurationMs,
-              measuredWindows,
-              measuredWordSpansMs: spans,
-            });
           }
+          return buildVoiceAnchors({
+            narration,
+            chunks,
+            ends: aligned.ends,
+            totalWords: Math.max(aligned.tokens.length, aligned.ends[aligned.ends.length - 1]),
+            runs,
+            sceneDurationMs: args.sceneDurationMs,
+            measuredWindows: aligned.windows,
+            measuredWordSpansMs: spans,
+          });
         }
       }
     } catch {
