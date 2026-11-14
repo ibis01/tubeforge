@@ -108,3 +108,41 @@ behavior byte-identical; the voicestudio rows are inert until configured;
 the P2 modules have zero importers (zero behavioral risk); the schema
 columns are additive and nullable. No grammar-breaking growth: the
 G-series graphics grammar changes only via recorded design slices.
+
+## 7. The deployment security posture (the operator half of the law)
+
+Added after VoiceStudio's 2026-11-14 hardening landed (verified upstream:
+`001470e` — the route-authorization census, "fail any mutating route that
+ships without an authorization decision"; `9a46ebd` — consumer/admin
+authorization gating the model-lifecycle routes; both confirmed by commit
+query on the day of this edit). That hardening authorizes VoiceStudio's
+HTTP mutating routes. It does NOT close the deployment surface: its own
+`docs/api-auth.md` documents that `/ws/tts` and `/ws/events` ride API-key
+middleware alone, and that with no `OMNIVOICE_API_KEY` configured remote
+connections keep their bootstrap behavior — the HTTP share PIN does not
+protect those lanes.
+
+The integration's exposure is bounded by what TubeForge's client speaks:
+HTTP only (`POST /v1/audio/speech`, the transcription lane, the deferred
+`/dub/*` builders). TubeForge never touches VoiceStudio's WebSocket lanes
+(`providers/voicestudio-extra.ts` + the TTS/ASR adapters are the whole
+surface). But the transport posture is the operator's, not the code's, and
+the deployment law for any server TubeForge reaches is therefore:
+
+1. **Private network placement** — VoiceStudio listens only where
+   TubeForge can reach it over a trusted network (loopback, VPC, VPN);
+   never a public ingress. The client already assumes this shape: the
+   default baseUrl is loopback (`127.0.0.1:3900`), and net-guard keeps
+   everything ELSE (voice imports, media downloads) locked to public
+   hosts regardless of env flags.
+2. **`OMNIVOICE_API_KEY` set on any remote deployment** — the adapter
+   rides `Authorization: Bearer` when a key is configured and runs
+   keyless on loopback by design; keys never reach logs (`redactText`
+   in `providerFetch`). An unauthenticated VoiceStudio reachable from
+   outside its own host is a mis-deployment, not a fallback — the
+   no-silent-fallback law applies to transport too.
+3. **The two guards never substitute for each other** — the private
+   network protects the SERVICE; the fail-closed model-license policy
+   (§2) protects the RENDERS. A keyless engine behind a perfect firewall
+   still cannot bill; a licensed engine on an open socket is still a
+   compromised deployment. Both laws hold simultaneously.
