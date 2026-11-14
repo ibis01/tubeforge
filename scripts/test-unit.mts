@@ -157,6 +157,7 @@ import {
   validateGraphicsDoc,
   writeGraphicsDoc,
   type GraphicsDoc,
+  type GraphicsScene,
 } from "../src/lib/tubeforge/graphics/types";
 import {
   frameAt,
@@ -164,6 +165,13 @@ import {
   GRAPHICS_MOTION_SEMANTICS,
   type GraphicsFrameState,
 } from "../src/lib/tubeforge/graphics/frame";
+import {
+  APPLY_GRAPHICS_FRAME_FN,
+  composeGraphicsScene,
+  formatCounter,
+  GRAPHICS_COMPOSE_DEFAULTS,
+  graphicsFramePayload,
+} from "../src/lib/tubeforge/graphics/compose";
 
 const execFileAsync = promisify(execFile);
 
@@ -15662,6 +15670,200 @@ await test("G1.2 an empty doc is a caller bug — refused loudly, never fabricat
     threw = true;
   }
   eq(threw, true, "frameAt throws on scenes: []");
+});
+
+// ---------------------------------------------------------------------------
+// G1.3 — the composer (Part B): static skeleton + ONE applier. Pins: compose
+// determinism (byte-identical html/payload), the group nesting, the
+// hostile-icon fixture landing inert (sanitizeSvg + escape, never a second
+// parser), the compose defaults as the ONE table, the bar/icon/shape reveal
+// mechanisms baked per the ONE-channel law, formatCounter, the payload
+// round-trip, the poster state, and the applier's construction laws
+// (set-only writes, no element creation, no wall clock, no randomness —
+// idempotence by construction; the full DOM idempotence rides the G1.10
+// benchmark's frame-hash pin).
+// ---------------------------------------------------------------------------
+
+suiteStart("graphics — G1.3 the composer — static skeleton + one APPLY_FRAME_FN");
+
+function g3FirstScene(doc: GraphicsDoc): GraphicsScene {
+  const s = doc.scenes[0];
+  if (s === undefined) throw new Error("the doc's first scene vanished");
+  return s;
+}
+
+const G3_SCENE = g3FirstScene(G2_DOC);
+const G3 = composeGraphicsScene(G3_SCENE, G2_DOC);
+
+await test("G1.3 compose is deterministic — same scene, byte-identical html and payload", () => {
+  const b = composeGraphicsScene(G3_SCENE, G2_DOC);
+  eq(b.html, G3.html, "the skeleton is byte-stable");
+  const pa = graphicsFramePayload(frameAt(G2_DOC, 1500));
+  const pb = graphicsFramePayload(frameAt(G2_DOC, 1500));
+  eq(pb, pa, "the payload is byte-stable");
+});
+
+await test("G1.3 the skeleton carries every element; group children nest INSIDE the group", () => {
+  for (const el of G3_SCENE.elements) {
+    ok(G3.html.includes(`id="ge-${el.id}"`), `element ${el.id} present`);
+  }
+  const grp = G3.html.indexOf('id="ge-grp"');
+  const h1 = G3.html.indexOf('id="ge-h1"');
+  const ic1 = G3.html.indexOf('id="ge-ic1"');
+  ok(grp >= 0 && h1 > grp && ic1 > grp,
+    "h1 and ic1 render inside ge-grp — h1's doc position comes FIRST, so nesting moved it");
+  ok(G3.html.includes('<svg id="board" width="1920" height="1080"'), "the board root at the doc surface");
+  ok(G3.html.includes('width="1920" height="1080" fill="#ffffff"'), "the background rect is the designed canvas");
+});
+
+await test("G1.3 the hostile icon lands inert — sanitizeSvg strips the payload, escape holds the attribute", async () => {
+  const { sanitizeSvg, pathSegments, totalLength } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const hostile = 'M 0 0 L 8 8" onload="alert(1)//<script>alert(2)</script>';
+  const doc = mustValidate(gDoc([gScene("s1", [gEl("ic", "icon", { icon: { paths: [hostile] } })])]), "hostile icon");
+  const { html } = composeGraphicsScene(g3FirstScene(doc), doc);
+  ok(!html.includes("<script"), "no script element survives");
+  ok(!html.includes("onload"), "the handler payload is stripped by sanitizeSvg");
+  ok(html.includes("&quot;"), "the surviving quote rides escaped — the attribute cannot break out");
+  const expected = String(Math.round(totalLength(pathSegments(sanitizeSvg(hostile))) * 1e6) / 1e6);
+  ok(expected === "11.313708", `the sanitized path still parses to geometry (len=${expected})`);
+  ok(html.includes(`data-len="${expected}"`), "the rendered path measures what survives sanitize");
+});
+
+await test("G1.3 the compose defaults are the ONE table — absent payload fields land on it", () => {
+  const doc = mustValidate(gDoc([gScene("s1", [
+    gEl("h1", "headline", { text: { text: "T" } }),
+    gEl("ic", "icon"),
+    gEl("sp", "shape"),
+  ])]), "defaults doc");
+  const { html } = composeGraphicsScene(g3FirstScene(doc), doc);
+  ok(html.includes(`font-size="${GRAPHICS_COMPOSE_DEFAULTS.sizePx}"`), "sizePx 48");
+  ok(html.includes(`font-weight="${GRAPHICS_COMPOSE_DEFAULTS.weight}"`), "weight 700");
+  ok(html.includes(`fill="${GRAPHICS_COMPOSE_DEFAULTS.ink}"`), "the ink");
+  ok(html.includes(`stroke-width="${GRAPHICS_COMPOSE_DEFAULTS.iconStrokeWidth}"`), "icon stroke 4");
+  ok(html.includes(`stroke-width="${GRAPHICS_COMPOSE_DEFAULTS.shapeStrokeWidth}"`), "shape stroke 4");
+  ok(html.includes('fill="none"'), "shape fill defaults to none (stroke-only, the house aesthetic)");
+});
+
+await test("G1.3 bar lengths bake the data reveal — value/scaleMax × ½ surface, data-base for vertical", () => {
+  ok(G3.html.includes('data-len="270"'), "bar a: 1/2 × 540 (½ of the 1080 surface)");
+  ok(G3.html.includes('data-len="540"'), "bar b: full");
+  ok(G3.html.includes('data-axis="v"'), "vertical is the default");
+  ok(/data-base="[\d.]+"/.test(G3.html), "the baseline is baked for the grow-up applier");
+  ok(G3.html.includes(">a</text>") && G3.html.includes(">b</text>"), "the labels render");
+  const doc = mustValidate(gDoc([gScene("s1", [
+    gEl("br", "bar", { bar: { data: [{ label: "a", value: 1 }], horizontal: true } }),
+  ])]), "horizontal bar");
+  const { html } = composeGraphicsScene(g3FirstScene(doc), doc);
+  ok(html.includes('data-axis="h"'), "the horizontal flag flips the axis");
+  ok(html.includes('data-len="960"'), "value 1 of max 1 × boxW 960");
+});
+
+await test("G1.3 icon paths bake the stroke-dash reveal along their arc length (svg.ts geometry, reused)", async () => {
+  const { pathSegments, totalLength } = await import("../src/lib/tubeforge/whiteboard/svg");
+  const d = "M 0 0 L 8 8 L 16 0";
+  const expected = String(Math.round(totalLength(pathSegments(d)) * 1e6) / 1e6);
+  ok(G3.html.includes(`stroke-dasharray="${expected}"`), "dasharray = the arc length");
+  ok(G3.html.includes(`data-len="${expected}"`), "the applier's unit of account");
+  ok(!G3.html.includes("stroke-dashoffset"), "poster = fully drawn (the offset rides the applier)");
+});
+
+await test("G1.3 the ONE reveal mechanism per element — grow/wipe/draw bake differently", () => {
+  ok(G3.html.includes('data-grow="1"'), "the mixed rect (grow enter): the geometry mechanism is armed");
+  ok(G3.html.includes('data-w="120"'), "full dims always baked");
+  ok(!G3.html.includes("clipPath"), "grow bakes no clip");
+  const wipe = mustValidate(gDoc([gScene("s1", [gEl("sp", "shape", {
+    shape: { kind: "circle", r: 90 },
+    enter: { kind: "fade", durationMs: 200, delayMs: 0, ease: "linear" },
+    exit: { kind: "wipe", durationMs: 400, delayMs: 2000, ease: "linear" },
+  })])]), "wipe circle");
+  const w3 = composeGraphicsScene(g3FirstScene(wipe), wipe);
+  ok(w3.html.includes('clip-path="url(#ge-sp--wipe)"') && w3.html.includes("<clipPath"), "the exit wipe arms the clip");
+  ok(w3.html.includes('data-w="180"'), "the clip's full width baked");
+  ok(!w3.html.includes("stroke-dasharray"), "ONE mechanism — no dash on a wipe shape");
+  const draw = mustValidate(gDoc([gScene("s1", [gEl("sp", "shape", {
+    shape: { kind: "line", w: 320 },
+    enter: { kind: "draw", durationMs: 500, delayMs: 0, ease: "linear" },
+  })])]), "draw line");
+  const d3 = composeGraphicsScene(g3FirstScene(draw), draw);
+  ok(d3.html.includes('stroke-dasharray="320"'), "line draw: dasharray = the extent");
+  ok(d3.html.includes('data-len="320"') && d3.html.includes('data-fill="1"'), "the fill-after-outline flip is armed");
+  const prec = mustValidate(gDoc([gScene("s1", [gEl("sp", "shape", {
+    shape: { kind: "rect", w: 100, h: 50 },
+    enter: { kind: "fade", durationMs: 200, delayMs: 0, ease: "linear" },
+    exit: { kind: "wipe", durationMs: 400, delayMs: 2000, ease: "linear" },
+    emphasis: { kind: "draw", durationMs: 300, delayMs: 1000, ease: "linear" },
+  })])]), "mechanism precedence");
+  const p3 = composeGraphicsScene(g3FirstScene(prec), prec);
+  ok(p3.html.includes("<clipPath"), "slot order: the exit wipe wins over the emphasis draw");
+  ok(!p3.html.includes("stroke-dasharray"), "and the draw does not double-bake");
+  const filled = mustValidate(gDoc([gScene("s1", [gEl("sp", "shape", {
+    shape: { kind: "rect", w: 100, h: 50, fill: "#ff0000" },
+    enter: { kind: "grow", durationMs: 500, delayMs: 0, ease: "linear" },
+  })])]), "filled grow");
+  const f3 = composeGraphicsScene(g3FirstScene(filled), filled);
+  ok(f3.html.includes('fill="#ff0000"') && !f3.html.includes('data-fill="1"'), "grow keeps its fill throughout");
+});
+
+await test("G1.3 formatCounter is the ONE formatter — decimals, unit, negatives", () => {
+  eq(formatCounter(100, 0, "%"), "100%");
+  eq(formatCounter(12.345, 1, "×"), "12.3×");
+  eq(formatCounter(-4, 0), "-4");
+  eq(formatCounter(7, 2, "k"), "7.00k");
+  eq(formatCounter(42), "42", "decimals default 0");
+});
+
+await test("G1.3 the counter bakes its format — the applier writes textContent from the tweened value", () => {
+  ok(G3.html.includes('data-counter="1"'), "the applier's hook");
+  ok(G3.html.includes('data-decimals="0"'), "the mixed counter's decimals");
+  ok(G3.html.includes('data-unit="%"'), "the unit rides the data attrs (entities decode back in the DOM)");
+  ok(G3.html.includes(">100%</text>"), "poster content = the final value");
+});
+
+await test("G1.3 the payload carries frameAt verbatim — same states, doc order, stable keys", () => {
+  const frame = frameAt(G2_DOC, 1500);
+  const parsed = JSON.parse(graphicsFramePayload(frame)) as GraphicsFrameState;
+  eq(parsed.sceneId, frame.sceneId, "the active scene rides");
+  eq(parsed.sceneTMs, frame.sceneTMs, "the scene-local clock rides");
+  eq(parsed.elements, frame.elements, "element states verbatim");
+  eq(parsed.elements.length, 10, "all ten mixed elements");
+});
+
+await test("G1.3 the applier's construction laws — set-only writes, no element creation, no wall clock, no randomness", () => {
+  for (const banned of ["Date.now", "Math.random", "new Date", "createElement", "appendChild", "insertAdjacentHTML", "innerHTML", "getBBox"]) {
+    ok(!APPLY_GRAPHICS_FRAME_FN.includes(banned), `no ${banned} — idempotence by construction`);
+  }
+  ok(APPLY_GRAPHICS_FRAME_FN.includes('getElementById("ge-" + el.id)'), "the id seam is the skeleton's namespace");
+  ok(APPLY_GRAPHICS_FRAME_FN.includes('":scope > rect[data-len][data-axis]"'), "bars scoped to their own content (a group's pass never overwrites a child)");
+  ok(APPLY_GRAPHICS_FRAME_FN.includes('":scope > [data-len]:not([data-axis])"'), "draw scoped off the bars");
+  ok(APPLY_GRAPHICS_FRAME_FN.includes('"translate(" + el.x + " " + el.y + ") rotate(" + el.rotateDeg + ") scale(" + el.scale + ")"'),
+    "the transform order matches the whiteboard placement law");
+});
+
+await test("G1.3 the poster is the placed state — the skeleton renders truthfully before any apply", () => {
+  ok(G3.html.includes('transform="translate(120 96) rotate(0) scale(1)"'), "the placed transform");
+  ok(G3.html.includes('height="270"') && G3.html.includes('height="540"'), "bar heights = data-len (progress 1)");
+  ok(G3.html.includes('opacity="0.9"'), "base opacity rides the poster");
+});
+
+await test("G1.3 author text lands escaped — markup and quotes ride as content", () => {
+  const doc = mustValidate(gDoc([gScene("s1", [
+    gEl("h1", "headline", { text: { text: '<b>bold</b> & "q"' } }),
+  ])]), "hostile text");
+  const { html } = composeGraphicsScene(g3FirstScene(doc), doc);
+  ok(html.includes("&lt;b&gt;bold&lt;/b&gt;"), "markup escaped");
+  ok(html.includes("&amp;"), "ampersand escaped");
+  ok(html.includes("&quot;q&quot;"), "quotes escaped");
+  ok(!html.includes("<b>"), "no raw markup in the output");
+});
+
+await test("G1.3 the surface drives the geometry — the same scene composes per house size", () => {
+  const vertical = mustValidate(gDoc([gScene("s1", [gEl("br", "bar")])], { width: 1080, height: 1920 }), "9:16 doc");
+  const v3a = composeGraphicsScene(g3FirstScene(vertical), vertical);
+  const v3b = composeGraphicsScene(g3FirstScene(vertical), vertical);
+  eq(v3b.html, v3a.html, "deterministic on the second surface too");
+  ok(v3a.html !== G3.html, "a different surface → different geometry");
+  ok(v3a.html.includes('data-len="480"'), "bar a: 1/2 × 960 (½ of the 1920 surface)");
+  ok(v3a.html.includes('data-len="960"'), "bar b: full");
 });
 
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
