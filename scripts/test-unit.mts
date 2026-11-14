@@ -14281,6 +14281,41 @@ await test("W4 glyph mode: registration end-to-end — paths not texts, draw_pat
   ok(markerEx !== undefined && markerEx.texts.length >= 1, "the marker wipe keeps its text elements");
 });
 
+await test("W4 glyph mode: the PAGE seam rides the transformed svg — the contours exist where the pen rows point", async () => {
+  // The W4 glyph proof's find: registration transformed geometry (the
+  // scheduler emitted draw_path rows) while composeScene still embedded the
+  // RAW svg — rows for elements that do not exist, the <text> hidden
+  // forever, and a word that never renders. The pin: the composed page for
+  // a glyph-mode placement exposes the contour PATH elements and no
+  // <text> — the same loadLibrary map the editor canvas composes from.
+  const { loadLibrary } = await import("../src/lib/tubeforge/whiteboard/assets");
+  const { composeScene } = await import("../src/lib/tubeforge/whiteboard/wb-page");
+  const lib = loadLibrary();
+  const scene = {
+    id: "s", durationMs: 8000, background: "#ffffff" as const,
+    placements: [{ assetId: "glyph-note", placement: { x: 500, y: 300, scale: 1.5, rotateDeg: 0 }, order: 0 }],
+    animations: [], camera: [], beats: [],
+  };
+  const composed = composeScene(scene, { title: "t", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 }, scenes: [scene] }, lib.assets);
+  const glyphEls = [...composed.pathEls.keys()].filter((k) => k.startsWith("glyph-note::gn-word-g"));
+  ok(glyphEls.length >= 4, `the composed page exposes the glyph contour elements (${glyphEls.length})`);
+  for (const [key, elId] of composed.pathEls) {
+    if (!key.startsWith("glyph-note::gn-word-g")) continue;
+    ok(elId.startsWith("glyph-note--"), `the element id carries the asset prefix (${elId})`);
+    ok(composed.html.includes(`id="${elId}"`), "the contour element exists in the page markup");
+  }
+  ok(!composed.html.includes("glyph-note--gn-word\""), "the raw <text> is gone from the page (no hidden zombie)");
+  ok(composed.textEls.get("glyph-note::text:gn-word") === undefined, "the replaced text is out of the page's text index");
+  // the marker card's texts still ride the text index (coexistence)
+  const markerScene = {
+    id: "m", durationMs: 8000, background: "#ffffff" as const,
+    placements: [{ assetId: "title-hero", placement: { x: 100, y: 100, scale: 1, rotateDeg: 0 }, order: 0 }],
+    animations: [], camera: [], beats: [],
+  };
+  const markerComposed = composeScene(markerScene, { title: "t", width: 1920, height: 1080, fps: 24, hand: { style: "marker", scale: 1 }, scenes: [markerScene] }, lib.assets);
+  ok((markerComposed.textEls.get("title-hero::text:th-line1") ?? "") !== "", "the marker card's text element survives in the page index");
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

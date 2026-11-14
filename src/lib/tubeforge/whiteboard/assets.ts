@@ -404,7 +404,14 @@ export function loadLibrary(uploaded: WhiteboardAsset[] = []): {
       }
     }
     const ex = extractAsset(effective);
-    assets.set(a.id, a);
+    // The PAGE seam rides the effective svg too: composeScene (the render
+    // engine AND the editor canvas — one source) embeds asset.svg verbatim,
+    // so storing the raw markup here would put the glyph contours in the
+    // scheduler's work list while the page still carried the <text> — rows
+    // for elements that do not exist, and a word that never renders (the
+    // W4 glyph proof caught exactly that: pen rows green, pixels empty).
+    // Non-glyph assets: effective === a, byte-identical (the fallback law).
+    assets.set(a.id, effective);
     extracted.set(a.id, ex);
     pathIdsByAsset.set(a.id, new Set(ex.paths.map((p) => p.id)));
     textIdsByAsset.set(a.id, new Set(ex.texts.map((t) => t.id)));
