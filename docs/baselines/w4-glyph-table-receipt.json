@@ -1,0 +1,11 @@
+{
+  "fontId": "caveat-w500",
+  "fontFile": "public/fonts/caveat/Caveat[wght].ttf",
+  "fontSha256": "0bdb6b660482d31531b3945849fba5916b3ef8695da7024a9e6b9ee3c4157988",
+  "weight": 500.0,
+  "upem": 1000,
+  "precision": 2,
+  "charset": "ASCII 0x20-0x7E",
+  "glyphCount": 95,
+  "tableSha256": "c0de9db8bda01375dd14a695d8bdfba913f88aa1b34c0a6bbc92c386c27b9138"
+}

@@ -14129,6 +14129,82 @@ await test("W5 framing receipts: the directed W1 benchmark keys pass every polic
   ok(directedScenes >= 3, `the benchmark carries directed scenes (${directedScenes} across aspects)`);
 });
 
+
+// ===========================================================================
+// W4 slice 2 — the committed glyph-outline table + the pure layout (S120 §3
+// W4, decision §10.3): one face (Caveat, OFL), generated once, committed, and
+// laid out by pure math. The pins: the table's own hash (an accidental
+// regeneration cannot land silently), full ASCII coverage, the y-flip and
+// advance arithmetic, byte-identical determinism, and the honest `skipped`
+// report that lets the scheduler choose the marker-wipe fallback.
+// ===========================================================================
+
+await test("W4 glyphs: the committed table is the receipt's table — full ASCII coverage, well-formed outlines", async () => {
+  const { GLYPH_TABLE, GLYPH_TABLE_SHA256 } = await import("../src/lib/tubeforge/whiteboard/glyphs");
+  eq(GLYPH_TABLE.fontId, "caveat-w500", "the single face is pinned (no font picker)");
+  eq(GLYPH_TABLE.upem, 1000, "Caveat's upem is 1000");
+  // the receipt pins the generator's output hash — regenerate deliberately,
+  // update this pin, review the diff (the table IS the artifact)
+  eq(GLYPH_TABLE_SHA256, "c0de9db8bda01375dd14a695d8bdfba913f88aa1b34c0a6bbc92c386c27b9138",
+    "the table's content hash matches the committed receipt");
+  let covered = 0;
+  for (let c = 0x20; c < 0x7f; c++) {
+    const row = GLYPH_TABLE.glyphs.get(String.fromCharCode(c));
+    if (!row) continue;
+    covered += 1;
+    if (c === 0x20) {
+      eq(row.d, "", "space carries advance only");
+    } else {
+      ok(row.d.startsWith("M"), `glyph ${JSON.stringify(String.fromCharCode(c))} outline starts with M`);
+      ok(!/[^A-Z0-9,.\- ]/.test(row.d), `glyph ${JSON.stringify(String.fromCharCode(c))} outline is absolute M/L/Q/C/Z only`);
+    }
+    ok(Number.isFinite(row.advance) && row.advance > 0, `glyph ${JSON.stringify(String.fromCharCode(c))} has a positive advance`);
+  }
+  eq(covered, 95, "the table covers every printable ASCII char (0x20–0x7E)");
+});
+
+await test("W4 glyphs: the layout math is exact — advance, y-flip, spacing, determinism, honest skips", async () => {
+  const { textToGlyphPaths } = await import("../src/lib/tubeforge/whiteboard/text-draw");
+  const a = textToGlyphPaths("AB", { x: 100, y: 500, size: 80 });
+  eq(a.skipped.length, 0, "ASCII letters are covered");
+  const glyphRows = (await import("../src/lib/tubeforge/whiteboard/glyphs")).GLYPH_TABLE.glyphs;
+  const rowA = glyphRows.get("A");
+  const rowB = glyphRows.get("B");
+  ok(rowA !== undefined && rowB !== undefined, "A and B are committed glyphs");
+  if (!rowA || !rowB) return;
+  const s = 80 / 1000;
+  // A advances, B starts after A's advance (+0 letterSpacing); width excludes
+  // the trailing spacing law: width = advA·s + advB·s when letterSpacing is 0
+  eq(a.width, Math.round((rowA.advance * s + rowB.advance * s) * 100) / 100, "width is the summed advance at size/upem scale");
+  eq(a.paths.length, 2, "two drawn glyph paths");
+  ok(a.paths[0].d.startsWith("M"), "the positioned outline starts with M");
+  // y-flip: a glyph's outline must rise ABOVE the baseline (y decreases in
+  // SVG space) — take the smallest y in the first path's coordinates
+  const coords = a.paths[0].d.match(/-?[\d.]+/g);
+  ok(coords !== null, "the outline carries coordinates");
+  if (!coords) return;
+  const ys = coords.map(Number);
+  const minY = Math.min(...ys.filter((_, i) => i % 2 === 1));
+  ok(minY < 500, `the outline rises above the baseline (top y ${minY} < 500)`);
+  // determinism: the same call twice is byte-identical
+  const b = textToGlyphPaths("AB", { x: 100, y: 500, size: 80 });
+  eq(JSON.stringify(a), JSON.stringify(b), "double-run byte-identical");
+  // letterSpacing shifts the second glyph by exactly ls
+  const spaced = textToGlyphPaths("AB", { x: 100, y: 500, size: 80, letterSpacing: 10 });
+  const dx = spaced.width - a.width;
+  eq(dx, 10, "letterSpacing widens the run by exactly ls per gap");
+  // unknown characters are REPORTED, contribute nothing, never throw
+  const unk = textToGlyphPaths("A\u00e9B\u4f60", { x: 0, y: 0, size: 50 });
+  eq(unk.skipped.join(""), "\u00e9\u4f60", "uncovered chars are reported in order");
+  ok(unk.paths.length === 2, "covered chars still draw around the skips");
+  // degenerate inputs fail soft, not garbage
+  const empty = textToGlyphPaths("", { x: 5, y: 5, size: 50 });
+  eq(empty.width, 0, "an empty run lays out zero width");
+  eq(empty.paths.length, 0, "an empty run draws nothing");
+  const zero = textToGlyphPaths("A", { x: 5, y: 5, size: 0 });
+  eq(zero.size, 0, "a zero size is clamped, not NaN");
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
