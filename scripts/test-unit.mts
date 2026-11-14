@@ -15676,6 +15676,175 @@ await test("S121 P3/P4: the dub client builders and the license policy table", a
   ok(lic.licenseGateRefusal("omnivoice").includes("omnivoice"), "the refusal names the engine");
 });
 
+// ---------- suite: S122 K1 — the 2D character-engine substrate ----------
+
+suiteStart("S122 K1 — the 2D character-engine substrate");
+
+await test("S122 K1 rig2d: the rig doc contract validates, refusals name their reasons", async () => {
+  const rig = await import("../src/lib/tubeforge/characters/rig2d");
+  const good = {
+    version: 1,
+    parts: [
+      { id: "torso", svgRef: "torso.svg", z: 0, pivot: { x: 100, y: 120 }, rest: { x: 100, y: 120 } },
+      { id: "arm-l", svgRef: "arm-l.svg", z: 1, pivot: { x: 80, y: 110 }, parent: "torso", rest: { x: 80, y: 110, rotateDeg: 10 } },
+      { id: "mouth-open", svgRef: "mouth-open.svg", z: 5, pivot: { x: 100, y: 90 }, rest: { x: 100, y: 90 } },
+      { id: "mouth-closed", svgRef: "mouth-closed.svg", z: 5, pivot: { x: 100, y: 90 }, rest: { x: 100, y: 90 } },
+    ],
+    poses: [
+      { id: "wave", name: "Wave", joints: { "arm-l": { rotateDeg: -80 } } },
+      { id: "point", name: "Point", joints: { "arm-l": { rotateDeg: 30, x: 2 } } },
+    ],
+  };
+  rig.validateRigDoc(good); // no throw is the pass
+  // the slot vocabulary — one id space for pose sheets, the schedule, the renderer
+  eq(rig.MOUTH_SHAPES.length, 5, "five mouth shapes — the honest beat-sync set");
+  eq(rig.mouthPartId("oh"), "mouth-oh", "the mouth slot id");
+  eq(rig.mouthShapeOfPartId("mouth-oh"), "oh", "the slot id round-trips");
+  eq(rig.mouthShapeOfPartId("mouth-nope"), null, "a non-slot id reads null");
+  eq(rig.armPartId("l"), "arm-l", "the arm slot id");
+  eq(rig.browPartId("r"), "brow-r", "the brow slot id");
+  // refusals — each names its reason
+  const refuse = (label: string, doc: unknown) => {
+    let threw = false;
+    try { rig.validateRigDoc(doc as never); } catch { threw = true; }
+    ok(threw, `the ${label} rig is refused`);
+  };
+  refuse("wrong-version", { ...good, version: 2 });
+  refuse("empty-parts", { ...good, parts: [] });
+  refuse("duplicate-part-id", { ...good, parts: [good.parts[0], good.parts[0]] });
+  refuse("unknown-parent", { ...good, parts: [{ ...good.parts[1], parent: "ghost" }] });
+  refuse("self-parent", { ...good, parts: [{ ...good.parts[0], parent: "torso" }] });
+  refuse("parent-cycle", {
+    version: 1,
+    parts: [
+      { id: "a", svgRef: "a.svg", z: 0, pivot: { x: 0, y: 0 }, parent: "b", rest: { x: 0, y: 0 } },
+      { id: "b", svgRef: "b.svg", z: 0, pivot: { x: 0, y: 0 }, parent: "a", rest: { x: 0, y: 0 } },
+    ],
+    poses: [],
+  });
+  refuse("non-finite-pivot", { ...good, parts: [{ ...good.parts[0], pivot: { x: NaN, y: 0 } }] });
+  refuse("zero-rest-scale", { ...good, parts: [{ ...good.parts[0], rest: { x: 0, y: 0, scale: 0 } }] });
+  refuse("blank-svgRef", { ...good, parts: [{ ...good.parts[0], svgRef: " " }] });
+  refuse("unknown-joint-part", { ...good, poses: [{ id: "p", name: "P", joints: { ghost: { rotateDeg: 1 } } }] });
+  refuse("non-finite-joint", { ...good, poses: [{ id: "p", name: "P", joints: { "arm-l": { rotateDeg: NaN } } }] });
+  refuse("zero-joint-scale", { ...good, poses: [{ id: "p", name: "P", joints: { "arm-l": { scale: 0 } } }] });
+  refuse("duplicate-pose-id", { ...good, poses: [good.poses[0], good.poses[0]] });
+  const many = Array.from({ length: 65 }, (_, i) => ({ id: `p${i}`, svgRef: "s.svg", z: i, pivot: { x: 0, y: 0 }, rest: { x: 0, y: 0 } }));
+  refuse("over-the-parts-wall", { ...good, parts: many });
+});
+
+await test("S122 K1 rig-frame: poseAt holds, blends eased, rest-fills, never NaN", async () => {
+  const rigMod = await import("../src/lib/tubeforge/characters/rig2d");
+  const frame = await import("../src/lib/tubeforge/characters/rig-frame");
+  const rig = {
+    version: 1,
+    parts: [
+      { id: "torso", svgRef: "torso.svg", z: 0, pivot: { x: 100, y: 120 }, rest: { x: 100, y: 120, scale: 1.1 } },
+      { id: "arm-l", svgRef: "arm-l.svg", z: 1, pivot: { x: 80, y: 110 }, parent: "torso", rest: { x: 80, y: 110, rotateDeg: 10 } },
+    ],
+    poses: [
+      { id: "rest", name: "Rest", joints: {} },
+      { id: "raise", name: "Raise", joints: { "arm-l": { rotateDeg: 80 } } },
+    ],
+  };
+  rigMod.validateRigDoc(rig);
+  const timeline = {
+    keys: [
+      { tMs: 0, poseId: "rest" },
+      { tMs: 2000, poseId: "raise", ease: "ease-in-out" as const },
+    ],
+  };
+  frame.validatePoseTimeline(rig, timeline);
+  // clamped holds: t=0 sits on the first key; past the last key holds it
+  eq(frame.poseAt(rig, timeline, 0).parts["arm-l"].rotateDeg, 10, "t=0 holds the first key's pose (rest 10°)");
+  eq(frame.poseAt(rig, timeline, 5000).parts["arm-l"].rotateDeg, 90, "past the last key holds raise (10 + 80)");
+  // the eased midpoint: ease-in-out lands at u=0.5 EXACTLY (the shared closed form)
+  eq(frame.poseAt(rig, timeline, 1000).parts["arm-l"].rotateDeg, 50, "the midpoint blends to exactly half the offset");
+  // rest-fill: a pose never mentions torso — it still rides at rest, never missing, never NaN
+  const mid = frame.poseAt(rig, timeline, 1000);
+  ok("torso" in mid.parts, "every rig part is in the frame");
+  eq(mid.parts.torso.scale, 1.1, "the untouched part rides at rest scale");
+  ok(Object.values(mid.parts).every((p) => Number.isFinite(p.rotateDeg) && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.scale)), "no NaN in any channel");
+  // determinism (S64)
+  eq(JSON.stringify(frame.poseAt(rig, timeline, 1000)), JSON.stringify(mid), "the same t is byte-identical across calls");
+  // refusals
+  const refuseTimeline = (label: string, keys: unknown) => {
+    let threw = false;
+    try { frame.validatePoseTimeline(rig, { keys: keys as never }); } catch { threw = true; }
+    ok(threw, `the ${label} timeline is refused`);
+  };
+  refuseTimeline("unknown-pose", [{ tMs: 0, poseId: "ghost" }]);
+  refuseTimeline("non-ascending", [{ tMs: 100, poseId: "rest" }, { tMs: 100, poseId: "raise" }]);
+  refuseTimeline("unknown-ease", [{ tMs: 0, poseId: "rest" }, { tMs: 100, poseId: "raise", ease: "wheel" }]);
+  refuseTimeline("negative-time", [{ tMs: -1, poseId: "rest" }]);
+  let threw = false;
+  try { frame.poseAt(rig, timeline, NaN); } catch { threw = true; }
+  ok(threw, "a NaN clock is refused — a frame never carries NaN");
+  // the additive baseline: no keys → REST everywhere
+  const resting = frame.poseAt(rig, { keys: [] }, 1234);
+  eq(resting.parts["arm-l"].rotateDeg, 10, "an empty timeline holds REST");
+});
+
+await test("S122 K1 mouth: the beat-sync schedule rides the measured spans", async () => {
+  const frame = await import("../src/lib/tubeforge/characters/rig-frame");
+  eq(frame.countSyllables("hello"), 2, "two vowel groups");
+  eq(frame.countSyllables("world"), 1, "one group");
+  eq(frame.countSyllables("animation"), 4, "four groups");
+  eq(frame.countSyllables("!!!"), 1, "a stripped word still paces one open");
+  eq(frame.countSyllables("abebibobu"), 4, "five groups capped at four — the wall");
+  const spans = [
+    { word: "hello", startMs: 0, endMs: 320 },
+    { word: "world", startMs: 500, endMs: 780 },
+  ];
+  const beats = frame.buildMouthBeats(spans);
+  eq(beats.length, 6, "2 syllables × 2 + 1 syllable × 2 beats");
+  eq(beats[0].shape, "open", "the first slice opens");
+  eq(beats[1].shape, "closed", "the second slice closes");
+  // every beat rides INSIDE its word span — the tolerance pin from W4
+  ok(beats.slice(0, 4).every((b) => b.startMs >= 0 && b.endMs <= 320), "hello's beats stay inside its measured span");
+  ok(beats.slice(4).every((b) => b.startMs >= 500 && b.endMs <= 780), "world's beats stay inside its measured span");
+  // the inter-word gap is silence — closed, never invented
+  eq(frame.mouthAt(beats, 400), "closed", "the inter-word gap reads closed");
+  eq(frame.mouthAt(beats, 10), "open", "the first open beat reads open");
+  eq(frame.mouthAt(beats, 800), "closed", "after the last word reads closed");
+  eq(frame.mouthAt([], 100), "closed", "an empty schedule is closed everywhere");
+  eq(frame.mouthAt(beats, NaN), "closed", "a NaN clock reads closed — never NaN");
+  // refusals
+  let threw = false;
+  try { frame.buildMouthBeats([]); } catch { threw = true; }
+  ok(threw, "an empty stream is refused");
+  threw = false;
+  try { frame.buildMouthBeats([{ word: "b", startMs: 100, endMs: 0 }]); } catch { threw = true; }
+  ok(threw, "a backwards span is refused");
+  threw = false;
+  try {
+    frame.buildMouthBeats([
+      { word: "a", startMs: 0, endMs: 100 },
+      { word: "b", startMs: 50, endMs: 200 },
+    ]);
+  } catch { threw = true; }
+  ok(threw, "an overlapping stream is refused");
+  // the measured bridge: the ASR rung's seconds → the schedule's integer ms
+  const ms = frame.wordSpansFromAsr([
+    { word: "hello", start: 0.0, end: 0.32 },
+    { word: "world", start: 0.32, end: 0.6 },
+  ]);
+  eq(ms[0].endMs, 320, "0.32 s → 320 ms");
+  eq(ms[1].startMs, 320, "0.32 s → 320 ms — both consumers agree on the numbers");
+});
+
+await test("S122 K1 honesty law: the mouth schedule only says what was measured — wide/oh/smile stay authored", async () => {
+  const frame = await import("../src/lib/tubeforge/characters/rig-frame");
+  // an emphatic word with punctuation and caps — the schedule still reads open/closed only
+  const beats = frame.buildMouthBeats(frame.wordSpansFromAsr([
+    { word: "INCREDIBLY!", start: 0.0, end: 0.5 },
+  ]));
+  ok(beats.every((b) => b.shape === "open" || b.shape === "closed"), "no shape is invented from the text");
+  eq(frame.countSyllables("INCREDIBLY!"), 4, "i-e-i-y: four vowel groups — capped at the wall");
+  eq(beats.length, frame.MAX_BEATS_PER_WORD, "the wall holds: 4 syllables → 8 beats");
+  eq(frame.MAX_BEATS_PER_WORD, frame.MAX_SYLLABLES_PER_WORD * 2, "the wall is the syllable cap × 2");
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);
