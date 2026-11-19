@@ -157,7 +157,7 @@ export function DashboardView() {
 
   const openVideo = (id: string) => {
     setFocusVideoId(id);
-    setView("library");
+    setView("workspace");
   };
 
   return (

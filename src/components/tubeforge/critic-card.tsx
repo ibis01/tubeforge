@@ -1,6 +1,6 @@
 "use client";
 
-// S85 — the Video Critic card (video detail dialog → Video tab, after the
+// S85 — the Video Critic card (the workspace → Timeline area, after the
 // QC scorecard). S84 shipped the API surface (GET/POST /api/videos/[id]/
 // critic, job kind "critic"); this is the human surface for it.
 //

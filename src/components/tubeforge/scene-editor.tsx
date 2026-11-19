@@ -1,7 +1,9 @@
 "use client";
 
-// Scene Studio — per-scene image editing dialog ("edit each storyboard image
-// to suit my taste"). Four ways to shape a scene's art, all in one place:
+// Scene Studio — per-scene image editing, INLINE ("edit each storyboard image
+// to suit my taste"). B3: the nested dialog became the Canvas area's panel —
+// one scene at a time, big, no chrome. Four ways to shape a scene's art, all
+// in one place:
 //   • Art style   — 11-style taste palette (SCENE_ART_STYLES) woven into the
 //                   scene's image prompt at generation time
 //   • Prompt      — edit the visual prompt / mood text, save, regenerate
@@ -14,13 +16,6 @@
 // server deletes stale MP4s), which the copy below makes explicit.
 
 import { useEffect, useRef, useState } from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -81,11 +76,9 @@ const STYLE_SWATCHES: Record<string, [string, string]> = {
 const styleSwatch = (id: string): [string, string] =>
   STYLE_SWATCHES[id] ?? STYLE_SWATCHES.default;
 
-export function SceneEditorDialog({
+export function SceneStudioPanel({
   videoId,
   scene,
-  open,
-  onOpenChange,
   onUpdated,
   renderMode = "kenburns",
   slide = null,
@@ -94,8 +87,6 @@ export function SceneEditorDialog({
 }: {
   videoId: string;
   scene: SceneDTO | null;
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
   /** Called after ANY successful change so the parent refreshes storyboard + video. */
   onUpdated: () => void;
   /** Video render mode — "slides" unlocks the slide design section. */
@@ -122,29 +113,26 @@ export function SceneEditorDialog({
   const fileRef = useRef<HTMLInputElement>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
 
-  // Stage 4a (T-4.6) — in-dialog regeneration: stay open, poll until the
-  // repaint lands, then offer a Before/After compare of the image.
+  // Stage 4a (T-4.6) — in-place regeneration: the panel stays put, polls
+  // until the repaint lands, then offers a Before/After compare of the image.
   const [repainting, setRepainting] = useState(false);
   const [prevImage, setPrevImage] = useState<string | null>(null);
   const [compare, setCompare] = useState<"after" | "before">("after");
   const lastImageRef = useRef<string | null>(null);
 
-  // Re-seed local state whenever a different scene opens — render-time
+  // Re-seed local state whenever a different scene is picked — render-time
   // adjust (guarded seed compare) replacing the re-seed effect: same
-  // trigger triple (scene index, repaint, open), same final state, one
-  // fewer paint.
+  // trigger pair (scene index, repaint), same final state, one fewer paint.
   const [sceneSeed, setSceneSeed] = useState({
     index: scene?.index,
     imageUrl: scene?.imageUrl,
-    open,
   });
   if (
     scene &&
     (sceneSeed.index !== scene.index ||
-      sceneSeed.imageUrl !== scene.imageUrl ||
-      sceneSeed.open !== open)
+      sceneSeed.imageUrl !== scene.imageUrl)
   ) {
-    setSceneSeed({ index: scene.index, imageUrl: scene.imageUrl, open });
+    setSceneSeed({ index: scene.index, imageUrl: scene.imageUrl });
     setVisual(scene.visual);
     setMood(scene.mood);
     setStyle(scene.style || "default");
@@ -156,17 +144,18 @@ export function SceneEditorDialog({
     setAccessory(scene.appearance?.accessory ?? "");
   }
 
-  // Track image transitions while open — any repaint (re-roll, AI edit,
-  // upload) records the previous take for the Before/After compare.
+  // Track image transitions while the scene is displayed — any repaint
+  // (re-roll, AI edit, upload) records the previous take for the
+  // Before/After compare.
   useEffect(() => {
-    if (!open || !scene) return;
+    if (!scene) return;
     const current = scene.imageUrl;
     if (lastImageRef.current && current && current !== lastImageRef.current) {
       setPrevImage(lastImageRef.current);
       setCompare("after");
     }
     lastImageRef.current = current;
-  }, [scene?.imageUrl, open, scene]);
+  }, [scene?.imageUrl, scene]);
 
   if (!scene) return null;
 
@@ -391,21 +380,22 @@ export function SceneEditorDialog({
   const anyBusy = busy !== null;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto glass border-white/12">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-base">
-            <Brush className="h-4 w-4 text-primary" />
+    <div className="rounded-2xl border border-white/10 glass p-4 sm:p-5 space-y-5">
+      <div className="flex items-start gap-2.5">
+        <Brush className="h-4 w-4 text-primary mt-0.5 shrink-0" />
+        <div className="min-w-0">
+          <p className="text-sm font-semibold leading-snug">
             Scene {scene.index} Studio — {scene.title}
-          </DialogTitle>
-          <DialogDescription className="text-xs">
+          </p>
+          <p className="text-xs text-muted-foreground mt-0.5">
             {renderMode === "slides"
               ? "Shape this scene's slide and its art — re-roll the design, restyle, edit the prompt, or upload your own image."
               : "Shape this scene's art to your taste — style, prompt, AI edits or your own image. Narration is never touched."}
-          </DialogDescription>
-        </DialogHeader>
+          </p>
+        </div>
+      </div>
 
-        <div className="space-y-5">
+      <div className="space-y-5">
           {/* Slide design (keynote slides mode) — what viewers actually see */}
           {renderMode === "slides" && (
             <div className="space-y-2 rounded-xl border border-violet-500/20 bg-violet-500/5 p-3">
@@ -832,8 +822,7 @@ export function SceneEditorDialog({
             </p>
             <SceneTrustPanel videoId={videoId} sceneIndex={scene.index} onUpdated={onUpdated} />
           </div>
-        </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   );
 }

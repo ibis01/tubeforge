@@ -1102,7 +1102,7 @@ function CharacterStudio({
                       type="button"
                       onClick={() => {
                         setFocusVideoId(v.id);
-                        setView("library");
+                        setView("workspace");
                         onClose();
                       }}
                       className="w-full flex items-center gap-2.5 rounded-lg border border-white/8 bg-white/3 px-2.5 py-2 text-left transition-all hover:border-white/20 hover:bg-white/6"

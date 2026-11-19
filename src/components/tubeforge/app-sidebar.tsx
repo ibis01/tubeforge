@@ -69,6 +69,7 @@ export function activeNavId(view: ViewId): ViewId {
     case "channels":
       return "insights";
     case "create":
+    case "workspace":
       return "library";
     default:
       return view;

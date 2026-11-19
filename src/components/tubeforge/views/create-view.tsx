@@ -2045,12 +2045,12 @@ export function CreateView() {
                 size="sm"
                 className="border-white/15 bg-white/4"
                 onClick={() => {
-                  setView("library");
+                  setView("workspace");
                   useAppStore.getState().setFocusVideoId(video.id);
                 }}
               >
                 <Library className="h-3.5 w-3.5" />
-                Open in Library
+                Open in workspace
               </Button>
             )}
           </div>

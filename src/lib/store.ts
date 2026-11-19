@@ -10,6 +10,7 @@ export type ViewId =
   | "research"
   | "create"
   | "library"
+  | "workspace"
   | "cast"
   | "world"
   | "voice"
@@ -25,7 +26,9 @@ interface AppState {
   refreshKey: number;
   bumpRefresh: () => void;
 
-  /** Video id used to preselect in library / open detail */
+  /** Video id used to open the production workspace (B3) — set alongside
+   *  setView("workspace") by every entry point (Projects cards, Home continue
+   *  row, palette, Create, Topic Radar, Calendar, Analytics, Cast). */
   focusVideoId: string | null;
   setFocusVideoId: (id: string | null) => void;
 

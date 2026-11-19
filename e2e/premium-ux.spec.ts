@@ -3,7 +3,7 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 //
 //   • ⌘K command palette opens, filters, and navigates
 //   • the Create guided brief advances step-by-step with gating + draft save
-//   • the classic Script tab autosaves edits through PATCH /api/videos/[id]
+//   • the classic Director area autosaves edits through PATCH /api/videos/[id]
 //
 // Registers fresh accounts (same pattern as isolation.spec.ts). No live AI
 // calls — the classic editor probe uses the synchronous custom-script path.
@@ -112,7 +112,7 @@ test.describe("Stage 4a premium UX", () => {
     await expect(page.getByLabel("Video topic")).toHaveValue(/container ships/);
   });
 
-  test("script tab: classic editor autosaves through PATCH (T-4.4)", async ({ page, request }) => {
+  test("director area: classic editor autosaves through PATCH (T-4.4)", async ({ page, request }) => {
     const cookie = await register(request);
     await page.context().addCookies([
       { name: "tf_session", value: cookie.split("=")[1], url: "http://localhost:3000" },
@@ -132,20 +132,20 @@ test.describe("Stage 4a premium UX", () => {
     const classicBody = (await classic.json()) as { video: { id: string } };
     const classicVideoId = classicBody.video.id;
 
-    // Open the video's detail dialog through the Projects destination.
+    // Open the video's production workspace through the Projects destination.
     await page.goto("/");
     await page.waitForSelector("nav[aria-label='Main navigation']");
     await page.getByRole("navigation", { name: "Main navigation" }).getByText("Projects").click();
     await page.getByText(`Classic probe ${RUN}`).first().click();
-    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("heading", { name: `Classic probe ${RUN}` })).toBeVisible();
 
-    // Classic format has Package + Script tabs.
-    await page.getByRole("tab", { name: "Script" }).click();
+    // Classic format gets two workspace areas — Director + Inspector.
+    await page.getByRole("tab", { name: "Director" }).click();
     const editor = page.getByLabel("Script editor");
     await expect(editor).toHaveValue(/Original narration/);
 
     // Edit + autosave (1s debounce) → the text persists server-side.
-    await editor.fill("Edited narration. The autosave path proves the Script tab writes through.");
+    await editor.fill("Edited narration. The autosave path proves the Director area writes through.");
     await page.waitForTimeout(2200);
     const after = await request.get(`/api/videos/${classicVideoId}`, { headers: { cookie } });
     const afterBody = (await after.json()) as { video: { script: string } };
@@ -158,7 +158,7 @@ test.describe("Stage 4a premium UX", () => {
 //   • Voice Studio renders the catalog and pronunciations roundtrip through
 //     the real route (add via UI → GET, remove via UI → GET)
 //   • Cast roster shows identity readiness and the studio shows "Cast in"
-//   • the detail dialog's clone tab deep-links into the Voice Studio
+//   • the workspace's voice panel deep-links into the Voice Studio
 //   • the Research workspace renders its scan rail and empty state
 //
 // Still no live AI calls — character creation and the pronunciation route are
@@ -236,7 +236,7 @@ test.describe("Stage 4b premium UX", () => {
     await expect(page.getByText(/assign this character in Create/)).toBeVisible();
   });
 
-  test("detail dialog: clone tab deep-links to the Voice Studio (T-4.10)", async ({ page, request }) => {
+  test("workspace: the voice panel deep-links to the Voice Studio (T-4.10)", async ({ page, request }) => {
     const cookie = await register(request);
     await page.context().addCookies([
       { name: "tf_session", value: cookie.split("=")[1], url: "http://localhost:3000" },
@@ -247,7 +247,7 @@ test.describe("Stage 4b premium UX", () => {
       data: {
         topic: `Clone link probe ${RUN}`,
         format: "script",
-        script: "A narration that exists so the dialog opens on the Package tab.",
+        script: "A narration that exists so the workspace opens on the Director area.",
         approved: true,
       },
     });
@@ -257,9 +257,11 @@ test.describe("Stage 4b premium UX", () => {
     await page.waitForSelector("nav[aria-label='Main navigation']");
     await page.getByRole("navigation", { name: "Main navigation" }).getByText("Projects").click();
     await page.getByText(`Clone link probe ${RUN}`).first().click();
-    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("heading", { name: `Clone link probe ${RUN}` })).toBeVisible();
 
-    // Package tab → voice panel → clone tab → the deep-link navigates.
+    // Inspector area (the package surface) → voice panel → clone tab → the
+    // deep-link navigates.
+    await page.getByRole("tab", { name: "Inspector" }).click();
     await page.getByRole("button", { name: /Change the voice/ }).click();
     await page.getByRole("button", { name: "Clone", exact: true }).click();
     await page.getByText("Manage & clone voices in the Voice Studio").click();

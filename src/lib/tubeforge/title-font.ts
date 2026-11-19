@@ -2,7 +2,7 @@
 //
 // WHY THIS FILE EXISTS: the title drawtext chain and its font ladder used to
 // live in studio-doc.ts — a module the CLIENT components import for its
-// sanitizers and presets (timeline-studio, video-detail-dialog). S156 added
+// sanitizers and presets (timeline-studio, production-workspace). S156 added
 // `import fs from "node:fs"` for the ladder, and the production build
 // detonated: the whole studio-doc module — node builtin included — entered
 // the browser chunk of /page, and Turbopack's browser chunking context

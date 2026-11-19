@@ -17,7 +17,7 @@ Capability expansion and product-experience modernization. Reference: `ibis01/ib
 | M0 | QC ffmpeg-8 log-prefix backport (dead-air false-pass) | `f334a4b` | battery + dual-prefix detector pins | ✅ DONE — `c162d7b` (battery 1004/1004, both prefix generations pinned) |
 | M1 | Security hardening (P0×2, P1×3, P2×2) | `adc2281`, `afea263` (docs) | battery + auth e2e | ✅ DONE — `3756210` (battery 1010/1010, six review pins) |
 | M2 | CI resilience + S3 signer fix + gitleaks root fix + production test | `473db65` `87599d3` `4ca159b` `9db6327` `b2fd3f3` `1e546a2` `5f4d30a` | storage suites green | ✅ DONE — `c736473` (signer 11/11, storage+rate PASS). NOTE: `1e546a2`/`5f4d30a` deferred to M5 — they live in `scripts/b4-production-test.mts`, a B4-era artifact |
-| M3 | Design foundation + Home/Projects (B1+B2) | `db2241e` | battery + premium-ux/mobile-sweep e2e + walk 1440/390 | PROPOSED — strictly after M0–M2, before M4 |
+| M3 | Design foundation + Home/Projects (B1+B2) | `db2241e` | battery + premium-ux/mobile-sweep e2e + walk 1440/390 | ✅ DONE — `2661bc7` (battery 1010/1010, e2e 37/37, walk 1440/390 clean, round-trip 0 fails, de-rebrand law + compat-strips per audit §4) |
 | M4 | Full-page production workspace (B3) | `76df60e` | battery + e2e incl. S86 jump selectors | PROPOSED — after M3 |
 | M5 | Creative workspace enhancement (B4) | `af15635` | battery + byte-identical no-sfx render check | PROPOSED — after M4 |
 | — | Whiteboard W1–W7 | standing roadmap | unchanged; runs in parallel (zero shared files with M0–M5) | PROPOSED (W1 first) |

@@ -108,6 +108,12 @@ const SettingsView = lazyView(
       default: m.SettingsView,
     })),
 );
+const WorkspaceView = lazyView(
+  () =>
+    import("@/components/tubeforge/views/workspace-view").then((m) => ({
+      default: m.WorkspaceView,
+    })),
+);
 
 // B1 destination hubs (docs/design/B1_DESIGN_SPECIFICATION.md §3): the four
 // destinations + Settings. Grouped views render inside their destination's
@@ -152,6 +158,10 @@ const VIEW_META: Record<ViewId, { title: string; subtitle: string }> = {
   library: {
     title: "Projects",
     subtitle: "Every project in your studio — click to open",
+  },
+  workspace: {
+    title: "Workspace",
+    subtitle: "Direct the production — scene by scene, stage by stage",
   },
   cast: {
     title: "Cast",
@@ -265,7 +275,7 @@ export default function Home() {
                 <kbd className="tf-kbd ml-1">⌘K</kbd>
               </button>
 
-              {view !== "create" && view !== "settings" ? (
+              {view !== "create" && view !== "settings" && view !== "workspace" ? (
                 <Button
                   onClick={() => setView("create")}
                   className="bg-brand-gradient hover:opacity-90 text-white font-semibold shadow-lg shrink-0"
@@ -316,6 +326,7 @@ export default function Home() {
             )}
             {view === "create" && <CreateView />}
             {view === "library" && <LibraryView />}
+            {view === "workspace" && <WorkspaceView />}
             {view === "settings" && <SettingsView />}
           </main>
 

@@ -75,7 +75,7 @@ const PROFILES: ProductionProfile[] = [
   {
     id: "narrative",
     label: "Narrative story",
-    blurb: "The faceless-YouTube classic — full catalog, no constraints",
+    blurb: "The classic narration-first studio — full catalog, no constraints",
     systemOverlay: NARRATIVE_OVERLAY,
     defaultTone: {
       transitionBias: "mixed",

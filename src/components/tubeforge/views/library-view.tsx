@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusBadge, EmptyState, formatDuration, timeAgo } from "@/components/tubeforge/shared";
-import { VideoDetailDialog } from "@/components/tubeforge/video-detail-dialog";
 import type { VideoDTO } from "@/lib/tubeforge/types";
 import {
   Film,
@@ -30,7 +29,6 @@ const FILTERS = [
 
 export function LibraryView() {
   const refreshKey = useAppStore((s) => s.refreshKey);
-  const focusVideoId = useAppStore((s) => s.focusVideoId);
   const setFocusVideoId = useAppStore((s) => s.setFocusVideoId);
   const setView = useAppStore((s) => s.setView);
   const setPrefillTopic = useAppStore((s) => s.setPrefillTopic);
@@ -38,7 +36,6 @@ export function LibraryView() {
   const [videos, setVideos] = useState<VideoDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
-  const [selected, setSelected] = useState<VideoDTO | null>(null);
 
   const load = useCallback(() => {
     return fetch(`/api/videos?status=${filter}`)
@@ -57,17 +54,12 @@ export function LibraryView() {
     load();
   }, [load, refreshKey]);
 
-  // Open a video when focused from another view
-  useEffect(() => {
-    if (!focusVideoId) return;
-    fetch(`/api/videos/${focusVideoId}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d?.video) setSelected(d.video);
-      })
-      .catch(() => undefined)
-      .finally(() => setFocusVideoId(null));
-  }, [focusVideoId, setFocusVideoId]);
+  // B3 — opening a project lands on the production workspace (focus id +
+  // view ride the store together; the workspace consumes the id on load).
+  const openWorkspace = (id: string) => {
+    setFocusVideoId(id);
+    setView("workspace");
+  };
 
   const quickDelete = async (id: string) => {
     const res = await fetch(`/api/videos/${id}`, { method: "DELETE" });
@@ -135,9 +127,9 @@ export function LibraryView() {
               <div className="flex flex-col">
                 {/* Thumb strip */}
                 <button
-                  onClick={() => setSelected(v)}
+                  onClick={() => openWorkspace(v.id)}
                   className="relative w-full aspect-[2.4/1] bg-white/4 overflow-hidden text-left"
-                  aria-label={`Open details for ${v.title ?? v.topic}`}
+                  aria-label={`Open the workspace for ${v.title ?? v.topic}`}
                 >
                   {v.hasThumbnail ? (
                     <img
@@ -171,7 +163,7 @@ export function LibraryView() {
                 {/* Meta */}
                 <div className="p-4">
                   <div className="flex items-start justify-between gap-2">
-                    <button onClick={() => setSelected(v)} className="min-w-0 text-left flex-1">
+                    <button onClick={() => openWorkspace(v.id)} className="min-w-0 text-left flex-1">
                       <p className="font-medium leading-snug line-clamp-2 group-hover:text-cyan-200 transition-colors">
                         {v.title ?? v.topic}
                       </p>
@@ -209,19 +201,6 @@ export function LibraryView() {
           ))}
         </div>
       )}
-
-      <VideoDetailDialog
-        video={selected}
-        onClose={() => setSelected(null)}
-        onChanged={(v) => {
-          setSelected(v);
-          load();
-        }}
-        onDeleted={() => {
-          setSelected(null);
-          load();
-        }}
-      />
     </div>
   );
 }

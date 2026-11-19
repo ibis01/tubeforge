@@ -685,11 +685,11 @@ export function CalendarView() {
                       onClick={() => {
                         setFocusVideoId(detail.videoId);
                         setDetail(null);
-                        setView("library");
+                        setView("workspace");
                       }}
                     >
                       <VideoIcon className="h-3.5 w-3.5" />
-                      Open in library
+                      Open in workspace
                     </Button>
                   )}
                   {!detail.done && (

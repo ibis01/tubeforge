@@ -3,14 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -31,7 +23,7 @@ import { MotionControlsCard, type MotionPickerValue } from "@/components/tubefor
 import { TransitionControlsCard, type TransitionPickerValue } from "@/components/tubeforge/transition-controls";
 import { InlineCloneSetup } from "@/components/tubeforge/inline-clone-setup";
 import { BrandKitCard } from "@/components/tubeforge/brand-kit";
-import { SceneEditorDialog } from "@/components/tubeforge/scene-editor";
+import { SceneStudioPanel } from "@/components/tubeforge/scene-editor";
 import WhiteboardStudio from "@/components/tubeforge/whiteboard/whiteboard-studio";
 import GraphicsStudio from "@/components/tubeforge/graphics/graphics-studio";
 import { DirectorCard } from "@/components/tubeforge/director-card";
@@ -39,7 +31,7 @@ import { CriticCard } from "@/components/tubeforge/critic-card";
 import { ProductionBoard } from "@/components/tubeforge/production-board";
 import { PacingStrip } from "@/components/tubeforge/pacing-strip";
 import { TimelineStudio } from "@/components/tubeforge/timeline-studio";
-import { CircleCheck, CircleX, CircleHelp, Ban, Brush } from "lucide-react";
+import { ArrowLeft, CircleCheck, CircleX, CircleHelp, Ban, Brush } from "lucide-react";
 import {
   pollVoiceover,
   pollThumbnail,
@@ -134,7 +126,19 @@ interface StoryboardResponse {
   error: string | null;
 }
 
-export function VideoDetailDialog({
+/** B3 — the production workspace (docs/design/B3_PRODUCTION_WORKSPACE_SPEC.md).
+ *
+ *  One full-page surface per project: Director · Storyboard · Canvas · Timeline
+ *  · Inspector (Director · Inspector for classic narration projects). The
+ *  interior carries the entire battle-tested production engine — script beats,
+ *  storyboard grid, scene re-rolls, Timeline Studio, QC scorecard + ship gate,
+ *  voice panel, publish flow — previously hosted in a cramped detail dialog.
+ *  The dialog chrome is retired: Projects (and every other entry point) lands
+ *  here, and the exit condition — inspect and revise individual scenes without
+ *  leaving the project — is the Canvas area: a scene rail + SceneStudioPanel
+ *  inline, no nested dialog.
+ */
+export function ProductionWorkspace({
   video,
   onClose,
   onChanged,
@@ -153,12 +157,14 @@ export function VideoDetailDialog({
   const [busy, setBusy] = useState<string | null>(null);
   const [variants, setVariants] = useState<VariantDTO[]>([]);
 
-  // S86 — the story-format tab is CONTROLLED so surfaces can navigate to
-  // it (the critic card's repair lane: "Open Storyboard" lands the human
-  // where the Director card + scene re-rolls live). Seeded with the same
-  // default the uncontrolled Tabs had; re-seeded per video below.
+  // S86 (B3 ids) — the story-format workspace area is CONTROLLED so surfaces
+  // can navigate to it (the critic card's repair lane: "Open Storyboard"
+  // lands the human where the Director card + scene re-rolls live; the
+  // storyboard's "Edit scene" lands on Canvas). Seeded with the same law the
+  // dialog used — a watchable video opens on Timeline, everything else on
+  // Director; re-seeded per video below.
   const [activeTab, setActiveTab] = useState<string>(
-    video?.hasVideo || video?.hasVoiceover ? "video" : "script"
+    video?.hasVideo || video?.hasVoiceover ? "timeline" : "director"
   );
 
   // Storyboard state
@@ -203,8 +209,11 @@ export function VideoDetailDialog({
     durationSec: null,
   });
   const transitionPatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Scene Studio — which scene's editor dialog is open (null = closed).
-  const [editingScene, setEditingScene] = useState<number | null>(null);
+  // B3 — Canvas area: which scene the Canvas surface edits (1-based). The
+  // storyboard's "Edit scene" lands here with the scene picked; the rail
+  // re-picks. A vanished index (regenerated board) falls back to scene 1 at
+  // read time — no stale empty state.
+  const [canvasScene, setCanvasScene] = useState<number>(1);
   // Stage 4a (T-4.5) — storyboard density: comfortable grid ↔ filmstrip.
   const [boardDensity, setBoardDensity] = useState<"grid" | "film">("grid");
   const [renderLabel, setRenderLabel] = useState<string | null>(null);
@@ -346,7 +355,7 @@ export function VideoDetailDialog({
       setSlides(null);
     } else {
       setRenderMode(video.renderMode ?? "kenburns");
-      setActiveTab(video.hasVideo || video.hasVoiceover ? "video" : "script");
+      setActiveTab(video.hasVideo || video.hasVoiceover ? "timeline" : "director");
       setMusicDraft({
         enabled: video.musicEnabled ?? null,
         trackId: video.musicTrackId ?? null,
@@ -367,7 +376,7 @@ export function VideoDetailDialog({
         style: video.transitionStyle ?? null,
         durationSec: video.transitionDuration ?? null,
       });
-      setEditingScene(null);
+      setCanvasScene(1);
       setRenderLabel(null);
       setVerifyReport(null);
       setVerifyRunning(false);
@@ -756,7 +765,7 @@ export function VideoDetailDialog({
           toast({
             title: "Voiceover cleared",
             description:
-              "Scene narration changed — the spoken audio no longer matches. Re-render the voiceover from the Package tab when the script reads right.",
+              "Scene narration changed — the spoken audio no longer matches. Re-render the voiceover from the Inspector area when the script reads right.",
           });
           await refreshVideo(v.id);
           bumpRefresh();
@@ -1669,7 +1678,7 @@ export function VideoDetailDialog({
       toast({
         title: "Scene video ready to paint",
         description:
-          "The script is now split into scenes and your existing voiceover was preserved. Open the Storyboard tab, paint the art, then render Ken Burns or full AI animation.",
+          "The script is now split into scenes and your existing voiceover was preserved. Open the Storyboard area, paint the art, then render Ken Burns or full AI animation.",
       });
       bumpRefresh();
     } catch (e) {
@@ -1919,9 +1928,12 @@ export function VideoDetailDialog({
                     variant="ghost"
                     size="sm"
                     disabled={Boolean(busy) || s.generating}
-                    onClick={() => setEditingScene(s.index)}
+                    onClick={() => {
+                      setCanvasScene(s.index);
+                      setActiveTab("canvas");
+                    }}
                     className="h-7 text-[11px] text-muted-foreground hover:text-foreground hover:bg-white/6 w-fit px-2"
-                    title="Scene Studio — style, prompt, AI edit, or upload your own art"
+                    title="Open in Canvas — style, prompt, AI edit, or upload your own art"
                   >
                     <Brush className="h-3 w-3" />
                     Edit scene
@@ -3715,7 +3727,7 @@ export function VideoDetailDialog({
   );
 
   const footer = (
-    <DialogFooter className="mt-6 flex-row flex-wrap gap-2 sm:justify-between">
+    <div className="mt-6 flex flex-row flex-wrap gap-2 sm:justify-between">
       <div className="flex flex-wrap gap-2">
         {!video.script && (
           <Button
@@ -4068,189 +4080,291 @@ export function VideoDetailDialog({
           )}
         </div>
       )}
-    </DialogFooter>
+    </div>
+  );
+
+  // ---------- B3 workspace areas ----------
+  // Inspector = the Package tab's inventory (voice, engagement kit, A/B lab)
+  // plus the ship actions that used to live in the dialog footer. Canvas =
+  // the scene rail + SceneStudioPanel inline — the B3 per-scene surface; the
+  // nested dialog died with the dialog chrome.
+  const inspectorArea = (
+    <>
+      {packageTab}
+      {footer}
+    </>
+  );
+
+  // The Canvas edits the picked scene; a vanished index (regenerated board)
+  // falls back to the first scene so the surface never goes stale.
+  const canvasSceneObj =
+    scenes.find((s) => s.index === canvasScene) ?? scenes[0] ?? null;
+
+  const canvasArea = (
+    <div className="space-y-4">
+      {/* Scene rail — one thumbnail per scene, the picked take highlighted */}
+      <div
+        className="tf-scroll tf-fade-x flex gap-2 overflow-x-auto pb-1 -mx-1 px-1"
+        role="group"
+        aria-label="Scene picker"
+      >
+        {scenes.map((s) => (
+          <button
+            key={s.index}
+            type="button"
+            onClick={() => setCanvasScene(s.index)}
+            aria-current={canvasSceneObj?.index === s.index ? "true" : undefined}
+            title={`Scene ${s.index} — ${s.title}`}
+            className={clsx(
+              "relative w-40 shrink-0 overflow-hidden rounded-xl border text-left transition-all tf-focusable",
+              canvasSceneObj?.index === s.index
+                ? "border-primary/60 glow-brand-soft"
+                : "border-white/10 hover:border-white/30"
+            )}
+          >
+            {s.imageUrl ? (
+              <img
+                src={s.imageUrl}
+                alt={`Scene ${s.index} art`}
+                className="w-full aspect-video object-cover"
+              />
+            ) : (
+              <div className="w-full aspect-video bg-white/4 flex items-center justify-center">
+                <span className="text-[10px] text-muted-foreground">no art yet</span>
+              </div>
+            )}
+            <span className="absolute top-1.5 left-1.5 rounded bg-black/70 px-1.5 text-[10px] text-white">
+              {s.index}
+            </span>
+            {(busy === `scene-${s.index}` || s.generating) && (
+              <span className="absolute inset-0 grid place-items-center bg-black/50">
+                <Loader2 className="h-4 w-4 animate-spin text-white" />
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {renderMode === "whiteboard" || renderMode === "graphics" ? (
+        <div className="rounded-xl border border-white/10 bg-white/3 px-4 py-6 text-center space-y-2">
+          <p className="text-sm text-muted-foreground max-w-md mx-auto">
+            {renderMode === "whiteboard"
+              ? "The Whiteboard Studio owns scene editing for this format — compose, scrub and revise scenes there."
+              : "The Graphics Studio owns scene editing for this format — compose, scrub and revise scenes there."}
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-white/15 bg-white/4"
+            onClick={() => setActiveTab("storyboard")}
+          >
+            <LayoutGrid className="h-3.5 w-3.5" />
+            Open the {renderMode === "whiteboard" ? "Whiteboard" : "Graphics"} Studio
+          </Button>
+        </div>
+      ) : scenes.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-white/12 bg-white/3 px-4 py-8 text-center">
+          <p className="text-sm text-muted-foreground">
+            No scenes yet — write the scene script in the Director area first.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-white/15 bg-white/4 mt-3"
+            onClick={() => setActiveTab("director")}
+          >
+            <Wand2 className="h-3.5 w-3.5" />
+            Open the Director area
+          </Button>
+        </div>
+      ) : canvasSceneObj ? (
+        <SceneStudioPanel
+          videoId={video.id}
+          scene={canvasSceneObj}
+          onUpdated={() => {
+            void reloadScenes(video.id);
+            if (renderMode === "slides") void reloadSlides(video.id);
+            bumpRefresh();
+          }}
+          renderMode={renderMode}
+          slide={slides?.find((sl) => sl.index === canvasSceneObj.index) ?? null}
+          slideBusy={busy === `slide-${canvasSceneObj.index}`}
+          onRerollSlide={() => {
+            const scene = scenes.find((s) => s.index === canvasSceneObj.index);
+            if (scene) void rerollSlide(scene.index, scene.title);
+          }}
+        />
+      ) : null}
+    </div>
   );
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto bg-card border-white/10 p-0">
-        {/* Header with thumbnail */}
+    <div className="space-y-5">
+      {/* Workspace header — the project's identity + the way back to Projects */}
+      <div className="flex items-start gap-3">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onClose}
+          className="border-white/15 bg-white/4 shrink-0"
+          aria-label="Back to Projects"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">Projects</span>
+        </Button>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <StatusBadge status={video.status} />
+            <Badge variant="outline" className="border-white/15 bg-white/5 text-muted-foreground">
+              {video.niche}
+            </Badge>
+            {video.characterName && (
+              <Badge className="bg-primary/15 text-cyan-200 border border-primary/25 gap-1">
+                <UserRound className="h-3 w-3" />
+                {video.characterName}
+              </Badge>
+            )}
+            {isStory && (
+              <Badge variant="outline" className="border-sky-500/25 bg-sky-500/10 text-sky-200 gap-1">
+                <Clapperboard className="h-3 w-3" />
+                Scene story · {video.sceneCount} scenes
+              </Badge>
+            )}
+            {isStory && video.hasVideo && (
+              <Badge variant="outline" className="border-emerald-500/25 bg-emerald-500/10 text-emerald-200">
+                MP4 · {formatDuration(video.videoDuration)}
+              </Badge>
+            )}
+            {video.hasShort && (
+              <Badge variant="outline" className="border-sky-500/25 bg-sky-500/10 text-sky-200 gap-1">
+                <Smartphone className="h-3 w-3" />
+                Short · {formatDuration(video.shortDuration)}
+              </Badge>
+            )}
+            {video.youtubeUrl && (
+              <Badge variant="outline" className="border-red-500/30 bg-red-500/12 text-red-200 gap-1">
+                <Youtube className="h-3 w-3" />
+                <a href={video.youtubeUrl} target="_blank" rel="noreferrer" className="hover:underline">
+                  Live on YouTube
+                </a>
+              </Badge>
+            )}
+            <span className="text-xs text-muted-foreground">{timeAgo(video.createdAt)}</span>
+          </div>
+          <h2 className="text-lg leading-snug font-semibold tracking-tight mt-1.5">
+            {video.title ?? video.topic}
+          </h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {video.wordCount ?? 0} words ·{" "}
+            {LENGTHS.find((l) => l.id === video.length)?.label ?? video.length} ·{" "}
+            {video.voiceSource === "custom"
+              ? `Custom voice — ${video.voiceLabel ?? "own audio"}`
+              : VOICES.find((v) => v.id === video.voice)?.label ?? video.voice}
+            {video.channelName ? ` · ${video.channelName}` : ""}
+          </p>
+        </div>
         {video.hasThumbnail && (
           <img
             src={`/api/videos/${video.id}/thumbnail`}
             alt={`Thumbnail for ${video.title ?? video.topic}`}
-            className="w-full aspect-video object-cover rounded-t-lg"
+            className="w-36 sm:w-44 aspect-video object-cover rounded-xl border border-white/10 shrink-0 hidden sm:block"
           />
         )}
-        <div className="p-6 pt-5">
-          <DialogHeader className="text-left space-y-1.5">
-            <div className="flex items-center gap-2 flex-wrap">
-              <StatusBadge status={video.status} />
-              <Badge variant="outline" className="border-white/15 bg-white/5 text-muted-foreground">
-                {video.niche}
-              </Badge>
-              {video.characterName && (
-                <Badge className="bg-primary/15 text-cyan-200 border border-primary/25 gap-1">
-                  <UserRound className="h-3 w-3" />
-                  {video.characterName}
-                </Badge>
-              )}
-              {isStory && (
-                <Badge variant="outline" className="border-sky-500/25 bg-sky-500/10 text-sky-200 gap-1">
-                  <Clapperboard className="h-3 w-3" />
-                  Scene story · {video.sceneCount} scenes
-                </Badge>
-              )}
-              {isStory && video.hasVideo && (
-                <Badge variant="outline" className="border-emerald-500/25 bg-emerald-500/10 text-emerald-200">
-                  MP4 · {formatDuration(video.videoDuration)}
-                </Badge>
-              )}
-              {video.hasShort && (
-                <Badge variant="outline" className="border-sky-500/25 bg-sky-500/10 text-sky-200 gap-1">
-                  <Smartphone className="h-3 w-3" />
-                  Short · {formatDuration(video.shortDuration)}
-                </Badge>
-              )}
-              {video.youtubeUrl && (
-                <Badge variant="outline" className="border-red-500/30 bg-red-500/12 text-red-200 gap-1">
-                  <Youtube className="h-3 w-3" />
-                  <a href={video.youtubeUrl} target="_blank" rel="noreferrer" className="hover:underline">
-                    Live on YouTube
-                  </a>
-                </Badge>
-              )}
-              <span className="text-xs text-muted-foreground">{timeAgo(video.createdAt)}</span>
-            </div>
-            <DialogTitle className="text-lg leading-snug">
-              {video.title ?? video.topic}
-            </DialogTitle>
-            <DialogDescription>
-              {video.wordCount ?? 0} words ·{" "}
-              {LENGTHS.find((l) => l.id === video.length)?.label ?? video.length} ·{" "}
-              {video.voiceSource === "custom"
-                ? `Custom voice — ${video.voiceLabel ?? "own audio"}`
-                : VOICES.find((v) => v.id === video.voice)?.label ?? video.voice}
-              {video.channelName ? ` · ${video.channelName}` : ""}
-            </DialogDescription>
-          </DialogHeader>
+      </div>
 
-          {video.error && !renderLabel && (
-            <p className="mt-3 text-xs text-red-300 bg-red-500/8 border border-red-500/20 rounded-lg px-3 py-2">
-              {video.error}
-            </p>
-          )}
+      {video.error && !renderLabel && (
+        <p className="text-xs text-red-300 bg-red-500/8 border border-red-500/20 rounded-lg px-3 py-2">
+          {video.error}
+        </p>
+      )}
 
-          {/* S91 — the living production board: stages, checkpoints, costs,
-              history — one glance at where this video is */}
-          <ProductionBoard videoId={video.id} />
+      {/* S91 — the living production board: stages, checkpoints, costs,
+          history — one glance at where the project stands (the visible
+          approval line: every stage the human has driven stays on record) */}
+      <ProductionBoard videoId={video.id} />
 
-          {isStory ? (
-            <Tabs
-              value={activeTab}
-              onValueChange={setActiveTab}
-              className="mt-4"
-            >
-              <TabsList className="grid grid-cols-4 bg-white/5">
-                <TabsTrigger value="package" className="data-[state=active]:bg-white/10 text-xs">
-                  Package
-                </TabsTrigger>
-                <TabsTrigger value="script" className="data-[state=active]:bg-white/10 text-xs">
-                  Script
-                </TabsTrigger>
-                <TabsTrigger value="storyboard" className="data-[state=active]:bg-white/10 text-xs">
-                  Storyboard
-                </TabsTrigger>
-                <TabsTrigger value="video" className="data-[state=active]:bg-white/10 text-xs">
-                  Video
-                </TabsTrigger>
-              </TabsList>
-              <TabsContent value="package" className="mt-4">
-                {packageTab}
-              </TabsContent>
-              <TabsContent value="script" className="mt-4">
-                {scriptTab}
-              </TabsContent>
-              <TabsContent value="storyboard" className="mt-4">
-                {renderMode === "whiteboard" ? (
-                  /* S67 — the Whiteboard Studio owns this tab in whiteboard
-                     mode: scaffold → scrub/play (the frame-plan seam) →
-                     render. The scene grid / Director card return for every
-                     other mode. */
-                  <WhiteboardStudio
-                    videoId={video.id}
-                    hasVideo={video.hasVideo}
-                    onRenderQueued={() => {
-                      void refreshVideo(video.id);
-                      bumpRefresh();
-                    }}
-                  />
-                ) : renderMode === "graphics" ? (
-                  /* S123 (G1) — the Graphics Studio owns this tab in
-                     graphics mode: scaffold → scrub/play the WHOLE doc
-                     through the frame-truth seam → labelled drafts →
-                     render. The same peer-engine law as the whiteboard. */
-                  <GraphicsStudio
-                    videoId={video.id}
-                    hasVideo={video.hasVideo}
-                    onRenderQueued={() => {
-                      void refreshVideo(video.id);
-                      bumpRefresh();
-                    }}
-                  />
-                ) : (
-                  storyboardTab
-                )}
-              </TabsContent>
-              <TabsContent value="video" className="mt-4">
-                {videoTab}
-              </TabsContent>
-            </Tabs>
-          ) : (
-            <Tabs defaultValue="package" className="mt-4">
-              <TabsList className="grid grid-cols-2 bg-white/5">
-                <TabsTrigger value="package" className="data-[state=active]:bg-white/10 text-xs">
-                  Package
-                </TabsTrigger>
-                <TabsTrigger value="script" className="data-[state=active]:bg-white/10 text-xs">
-                  Script
-                </TabsTrigger>
-              </TabsList>
-              <TabsContent value="package" className="mt-4">
-                {packageTab}
-              </TabsContent>
-              <TabsContent value="script" className="mt-4">
-                {scriptTab}
-              </TabsContent>
-            </Tabs>
-          )}
-
-          {footer}
-        </div>
-      </DialogContent>
-
-      {/* Scene Studio — per-scene art editing (style / prompt / AI edit / upload) */}
-      <SceneEditorDialog
-        videoId={video.id}
-        scene={scenes.find((s) => s.index === editingScene) ?? null}
-        open={editingScene !== null}
-        onOpenChange={(o) => {
-          if (!o) setEditingScene(null);
-        }}
-        onUpdated={() => {
-          void reloadScenes(video.id);
-          if (renderMode === "slides") void reloadSlides(video.id);
-          bumpRefresh();
-        }}
-        renderMode={renderMode}
-        slide={slides?.find((sl) => sl.index === editingScene) ?? null}
-        slideBusy={busy === `slide-${editingScene}`}
-        onRerollSlide={() => {
-          const scene = scenes.find((s) => s.index === editingScene);
-          if (scene) void rerollSlide(scene.index, scene.title);
-        }}
-      />
-    </Dialog>
+      {isStory ? (
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList className="flex w-full overflow-x-auto scroll-area-bar bg-white/5 sm:grid sm:grid-cols-5">
+            <TabsTrigger value="director" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
+              Director
+            </TabsTrigger>
+            <TabsTrigger value="storyboard" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
+              Storyboard
+            </TabsTrigger>
+            <TabsTrigger value="canvas" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
+              Canvas
+            </TabsTrigger>
+            <TabsTrigger value="timeline" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
+              Timeline
+            </TabsTrigger>
+            <TabsTrigger value="inspector" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
+              Inspector
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="director" className="mt-4">
+            {scriptTab}
+          </TabsContent>
+          <TabsContent value="storyboard" className="mt-4">
+            {renderMode === "whiteboard" ? (
+              /* S67 — the Whiteboard Studio owns this area in whiteboard
+                 mode: scaffold → scrub/play (the frame-plan seam) →
+                 render. The scene grid / Director card return for every
+                 other mode. */
+              <WhiteboardStudio
+                videoId={video.id}
+                hasVideo={video.hasVideo}
+                onRenderQueued={() => {
+                  void refreshVideo(video.id);
+                  bumpRefresh();
+                }}
+              />
+            ) : renderMode === "graphics" ? (
+              /* S123 (G1) — the Graphics Studio owns this area in
+                 graphics mode: scaffold → scrub/play the WHOLE doc
+                 through the frame-truth seam → labelled drafts →
+                 render. The same peer-engine law as the whiteboard. */
+              <GraphicsStudio
+                videoId={video.id}
+                hasVideo={video.hasVideo}
+                onRenderQueued={() => {
+                  void refreshVideo(video.id);
+                  bumpRefresh();
+                }}
+              />
+            ) : (
+              storyboardTab
+            )}
+          </TabsContent>
+          <TabsContent value="canvas" className="mt-4">
+            {canvasArea}
+          </TabsContent>
+          <TabsContent value="timeline" className="mt-4">
+            {videoTab}
+          </TabsContent>
+          <TabsContent value="inspector" className="mt-4">
+            {inspectorArea}
+          </TabsContent>
+        </Tabs>
+      ) : (
+        <Tabs defaultValue="director">
+          <TabsList className="grid grid-cols-2 bg-white/5">
+            <TabsTrigger value="director" className="data-[state=active]:bg-white/10 text-xs">
+              Director
+            </TabsTrigger>
+            <TabsTrigger value="inspector" className="data-[state=active]:bg-white/10 text-xs">
+              Inspector
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="director" className="mt-4">
+            {scriptTab}
+          </TabsContent>
+          <TabsContent value="inspector" className="mt-4">
+            {inspectorArea}
+          </TabsContent>
+        </Tabs>
+      )}
+    </div>
   );
 }
 
@@ -4404,7 +4518,7 @@ function SceneScriptCard({
       </div>
       {narration !== synced.narration && (
         <p className="text-[10px] text-amber-300/80 mt-1.5 leading-snug">
-          Saving this narration clears the stale voiceover — re-render it from the Package tab.
+          Saving this narration clears the stale voiceover — re-render it from the Inspector area.
         </p>
       )}
     </div>

@@ -116,7 +116,7 @@ export function CommandPalette() {
       keywords: `${v.title} ${v.topic} ${v.niche} ${v.status}`.toLowerCase(),
       run: () => {
         setFocusVideoId(v.id);
-        setView("library");
+        setView("workspace");
       },
     }));
     return [...actions, ...views, ...videos];

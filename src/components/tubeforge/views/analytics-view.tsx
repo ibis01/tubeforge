@@ -260,7 +260,7 @@ export function AnalyticsView() {
                 key={row.videoId}
                 onClick={() => {
                   setFocusVideoId(row.videoId);
-                  setView("library");
+                  setView("workspace");
                 }}
                 className="w-full flex items-center gap-3 rounded-xl border border-white/8 bg-white/3 px-3 py-2.5 text-left transition-all hover:border-white/20 hover:bg-white/6"
               >

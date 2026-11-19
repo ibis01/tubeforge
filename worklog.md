@@ -7000,3 +7000,25 @@ order, narration alignment — is the operator's next human step.
   dependency. Battery 807 → 814, 0 failed; tsc clean; changed-file eslint clean.
 - THE OPERATOR'S STANDING ITEM (unchanged): the four chat-exposed PATs must still be
   revoked at github.com/settings/tokens — the repo never received them (gitleaks-green).
+
+## M4/B3 — the production workspace (2026-11, backported from Studio 76df60e)
+
+- THE DIALOG BECAME A PAGE: the 4.4k-line video-detail-dialog is now
+  `production-workspace.tsx` — a full-page per-project surface with five areas
+  (Director · Storyboard · Canvas · Timeline · Inspector; Director · Inspector for
+  classic narration). Every entry point (Projects cards, Home continue row, palette,
+  Create, Topic Radar, Calendar, Analytics, Cast) lands the workspace; the detail
+  dialog chrome, its library mount and the nested SceneEditorDialog are gone
+  (`SceneEditorDialog` → `SceneStudioPanel`, inline in Canvas). Exit condition closed:
+  inspect and revise individual scenes without leaving the project (scene rail +
+  inline studio; storyboard's Edit scene lands Canvas with the scene picked).
+- ZERO ENGINE REWRITE: the extraction moved the battle-tested interior — script beats,
+  storyboard grid, re-rolls, Timeline Studio, QC scorecard + ship gate, voice panel,
+  publish flow — under new chrome; API/lib untouched; the two source pins
+  (S119 render-honesty, S151 re-roll honesty) followed the rename with strings intact.
+- THE WALK EARNED ITS KEEP AGAIN: the rendered pass caught the Narrative profile's
+  user-facing blurb still reading "The faceless-YouTube classic"; fixed + a new pin
+  sweeps every profile blurb for legacy vocabulary. Same walk shape as B1's escapes.
+- De-rebrand law applied (audit §4): ibismuh paths/keys/cookies mapped to the
+  TubeForge originals; battery 1010 → 1015 pins (B3 suite appended before the
+  summary block; S119/S151 file pins follow the rename).

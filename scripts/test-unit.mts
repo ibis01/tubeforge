@@ -13903,7 +13903,7 @@ await test("s123 P3: the lane is wired end-to-end — route branch, job dispatch
   );
 });
 
-await test("s119: the lane contract is wired — route resolves the lane, scaffold pins, dialog surfaces rejections (source pin)", async () => {
+await test("s119: the lane contract is wired — route resolves the lane, scaffold pins, workspace surfaces rejections (source pin)", async () => {
   const route = fs.readFileSync("src/app/api/videos/[id]/render/route.ts", "utf8");
   ok(
     route.includes("resolveRenderLane(bodyMode, video.renderMode)") && route.includes("lane.pinRenderMode"),
@@ -13918,10 +13918,10 @@ await test("s119: the lane contract is wired — route resolves the lane, scaffo
     /renderMode: "whiteboard"/.test(scaffold),
     "POST /whiteboard/scaffold pins the row to the whiteboard lane (scaffolding IS whiteboard intent)"
   );
-  const dialog = fs.readFileSync("src/components/tubeforge/video-detail-dialog.tsx", "utf8");
+  const workspace = fs.readFileSync("src/components/tubeforge/production-workspace.tsx", "utf8");
   ok(
-    dialog.includes("Render request failed (HTTP"),
-    "the dialog's startRender throws on !res.ok — a refused admission is a destructive toast, never a false 'Video rendered'"
+    workspace.includes("Render request failed (HTTP"),
+    "the workspace's startRender throws on !res.ok — a refused admission is a destructive toast, never a false 'Video rendered'"
   );
 });
 
@@ -22535,11 +22535,11 @@ await test("S151 scene flags: serializeScenes answers from the rows — no insta
   ok(src.includes("jobError: sceneJobErrors.get(s.index)"), "each scene carries its latest failed re-roll's error");
 });
 
-await test("S151 client honesty: the poller throws a failed re-roll's error; the dialog checks the start and counts what landed", async () => {
+await test("S151 client honesty: the poller throws a failed re-roll's error; the workspace checks the start and counts what landed", async () => {
   const poll = await fsp.readFile("src/lib/tubeforge/poll.ts", "utf8");
   ok(/jobError\)\s*throw new Error\(scene\.jobError\)/.test(poll), "pollScene refuses to toast success over a failed re-roll");
 
-  const dlg = await fsp.readFile("src/components/tubeforge/video-detail-dialog.tsx", "utf8");
+  const dlg = await fsp.readFile("src/components/tubeforge/production-workspace.tsx", "utf8");
   ok(/Could not start the storyboard/.test(dlg), "the full-storyboard start is checked (an unchecked 400/409 used to lie)");
   ok(/Could not start the scene re-roll/.test(dlg), "the single-scene start is checked too");
   ok(dlg.includes("board.complete") && dlg.includes("Storyboard partially painted"), "the success toast requires the board to ACTUALLY be complete");
@@ -22883,7 +22883,7 @@ suiteStart("S157 — the browser-chunk seam (the production-build law)");
 
 await test("S157 studio-doc rides the browser chunk — no node builtins may enter the client graph", async () => {
   // The receipt: S156 put `import fs from "node:fs"` in studio-doc.ts for the
-  // font ladder; the client components (timeline-studio, video-detail-dialog)
+  // font ladder; the client components (timeline-studio, production-workspace)
   // import studio-doc VALUES, so the whole module — node builtin included —
   // entered the /page browser chunk and Turbopack died: "the chunking context
   // (unknown) does not support external modules (request: node:fs)". The pin
@@ -25298,6 +25298,93 @@ await test("security review P2-2: the fail-open counterweight has a schedule, an
   ok(nightly.includes("run: npm run alert:probe"), "the alert probe runs on the nightly schedule (P2-2)");
   ok(nightly.includes("FF_STATIC_URL"), "the nightly ffmpeg step carries the pinned static outage net");
   ok(!nightly.includes("apt failed twice"), "the old un-netted apt loop is gone from the nightly");
+});
+
+
+// ---------- suite: B3 — the production workspace ----------
+
+suiteStart("B3 — the production workspace: the detail dialog became a full-page surface");
+
+await test("B3 surface: ProductionWorkspace exports, the dialog chrome is gone, the five areas are the only tabs (source pin)", async () => {
+  const ws = fs.readFileSync("src/components/tubeforge/production-workspace.tsx", "utf8");
+  ok(
+    ws.includes("export function ProductionWorkspace("),
+    "the renamed file exports the workspace surface — VideoDetailDialog is retired (docs/design/B3_PRODUCTION_WORKSPACE_SPEC.md)"
+  );
+  ok(!ws.includes('from "@/components/ui/dialog"'), "no Dialog chrome — the workspace is a page, not a modal");
+  ok(!ws.includes("VideoDetailDialog"), "the old dialog name is gone from the workspace file");
+  for (const area of ['value="director"', 'value="storyboard"', 'value="canvas"', 'value="timeline"', 'value="inspector"']) {
+    ok(ws.includes(area), `the ${area.slice(7, -1)} workspace area is pinned`);
+  }
+  ok(
+    !ws.includes('value="script"') && !ws.includes('value="package"') && !ws.includes('value="video"'),
+    "the pre-B3 tab ids (package/script/video) are gone — the areas replaced them"
+  );
+});
+
+await test("B3 entries: every focusVideoId producer pairs it with setView(\"workspace\") — no flow still lands in the dialog era (source pin)", async () => {
+  const files = [
+    "src/components/tubeforge/views/library-view.tsx",
+    "src/components/tubeforge/views/dashboard-view.tsx",
+    "src/components/tubeforge/views/create-view.tsx",
+    "src/components/tubeforge/views/research-view.tsx",
+    "src/components/tubeforge/views/calendar-view.tsx",
+    "src/components/tubeforge/views/cast-view.tsx",
+    "src/components/tubeforge/views/analytics-view.tsx",
+    "src/components/tubeforge/command-palette.tsx",
+  ];
+  const dialogEra = /setFocusVideoId\([\s\S]{0,200}?setView\("library"\)/;
+  for (const f of files) {
+    const src = fs.readFileSync(f, "utf8");
+    ok(src.includes("setFocusVideoId"), `${f} still produces focus ids`);
+    ok(!dialogEra.test(src), `${f} no longer pairs a focus id with the Projects list — it opens the workspace`);
+  }
+  const wsv = fs.readFileSync("src/components/tubeforge/views/workspace-view.tsx", "utf8");
+  ok(wsv.includes("export function WorkspaceView"), "the per-project view host exists");
+  ok(wsv.includes("setFocusVideoId(null)"), "the workspace consumes the focus id on load — the fetched DTO is local state");
+});
+
+await test("B3 canvas: SceneStudioPanel is inline (no open prop), the storyboard's Edit lands Canvas, the continuity panel rides along (source pin)", async () => {
+  const se = fs.readFileSync("src/components/tubeforge/scene-editor.tsx", "utf8");
+  ok(se.includes("export function SceneStudioPanel"), "the panel export exists — SceneEditorDialog is retired");
+  ok(!se.includes("SceneEditorDialog"), "the nested dialog is gone from the scene-editor file");
+  ok(!se.includes("onOpenChange"), "no open/onOpenChange props — the panel lives inline in the Canvas area");
+  ok(se.includes("<SceneTrustPanel"), "the S77 continuity panel rides in the canvas (the approval seam stays per-scene)");
+  const ws = fs.readFileSync("src/components/tubeforge/production-workspace.tsx", "utf8");
+  ok(ws.includes("<SceneStudioPanel"), "the Canvas area hosts the scene panel inline");
+  ok(
+    /setCanvasScene\(s\.index\);[\s\S]{0,120}?setActiveTab\("canvas"\)/.test(ws),
+    "the storyboard's Edit scene lands the Canvas area with the scene picked"
+  );
+});
+
+await test("B3 language & nav: the new copy speaks creator-control and the shell knows the workspace (source pin)", async () => {
+  const ws = fs.readFileSync("src/components/tubeforge/production-workspace.tsx", "utf8");
+  ok(ws.includes('aria-label="Back to Projects"'), "the way back is labeled for screen readers");
+  ok(ws.includes("The Whiteboard Studio owns scene editing"), "the whiteboard lane's Canvas pointer names the owning studio");
+  ok(ws.includes("The Graphics Studio owns scene editing"), "the graphics lane's Canvas pointer names the owning studio");
+  const store = fs.readFileSync("src/lib/store.ts", "utf8");
+  ok(store.includes('  | "workspace"'), "workspace joined the ViewId union (existing ids preserved)");
+  const page = fs.readFileSync("src/app/page.tsx", "utf8");
+  ok(page.includes("workspace: {"), "VIEW_META knows the workspace");
+  ok(page.includes('view !== "workspace"'), "the header CTA hides on the workspace (a focused surface, like Create/Settings)");
+  const sidebar = fs.readFileSync("src/components/tubeforge/app-sidebar.tsx", "utf8");
+  ok(
+    /case "create":\s*\n\s*case "workspace":\s*\n\s*return "library";/.test(sidebar),
+    "the workspace highlights the Projects destination in the sidebar"
+  );
+});
+
+await test("B3 language law: the production profiles' user-facing blurbs carry no legacy vocabulary (the walk caught 'faceless' in the Director card)", async () => {
+  const src = fs.readFileSync("src/lib/tubeforge/production-profiles.ts", "utf8");
+  // The system overlays speak the model's domain language and may keep it;
+  // the blurbs are UI copy — they must not.
+  const blurbs = [...src.matchAll(/blurb: "([^"]+)"/g)].map((m) => m[1]);
+  ok(blurbs.length >= 5, "the seven-profile catalog's blurbs are readable from source");
+  ok(
+    blurbs.every((b) => !/faceless|auto-pilot|fully automated|zero manual work/i.test(b)),
+    `no blurb carries legacy vocabulary (got: ${blurbs.filter((b) => /faceless|auto-pilot|fully automated|zero manual work/i.test(b)).join(" | ") || "clean"})`
+  );
 });
 
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);

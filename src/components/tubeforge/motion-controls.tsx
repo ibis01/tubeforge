@@ -1,10 +1,10 @@
 "use client";
 
 // Shared Smart Motion (Ken Burns) UI — one card used by the Create form and
-// the video detail dialog. Mirrors the music-controls pattern:
+// the production workspace. Mirrors the music-controls pattern:
 //   • value uses nulls to mean "follow the built-in defaults"
 //   • Create sends the fields on POST /api/videos
-//   • the detail dialog PATCHes them (debounced by the caller)
+//   • the workspace PATCHes them (debounced by the caller)
 //
 // The renderer (src/lib/tubeforge/motion.ts) is the source of truth for the
 // semantics: smart scene-aware plans, 12% default zoom intensity, smooth
@@ -123,7 +123,7 @@ function kbAnimationClass(
  *
  * The frame art is a webpack-bundled asset (fingerprinted /_next/static/media
  * URL) so the preview never depends on a runtime public/ path; when a video's
- * own storyboard art is available (detail dialog) it takes precedence via
+ * own storyboard art is available (the workspace) it takes precedence via
  * `frame`, previewing the real scene instead of the stock plate.
  */
 export function MotionStage({
@@ -167,7 +167,7 @@ export function MotionStage({
 /**
  * Image Motion card. `disabled` greys everything (busy renders);
  * `note` explains the scope when the current render mode ignores it.
- * `frame` previews a real storyboard image when one exists (detail dialog).
+ * `frame` previews a real storyboard image when one exists (the workspace).
  */
 export function MotionControlsCard({
   value,

@@ -491,14 +491,14 @@ export function ResearchView() {
       if (!res.ok) throw new Error(data.error ?? "Greenlight failed");
       bumpRefresh();
       // Stage 1 (T-1.10): greenlight returns 202 — the script writes in a
-      // background job and the library's detail dialog adopts the in-flight
+      // background job and the production workspace adopts the in-flight
       // generation (same UX as a script re-roll).
       toast({
         title: "Scene story greenlit",
         description: `"${data.video.title ?? idea.title}" is writing its script in the background — open it to follow progress.`,
       });
-      setFocusVideoId(data.video.id); // library opens the detail dialog
-      setView("library");
+      setFocusVideoId(data.video.id); // the workspace opens the production surface
+      setView("workspace");
     } catch (e) {
       toast({
         title: "Greenlight failed",
