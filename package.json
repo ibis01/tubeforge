@@ -35,6 +35,7 @@
     "test:billing": "node --import tsx scripts/test-billing.mts",
     "test:voicestudio": "node --import tsx scripts/test-voicestudio-adapter.mts",
     "test:storage": "node --import tsx scripts/test-storage.mts",
+    "test:s3-signer": "node --import tsx scripts/test-s3-signer.mts",
     "test:rate": "node --import tsx scripts/test-rate-limit.mts",
     "test:scene-revisions": "node --import tsx scripts/test-scene-revisions.mts",
     "test:drill": "node --import tsx scripts/restore-drill.mts",

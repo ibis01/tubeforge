@@ -56,30 +56,50 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# --- Hub-free image sourcing (ECR Public mirrors, tagged to local names) ---
-for pair in \
-  "public.ecr.aws/docker/library/node:20-bookworm-slim node:20-bookworm-slim" \
-  "public.ecr.aws/docker/library/postgres:16-alpine postgres:16-alpine"; do
-  set -- $pair
-  if docker image inspect "$2" >/dev/null 2>&1; then
-    echo "[smoke] $2 already cached"
+# --- Hub-free image sourcing (registry mirrors, tagged to local names) ---
+# S105 follow-up receipt chain: Docker Hub DENIES anonymous pulls from
+# GitHub's shared runner IP pools ("pull access denied … repository does
+# not exist") regardless of backoff → every image sourced HUB-FREE from
+# the ECR Public library mirror (public.ecr.aws/docker/library/…), tagged
+# locally to the names the Dockerfile / compose expect. 2026-11-14
+# (run 43531489543): ECR throttles shared runner IP pools too —
+# "toomanyrequests: Rate exceeded" — so the pulls retry with escalating
+# backoff. 2026-11-18 (aaa3593): ECR's throttle went VOLUME-shaped —
+# "toomanyrequests: Data limit exceeded" on the shared pool, backoff-immune
+# for the whole window (the 4-attempt walk died in ~2 minutes). The pull
+# now walks TWO independent Hub-free mirrors — ECR Public first, then
+# Google's Docker-Hub read-through cache mirror.gcr.io (anonymously
+# readable from runners; both manifests verified 200 amd64 when this was
+# wired) — before failing.
+for spec in \
+  "node:20-bookworm-slim|public.ecr.aws/docker/library/node:20-bookworm-slim|mirror.gcr.io/library/node:20-bookworm-slim" \
+  "postgres:16-alpine|public.ecr.aws/docker/library/postgres:16-alpine|mirror.gcr.io/library/postgres:16-alpine"; do
+  IFS='|' read -r LOCAL M1 M2 <<< "$spec"
+  if docker image inspect "$LOCAL" >/dev/null 2>&1; then
+    echo "[smoke] $LOCAL already cached"
     continue
   fi
-  echo "[smoke] pulling $2 from the ECR Public mirror"
   PULL_OK=false
-  for ATTEMPT in 1 2 3 4; do
-    if docker pull "$1"; then PULL_OK=true; break; fi
-    if [ "$ATTEMPT" -lt 4 ]; then
-      BACKOFF=$((ATTEMPT * 20))
-      echo "[smoke] pull attempt $ATTEMPT failed — ECR Public throttles shared runner IPs; retrying in ${BACKOFF}s"
-      sleep "$BACKOFF"
-    fi
+  for SRC in "$M1" "$M2"; do
+    echo "[smoke] pulling $LOCAL from $SRC"
+    for ATTEMPT in 1 2 3 4; do
+      if docker pull "$SRC"; then
+        docker tag "$SRC" "$LOCAL"
+        PULL_OK=true
+        break 2
+      fi
+      if [ "$ATTEMPT" -lt 4 ]; then
+        BACKOFF=$((ATTEMPT * 20))
+        echo "[smoke] pull attempt $ATTEMPT from $SRC failed — retrying in ${BACKOFF}s"
+        sleep "$BACKOFF"
+      fi
+    done
+    echo "[smoke] $SRC exhausted for $LOCAL — trying the next mirror"
   done
   if [ "$PULL_OK" != true ]; then
-    echo "[smoke] FAIL: the ECR Public mirror kept rate-limiting the $1 pull after 4 attempts"
+    echo "[smoke] FAIL: no mirror served $LOCAL (ECR Public and mirror.gcr.io both exhausted)"
     exit 1
   fi
-  docker tag "$1" "$2"
 done
 
 # --- object store as a HOST process (Hub-free; dl.min.io is 410 Gone —

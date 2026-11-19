@@ -95,7 +95,10 @@ export async function serializeVideo(
     transitionStyle: v.transitionStyle,
     transitionDuration: v.transitionDuration,
     brandAccent: v.brandAccent,
-    brandHasLogo: isStory && (await hasBrandLogo(v.id)),
+    // The logo probe is cosmetic — a storage hiccup (e.g. a 403 from the s3
+    // driver) must degrade to "no logo", never block greenlighting a video
+    // or loading the library. Real writes still fail loudly downstream.
+    brandHasLogo: isStory && (await hasBrandLogo(v.id).catch(() => false)),
     brandLogoOn: v.brandLogoOn ?? true,
     qc: parseQc(v.qcReport),
     // S40 — the ship gate, computed where the report is parsed so every

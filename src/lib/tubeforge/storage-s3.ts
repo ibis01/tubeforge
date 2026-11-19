@@ -67,8 +67,11 @@ function sigv4Headers(
 
   // Keys arrive PRE-NORMALIZED — the facade normalizes every key at its
   // boundary (normalizeKey); the signer must not re-import the facade.
+  // An EMPTY key (bucket-level op, e.g. ListObjectsV2) signs the bare
+  // "/<bucket>" canonical URI — a trailing slash would mismatch the actual
+  // request path and S3 would reject the signature.
   const encodedKey = encodeS3Key(key);
-  const canonicalUri = `/${cfg.bucket}/${encodedKey}`;
+  const canonicalUri = `/${cfg.bucket}${encodedKey ? `/${encodedKey}` : ""}`;
 
   const query: Record<string, string> = { ...extraQuery };
   const canonicalQuery = Object.keys(query)
@@ -146,4 +149,36 @@ export async function s3Fetch(
 ): Promise<Response> {
   const { url, headers } = sigv4Headers(cfg, method, key, body ?? Buffer.alloc(0), extraQuery);
   return fetch(url, { method, headers, body: body ? new Uint8Array(body) : undefined });
+}
+
+/** Signed ListObjectsV2 with continuation tokens — every key under the
+ *  prefix (URL-decoded, exactly what the facade's list() contract returns).
+ *  This replaces the facade's old UNSIGNED fetch(): AWS S3 and Cloudflare R2
+ *  both 403 anonymous LISTs, which silently broke character pose-sheet
+ *  listing, render invalidation passes and video DELETE cleanup under the
+ *  s3 driver. */
+export async function s3List(cfg: S3Config, prefix: string): Promise<string[]> {
+  const keys: string[] = [];
+  let token: string | null = null;
+  for (;;) {
+    const query: Record<string, string> = {
+      "list-type": "2",
+      prefix,
+      "max-keys": "1000",
+    };
+    if (token) query["continuation-token"] = token;
+    const res = await s3Fetch("GET", "", cfg, undefined, query);
+    if (!res.ok) {
+      // LIST failures carry an XML body (<Code>SignatureDoesNotMatch</Code> —
+      // surface the first 200 chars so misconfigurations diagnose themselves).
+      const detail = (await res.text().catch(() => "")).slice(0, 200).replace(/\s+/g, " ");
+      throw new Error(`storage: LIST "${prefix}" → ${res.status}${detail ? ` ${detail}` : ""}`);
+    }
+    const text = await res.text();
+    for (const m of text.matchAll(/<Key>([^<]+)<\/Key>/g)) keys.push(decodeURIComponent(m[1]));
+    const next = text.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/);
+    if (!next) break;
+    token = next[1];
+  }
+  return keys;
 }

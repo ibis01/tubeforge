@@ -37,7 +37,7 @@ import os from "os";
 import path from "path";
 import { Readable } from "stream";
 import { currentCtx } from "./tenant";
-import { s3Config, s3Fetch, s3Presign } from "./storage-s3";
+import { s3Config, s3Fetch, s3List, s3Presign } from "./storage-s3";
 import { bumpUsage, reserveStorageBytes, storageQuotaBytes, type StoragePutReservation } from "./storage-quota";
 
 // The two extracted halves re-export through the facade — every existing
@@ -98,6 +98,16 @@ export interface StatResult {
   mtime: Date;
 }
 
+/** HEAD has no body, so the bucket's XML error code (SignatureDoesNotMatch,
+ *  InvalidAccessKeyId, RequestTimeTooSkewed…) is unreadable — attach the
+ *  operator checklist to the one status that always means "the bucket
+ *  rejected the request itself", never "the object is missing" (404 is). */
+function headForbiddenHint(status: number): string {
+  return status === 403
+    ? " (forbidden — the bucket rejected the TUBEFORGE_S3_* credentials: check access key/secret, the token's bucket scope + Object Read & Write permission, the endpoint host, and the server clock)"
+    : "";
+}
+
 // ---------------------------------------------------------------------------
 // Key hygiene
 
@@ -143,7 +153,7 @@ export async function materialize(key: string): Promise<string> {
 
   const head = await s3Fetch("HEAD", k, cfg);
   if (head.status === 404) throw new Error(`storage: missing object "${k}"`);
-  if (!head.ok) throw new Error(`storage: HEAD "${k}" → ${head.status}`);
+  if (!head.ok) throw new Error(`storage: HEAD "${k}" → ${head.status}${headForbiddenHint(head.status)}`);
   const etag = head.headers.get("etag") ?? "none";
 
   const dest = cacheFileFor(k, etag);
@@ -298,7 +308,7 @@ export async function stat(key: string): Promise<StatResult | null> {
     if (!cfg) return null;
     const res = await s3Fetch("HEAD", k, cfg);
     if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`storage: HEAD "${k}" → ${res.status}`);
+    if (!res.ok) throw new Error(`storage: HEAD "${k}" → ${res.status}${headForbiddenHint(res.status)}`);
     const len = res.headers.get("content-length");
     const lastMod = res.headers.get("last-modified");
     return { size: len ? Number(len) : 0, mtime: lastMod ? new Date(lastMod) : new Date() };
@@ -342,20 +352,9 @@ export async function list(prefix: string): Promise<string[]> {
 
   const cfg = s3Config();
   if (!cfg) throw new Error("storage: s3 driver selected but TUBEFORGE_S3_* env is incomplete");
-  const keys: string[] = [];
-  let token: string | null = null;
-  for (;;) {
-    let url = `${cfg.endpoint}/${cfg.bucket}?list-type=2&prefix=${encodeURIComponent(p + "/")}&max-keys=1000`;
-    if (token) url += `&continuation-token=${encodeURIComponent(token)}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`storage: LIST "${p}" → ${res.status}`);
-    const text = await res.text();
-    for (const m of text.matchAll(/<Key>([^<]+)<\/Key>/g)) keys.push(decodeURIComponent(m[1]));
-    const next = text.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/);
-    if (!next) break;
-    token = next[1];
-  }
-  return keys;
+  // Signed ListObjectsV2 (s3List) — the bucket-level request carries the
+  // SigV4 Authorization header; anonymous LISTs 403 on AWS S3 and R2.
+  return s3List(cfg, p + "/");
 }
 
 export async function remove(key: string): Promise<void> {
@@ -392,23 +391,15 @@ export async function removePrefix(prefix: string): Promise<number> {
     return bytes;
   }
 
-  // s3 — delete-by-prefix. Continuation-token listing via ListObjectsV2.
+  // s3 — delete-by-prefix. Signed LIST (s3List — anonymous LISTs 403) then
+  // per-object signed DELETEs.
   const cfg = s3Config();
   if (!cfg) throw new Error("storage: s3 driver selected but TUBEFORGE_S3_* env is incomplete");
   let removed = 0;
-  for (;;) {
-    const listRes = await fetch(
-      `${cfg.endpoint}/${cfg.bucket}?list-type=2&prefix=${encodeURIComponent(p + "/")}&max-keys=1000`
-    );
-    if (!listRes.ok) throw new Error(`storage: LIST "${p}" → ${listRes.status}`);
-    const text = await listRes.text();
-    const keys = [...text.matchAll(/<Key>([^<]+)<\/Key>/g)].map((m) => m[1]);
-    if (!keys.length) break;
-    for (const objectKey of keys) {
-      const res = await s3Fetch("DELETE", decodeURIComponent(objectKey), cfg);
-      if (res.ok || res.status === 404) removed += 1;
-    }
-    if (!/<IsTruncated>true<\/IsTruncated>/.test(text)) break;
+  const keys = await s3List(cfg, p + "/");
+  for (const objectKey of keys) {
+    const res = await s3Fetch("DELETE", objectKey, cfg);
+    if (res.ok || res.status === 404) removed += 1;
   }
   return removed;
 }
