@@ -228,7 +228,7 @@ function IdeaCard({
         </div>
         <p className="text-[10px] text-muted-foreground/70 text-center leading-snug">
           Greenlight weaves this idea's angle &amp; SEO keywords straight into a
-          {idea.suggestedLength === "long" ? " long-form" : idea.suggestedLength === "short" ? " short" : ""} scene outline — then Auto-Pilot takes over.
+          {idea.suggestedLength === "long" ? " long-form" : idea.suggestedLength === "short" ? " short" : ""} scene outline — then direct the production.
         </p>
       </div>
     </Card>
@@ -341,7 +341,7 @@ function NichePulse({ sessions }: { sessions: ResearchSessionDTO[] }) {
               <Badge
                 key={k}
                 variant="outline"
-                className="border-primary/25 bg-primary/10 text-red-200 text-[10px]"
+                className="border-primary/25 bg-primary/10 text-cyan-200 text-[10px]"
                 title={`Appears in ${n} of ${sessions.length} scans`}
               >
                 <KeyRound className="h-2.5 w-2.5 mr-1" />
@@ -542,7 +542,7 @@ export function ResearchView() {
       <div className="lg:w-80 shrink-0 space-y-6">
         <Card className="glass border-white/8 rounded-2xl p-5">
           <div className="flex items-center gap-2 mb-4">
-            <div className="h-8 w-8 rounded-lg bg-brand-gradient flex items-center justify-center shrink-0 glow-red-soft">
+            <div className="h-8 w-8 rounded-lg bg-brand-gradient flex items-center justify-center shrink-0 glow-brand-soft">
               <Radar className="h-4 w-4 text-white" />
             </div>
             <div>
@@ -724,7 +724,7 @@ export function ResearchView() {
                     </div>
                   )}
                   <p className="text-[11px] text-muted-foreground mt-2">
-                    {active.ideas.length} ideas · scanned {timeAgo(active.createdAt)} · pick one and send it straight to the Auto-Pilot
+                    {active.ideas.length} ideas · scanned {timeAgo(active.createdAt)} · pick one and send it straight to production
                   </p>
                   {/* Idea toolbar (T-4.8) — sort + competition filter */}
                   <div className="flex flex-wrap items-center gap-2 mt-3.5">
@@ -753,7 +753,7 @@ export function ResearchView() {
                             className={clsx(
                               "rounded-full border px-2.5 py-1 text-[11px] transition-all",
                               compFilter === c
-                                ? "border-primary/50 bg-primary/15 text-red-200"
+                                ? "border-primary/50 bg-primary/15 text-cyan-200"
                                 : "border-white/10 bg-white/4 text-muted-foreground hover:border-white/25"
                             )}
                           >
@@ -794,7 +794,7 @@ export function ResearchView() {
           <EmptyState
             icon={Radar}
             title="No scans yet"
-            hint="Point the radar at a niche and let GLM surface high-potential topics with search volume, competition and viral scores — then send any idea straight to the Auto-Pilot."
+            hint="Point the radar at a niche and let GLM surface high-potential topics with search volume, competition and viral scores — then send any idea straight into production."
             action={
               <Button
                 onClick={runScan}

@@ -96,7 +96,7 @@ test.describe("Stage 7 — mobile responsiveness (390px sweep)", () => {
     // way in is the mobile nav: tap the hamburger, then the sheet's nav.
     await page.goto("/");
     await page.getByRole("button", { name: "Open navigation menu" }).click();
-    await page.getByRole("navigation", { name: "Main navigation" }).getByText("Library").click();
+    await page.getByRole("navigation", { name: "Main navigation" }).getByText("Projects").click();
     await page.getByText(`Stage 7 mobile ${RUN}`).first().click();
     await expect(page.getByRole("dialog")).toBeVisible();
 

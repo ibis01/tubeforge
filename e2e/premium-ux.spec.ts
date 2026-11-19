@@ -57,12 +57,13 @@ test.describe("Stage 4a premium UX", () => {
     // Palette opens on mod+K…
     await page.keyboard.press("Control+k");
     await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
-    // …filters by keyword…
-    await page.getByLabel("Command palette search").fill("library");
-    await expect(page.getByRole("button", { name: /Library Video queue/ })).toBeVisible();
+    // …filters by keyword (a term unique to the Projects destination — the
+    // Home hint also mentions "projects", so "projects" alone matches two)…
+    await page.getByLabel("Command palette search").fill("continue");
+    await expect(page.getByRole("button", { name: /Projects Create & continue videos/ })).toBeVisible();
     // …and Enter navigates.
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("heading", { name: "Video Library" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
   });
 
   test("guided brief: steps gate and the draft survives a reload (T-4.3)", async ({ page }) => {
@@ -72,7 +73,7 @@ test.describe("Stage 4a premium UX", () => {
     ]);
     await page.goto("/");
     await page.waitForSelector("nav[aria-label='Main navigation']");
-    await page.getByRole("navigation", { name: "Main navigation" }).getByText("Create").click();
+    await page.getByRole("button", { name: "New Project", exact: true }).click();
 
     // Step 1 (Video type): the FIRST decision — four presets, always valid,
     // nothing generated. S76 moved the type choice ahead of everything else.
@@ -105,7 +106,7 @@ test.describe("Stage 4a premium UX", () => {
     // reopens at step 0 (the type picker) — walk to Concept to see the topic.
     await page.reload();
     await page.waitForSelector("nav[aria-label='Main navigation']");
-    await page.getByRole("navigation", { name: "Main navigation" }).getByText("Create").click();
+    await page.getByRole("button", { name: "New Project", exact: true }).click();
     await expect(page.getByText("Brief draft restored from your last visit.")).toBeVisible();
     await page.getByRole("button", { name: /Next: Concept/ }).click();
     await expect(page.getByLabel("Video topic")).toHaveValue(/container ships/);
@@ -131,10 +132,10 @@ test.describe("Stage 4a premium UX", () => {
     const classicBody = (await classic.json()) as { video: { id: string } };
     const classicVideoId = classicBody.video.id;
 
-    // Open the video's detail dialog through the Library.
+    // Open the video's detail dialog through the Projects destination.
     await page.goto("/");
     await page.waitForSelector("nav[aria-label='Main navigation']");
-    await page.getByRole("navigation", { name: "Main navigation" }).getByText("Library").click();
+    await page.getByRole("navigation", { name: "Main navigation" }).getByText("Projects").click();
     await page.getByText(`Classic probe ${RUN}`).first().click();
     await expect(page.getByRole("dialog")).toBeVisible();
 
@@ -172,8 +173,10 @@ test.describe("Stage 4b premium UX", () => {
     await page.goto("/");
     await page.waitForSelector("nav[aria-label='Main navigation']");
 
-    // The tenth surface: nav entry, page heading, catalog grid.
-    await page.getByRole("navigation", { name: "Main navigation" }).getByText("Voice Studio").click();
+    // The tenth surface: Assets destination → Voice Studio tab, page
+    // heading, catalog grid.
+    await page.getByRole("navigation", { name: "Main navigation" }).getByText("Assets").click();
+    await page.getByRole("tab", { name: "Voice Studio" }).click();
     await expect(page.getByRole("heading", { name: "Voice Studio" })).toBeVisible();
     await expect(page.getByText("Narration voices", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Audition" }).first()).toBeVisible();
@@ -217,7 +220,8 @@ test.describe("Stage 4b premium UX", () => {
 
     await page.goto("/");
     await page.waitForSelector("nav[aria-label='Main navigation']");
-    await page.getByRole("navigation", { name: "Main navigation" }).getByText("Cast").click();
+    await page.getByRole("navigation", { name: "Main navigation" }).getByText("Assets").click();
+    await page.getByRole("tab", { name: "Cast", exact: true }).click();
 
     // Roster card + identity readiness chips (Bible done, art not yet).
     await expect(page.getByText("Professor Vex")).toBeVisible();
@@ -251,7 +255,7 @@ test.describe("Stage 4b premium UX", () => {
 
     await page.goto("/");
     await page.waitForSelector("nav[aria-label='Main navigation']");
-    await page.getByRole("navigation", { name: "Main navigation" }).getByText("Library").click();
+    await page.getByRole("navigation", { name: "Main navigation" }).getByText("Projects").click();
     await page.getByText(`Clone link probe ${RUN}`).first().click();
     await expect(page.getByRole("dialog")).toBeVisible();
 
@@ -270,7 +274,8 @@ test.describe("Stage 4b premium UX", () => {
     await page.goto("/");
     await page.waitForSelector("nav[aria-label='Main navigation']");
 
-    await page.getByRole("navigation", { name: "Main navigation" }).getByText("Topic Radar").click();
+    await page.getByRole("navigation", { name: "Main navigation" }).getByText("Insights").click();
+    await page.getByRole("tab", { name: "Topic Radar" }).click();
     await expect(page.getByRole("heading", { name: "Topic Radar" })).toBeVisible();
     await expect(page.getByText("Scan a niche")).toBeVisible();
     await expect(page.getByText("Run Topic Radar")).toBeVisible();

@@ -7,6 +7,7 @@ import {
   AppSidebar,
   MOBILE_NAV_ITEMS,
   NAV_ITEMS,
+  activeNavId,
 } from "@/components/tubeforge/app-sidebar";
 import { AuthGate } from "@/components/tubeforge/auth-gate";
 import { DashboardView } from "@/components/tubeforge/views/dashboard-view";
@@ -20,13 +21,13 @@ import {
 import { Loader2, Menu, Plus, Search } from "lucide-react";
 import { TubeForgeLogo, TubeForgeWordmark } from "@/components/tubeforge/logo";
 import { CommandPalette } from "@/components/tubeforge/command-palette";
+import { HubTabs } from "@/components/tubeforge/hub-tabs";
 
-// Code splitting (boot-payload fix, 2026-11): statically importing all 11
-// views forced every phone to download the whole studio (~10 MB gz in dev)
-// before the AuthGate could resolve, leaving the "Warming up the forge…"
-// splash on screen for minutes on a slow link. The dashboard — the landing
-// view — stays eager; every other view streams in on first visit and is
-// cached by the browser afterwards.
+// Code splitting (boot-payload fix, 2026-11): statically importing every
+// view forced every phone to download the whole studio (~10 MB gz in dev)
+// before the AuthGate could resolve, leaving the splash on screen for
+// minutes on a slow link. The dashboard — the landing view — stays eager;
+// every other view streams in on first visit and is cached afterwards.
 function ViewFallback() {
   return (
     <div
@@ -108,10 +109,33 @@ const SettingsView = lazyView(
     })),
 );
 
+// B1 destination hubs (docs/design/B1_DESIGN_SPECIFICATION.md §3): the four
+// destinations + Settings. Grouped views render inside their destination's
+// HubTabs strip; the hub maps its tab ids onto ViewIds, so programmatic
+// jumps (clone deep-link → voice, project → calendar) land on the same
+// surface with the right tab lit and the sidebar highlighting the
+// destination that owns the view (activeNavId).
+const ASSETS_GROUP: ViewId[] = ["assets", "cast", "world", "voice"];
+const INSIGHTS_GROUP: ViewId[] = [
+  "insights",
+  "analytics",
+  "research",
+  "calendar",
+  "channels",
+];
+
 const VIEW_META: Record<ViewId, { title: string; subtitle: string }> = {
   dashboard: {
-    title: "Mission Control",
-    subtitle: "Your faceless-channel factory at a glance",
+    title: "Home",
+    subtitle: "Your studio at a glance",
+  },
+  assets: {
+    title: "Assets",
+    subtitle: "Cast, world and voice — reusable across projects",
+  },
+  insights: {
+    title: "Insights",
+    subtitle: "Research, analytics and publishing intelligence",
   },
   analytics: {
     title: "Analytics",
@@ -122,12 +146,12 @@ const VIEW_META: Record<ViewId, { title: string; subtitle: string }> = {
     subtitle: "AI keyword research — find what to make next",
   },
   create: {
-    title: "Auto-Pilot Studio",
-    subtitle: "Topic in — finished video package out",
+    title: "New Project",
+    subtitle: "Brief in — directed production out",
   },
   library: {
-    title: "Video Library",
-    subtitle: "Every asset the pipeline has produced",
+    title: "Projects",
+    subtitle: "Every project in your studio — click to open",
   },
   cast: {
     title: "Cast",
@@ -147,11 +171,11 @@ const VIEW_META: Record<ViewId, { title: string; subtitle: string }> = {
   },
   channels: {
     title: "Channels",
-    subtitle: "Manage your faceless channel lineup",
+    subtitle: "Manage your channel lineup",
   },
   settings: {
     title: "Settings",
-    subtitle: "Automation defaults & preferences",
+    subtitle: "Preferences, providers & integrations",
   },
 };
 
@@ -248,7 +272,7 @@ export default function Home() {
                   size="sm"
                 >
                   <Plus className="h-4 w-4" />
-                  <span className="hidden sm:inline">New Video</span>
+                  <span className="hidden sm:inline">New Project</span>
                   <span className="sm:hidden">New</span>
                 </Button>
               ) : null}
@@ -258,15 +282,40 @@ export default function Home() {
           {/* View content */}
           <main className="flex-1 px-4 sm:px-6 py-6 w-full max-w-[1400px] mx-auto">
             {view === "dashboard" && <DashboardView />}
-            {view === "analytics" && <AnalyticsView />}
-            {view === "research" && <ResearchView />}
+            {ASSETS_GROUP.includes(view) && (
+              <HubTabs
+                active={view}
+                tabs={[
+                  { id: "cast", label: "Cast" },
+                  { id: "world", label: "World" },
+                  { id: "voice", label: "Voice Studio" },
+                ]}
+                panels={{
+                  cast: <CastView />,
+                  world: <WorldView />,
+                  voice: <VoiceView />,
+                }}
+              />
+            )}
+            {INSIGHTS_GROUP.includes(view) && (
+              <HubTabs
+                active={view}
+                tabs={[
+                  { id: "analytics", label: "Analytics" },
+                  { id: "research", label: "Topic Radar" },
+                  { id: "calendar", label: "Publishing Calendar" },
+                  { id: "channels", label: "Channels" },
+                ]}
+                panels={{
+                  analytics: <AnalyticsView />,
+                  research: <ResearchView />,
+                  calendar: <CalendarView />,
+                  channels: <ChannelsView />,
+                }}
+              />
+            )}
             {view === "create" && <CreateView />}
             {view === "library" && <LibraryView />}
-            {view === "cast" && <CastView />}
-            {view === "world" && <WorldView />}
-            {view === "voice" && <VoiceView />}
-            {view === "calendar" && <CalendarView />}
-            {view === "channels" && <ChannelsView />}
             {view === "settings" && <SettingsView />}
           </main>
 
@@ -275,9 +324,9 @@ export default function Home() {
             <div className="max-w-[1400px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-muted-foreground">
               <p>
                 <span className="text-gradient font-semibold">TubeForge</span> ·
-                Automated faceless YouTube content engine
+                AI video production workspace
               </p>
-              <p>Script · Voice · Thumbnail · Render</p>
+              <p>Direct · Scene · Voice · Ship</p>
             </div>
           </footer>
         </div>
@@ -293,6 +342,7 @@ function MobileNavContent({
   onNavigate: (v: ViewId) => void;
   view: ViewId;
 }) {
+  const active = activeNavId(view);
   return (
     <nav aria-label="Main navigation" className="p-3">
       <div className="flex items-center gap-2.5 px-3 py-4">
@@ -305,7 +355,7 @@ function MobileNavContent({
             <button
               onClick={() => onNavigate(item.id)}
               className={`w-full flex items-center gap-3 rounded-lg px-3 py-3 text-sm transition-colors min-h-[44px] ${
-                view === item.id
+                active === item.id
                   ? "bg-primary/15 text-primary"
                   : "text-muted-foreground hover:bg-white/5 hover:text-foreground"
               }`}

@@ -85,7 +85,7 @@ export default function LoginPage() {
       <main className="relative w-full max-w-sm">
         <div className="glass rounded-2xl p-8 shadow-2xl">
           <div className="flex flex-col items-center text-center">
-            <ForgeMark className="h-16 w-16 drop-shadow-[0_0_24px_rgba(255,90,20,0.45)]" />
+            <ForgeMark className="h-16 w-16 drop-shadow-[0_0_24px_rgba(34,211,238,0.4)]" />
             <h1 className="mt-4 text-2xl font-bold tracking-tight">
               Tube<span className="text-gradient">Forge</span>
             </h1>

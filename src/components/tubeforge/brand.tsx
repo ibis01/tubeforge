@@ -1,14 +1,14 @@
-// TubeForge brand kit — recreated from the 2026 brand logo (black / red-orange
-// gradient "P" play glyph with speed lines, "Tube"+"Forge" wordmark).
+// TubeForge brand kit — B1 visual identity (deep navy / blue / cyan):
+// gradient play glyph with speed lines, "TubeForge" wordmark.
 // ForgeMark  : icon-only SVG mark (scales anywhere, crisp on every DPI)
 // BrandLockup: mark + wordmark (+ optional "IDEAS → VIDEOS → IMPACT" tagline)
 
 import Link from "next/link";
 
 export const BRAND_GRADIENT = {
-  from: "#FF3B30",
-  mid: "#FF6A15",
-  to: "#FF8E1F",
+  from: "#2563EB",
+  mid: "#0EA5E9",
+  to: "#22D3EE",
 };
 
 /** Icon-only brand mark: gradient "P"-shaped play button with speed lines. */
@@ -23,9 +23,9 @@ export function ForgeMark({ className }: { className?: string }) {
     >
       <defs>
         <linearGradient id="tf-fire" x1="14" y1="10" x2="106" y2="112" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#FF3B30" />
-          <stop offset="0.55" stopColor="#FF6A15" />
-          <stop offset="1" stopColor="#FF8E1F" />
+          <stop offset="0" stopColor="#2563EB" />
+          <stop offset="0.55" stopColor="#0EA5E9" />
+          <stop offset="1" stopColor="#22D3EE" />
         </linearGradient>
       </defs>
 
@@ -80,7 +80,7 @@ export function BrandLockup({
   markClassName = "h-9 w-9",
   tagline = false,
   href = "/",
-  subtitle = "Auto-Pilot Engine",
+  subtitle = "AI Video Studio",
 }: {
   className?: string;
   markClassName?: string;
@@ -90,7 +90,7 @@ export function BrandLockup({
 }) {
   return (
     <Link href={href} className={`flex items-center gap-2.5 ${className ?? ""}`}>
-      <ForgeMark className={`${markClassName} shrink-0 drop-shadow-[0_0_12px_rgba(255,90,20,0.35)]`} />
+      <ForgeMark className={`${markClassName} shrink-0 drop-shadow-[0_0_12px_rgba(34,211,238,0.3)]`} />
       <div className="min-w-0">
         <p className="font-semibold leading-tight tracking-tight text-[15px]">
           Tube<span className="text-gradient">Forge</span>

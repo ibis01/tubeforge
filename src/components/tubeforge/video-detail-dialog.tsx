@@ -1716,7 +1716,7 @@ export function VideoDetailDialog({
 
   const sceneStatus = (s: SceneDTO, slide: SlideDTO | null): { label: string; cls: string } => {
     if (s.generating || boardGenerating)
-      return { label: "Painting…", cls: "border-primary/30 bg-primary/15 text-red-200" };
+      return { label: "Painting…", cls: "border-primary/30 bg-primary/15 text-cyan-200" };
     if (renderMode === "slides" && slide?.hasPng)
       return { label: "Slide", cls: "border-violet-500/30 bg-violet-500/15 text-violet-200" };
     if (s.hasStock)
@@ -2541,7 +2541,7 @@ export function VideoDetailDialog({
               className={clsx(
                 "rounded-full border px-3 py-1 text-[11px] transition-all",
                 shortScenePick === "auto"
-                  ? "border-primary/50 bg-primary/15 text-red-200"
+                  ? "border-primary/50 bg-primary/15 text-cyan-200"
                   : "border-white/10 bg-white/4 text-muted-foreground hover:border-white/25"
               )}
             >
@@ -2558,7 +2558,7 @@ export function VideoDetailDialog({
                 className={clsx(
                   "rounded-full border px-3 py-1 text-[11px] transition-all max-w-[160px] truncate",
                   shortScenePick === s.index
-                    ? "border-primary/50 bg-primary/15 text-red-200"
+                    ? "border-primary/50 bg-primary/15 text-cyan-200"
                     : "border-white/10 bg-white/4 text-muted-foreground hover:border-white/25"
                 )}
               >
@@ -3066,7 +3066,7 @@ export function VideoDetailDialog({
             {/* Pinned comment */}
             <div>
               <div className="flex items-center justify-between gap-2 mb-1.5">
-                <Badge className="bg-primary/15 text-red-200 border border-primary/25 text-[10px] gap-1">
+                <Badge className="bg-primary/15 text-cyan-200 border border-primary/25 text-[10px] gap-1">
                   <MessageCircle className="h-2.5 w-2.5" /> Pin this comment
                 </Badge>
                 <button
@@ -3232,7 +3232,7 @@ export function VideoDetailDialog({
                 className={clsx(
                   "group relative rounded-xl overflow-hidden border transition-all",
                   v.isPrimary
-                    ? "border-primary glow-red-soft"
+                    ? "border-primary glow-brand-soft"
                     : "border-white/12 hover:border-white/30"
                 )}
                 title={v.isPrimary ? "Current primary thumbnail" : `Set “${v.label}” as primary`}
@@ -4090,7 +4090,7 @@ export function VideoDetailDialog({
                 {video.niche}
               </Badge>
               {video.characterName && (
-                <Badge className="bg-primary/15 text-red-200 border border-primary/25 gap-1">
+                <Badge className="bg-primary/15 text-cyan-200 border border-primary/25 gap-1">
                   <UserRound className="h-3 w-3" />
                   {video.characterName}
                 </Badge>

@@ -22838,7 +22838,7 @@ await test("S155 the autopilot stages are independent toggles — voice, thumbna
   ok(src.includes("the stages are INDEPENDENT toggles"), "the S155 note marks the decoupling");
   ok(!/\$\{startThumbnail\(voiced\.id\)/.test(src), "the classic thumbnail no longer hangs off the voiced result");
   // The story branch: thumbnail + render must sit OUTSIDE the autoVoice block.
-  const storyBlock = src.slice(src.indexOf("the stages are INDEPENDENT toggles"), src.indexOf("Auto-Pilot complete"));
+  const storyBlock = src.slice(src.indexOf("the stages are INDEPENDENT toggles"), src.indexOf("Production complete"));
   ok(storyBlock.includes('if (autopilot && autoThumb) {'), "the thumbnail reads its own toggle");
   ok(/if \(renderMode === "animated"\)/.test(storyBlock), "the render runs regardless of the voice/thumb toggles");
   ok(storyBlock.indexOf("autoVoice") < storyBlock.indexOf("autoThumb"), "voice and thumbnail are sequential, not nested");

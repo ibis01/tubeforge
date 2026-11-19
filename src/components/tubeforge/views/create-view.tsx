@@ -95,7 +95,8 @@ const STEPS = [
 /** S76 — the FIRST thing a creator chooses: the type of video. Each preset
  *  pins format + renderMode together so the whole downstream brief (script
  *  source, storyboard, render pipeline, ETA copy) adapts from minute zero
- *  instead of burying the choice mid-wizard. */
+ *  instead of burying the choice mid-wizard. B1 §5.2: every preset shows a
+ *  visual preview of the output style (public/formats/*, navy/cyan-graded). */
 const VIDEO_TYPES = [
   {
     id: "classic",
@@ -105,6 +106,7 @@ const VIDEO_TYPES = [
     desc: "AI writes a flowing narration + metadata — classic render with a thumbnail package.",
     icon: FileText,
     accent: "text-primary",
+    preview: "/formats/classic.jpg",
   },
   {
     id: "story",
@@ -114,6 +116,7 @@ const VIDEO_TYPES = [
     desc: "Scene-by-scene script and storyboard art — Smart Motion pans & zooms per scene.",
     icon: Clapperboard,
     accent: "text-amber-300",
+    preview: "/formats/story.jpg",
   },
   {
     id: "whiteboard",
@@ -123,6 +126,7 @@ const VIDEO_TYPES = [
     desc: "A hand draws every scene in real time — narrated whiteboard animation.",
     icon: PenTool,
     accent: "text-sky-300",
+    preview: "/formats/whiteboard.jpg",
   },
   {
     id: "graphics2d",
@@ -132,6 +136,7 @@ const VIDEO_TYPES = [
     desc: "A native 2D engine animates headlines, counters, bar charts and icons from a declarative doc — kinetic and $0, no image generation.",
     icon: BarChart3,
     accent: "text-emerald-300",
+    preview: "/formats/graphics2d.jpg",
   },
   {
     id: "character",
@@ -141,6 +146,7 @@ const VIDEO_TYPES = [
     desc: "Your Cast character performs the story — attach a rigged character and the native rig channel draws it pose-by-pose into every scene; without one, storyboard art carries the scene.",
     icon: PersonStanding,
     accent: "text-fuchsia-300",
+    preview: "/formats/character.jpg",
   },
   {
     id: "slides",
@@ -150,6 +156,7 @@ const VIDEO_TYPES = [
     desc: "A kinetic-typography slide deck, one designed slide per beat — no image generation.",
     icon: Presentation,
     accent: "text-violet-300",
+    preview: "/formats/slides.jpg",
   },
 ] as const;
 
@@ -1062,7 +1069,7 @@ export function CreateView() {
 
         if (autopilot) {
           toast({
-            title: "Auto-Pilot complete",
+            title: "Production complete",
             description:
               isStory &&
               (renderMode === "kenburns" || renderMode === "animated")
@@ -1229,7 +1236,7 @@ export function CreateView() {
       {/* Left — configuration (guided brief, T-4.3) */}
       <Card className="glass rounded-2xl p-5 lg:col-span-5 h-fit lg:sticky lg:top-24">
         <div className="flex items-center gap-2 mb-4">
-          <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center glow-red-soft shrink-0">
+          <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center glow-brand-soft shrink-0">
             <Wand2 className="h-4.5 w-4.5 text-white" />
           </div>
           <div>
@@ -1340,12 +1347,26 @@ export function CreateView() {
                     setRenderMode(t.renderMode);
                   }}
                   className={clsx(
-                    "rounded-xl border p-4 text-left transition-all",
+                    "rounded-xl border p-3 text-left transition-all overflow-hidden",
                     active
-                      ? "border-primary/50 bg-primary/8 glow-red-soft"
+                      ? "border-primary/50 bg-primary/8 glow-brand-soft"
                       : "border-white/10 bg-white/3 hover:border-white/25",
                   )}
                 >
+                  <div className="relative aspect-video rounded-lg overflow-hidden bg-white/5 mb-3">
+                    <img
+                      src={t.preview}
+                      alt=""
+                      aria-hidden="true"
+                      className={clsx(
+                        "h-full w-full object-cover transition-all duration-300",
+                        active ? "opacity-100" : "opacity-75 saturate-[0.85]",
+                      )}
+                    />
+                    {active && (
+                      <div className="absolute inset-0 ring-1 ring-inset ring-primary/40 rounded-lg" />
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
                     <Icon className={clsx("h-4 w-4", t.accent)} />
                     <span className="text-sm font-medium">{t.title}</span>
@@ -1438,7 +1459,7 @@ export function CreateView() {
             {useOwnScript && (
               <div className="p-3 pt-0 space-y-2.5">
                 <Textarea
-                  placeholder="Paste your narration here — Auto-Pilot will skip AI generation and use this text verbatim. Title still comes from the topic above. Edit anytime after creation."
+                  placeholder="Paste your narration here — production will skip AI generation and use this text verbatim. Title still comes from the topic above. Edit anytime after creation."
                   value={customScript}
                   onChange={(e) => setCustomScript(e.target.value)}
                   rows={8}
@@ -1577,20 +1598,20 @@ export function CreateView() {
               </div>
               {renderMode === "animated" && (
                 <p className="text-[11px] text-sky-300/90 leading-relaxed">
-                  Auto-Pilot renders the full animated video — every scene is
+                  The studio renders the full animated video — every scene is
                   animated via image-to-video (~4 min per scene, tracked live).
                 </p>
               )}
               {renderMode === "slides" && (
                 <p className="text-[11px] text-violet-300/90 leading-relaxed">
-                  Auto-Pilot designs a keynote slide deck from your script — one
+                  The studio designs a keynote slide deck from your script — one
                   huge-typography beat per scene, rendered vertical 9:16 with no
                   image generation. Pairs best with hard-cut transitions.
                 </p>
               )}
               {renderMode === "stock" && (
                 <p className="text-[11px] text-emerald-300/90 leading-relaxed">
-                  Auto-Pilot matches free stock footage (Pexels + Pixabay) to every
+                  The studio matches free stock footage (Pexels + Pixabay) to every
                   scene and renders real b-roll — scenes without a match keep their
                   Smart Motion art. Add your free keys in Settings → Stock footage.
                 </p>
@@ -1897,7 +1918,7 @@ export function CreateView() {
             <Button
               onClick={() => handleGenerate(true)}
               disabled={!topic.trim() || busy || !settingsLoaded}
-              className="bg-brand-gradient hover:opacity-90 font-semibold h-11 glow-red-soft"
+              className="bg-brand-gradient hover:opacity-90 font-semibold h-11 glow-brand-soft"
               size="lg"
             >
               {busy ? (
@@ -1905,7 +1926,7 @@ export function CreateView() {
               ) : (
                 <Zap className="h-4.5 w-4.5" />
               )}
-              {busy ? "Auto-Pilot running…" : "Run Full Auto-Pilot"}
+              {busy ? "Production running…" : "Run full production"}
             </Button>
             <Button
               onClick={() => handleGenerate(false)}
@@ -1918,8 +1939,8 @@ export function CreateView() {
             </Button>
             <p className="text-[11px] text-muted-foreground text-center leading-relaxed">
               {isStory
-                ? `Auto-Pilot runs: scene script → storyboard → ${renderMode === "stock" ? "stock b-roll → " : ""}${autoVoice ? "voiceover → " : ""}${autoThumb ? "thumbnail → " : ""}render ${renderMode === "animated" ? "full AI animation" : "MP4"}`
-                : `Auto-Pilot runs: script → ${autoVoice ? "voiceover → " : ""}${autoThumb ? "thumbnail → " : ""}ready (configure in Settings)`}
+                ? `Production runs: scene script → storyboard → ${renderMode === "stock" ? "stock b-roll → " : ""}${autoVoice ? "voiceover → " : ""}${autoThumb ? "thumbnail → " : ""}render ${renderMode === "animated" ? "full AI animation" : "MP4"}`
+                : `Production runs: script → ${autoVoice ? "voiceover → " : ""}${autoThumb ? "thumbnail → " : ""}ready (configure in Settings)`}
             </p>
           </div>
 
@@ -2014,7 +2035,7 @@ export function CreateView() {
                     ? isStory && renderMode !== "animated"
                       ? "Video rendered — ready to upload"
                       : "Package complete — ready to upload"
-                    : "Auto-Pilot is assembling your video"
+                    : "The studio is assembling your video"
                   : "Waiting for a topic…"}
               </p>
             </div>
@@ -2053,7 +2074,7 @@ export function CreateView() {
                     state === "done" &&
                       "border-emerald-500/25 bg-emerald-500/6",
                     state === "running" &&
-                      "border-primary/40 bg-primary/8 glow-red-soft",
+                      "border-primary/40 bg-primary/8 glow-brand-soft",
                     state === "error" && "border-red-500/30 bg-red-500/6",
                     state === "idle" && "border-white/8 bg-white/3",
                   )}
@@ -2129,7 +2150,7 @@ export function CreateView() {
             </div>
             <p className="mt-4 font-medium">No production run yet</p>
             <p className="text-sm text-muted-foreground mt-1.5 max-w-sm leading-relaxed">
-              Configure the blueprint on the left and launch Auto-Pilot. Results
+              Configure the blueprint on the left and launch production. Results
               will stream in here stage by stage.
             </p>
           </Card>

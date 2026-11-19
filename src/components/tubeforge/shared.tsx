@@ -110,7 +110,7 @@ export function StatCard({
     <Card
       className={clsx(
         "glass border-white/8 rounded-2xl p-4 sm:p-5 relative overflow-hidden",
-        accent && "glow-red-soft"
+        accent && "glow-brand-soft"
       )}
     >
       {accent && (
@@ -127,7 +127,7 @@ export function StatCard({
         <div
           className={clsx(
             "h-10 w-10 rounded-xl flex items-center justify-center shrink-0",
-            accent ? "bg-brand-gradient glow-red-soft" : "bg-white/6 border border-white/10"
+            accent ? "bg-brand-gradient glow-brand-soft" : "bg-white/6 border border-white/10"
           )}
         >
           <Icon className={clsx("h-5 w-5", accent ? "text-white" : "text-primary")} />

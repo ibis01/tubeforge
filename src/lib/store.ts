@@ -4,6 +4,8 @@ import { create } from "zustand";
 
 export type ViewId =
   | "dashboard"
+  | "assets"
+  | "insights"
   | "analytics"
   | "research"
   | "create"

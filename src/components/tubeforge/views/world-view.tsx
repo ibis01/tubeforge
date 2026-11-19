@@ -127,7 +127,7 @@ function WorldSection({
           {items.map((it) => (
             <Card key={it.id} className="glass rounded-2xl p-5 flex flex-col">
               <div className="flex items-start justify-between gap-3">
-                <div className="h-11 w-11 rounded-xl bg-brand-gradient/90 flex items-center justify-center shrink-0 glow-red-soft">
+                <div className="h-11 w-11 rounded-xl bg-brand-gradient/90 flex items-center justify-center shrink-0 glow-brand-soft">
                   <meta.icon className="h-5 w-5 text-white" />
                 </div>
                 <Switch

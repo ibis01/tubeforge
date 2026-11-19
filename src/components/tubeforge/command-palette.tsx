@@ -34,6 +34,15 @@ interface PaletteItem {
   run: () => void;
 }
 
+// Pre-B1 vocabulary aliases — muscle memory from the eleven-item navigation
+// era still finds the right destination (B1 §3.4).
+const ALIASES: Record<string, string> = {
+  dashboard: "mission control",
+  library: "library videos video queue",
+  assets: "cast world voice studio characters locations",
+  insights: "analytics topic radar calendar channels publishing research",
+};
+
 export function CommandPalette() {
   const paletteOpen = useAppStore((s) => s.paletteOpen);
   const setPaletteOpen = useAppStore((s) => s.setPaletteOpen);
@@ -75,10 +84,10 @@ export function CommandPalette() {
     const actions: PaletteItem[] = [
       {
         id: "action-new-video",
-        label: "New video",
-        hint: "Guided brief → Auto-Pilot",
+        label: "New project",
+        hint: "Guided brief → production",
         group: "Actions",
-        keywords: "create new video production start",
+        keywords: "create new project video production start",
         run: () => setView("create"),
       },
       {
@@ -95,7 +104,7 @@ export function CommandPalette() {
       label: n.label,
       hint: n.hint,
       group: "Views",
-      keywords: `${n.label} ${n.hint} view page`.toLowerCase(),
+      keywords: `${n.label} ${n.hint} view page ${ALIASES[n.id] ?? ""}`.toLowerCase(),
       run: () => setView(n.id as ViewId),
     }));
     const videos: PaletteItem[] = recent.map((v) => ({

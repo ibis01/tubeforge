@@ -31,14 +31,15 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TubeForge — Automated YouTube Content Engine",
+  title: "TubeForge — AI Video Production Workspace",
   description:
-    "Fully-automated faceless YouTube platform: AI scripts, voiceovers, thumbnails and packaging on auto-pilot.",
+    "Bring an idea in and direct its production: AI-assisted scripts, storyboards, scenes, narration and publishing — with the creator in control of every step.",
   keywords: [
-    "YouTube automation",
-    "faceless channel",
-    "AI script writer",
-    "auto-pilot content",
+    "AI video production",
+    "creative studio",
+    "storyboard",
+    "AI direction",
+    "YouTube publishing",
     "TubeForge",
   ],
   // S25 — the installable app. The manifest + icons + service worker have
@@ -60,7 +61,7 @@ export const metadata: Metadata = {
 // theme_color / background_color for the installed shell (Next 16 moves
 // themeColor out of metadata into the viewport export).
 export const viewport: Viewport = {
-  themeColor: "#0a0a0a",
+  themeColor: "#0b1220",
 };
 
 export default function RootLayout({

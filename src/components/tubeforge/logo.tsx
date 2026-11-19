@@ -1,10 +1,9 @@
-// TubeForge brand mark — the red-orange flame-play logo used in the sidebar,
+// TubeForge brand mark — the navy/cyan play-glyph logo used in the sidebar,
 // lock screen and splash. Kept as a component so every surface stays identical.
-
 export function TubeForgeLogo({ size = 36 }: { size?: number }) {
   return (
     <div
-      className="rounded-xl bg-brand-gradient flex items-center justify-center shadow-lg glow-red-soft shrink-0"
+      className="rounded-xl bg-brand-gradient flex items-center justify-center shadow-lg glow-brand-soft shrink-0"
       style={{ width: size, height: size }}
       aria-hidden="true"
     >
@@ -17,13 +16,13 @@ export function TubeForgeLogo({ size = 36 }: { size?: number }) {
       >
         <defs>
           <linearGradient id="tf-tile" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#FF2020" />
-            <stop offset="0.55" stopColor="#FF3D14" />
-            <stop offset="1" stopColor="#FF7A1F" />
+            <stop offset="0" stopColor="#2563EB" />
+            <stop offset="0.55" stopColor="#0EA5E9" />
+            <stop offset="1" stopColor="#22D3EE" />
           </linearGradient>
           <linearGradient id="tf-flame" x1="0" y1="1" x2="0" y2="0">
-            <stop offset="0" stopColor="#FFB13D" />
-            <stop offset="1" stopColor="#FFDD6B" />
+            <stop offset="0" stopColor="#7DD3FC" />
+            <stop offset="1" stopColor="#CFFAFE" />
           </linearGradient>
         </defs>
         <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#tf-tile)" />
@@ -43,7 +42,7 @@ export function TubeForgeWordmark() {
       <p className="font-semibold leading-tight">
         Tube<span className="text-gradient">Forge</span>
       </p>
-      <p className="text-[11px] text-muted-foreground">Auto-Pilot Engine</p>
+      <p className="text-[11px] text-muted-foreground">AI Video Studio</p>
     </div>
   );
 }

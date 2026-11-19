@@ -171,7 +171,7 @@ export function AnalyticsView() {
                 </Button>
               )}
               <Button onClick={() => setView("library")} variant="outline" className="border-white/15 bg-white/4 text-muted-foreground hover:text-foreground">
-                Open Library
+                Open Projects
               </Button>
             </div>
           }
@@ -189,7 +189,7 @@ export function AnalyticsView() {
       {/* Sync bar */}
       <Card className="glass border-white/8 rounded-2xl p-4 flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2 min-w-0">
-          <div className="h-9 w-9 rounded-xl bg-brand-gradient glow-red-soft flex items-center justify-center shrink-0">
+          <div className="h-9 w-9 rounded-xl bg-brand-gradient glow-brand-soft flex items-center justify-center shrink-0">
             <Youtube className="h-4.5 w-4.5 text-white" />
           </div>
           <div className="min-w-0">
@@ -369,7 +369,7 @@ export function AnalyticsView() {
             {data.feedback.topKeywords.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {data.feedback.topKeywords.map((k) => (
-                  <Badge key={k} variant="outline" className="border-primary/25 bg-primary/10 text-red-200 text-[10px]">
+                  <Badge key={k} variant="outline" className="border-primary/25 bg-primary/10 text-cyan-200 text-[10px]">
                     {k}
                   </Badge>
                 ))}

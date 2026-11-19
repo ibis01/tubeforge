@@ -838,11 +838,11 @@ export function SettingsView() {
       <PlanCard />
       <Card className="glass rounded-2xl p-5 sm:p-6">
         <div className="flex items-center gap-2.5 mb-5">
-          <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center glow-red-soft shrink-0">
+          <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center glow-brand-soft shrink-0">
             <Zap className="h-4.5 w-4.5 text-white" />
           </div>
           <div>
-            <h3 className="font-semibold leading-tight">Auto-Pilot Behavior</h3>
+            <h3 className="font-semibold leading-tight">Production defaults</h3>
             <p className="text-xs text-muted-foreground">
               What the one-click pipeline does when you launch it
             </p>
@@ -1762,7 +1762,7 @@ export function SettingsView() {
 
       <Card className="glass rounded-2xl p-5 sm:p-6">
         <div className="flex items-center gap-2.5 mb-5">
-          <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center glow-red-soft shrink-0">
+          <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center glow-brand-soft shrink-0">
             <ShieldCheck className="h-4.5 w-4.5 text-white" />
           </div>
           <div>
@@ -1962,7 +1962,7 @@ export function SettingsView() {
               aria-pressed={kindFilter === f.id}
               className={`rounded-full border px-2.5 py-1 text-[11px] transition-all ${
                 kindFilter === f.id
-                  ? "border-primary/50 bg-primary/15 text-red-200"
+                  ? "border-primary/50 bg-primary/15 text-cyan-200"
                   : "border-white/10 bg-white/4 text-muted-foreground hover:border-white/25"
               }`}
             >

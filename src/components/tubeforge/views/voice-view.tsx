@@ -470,7 +470,7 @@ export function VoiceView() {
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
-          <div className="h-10 w-10 rounded-xl bg-brand-gradient glow-red-soft flex items-center justify-center shrink-0">
+          <div className="h-10 w-10 rounded-xl bg-brand-gradient glow-brand-soft flex items-center justify-center shrink-0">
             <AudioLines className="h-5 w-5 text-white" />
           </div>
           <div className="min-w-0">
@@ -729,7 +729,7 @@ export function VoiceView() {
       {/* Clone studio */}
       <Card className="glass border-white/8 rounded-2xl p-5">
         <div className="flex items-center gap-2.5 mb-1">
-          <div className="h-8 w-8 rounded-lg bg-brand-gradient flex items-center justify-center shrink-0 glow-red-soft">
+          <div className="h-8 w-8 rounded-lg bg-brand-gradient flex items-center justify-center shrink-0 glow-brand-soft">
             <Wand2 className="h-4 w-4 text-white" />
           </div>
           <div>
@@ -769,7 +769,7 @@ export function VoiceView() {
                   className={clsx(
                     "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-all",
                     cloneMode === m.id
-                      ? "bg-primary/15 text-red-200"
+                      ? "bg-primary/15 text-cyan-200"
                       : "text-muted-foreground hover:text-foreground"
                   )}
                 >

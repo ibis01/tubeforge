@@ -86,7 +86,7 @@ export function LibraryView() {
               <TabsTrigger
                 key={f.id}
                 value={f.id}
-                className="data-[state=active]:bg-primary/20 data-[state=active]:text-red-200 px-3 text-xs sm:text-13px h-8"
+                className="data-[state=active]:bg-primary/20 data-[state=active]:text-cyan-200 px-3 text-xs sm:text-13px h-8"
               >
                 {f.label}
               </TabsTrigger>
@@ -96,7 +96,7 @@ export function LibraryView() {
         <p className="text-xs text-muted-foreground shrink-0">
           {videos.length === 0
             ? "Nothing here yet"
-            : `${videos.length} video${videos.length === 1 ? "" : "s"}`}
+            : `${videos.length} project${videos.length === 1 ? "" : "s"}`}
         </p>
       </div>
 
@@ -109,11 +109,11 @@ export function LibraryView() {
       ) : videos.length === 0 ? (
         <EmptyState
           icon={LibraryIcon}
-          title={filter === "all" ? "Library is empty" : "No videos in this stage"}
+          title={filter === "all" ? "No projects yet" : "No projects in this stage"}
           hint={
             filter === "all"
-              ? "Fire up Auto-Pilot to produce your first complete video package."
-              : "Try another filter, or produce new videos with Auto-Pilot."
+              ? "Start your first project — brief in, finished video out. You direct, AI assists."
+              : "Try another filter, or start a new project."
           }
           action={
             <Button
@@ -121,7 +121,7 @@ export function LibraryView() {
               className="bg-brand-gradient hover:opacity-90 font-medium"
             >
               <Wand2 className="h-4 w-4" />
-              Generate a Video
+              New project
             </Button>
           }
         />
@@ -172,7 +172,7 @@ export function LibraryView() {
                 <div className="p-4">
                   <div className="flex items-start justify-between gap-2">
                     <button onClick={() => setSelected(v)} className="min-w-0 text-left flex-1">
-                      <p className="font-medium leading-snug line-clamp-2 group-hover:text-red-200 transition-colors">
+                      <p className="font-medium leading-snug line-clamp-2 group-hover:text-cyan-200 transition-colors">
                         {v.title ?? v.topic}
                       </p>
                       <p className="text-[11px] text-muted-foreground mt-1 truncate">

@@ -172,26 +172,27 @@ export function DashboardView() {
         <div className="relative p-5 sm:p-7">
           <div className="flex flex-col md:flex-row md:items-center gap-5">
             <div className="flex-1 min-w-0">
-              <div className="inline-flex items-center gap-2 rounded-full border border-primary/35 bg-primary/15 px-3 py-1 text-[11px] font-medium text-red-200">
+              <div className="inline-flex items-center gap-2 rounded-full border border-primary/35 bg-primary/15 px-3 py-1 text-[11px] font-medium text-cyan-100">
                 <span className="animate-pulse-dot h-1.5 w-1.5 rounded-full bg-primary" />
-                Auto-Pilot Online
+                Studio ready
               </div>
               <h2 className="mt-3 text-xl sm:text-2xl font-bold tracking-tight">
-                Your faceless channel, fully automated.
+                Bring an idea in. Leave with a finished video.
               </h2>
               <p className="text-sm text-muted-foreground mt-2 max-w-lg leading-relaxed">
-                Drop a topic — AI writes the script, generates the narration, and
-                paints the thumbnail. You just hit publish.
+                You direct the production — AI assists with scripts, scenes,
+                narration and packaging. Every important step stays yours to
+                approve.
               </p>
             </div>
             <div className="flex flex-col sm:flex-row gap-2.5 shrink-0">
               <Button
                 onClick={() => setView("create")}
                 size="lg"
-                className="bg-brand-gradient hover:opacity-90 font-semibold glow-red"
+                className="bg-brand-gradient hover:opacity-90 font-semibold glow-brand"
               >
                 <Wand2 className="h-4.5 w-4.5" />
-                Generate a Video
+                Start a new project
               </Button>
               <Button
                 onClick={() => setView("research")}
@@ -200,7 +201,7 @@ export function DashboardView() {
                 className="border-white/15"
               >
                 <Radar className="h-4.5 w-4.5" />
-                Research a Topic
+                Find your next topic
               </Button>
             </div>
           </div>
@@ -231,16 +232,16 @@ export function DashboardView() {
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
           icon={Film}
-          label="Total Videos"
+          label="Total projects"
           value={String(stats.total)}
           sub={`${stats.channels} channel${stats.channels === 1 ? "" : "s"} connected`}
           accent
         />
         <StatCard
           icon={Loader2}
-          label="In Pipeline"
+          label="In production"
           value={String(stats.inPipeline)}
-          sub="Scripting / voicing / art"
+          sub="Script / scenes / voice"
         />
         <StatCard
           icon={Rocket}
@@ -369,9 +370,9 @@ export function DashboardView() {
           </div>
           {chartTotal === 0 ? (
             <div className="mt-6 h-44 rounded-xl border border-dashed border-white/12 bg-white/[0.02] flex flex-col items-center justify-center text-center px-6">
-              <p className="text-sm font-medium">No videos yet</p>
+              <p className="text-sm font-medium">No projects yet</p>
               <p className="text-xs text-muted-foreground mt-1 leading-relaxed max-w-xs">
-                Your first generation will chart here, day by day.
+                Your first production will chart here, day by day.
               </p>
             </div>
           ) : (
@@ -415,9 +416,9 @@ export function DashboardView() {
 
         {/* Pipeline breakdown */}
         <Card className="glass rounded-2xl p-5 lg:col-span-2 h-full flex flex-col">
-          <h3 className="font-semibold">Pipeline Breakdown</h3>
+          <h3 className="font-semibold">Production pipeline</h3>
           <p className="text-xs text-muted-foreground">
-            Where your videos currently sit
+            Where your projects currently sit
           </p>
           <ul className="mt-5 space-y-3.5">
             {pipelineData.map((p) => (
@@ -481,7 +482,7 @@ export function DashboardView() {
               className="text-muted-foreground hover:text-foreground"
               onClick={() => setView("library")}
             >
-              Library
+              All projects
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
           </div>
@@ -540,7 +541,7 @@ export function DashboardView() {
           <div>
             <h3 className="font-semibold">Recent Activity</h3>
             <p className="text-xs text-muted-foreground">
-              Live from the automation floor
+              Latest studio events
             </p>
           </div>
           <Button
@@ -549,14 +550,13 @@ export function DashboardView() {
             className="text-muted-foreground hover:text-foreground"
             onClick={() => setView("library")}
           >
-            Library
+            All projects
             <ArrowRight className="h-3.5 w-3.5" />
           </Button>
         </div>
         {stats.recent.length === 0 ? (
           <p className="text-sm text-muted-foreground mt-6">
-            Nothing yet — generate your first video to see the pipeline in
-            action.
+            Nothing yet — start your first project to see the studio in action.
           </p>
         ) : (
           <div className="mt-4 max-h-80 overflow-y-auto scroll-area-bar pr-1">

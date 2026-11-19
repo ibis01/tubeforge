@@ -107,7 +107,7 @@ export function ChannelsView() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          Run one channel or a whole faceless empire — each keeps its own niche.
+          Run one channel or a whole lineup — each keeps its own niche.
         </p>
         <Button
           onClick={() => setDialogOpen(true)}
@@ -133,7 +133,7 @@ export function ChannelsView() {
         <EmptyState
           icon={Radio}
           title="No channels yet"
-          hint="Create your first faceless channel — videos can then be assigned to it in the Create studio."
+          hint="Create your first channel — videos can then be assigned to it in the studio."
           action={
             <Button
               onClick={() => setDialogOpen(true)}
@@ -149,7 +149,7 @@ export function ChannelsView() {
           {channels.map((c) => (
             <Card key={c.id} className="glass rounded-2xl p-5 flex flex-col">
               <div className="flex items-start justify-between gap-3">
-                <div className="h-11 w-11 rounded-xl bg-brand-gradient/90 flex items-center justify-center shrink-0 glow-red-soft">
+                <div className="h-11 w-11 rounded-xl bg-brand-gradient/90 flex items-center justify-center shrink-0 glow-brand-soft">
                   <Radio className="h-5 w-5 text-white" />
                 </div>
                 <div className="flex items-center gap-2">
@@ -203,7 +203,7 @@ export function ChannelsView() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-md bg-card border-white/10">
           <DialogHeader>
-            <DialogTitle>New faceless channel</DialogTitle>
+            <DialogTitle>New channel</DialogTitle>
             <DialogDescription>
               Give it a name and niche — assign videos to it from the Create studio.
             </DialogDescription>

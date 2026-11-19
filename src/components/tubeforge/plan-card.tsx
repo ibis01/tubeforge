@@ -131,7 +131,7 @@ export function PlanCard() {
   return (
     <div className="glass rounded-2xl p-5 sm:p-6 space-y-4">
       <div className="flex items-center gap-2.5">
-        <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center glow-red-soft shrink-0">
+        <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center glow-brand-soft shrink-0">
           <CreditCard className="h-4.5 w-4.5 text-white" />
         </div>
         <div className="min-w-0">
@@ -251,7 +251,7 @@ export function PlanCard() {
               data.stripe.checkoutTiers.includes("creator") && (
                 <Button
                   size="sm"
-                  className="h-8 bg-brand-gradient text-white glow-red-soft"
+                  className="h-8 bg-brand-gradient text-white glow-brand-soft"
                   disabled={busyAction !== null}
                   onClick={() => void openBillingDoor("checkout", "creator")}
                 >

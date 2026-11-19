@@ -1,13 +1,13 @@
 {
-  "name": "TubeForge — Auto-Pilot Engine",
+  "name": "TubeForge — AI Video Production Workspace",
   "short_name": "TubeForge",
-  "description": "Fully-automated faceless YouTube platform: AI scripts, voiceovers, thumbnails and animated videos on auto-pilot.",
+  "description": "Direct your video productions: AI-assisted scripts, storyboards, scenes, narration and publishing — with you in control of every step.",
   "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#0a0a0a",
-  "theme_color": "#0a0a0a",
+  "background_color": "#0b1220",
+  "theme_color": "#0b1220",
   "categories": ["productivity", "video"],
   "icons": [
     { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },

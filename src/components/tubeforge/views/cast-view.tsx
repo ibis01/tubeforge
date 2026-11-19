@@ -289,7 +289,7 @@ export function CastView() {
               variant="outline"
               onClick={runAiBible}
               disabled={bibleRunning || !form.name.trim()}
-              className="w-full border-primary/30 bg-primary/10 hover:bg-primary/15 text-red-200"
+              className="w-full border-primary/30 bg-primary/10 hover:bg-primary/15 text-cyan-200"
             >
               {bibleRunning ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

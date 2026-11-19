@@ -480,7 +480,7 @@ export function CalendarView() {
                 className="mt-3 border-white/15 bg-white/4"
                 onClick={() => setView("create")}
               >
-                Open Auto-Pilot
+                New project
               </Button>
             </div>
           ) : (

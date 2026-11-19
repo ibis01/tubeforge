@@ -251,7 +251,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         channel: video.channel
           ? { name: video.channel.name, niche: video.channel.niche }
           : null,
-        generatedBy: "TubeForge Auto-Pilot",
+        generatedBy: "TubeForge production",
         exportedAt: new Date().toISOString(),
       },
       null,
@@ -342,7 +342,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 
   if (entries.length === 0)
     return NextResponse.json(
-      { error: "Nothing to export yet — run the Auto-Pilot pipeline first" },
+      { error: "Nothing to export yet — run the production pipeline first" },
       { status: 400 }
     );
 

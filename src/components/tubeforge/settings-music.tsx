@@ -120,7 +120,7 @@ export function MusicLibrarySection() {
   return (
     <Card className="glass rounded-2xl p-5 sm:p-6">
       <div className="flex items-center gap-2.5 mb-1">
-        <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center shrink-0 glow-red-soft">
+        <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center shrink-0 glow-brand-soft">
           <Music2 className="h-4.5 w-4.5 text-white" />
         </div>
         <div className="flex-1 min-w-0">
