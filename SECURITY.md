@@ -53,9 +53,20 @@ evidence ledger); every item below is re-proven by CI on every push to `main`.
 
 ## Daily-use security checklist
 
-- Keep `TUBEFORGE_AUTH_SECRET` and `TUBEFORGE_ENCRYPTION_KEY` set (32+ hex chars each)
-  and never commit `.env` — the secret signs sessions; the key encrypts provider
-  credentials at rest.
+- Keep `TUBEFORGE_AUTH_SECRET` and `TUBEFORGE_ENCRYPTION_KEY` set and never commit
+  `.env` — the secret signs sessions; the key encrypts provider credentials at rest. The
+  documented floor is **32+ hex chars each** — exactly what `npm run setup` generates (64 hex).
+  The runtime still accepts ≥16 chars so legacy `.env` files keep authenticating (P1-1
+  decision: agreement over breakage); a shorter secret logs one loud warning per process
+  and should be rotated to a generated value.
+- **Email verification (P1-2 decision, 2026-11):** verification is TRACKED
+  (`emailVerifiedAt`, surfaced in Settings → Security) but deliberately does NOT gate sign-in
+  or features. TubeForge is self-hosted-first and mail delivery is optional — registration
+  already succeeds when the verification mail fails to send, so gating anything on a stamp
+  that can never be earned would lock self-hosted operators out of their own studio. Revisit
+  as option (a) of the review's plan (gate YouTube connect / provider-key writes / billing /
+  API-token minting on the stamp) only if a managed deployment with guaranteed mail ships.
+  This closes the review's "no silent choice": the choice is DOCUMENTED here, not silent.
 - Exposing the studio beyond your machine? Run it behind a reverse proxy with TLS and
   configure the trusted-proxy chain (see [`DEPLOYMENT.md`](DEPLOYMENT.md)) — the rate
   limiter and login lockout depend on correct client-IP resolution.

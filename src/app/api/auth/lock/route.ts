@@ -8,6 +8,7 @@ import {
   sessionCookie,
 } from "@/lib/tubeforge/auth";
 import { getAuthSecret } from "@/lib/tubeforge/auth-token";
+import { requireUser, sessionIdFromRequest } from "@/lib/tubeforge/tenant";
 
 /**
  * POST — owner control for password protection (Settings → Studio access).
@@ -22,6 +23,19 @@ import { getAuthSecret } from "@/lib/tubeforge/auth-token";
  *                                 clearPassword also forgets the stored hash.
  */
 export async function POST(req: NextRequest) {
+  // P2-1 (external security review) — the lock toggle is a BROWSER action
+  // (Settings → Studio access; the only UI caller is security-card.tsx). A
+  // 90-day API bearer must never flip the studio's global lock — the same
+  // session-only law the token registry enforces (a leaked bearer must not
+  // be able to change who can get in).
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  if (!(await sessionIdFromRequest(req)))
+    return NextResponse.json(
+      { error: "Studio access is managed from a signed-in browser session only" },
+      { status: 403 }
+    );
+
   const body = (await req.json().catch(() => ({}))) as {
     enabled?: boolean;
     password?: string;

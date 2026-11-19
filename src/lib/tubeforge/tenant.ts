@@ -94,7 +94,12 @@ function enterTenant(ctx: TenantCtx): void {
 // used: pbkdf2$<iters>$<saltB64>$<hashB64>), so legacy auth.password rows
 // migrate into User.passwordHash unchanged.
 
-const PBKDF2_ITERS = 120_000;
+// P1-3 (external security review) — minted at the OWASP-recommended cost for
+// PBKDF2-HMAC-SHA256 (600,000 iterations; was 120k). The stored string carries
+// its own iteration count and verifyPassword reads it, so every legacy row
+// keeps verifying unchanged — login rehashes transparently (see
+// passwordNeedsRehash + the login route).
+const PBKDF2_ITERS = 600_000;
 export const MIN_PASSWORD_LEN = 8;
 
 function toB64(bytes: Uint8Array): string {
@@ -144,6 +149,17 @@ export async function verifyPassword(password: string, stored: string): Promise<
   let diff = 0;
   for (let i = 0; i < got.length; i++) diff |= got[i] ^ expected[i];
   return diff === 0;
+}
+
+/**
+ * P1-3 — true when a stored hash was minted BELOW the current iteration
+ * floor (e.g. the original 120k rows). The login route re-mints the hash on
+ * every successful verify, so each account migrates to the new cost on its
+ * next sign-in — no schema change, no lockout, no rewrite.
+ */
+export function passwordNeedsRehash(stored: string): boolean {
+  const iters = Number(stored.split("$")[1]);
+  return !(Number.isFinite(iters) && iters >= PBKDF2_ITERS);
 }
 
 // ---------------------------------------------------------------------------

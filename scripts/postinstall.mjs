@@ -52,7 +52,11 @@ if (!url) {
 if (existsSync(envPath)) {
   try {
     let env = readFileSync(envPath, 'utf8');
-    const rand = () => randomBytes(24).toString('base64url');
+    // P1-1 (external security review) — 32 random bytes as 64 hex chars: the
+    // 256-bit entropy SECURITY.md documents ("32+ hex chars"). The old
+    // base64url(24 bytes) was ~32 chars of mixed alphabet, which the
+    // getAuthSecret weak-secret warning would flag forever.
+    const rand = () => randomBytes(32).toString('hex');
     for (const [key, note] of [
       ['TUBEFORGE_AUTH_SECRET', 'signs session/api tokens'],
       ['TUBEFORGE_ENCRYPTION_KEY', 'encrypts secrets at rest'],

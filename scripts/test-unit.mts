@@ -25200,6 +25200,106 @@ await test("S167 3D admission: PlanVisualKind '3d' reads from the tracks, refuse
   });
 }
 
+// ---------------------------------------------------------------------------
+// External security review remediation pins (M1 backport of Studio adc2281;
+// the review record: docs/audits/external-security-review-2026-11-17.md §7) —
+// every patch rides a battery pin.
+
+await test("security review P0-1: a malformed token SIGNATURE answers null — never a throw", async () => {
+  const { signToken, verifyToken } = await import("../src/lib/tubeforge/auth-token.ts");
+  const secret = "x".repeat(32);
+  const tok = await signToken({ s: "session", exp: Math.floor(Date.now() / 1000) + 3600, jti: "abcdefgh" }, secret);
+  ok(tok, "a valid token signs");
+  // The runtime-confirmed 500 path: invalid base64 in the SIGNATURE half.
+  // The body decode already had the try/catch contract; the signature decode
+  // now shares it (InvalidCharacterError → null → clean 401 at every caller).
+  eq(await verifyToken(`${tok}.!!!`, secret), null, "garbage signature chars → null");
+  eq(await verifyToken(`${tok}.$$$`, secret), null, "more garbage signature chars → null");
+  // Valid base64, wrong length — a verify mismatch, still null.
+  eq(await verifyToken(`${tok}.AAAA`, secret), null, "wrong-length signature → null (not a throw)");
+  // The body half keeps its original contract.
+  const bodyHalf = String(tok).split(".")[1];
+  eq(await verifyToken(`!!!.${bodyHalf}`, secret), null, "garbage body → null (unchanged law)");
+  // A well-formed token still verifies.
+  ok(await verifyToken(tok, secret), "an untouched token still verifies");
+});
+
+await test("security review P0-2: diag is guarded in-handler and hides the schema inventory from bearers", async () => {
+  const src = fs.readFileSync("src/app/api/diag/route.ts", "utf8");
+  ok(src.includes("const auth = await requireUser(req)"), "diag calls requireUser in-handler (instant revocation + shared limiter)");
+  ok(src.includes("sessionIdFromRequest(req)"), "diag distinguishes session callers from bearers");
+  ok(src.includes('"session-only"'), "the migration/table-name inventory is session-only (P0-2 hygiene)");
+  ok(src.includes("status: auth.status"), "an unauthenticated caller gets the standard AuthResult shape, not a leak");
+});
+
+await test("security review P1-1: the auth-secret floor law — 16 accepted, 15 refused (agreement, not breakage)", async () => {
+  const { getAuthSecret } = await import("../src/lib/tubeforge/auth-token.ts");
+  const prev = process.env.TUBEFORGE_AUTH_SECRET;
+  try {
+    process.env.TUBEFORGE_AUTH_SECRET = "k".repeat(16);
+    eq(getAuthSecret(), "k".repeat(16), "the 16-char runtime floor STAYS — legacy .env files keep authenticating");
+    process.env.TUBEFORGE_AUTH_SECRET = "k".repeat(15);
+    eq(getAuthSecret(), undefined, "15 chars is still refused — the floor did not move");
+    ok(
+      fs.readFileSync("src/lib/tubeforge/auth-token.ts", "utf8").includes("[tubeforge:auth-secret]"),
+      "the one-shot below-documented-floor warning exists in source (config truth)"
+    );
+    ok(
+      fs.readFileSync("scripts/postinstall.mjs", "utf8").includes("randomBytes(32).toString('hex')"),
+      "npm run setup generates 64-hex (32-byte) secrets — the documented floor, config truth"
+    );
+    ok(
+      fs.readFileSync("SECURITY.md", "utf8").includes("The runtime still accepts ≥16 chars"),
+      "SECURITY.md states the REAL floor — the doc/runtime mismatch is closed by agreement"
+    );
+  } finally {
+    if (prev === undefined) delete process.env.TUBEFORGE_AUTH_SECRET;
+    else process.env.TUBEFORGE_AUTH_SECRET = prev;
+  }
+});
+
+await test("security review P1-3: fresh hashes mint at 600k, legacy 120k rows still verify, rehash detection is exact", async () => {
+  const { hashPassword, verifyPassword, passwordNeedsRehash } = await import("../src/lib/tubeforge/tenant.ts");
+  const pw = "correct horse battery staple";
+  const fresh = await hashPassword(pw);
+  eq(Number(fresh.split("$")[1]), 600000, "fresh mints carry the OWASP 600k iteration count");
+  eq(await verifyPassword(pw, fresh), true, "a fresh hash verifies");
+  eq(await verifyPassword("wrong", fresh), false, "a fresh hash rejects the wrong password");
+  // Mint a REAL legacy 120k row the old way and prove it still verifies —
+  // the stored-format iteration-count law means zero lockouts.
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const keyMaterial = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: salt as unknown as ArrayBuffer, iterations: 120000, hash: "SHA-256" },
+    keyMaterial,
+    256
+  );
+  const legacy = `pbkdf2$120000$${Buffer.from(salt).toString("base64")}$${Buffer.from(new Uint8Array(bits)).toString("base64")}`;
+  eq(await verifyPassword(pw, legacy), true, "a legacy 120k row still verifies (transparent migration law)");
+  eq(await verifyPassword("nope", legacy), false, "a legacy row still rejects wrong passwords");
+  eq(passwordNeedsRehash(fresh), false, "a fresh 600k row does not need a rehash");
+  eq(passwordNeedsRehash(legacy), true, "a legacy 120k row is flagged for the login-time rehash");
+  eq(passwordNeedsRehash("pbkdf2$garbage$aa$bb"), true, "a malformed stored string is conservatively flagged");
+  eq(passwordNeedsRehash("not-a-hash"), true, "junk is conservatively flagged");
+});
+
+await test("security review P2-1: the legacy single-user surface is session-only — a bearer can never flip the lock", async () => {
+  const lockSrc = fs.readFileSync("src/app/api/auth/lock/route.ts", "utf8");
+  const setupSrc = fs.readFileSync("src/app/api/auth/setup/route.ts", "utf8");
+  for (const [name, src] of [["lock", lockSrc], ["setup", setupSrc]] as const) {
+    ok(src.includes("const auth = await requireUser(req)"), `${name}: requireUser guards the route`);
+    ok(src.includes("sessionIdFromRequest(req)"), `${name}: the session-only gate is present`);
+    ok(src.includes("status: 403"), `${name}: bearers get the standard 403 (same law as the token registry)`);
+  }
+});
+
+await test("security review P2-2: the fail-open counterweight has a schedule, and the nightly carries the outage net", async () => {
+  const nightly = fs.readFileSync(".github/workflows/nightly.yml", "utf8");
+  ok(nightly.includes("run: npm run alert:probe"), "the alert probe runs on the nightly schedule (P2-2)");
+  ok(nightly.includes("FF_STATIC_URL"), "the nightly ffmpeg step carries the pinned static outage net");
+  ok(!nightly.includes("apt failed twice"), "the old un-netted apt loop is gone from the nightly");
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

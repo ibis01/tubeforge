@@ -7,7 +7,16 @@
 // every other /api/* endpoint. Returns ONLY booleans/protocols and the
 // redacted import/query error text — never env values, never connection
 // strings.
-import { NextResponse } from "next/server";
+//
+// P0-2 (external security review, 2026-11) — the middleware's signature check
+// alone let a revoked-but-unexpired session read this, and the shared DB rate
+// limiter never ran for it. requireUser() now guards the route in-handler
+// (instant revocation + the shared per-IP limiter), and the migration/
+// table-name listing is SESSION-ONLY: a 90-day API bearer still triages
+// booleans/protocols but never sees the schema inventory (the review's
+// information-hygiene note).
+import { NextRequest, NextResponse } from "next/server";
+import { requireUser, sessionIdFromRequest } from "@/lib/tubeforge/tenant";
 
 const redact = (s: string) =>
   s
@@ -17,7 +26,12 @@ const redact = (s: string) =>
     .replace(/\b([a-z0-9-]+\.)+[a-z]{2,}(:\d+)?\b/gi, "[host]$2")
     .slice(0, 600);
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter();
+  const isSessionCaller = (await sessionIdFromRequest(req)) !== null;
+
   const g = globalThis as typeof globalThis & {
     __tfInstrumentation?: { ok: boolean; error?: string; at: string };
   };
@@ -57,26 +71,32 @@ export async function GET() {
         out.schema = {
           publicTables: Number(tables?.[0]?.n ?? -1),
           migrationsTable,
-          tableNames: tableList.map((t) => t.name),
+          // the table-name inventory is signed-in-browser triage only; bearer
+          // callers get the counts without the names (P0-2 hygiene).
+          tableNames: isSessionCaller ? tableList.map((t) => t.name) : "session-only",
         };
         if (migrationsTable) {
-          const rows = (await mod.db.$queryRawUnsafe(
-            `SELECT migration_name, finished_at, rolled_back_at, applied_steps_count, logs
-               FROM _prisma_migrations ORDER BY migration_name`
-          )) as {
-            migration_name: string;
-            finished_at: Date | null;
-            rolled_back_at: Date | null;
-            applied_steps_count: number;
-            logs: string | null;
-          }[];
-          out.migrations = rows.map((r) => ({
-            name: r.migration_name,
-            finished: r.finished_at !== null,
-            rolledBack: r.rolled_back_at !== null,
-            steps: Number(r.applied_steps_count ?? 0),
-            log: redact(String(r.logs ?? "")).slice(0, 240),
-          }));
+          if (!isSessionCaller) {
+            out.migrations = "session-only";
+          } else {
+            const rows = (await mod.db.$queryRawUnsafe(
+              `SELECT migration_name, finished_at, rolled_back_at, applied_steps_count, logs
+                 FROM _prisma_migrations ORDER BY migration_name`
+            )) as {
+              migration_name: string;
+              finished_at: Date | null;
+              rolled_back_at: Date | null;
+              applied_steps_count: number;
+              logs: string | null;
+            }[];
+            out.migrations = rows.map((r) => ({
+              name: r.migration_name,
+              finished: r.finished_at !== null,
+              rolledBack: r.rolled_back_at !== null,
+              steps: Number(r.applied_steps_count ?? 0),
+              log: redact(String(r.logs ?? "")).slice(0, 240),
+            }));
+          }
         }
       } catch (e) {
         out.schemaProbe = redact(e instanceof Error ? e.message : String(e));

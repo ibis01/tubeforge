@@ -4,6 +4,8 @@ import { rawDatabase as rawDb } from "@/lib/tubeforge/tenant-db";
 import {
   createSessionRecord,
   createSessionToken,
+  hashPassword,
+  passwordNeedsRehash,
   sessionCookie,
   sweepExpiredSessions,
   verifyPassword,
@@ -41,6 +43,20 @@ export async function POST(req: NextRequest) {
     if (!user || !ok) {
       await recordLoginFailure(ip);
       return NextResponse.json({ error: "Wrong email or password" }, { status: 401 });
+    }
+
+    // P1-3 (external security review) — transparent hash migration: a row
+    // minted below the current iteration floor (the original 120k) is
+    // re-minted at today's cost on its next successful sign-in. Best-effort:
+    // a failed update never blocks the login — the account simply migrates on
+    // a later one. verifyPassword already read the stored iteration count, so
+    // legacy rows verify unchanged BEFORE this runs.
+    if (passwordNeedsRehash(user.passwordHash)) {
+      const migrated = await hashPassword(password).catch(() => null);
+      if (migrated)
+        await rawDb.user
+          .update({ where: { id: user.id }, data: { passwordHash: migrated } })
+          .catch(() => {});
     }
 
     await recordLoginSuccess(ip);

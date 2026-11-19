@@ -6,6 +6,7 @@ import {
   sessionCookie,
 } from "@/lib/tubeforge/auth";
 import { getAuthSecret } from "@/lib/tubeforge/auth-token";
+import { requireUser, sessionIdFromRequest } from "@/lib/tubeforge/tenant";
 
 /**
  * POST — first-run: create the access password and sign in.
@@ -19,6 +20,18 @@ import { getAuthSecret } from "@/lib/tubeforge/auth-token";
  * Unset (local dev), the route behaves exactly as before.
  */
 export async function POST(req: NextRequest) {
+  // P2-1 (external security review) — session-only, like the lock route: a
+  // 90-day API bearer must never mint the studio's access password. The
+  // route stays reachable for a signed-in browser during the pre-claim window
+  // (middleware already gated it; this closes the bearer hole).
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  if (!(await sessionIdFromRequest(req)))
+    return NextResponse.json(
+      { error: "Studio setup runs from a signed-in browser session only" },
+      { status: 403 }
+    );
+
   if (await isAuthConfigured())
     return NextResponse.json(
       { error: "A password is already set — sign in instead" },
