@@ -1,8 +1,28 @@
 # TubeForge — Stage 1 Task Backlog
 
 **Status:** Stage 1 audit complete; this is the implementation backlog.
-**Last updated:** 2026-11-01
+**Last updated:** 2026-11-18
 **Source:** `FOUNDATION_AUDIT.md` defects + `RISK_REGISTER.md` Stage 1 risks
+
+---
+
+## TubeForge Next — programme backlog (registered 2026-11-18)
+
+Capability expansion and product-experience modernization. Reference: `ibis01/ibismuh-studio`. Evidence and full map: `docs/audits/tubeforge-next-phase0-parity-audit.md`.
+
+**Structural finding:** Studio is TubeForge `b06f222` + 26 commits (0 deleted files). Migration is a backport of a bounded, classified delta — never a repository replacement. Rebrand layer excluded; TubeForge identity retained.
+
+| ID | Migration | Source SHA(s) | Gate | Status |
+|---|---|---|---|---|
+| M0 | QC ffmpeg-8 log-prefix backport (dead-air false-pass) | `f334a4b` | battery + dual-prefix detector pins | PROPOSED |
+| M1 | Security hardening (P0×2, P1×3, P2×2) | `adc2281`, `afea263` (docs) | battery + auth e2e | PROPOSED |
+| M2 | CI resilience + S3 signer fix + gitleaks root fix + production test | `473db65` `87599d3` `4ca159b` `9db6327` `b2fd3f3` `1e546a2` `5f4d30a` | storage suites green | PROPOSED |
+| M3 | Design foundation + Home/Projects (B1+B2) | `db2241e` | battery + premium-ux/mobile-sweep e2e + walk 1440/390 | PROPOSED — strictly after M0–M2, before M4 |
+| M4 | Full-page production workspace (B3) | `76df60e` | battery + e2e incl. S86 jump selectors | PROPOSED — after M3 |
+| M5 | Creative workspace enhancement (B4) | `af15635` | battery + byte-identical no-sfx render check | PROPOSED — after M4 |
+| — | Whiteboard W1–W7 | standing roadmap | unchanged; runs in parallel (zero shared files with M0–M5) | PROPOSED (W1 first) |
+
+**Rules of the programme:** cherry-pick + de-rebrand law (`src/lib/ibismuh` → `src/lib/tubeforge`, `IBISMUH_STUDIO_*` → `TUBEFORGE_*`, `ibismuh_session` → `tf_session`, strings re-pointed; `compat-env.ts` not needed); one migration merged and green before the next; engines byte-pinned; history preserved.
 
 ---
 
