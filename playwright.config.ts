@@ -35,7 +35,10 @@ export default defineConfig({
     // crosses a window boundary ate a 429 (the flake the first full-suite
     // runs showed, alternating victims by file order). The harness is a
     // trusted single-tenant load, so its OWN server raises the ceilings;
-    // production defaults are untouched.
+    // production defaults are untouched. (B4 backport note: the harness
+    // speaks the CURRENT env names — a battery pin keeps this block and
+    // the limiter's envInt keys from drifting apart again; Studio needed
+    // a rename there, TubeForge never did.)
     env: {
       ...process.env,
       TUBEFORGE_RATE_WRITE: "10000",

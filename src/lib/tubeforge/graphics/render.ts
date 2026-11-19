@@ -64,6 +64,10 @@ import {
 } from "./static-dedup";
 import { APPLY_GRAPHICS_FRAME_FN, composeGraphicsScene, graphicsFrameApplierKey, graphicsFramePayload } from "./compose";
 import { graphicsEventList, type GraphicsEventSlot } from "./events";
+// B4-4 — the sfx events become sound: the catalog kinds + the synthesized
+// wav cache (ensureSfx renders once, then every render reuses the file).
+import { ensureSfx } from "../sfx";
+import { SFX_KINDS } from "../types";
 import { frameAt, graphicsSceneDurationsMs } from "./frame";
 import { assertGraphicsBudget } from "./preflight";
 // S163 Phase B — the native transition engine: the plan, the compositor
@@ -431,8 +435,51 @@ export function graphicsAssemblyArgs(input: {
   totalSec: number;
   musicPath: string | null;
   anyVoAudio: boolean;
+  /** B4-4 — the S131 sfx events, resolved to wav paths + projected global
+   *  times. ABSENT (or empty) ⇒ byte-identical args (the additive-seam law:
+   *  every doc rendered so far — and every doc without sfx cues forever —
+   *  encodes exactly as before). Present ⇒ each cue is adelayed to its
+   *  projected time and amixed under the bed at a fixed gain (the recipes
+   *  are already level-tuned; the mixer adds no per-cue polish). */
+  sfxCues?: { path: string; tSec: number }[];
 }): string[] {
+  const cues = input.sfxCues ?? [];
   if (!input.musicPath) {
+    // B4-4 — sfx can ride even a bed-less program: the concat (voice or a
+    // generated silence anchor) + the delayed cues. duration=first rules by
+    // the FIRST mix input — the VO (the program) or the silence (totalSec),
+    // never by a short cue.
+    if (cues.length > 0) {
+      const sfxInputs = cues.flatMap((c) => ["-i", c.path]);
+      const sfxChains = cues
+        .map((c, i) => `[${i + 1}:a]adelay=${Math.round(c.tSec * 1000)}:all=1,volume=0.9[s${i}]`)
+        .join(";");
+      const sfxLabels = cues.map((_, i) => `[s${i}]`).join("");
+      if (input.anyVoAudio) {
+        return [
+          "-y",
+          "-f", "concat", "-safe", "0", "-i", input.listFile,
+          ...sfxInputs,
+          "-filter_complex",
+            "[0:v]format=yuv420p[v];" + sfxChains + (sfxChains ? ";" : "") +
+            "[0:a]" + sfxLabels + `amix=inputs=${cues.length + 1}:duration=first:normalize=0[a]`,
+          "-map", "[v]", "-map", "[a]",
+          input.finalFile,
+        ];
+      }
+      return [
+        "-y",
+        "-f", "concat", "-safe", "0", "-i", input.listFile,
+        ...sfxInputs,
+        "-filter_complex",
+          "[0:v]format=yuv420p[v];" +
+          `anullsrc=r=48000:cl=stereo:d=${input.totalSec.toFixed(3)}[sil];` +
+          sfxChains + (sfxChains ? ";" : "") +
+          "[sil]" + sfxLabels + `amix=inputs=${cues.length + 1}:duration=first:normalize=0[a]`,
+        "-map", "[v]", "-map", "[a]",
+        input.finalFile,
+      ];
+    }
     return ["-y", "-f", "concat", "-safe", "0", "-i", input.listFile, "-c", "copy", input.finalFile];
   }
   const bedGain = input.anyVoAudio ? 0.16 : 1.0;
@@ -440,6 +487,30 @@ export function graphicsAssemblyArgs(input: {
     "[1:a]volume=" + bedGain +
     ",afade=t=in:st=0:d=1.5" +
     ",afade=t=out:st=" + Math.max(0, input.totalSec - 2).toFixed(3) + ":d=2";
+  // B4-4 — with a bed the cues join the SAME amix (voice? + bed + cues):
+  // one mix, one duration anchor ([0:a] with VO — the program; [bed] without
+  // VO — the looped, -t-bounded bed). No cues ⇒ the exact pre-B4 strings.
+  if (cues.length > 0) {
+    const sfxInputs = cues.flatMap((c) => ["-i", c.path]);
+    const sfxChains = cues
+      .map((c, i) => `[${i + 2}:a]adelay=${Math.round(c.tSec * 1000)}:all=1,volume=0.9[s${i}]`)
+      .join(";");
+    const headLabels = input.anyVoAudio ? "[0:a][bed]" : "[bed]";
+    return [
+      "-y",
+      "-f", "concat", "-safe", "0", "-i", input.listFile,
+      "-stream_loop", "-1", "-t", input.totalSec.toFixed(3), "-i", input.musicPath,
+      ...sfxInputs,
+      "-filter_complex",
+        "[0:v]format=yuv420p[v];" + bedChain + "[bed];" + sfxChains + (sfxChains ? ";" : "") +
+        headLabels + cues.map((_, i) => `[s${i}]`).join("") +
+        `amix=inputs=${cues.length + (input.anyVoAudio ? 2 : 1)}:duration=first:normalize=0[a]`,
+      "-map", "[v]", "-map", "[a]",
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+      "-c:a", "aac", "-b:a", "160k",
+      input.finalFile,
+    ];
+  }
   return [
     "-y",
     "-f", "concat", "-safe", "0", "-i", input.listFile,
@@ -984,12 +1055,27 @@ export async function renderGraphics(
     // the scene files verbatim — byte-identity).
     const concatFiles = graphicsConcatEntries(sceneFiles.map((s) => s.file), windowFiles);
     fs.writeFileSync(listFile, concatFiles.map((f) => `file '${path.resolve(f)}'`).join("\n") + "\n");
+    // B4-4 — the S131 seam's audio consumers finally read it: an `sfx` event
+    // whose label names a catalog kind becomes a real synthesized sound at
+    // its PROJECTED global time (graphicsEventList — the ONE clock truth).
+    // A doc without sfx events (every doc so far) resolves NO cues ⇒ the
+    // assembly args are byte-identical (the additive-seam law). Capped at 24
+    // (a defensive ceiling; the validator already bounds events per scene).
+    const sfxCues: { path: string; tSec: number }[] = [];
+    for (const ev of graphicsEventList(doc, doc.fps, voMsBySceneId)) {
+      if (sfxCues.length >= 24) break;
+      if (ev.kind !== "sfx" || !ev.label) continue;
+      if (!(SFX_KINDS as readonly string[]).includes(ev.label)) continue;
+      const wav = await ensureSfx(ev.label);
+      if (wav) sfxCues.push({ path: wav, tSec: ev.tSec });
+    }
     await runFfmpeg(graphicsAssemblyArgs({
       listFile,
       finalFile,
       totalSec,
       musicPath: opts.musicPath ?? null,
       anyVoAudio,
+      ...(sfxCues.length > 0 ? { sfxCues } : {}),
     }), "final assembly");
     // S132 — the render COMPLETED: the manifest's purpose (resuming an
     // interrupted run) is spent. Delete it so the next run starts fresh;

@@ -47,6 +47,14 @@ const video = await db.video.create({
     script: scenes.map((s) => s.narration).join("\n\n"),
     scenes: JSON.stringify(scenes),
     hasStoryboard: true,
+    // B4 walk — the voiced state so the ALWAYS-MOUNTED timeline strip renders
+    // the real TimelineStudio (its own gate: "for scene videos with a
+    // voiceover"). No audio files exist — the lanes render with their honest
+    // empty/error states; the LAYOUT is what's under test.
+    hasVoiceover: true,
+    voiceSource: "tts",
+    voice: "jam",
+    audioDuration: 33,
     wordCount: 96,
     length: "medium",
   },

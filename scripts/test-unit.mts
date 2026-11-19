@@ -25387,6 +25387,95 @@ await test("B3 language law: the production profiles' user-facing blurbs carry n
   );
 });
 
+// ---------------------------------------------------------------------------
+// B4 — Creative Workspace Enhancement pins (docs/design/B4_CREATIVE_WORKSPACE_SPEC.md)
+
+await test("B4-4 — sfx cues are an ADDITIVE seam: absent cues keep the pre-B4 args byte-identical", () => {
+  const base = { listFile: "c.txt", finalFile: "final.mp4", totalSec: 8.6 };
+  // No cues + bed + VO: the EXACT pre-B4 shape (the S64 receipt strings).
+  const bedVo = graphicsAssemblyArgs({ ...base, musicPath: "bed.flac", anyVoAudio: true });
+  const bedVoFilter = bedVo[bedVo.indexOf("-filter_complex") + 1];
+  ok(bedVoFilter.includes("[0:a][bed]amix=inputs=2:duration=first:normalize=0[a]"), "no cues: the two-input mix verbatim");
+  ok(!bedVo.includes("adelay"), "no cues: no adelay anywhere");
+  // No cues + no bed: the concat stream-copy verbatim.
+  const copy = graphicsAssemblyArgs({ ...base, musicPath: null, anyVoAudio: true });
+  ok(copy.includes("-c") && copy.includes("copy"), "no cues, no bed: the stream-copy verbatim");
+});
+
+await test("B4-4 — sfx cues mix at their projected times: adelay + one amix, never a second clock", () => {
+  const base = { listFile: "c.txt", finalFile: "final.mp4", totalSec: 8.6 };
+  const cues = [
+    { path: "whoosh.wav", tSec: 1.25 },
+    { path: "boom.wav", tSec: 4 },
+  ];
+  // With bed + VO: inputs = concat, music, sfx×2 → amix inputs=4, delays at 1250/4000 ms.
+  const withBed = graphicsAssemblyArgs({ ...base, musicPath: "bed.flac", anyVoAudio: true, sfxCues: cues });
+  ok(withBed.filter((a) => a === "whoosh.wav").length === 1, "each cue rides as its own -i input");
+  const withBedFilter = withBed[withBed.indexOf("-filter_complex") + 1];
+  ok(withBedFilter.includes("adelay=1250:all=1") && withBedFilter.includes("adelay=4000:all=1"), "the cue lands at its PROJECTED global time");
+  ok(withBedFilter.includes("amix=inputs=4:duration=first:normalize=0[a]"), "voice + bed + 2 cues = one 4-input mix");
+  ok(withBedFilter.includes("volume=0.16"), "the bed gain law is untouched by the cues");
+  // With bed, no VO: the bed anchors the mix duration (looped + -t bounded).
+  const bedSolo = graphicsAssemblyArgs({ ...base, musicPath: "bed.flac", anyVoAudio: false, sfxCues: cues });
+  ok(bedSolo[bedSolo.indexOf("-filter_complex") + 1].includes("amix=inputs=3"), "bed + 2 cues without VO = a 3-input mix");
+  // Bed-less, no VO: a generated silence anchors the duration (never a short cue).
+  const silent = graphicsAssemblyArgs({ ...base, musicPath: null, anyVoAudio: false, sfxCues: [cues[0]] });
+  const silentFilter = silent[silent.indexOf("-filter_complex") + 1];
+  ok(silentFilter.includes("anullsrc=r=48000:cl=stereo:d=8.600"), "the silence anchor is the program length");
+  ok(silentFilter.includes("amix=inputs=2"), "silence + 1 cue = a 2-input mix");
+  // Bed-less with VO: the VO anchors; no music inputs at all.
+  const voOnly = graphicsAssemblyArgs({ ...base, musicPath: null, anyVoAudio: true, sfxCues: [cues[0]] });
+  ok(voOnly[voOnly.indexOf("-filter_complex") + 1].includes("[0:a][s0]amix=inputs=2"), "VO + cue mix over the concat only");
+});
+
+await test("B4-3 — the scene3d PUT rides the ONE parse law and never overwrites with absent", () => {
+  const src = fs.readFileSync("src/app/api/videos/[id]/scene3d/route.ts", "utf8");
+  ok(src.includes("export async function PUT"), "the PUT exists (the lane's first product-surface write path)");
+  ok(src.includes("const doc = parseScene3D(raw)"), "the PUT validates through parseScene3D — the same tolerant read the renderer consumes");
+  ok(src.includes('status: 400'), "unparseable input is refused with 400 — never a silent overwrite");
+  ok(src.includes("startJob(id, \"scene3d\""), "rerender rides the SAME deterministic job POST uses");
+});
+
+await test("B4-1 — the workspace layout: simultaneous panels at ≥1024px, the B3 stacked tabs below", () => {
+  const src = fs.readFileSync("src/components/tubeforge/production-workspace.tsx", "utf8");
+  ok(src.includes("ResizablePanelGroup direction=\"vertical\""), "the vertical group hosts center+inspector over the timeline strip");
+  ok(src.includes("ResizablePanelGroup direction=\"horizontal\""), "the horizontal group hosts center over the inspector rail");
+  ok(src.includes("const timelineStrip"), "the Timeline Studio lives in ONE always-mounted strip");
+  ok(src.includes("const renderShipPanel"), "the render/ship controls are the Timeline-area center content");
+  ok(src.includes("(min-width: 1024px)"), "the pro layout is the lg gate — below it, the B3 stacked tabs");
+  ok(src.includes("isWide ? ("), "the branch chooses the layout by the viewport, never both at once");
+  ok(src.includes('activeTab !== "inspector" && <ResizableHandle'), "the Inspector rail hides when Inspector is focused — never two mounted instances");
+  // The S86 law + the e2e selectors survive: same triggers, same controlled state.
+  ok(src.includes("<Tabs value={activeTab} onValueChange={setActiveTab}>"), "the area strip keeps the controlled-tab law (S86)");
+  ok(src.includes('value="inspector"'), "the five area triggers keep their names (e2e + screen readers)");
+});
+
+await test("B4-2 — motion authoring rides the ONE writer: insertion, 15-curve ease dropdown, tweens, camera keys", () => {
+  const panel = fs.readFileSync("src/components/tubeforge/graphics/motion-panel.tsx", "utf8");
+  ok(panel.includes("EASE_CURVES"), "the ease dropdown reads the S162 curve table (the 15 exact-op names)");
+  ok(panel.includes("CAMERA_BOUNDS"), "the camera key editor surfaces the zoom pins");
+  ok(panel.includes("TWEEN_CHANNELS"), "the tween editor is over the closed channel set");
+  ok(panel.includes("MOTION_KINDS_BY_ELEMENT"), "the motion kinds follow the per-kind compatibility table");
+  ok(panel.includes("defaultElementFor"), "insertion defaults are legal per kind");
+  const studio = fs.readFileSync("src/components/tubeforge/graphics/graphics-studio.tsx", "utf8");
+  ok(studio.includes("<GraphicsMotionPanel"), "the studio mounts the motion panel in the element strip");
+  ok(studio.includes("setDirty(true)"), "every B4-2 patch rides the same dirty → validated PUT path");
+});
+
+await test("B4 — the e2e harness rate ceilings speak the CURRENT env names (config-truth, the S68 lesson)", () => {
+  const cfg = fs.readFileSync("playwright.config.ts", "utf8");
+  ok(cfg.includes("TUBEFORGE_RATE_WRITE"), "the harness raises the WRITE ceiling under the name both limiters read");
+  ok(cfg.includes("TUBEFORGE_RATE_READ"), "the harness raises the READ ceiling under the current name");
+  ok(!cfg.includes("IBISMUH_STUDIO_RATE_"), "no foreign rebrand names in the harness — TubeForge's keys were never renamed, so there are no dead legacy names to purge");
+  ok(
+    (cfg.match(/TUBEFORGE_RATE_[A-Z_]+/g) ?? []).sort().join(",") === "TUBEFORGE_RATE_READ,TUBEFORGE_RATE_WRITE",
+    "the harness speaks exactly the two documented ceiling keys — no third key drifting toward a limiter that never reads it"
+  );
+  const limiter = fs.readFileSync("src/lib/tubeforge/shared-rate-limit.ts", "utf8");
+  const shed = fs.readFileSync("src/lib/tubeforge/rate-limit.ts", "utf8");
+  ok(limiter.includes("TUBEFORGE_RATE_WRITE") && shed.includes("TUBEFORGE_RATE_WRITE"), "both limiter layers read the same env names the harness sets");
+});
+
 console.log(`${passed} passed, ${failed} failed${failures.length ? ":" : ""}`);
 for (const f of failures) console.log(`  ✗ ${f}`);
 process.exit(failed > 0 ? 1 : 0);

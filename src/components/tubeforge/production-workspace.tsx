@@ -18,7 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusBadge, formatDuration, timeAgo, useVoices, VoiceSelectWithPreview, VOICES_CHANGED_EVENT, Kbd } from "@/components/tubeforge/shared";
-import { MusicPickerCard, type MusicPickerValue } from "@/components/tubeforge/music-controls";
+import { MusicPickerCard, MixPreviewButton, type MusicPickerValue } from "@/components/tubeforge/music-controls";
 import { MotionControlsCard, type MotionPickerValue } from "@/components/tubeforge/motion-controls";
 import { TransitionControlsCard, type TransitionPickerValue } from "@/components/tubeforge/transition-controls";
 import { InlineCloneSetup } from "@/components/tubeforge/inline-clone-setup";
@@ -27,10 +27,12 @@ import { SceneStudioPanel } from "@/components/tubeforge/scene-editor";
 import WhiteboardStudio from "@/components/tubeforge/whiteboard/whiteboard-studio";
 import GraphicsStudio from "@/components/tubeforge/graphics/graphics-studio";
 import { DirectorCard } from "@/components/tubeforge/director-card";
+import { Scene3DPanel } from "@/components/tubeforge/scene3d-panel";
 import { CriticCard } from "@/components/tubeforge/critic-card";
 import { ProductionBoard } from "@/components/tubeforge/production-board";
 import { PacingStrip } from "@/components/tubeforge/pacing-strip";
 import { TimelineStudio } from "@/components/tubeforge/timeline-studio";
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { ArrowLeft, CircleCheck, CircleX, CircleHelp, Ban, Brush } from "lucide-react";
 import {
   pollVoiceover,
@@ -170,6 +172,20 @@ export function ProductionWorkspace({
   // Storyboard state
   const [scenes, setScenes] = useState<SceneDTO[]>([]);
   const [boardGenerating, setBoardGenerating] = useState(false);
+
+  // B4-1 — the professional editing layout lives at ≥1024px (lg): the work
+  // area, the Inspector rail and the Timeline strip are SIMULTANEOUS and
+  // resizable. Below lg the B3 stacked tabs render unchanged (mobile law).
+  // State-init false + effect flip = no hydration mismatch (the useIsMobile
+  // pattern).
+  const [isWide, setIsWide] = useState(false);
+  useEffect(() => {
+    const mql = window.matchMedia("(min-width: 1024px)");
+    const onChange = () => setIsWide(mql.matches);
+    onChange();
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
 
   // Keynote slides state — the designed deck (render mode "slides" only).
   // null = the deck hasn't been designed yet (no render / re-roll so far).
@@ -1989,22 +2005,42 @@ export function ProductionWorkspace({
       ? "Generate the voiceover first"
       : null;
 
-  const videoTab = (
-    <div className="space-y-5">
-      {/* Stage 6 — the Timeline Studio: lanes + live preview + inspector.
-          Mounted first so the user can trim the timeline BEFORE the render
-          commits the trims to disk. Hidden when the video isn't scene-format
-          or has no scenes — the same gate the /assemble endpoint enforces. */}
-      {isStory && scenes.length > 0 && video && (
-        <TimelineStudio
-          videoId={video.id}
-          video={video}
-          scenes={scenes}
-          canAssemble={Boolean(video.hasVoiceover)}
-          renderInFlight={busy === "render" || busy === "preview"}
-          onSaved={() => void refreshVideo(video.id)}
-        />
-      )}
+  // B4-1 — the Timeline Studio lives in ONE place: the always-mounted bottom
+  // strip of the wide (≥1024px) pro layout, so the live preview and lanes
+  // survive every area switch. The narrow layout composes the same const
+  // inline (via videoTab) — only one branch ever renders, so the instance is
+  // never duplicated. The Studio's own gate is honored honestly: it is "for
+  // scene videos with a voiceover" (its own null law) — without one, the
+  // strip explains what unlocks the lanes instead of painting silence.
+  const timelineStrip = !isStory || !video || scenes.length === 0 ? (
+    <div className="rounded-xl border border-dashed border-white/10 bg-white/3 p-6 text-center text-xs text-muted-foreground">
+      The timeline assembles here once the storyboard has scenes — every scene
+      becomes a clip on the lanes under the preview.
+    </div>
+  ) : !video.hasVoiceover ? (
+    <div className="rounded-xl border border-dashed border-white/10 bg-white/3 p-6 text-center text-xs text-muted-foreground">
+      The lanes and the live preview unlock here once the project has a voice
+      — generate the narration (Inspector → Change the voice) and they assemble
+      from the {scenes.length} scene{scenes.length === 1 ? "" : "s"} on the storyboard.
+    </div>
+  ) : (
+    <TimelineStudio
+      videoId={video.id}
+      video={video}
+      scenes={scenes}
+      canAssemble={Boolean(video.hasVoiceover)}
+      renderInFlight={busy === "render" || busy === "preview"}
+      onSaved={() => void refreshVideo(video.id)}
+    />
+  );
+
+  // The Timeline-area CENTER: everything the old videoTab rendered around the
+  // studio (render controls, captions, export presets, music, motion,
+  // transitions, render buttons, QC scorecard + ship gate). In the wide
+  // layout these ride the center while the lanes live in the strip — the
+  // controls and the lanes are simultaneous.
+  const renderShipPanel = (
+    <>
       {/* Render controls */}
       <div className="rounded-xl border border-white/10 bg-white/3 p-4 space-y-4">
         <div className="grid grid-cols-2 gap-2">
@@ -2209,6 +2245,11 @@ export function ProductionWorkspace({
           </p>
         )}
       </div>
+
+      {/* B4-3 — the 3D scene clip (optional layer): scaffold, edit and
+          re-render the Scene3D doc from the workspace. The lane was API-only
+          until this panel — the audit's small-scope recommendation. */}
+      <Scene3DPanel videoId={video.id} onChanged={() => void refreshVideo(video.id)} />
 
       {/* S40 — the ship gate: the enforcement verdict over the standing QC
           report (qc-policy.ts matrix, computed server-side in the DTO).
@@ -2685,6 +2726,15 @@ export function ProductionWorkspace({
           what exists today, so run the stage first if you need it inside.
         </p>
       </div>
+    </>
+  );
+
+  // The mobile/narrow Timeline tab composes the strip + the controls — the
+  // same two pieces the wide layout holds simultaneously.
+  const videoTab = (
+    <div className="space-y-5">
+      {timelineStrip}
+      {renderShipPanel}
     </div>
   );
 
@@ -2760,6 +2810,20 @@ export function ProductionWorkspace({
         ) : (
           <p className="text-sm text-muted-foreground">No narration yet — pick an AI voice below, or bring your own audio.</p>
         )}
+
+        {/* B4-4 — the consolidated audio card: the REAL final mix (voice + the
+            ducked bed + loudness normalization) plays right where the creator
+            already is. The music card (ducking intensity, volume, fades) stays
+            the single writer in the Timeline area — this card only listens. */}
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/3 px-3 py-2.5">
+          <div>
+            <p className="text-xs font-medium">Final mix preview</p>
+            <p className="text-[10px] text-muted-foreground">
+              12s of the real mix — narration, ducked music bed, loudness-normalized (−16 LUFS)
+            </p>
+          </div>
+          <MixPreviewButton videoId={video.id} disabled={Boolean(busy)} />
+        </div>
 
         <div className="mt-3 rounded-xl border border-white/10 bg-white/3 overflow-hidden">
           <button
@@ -4095,6 +4159,40 @@ export function ProductionWorkspace({
     </>
   );
 
+  // The Storyboard center content — owned by the peer studios in their lanes
+  // (S67 whiteboard / S123 graphics), the scene grid otherwise. ONE const so
+  // the wide pro layout and the narrow stacked tabs share a single
+  // definition (only one branch renders at a time).
+  const storyboardArea = renderMode === "whiteboard" ? (
+    /* S67 — the Whiteboard Studio owns this area in whiteboard
+       mode: scaffold → scrub/play (the frame-plan seam) →
+       render. The scene grid / Director card return for every
+       other mode. */
+    <WhiteboardStudio
+      videoId={video.id}
+      hasVideo={video.hasVideo}
+      onRenderQueued={() => {
+        void refreshVideo(video.id);
+        bumpRefresh();
+      }}
+    />
+  ) : renderMode === "graphics" ? (
+    /* S123 (G1) — the Graphics Studio owns this area in
+       graphics mode: scaffold → scrub/play the WHOLE doc
+       through the frame-truth seam → labelled drafts →
+       render. The same peer-engine law as the whiteboard. */
+    <GraphicsStudio
+      videoId={video.id}
+      hasVideo={video.hasVideo}
+      onRenderQueued={() => {
+        void refreshVideo(video.id);
+        bumpRefresh();
+      }}
+    />
+  ) : (
+    storyboardTab
+  );
+
   // The Canvas edits the picked scene; a vanished index (regenerated board)
   // falls back to the first scene so the surface never goes stale.
   const canvasSceneObj =
@@ -4284,68 +4382,117 @@ export function ProductionWorkspace({
       <ProductionBoard videoId={video.id} />
 
       {isStory ? (
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="flex w-full overflow-x-auto scroll-area-bar bg-white/5 sm:grid sm:grid-cols-5">
-            <TabsTrigger value="director" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
-              Director
-            </TabsTrigger>
-            <TabsTrigger value="storyboard" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
-              Storyboard
-            </TabsTrigger>
-            <TabsTrigger value="canvas" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
-              Canvas
-            </TabsTrigger>
-            <TabsTrigger value="timeline" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
-              Timeline
-            </TabsTrigger>
-            <TabsTrigger value="inspector" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
-              Inspector
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="director" className="mt-4">
-            {scriptTab}
-          </TabsContent>
-          <TabsContent value="storyboard" className="mt-4">
-            {renderMode === "whiteboard" ? (
-              /* S67 — the Whiteboard Studio owns this area in whiteboard
-                 mode: scaffold → scrub/play (the frame-plan seam) →
-                 render. The scene grid / Director card return for every
-                 other mode. */
-              <WhiteboardStudio
-                videoId={video.id}
-                hasVideo={video.hasVideo}
-                onRenderQueued={() => {
-                  void refreshVideo(video.id);
-                  bumpRefresh();
-                }}
-              />
-            ) : renderMode === "graphics" ? (
-              /* S123 (G1) — the Graphics Studio owns this area in
-                 graphics mode: scaffold → scrub/play the WHOLE doc
-                 through the frame-truth seam → labelled drafts →
-                 render. The same peer-engine law as the whiteboard. */
-              <GraphicsStudio
-                videoId={video.id}
-                hasVideo={video.hasVideo}
-                onRenderQueued={() => {
-                  void refreshVideo(video.id);
-                  bumpRefresh();
-                }}
-              />
-            ) : (
-              storyboardTab
-            )}
-          </TabsContent>
-          <TabsContent value="canvas" className="mt-4">
-            {canvasArea}
-          </TabsContent>
-          <TabsContent value="timeline" className="mt-4">
-            {videoTab}
-          </TabsContent>
-          <TabsContent value="inspector" className="mt-4">
-            {inspectorArea}
-          </TabsContent>
-        </Tabs>
+        isWide ? (
+          /* B4-1 — the professional editing layout: the work area, the
+             Inspector rail and the Timeline strip are SIMULTANEOUS and
+             resizable. The strip keeps the Radix tab semantics — the S86
+             jumps and the e2e selectors ride the same triggers. Selecting
+             Inspector focuses it full-width (the rail hides for that
+             value — never two mounted Inspector instances). */
+          <div className="mt-4 space-y-3">
+            <Tabs value={activeTab} onValueChange={setActiveTab}>
+              <TabsList className="flex w-full overflow-x-auto scroll-area-bar bg-white/5 sm:grid sm:grid-cols-5">
+                <TabsTrigger value="director" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
+                  Director
+                </TabsTrigger>
+                <TabsTrigger value="storyboard" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
+                  Storyboard
+                </TabsTrigger>
+                <TabsTrigger value="canvas" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
+                  Canvas
+                </TabsTrigger>
+                <TabsTrigger value="timeline" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
+                  Timeline
+                </TabsTrigger>
+                <TabsTrigger value="inspector" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
+                  Inspector
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <ResizablePanelGroup direction="vertical" className="h-[calc(100vh-16rem)] min-h-[640px]">
+              <ResizablePanel defaultSize={64} minSize={25} id="ws-main" order={1}>
+                <ResizablePanelGroup direction="horizontal" className="h-full">
+                  <ResizablePanel
+                    defaultSize={70}
+                    minSize={40}
+                    id="ws-center"
+                    order={1}
+                    className="h-full overflow-y-auto scroll-area-bar pr-1"
+                  >
+                    {activeTab === "director"
+                      ? scriptTab
+                      : activeTab === "storyboard"
+                        ? storyboardArea
+                        : activeTab === "canvas"
+                          ? canvasArea
+                          : activeTab === "inspector"
+                            ? inspectorArea
+                            : /* timeline — the render & ship controls; the lanes live in the strip below */
+                              renderShipPanel}
+                  </ResizablePanel>
+                  {activeTab !== "inspector" && <ResizableHandle withHandle />}
+                  {activeTab !== "inspector" && (
+                    <ResizablePanel
+                      defaultSize={30}
+                      minSize={16}
+                      id="ws-inspector"
+                      order={2}
+                      className="h-full overflow-y-auto scroll-area-bar pl-1"
+                    >
+                      {inspectorArea}
+                    </ResizablePanel>
+                  )}
+                </ResizablePanelGroup>
+              </ResizablePanel>
+              <ResizableHandle withHandle />
+              <ResizablePanel
+                defaultSize={36}
+                minSize={12}
+                id="ws-timeline"
+                order={2}
+                className="overflow-y-auto scroll-area-bar"
+              >
+                {timelineStrip}
+              </ResizablePanel>
+            </ResizablePanelGroup>
+          </div>
+        ) : (
+          /* <1024px — the B3 stacked tabs, unchanged (mobile law). */
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="flex w-full overflow-x-auto scroll-area-bar bg-white/5 sm:grid sm:grid-cols-5">
+              <TabsTrigger value="director" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
+                Director
+              </TabsTrigger>
+              <TabsTrigger value="storyboard" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
+                Storyboard
+              </TabsTrigger>
+              <TabsTrigger value="canvas" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
+                Canvas
+              </TabsTrigger>
+              <TabsTrigger value="timeline" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
+                Timeline
+              </TabsTrigger>
+              <TabsTrigger value="inspector" className="flex-1 shrink-0 min-w-[88px] sm:min-w-0 px-3 data-[state=active]:bg-white/10 text-[11px] sm:text-xs">
+                Inspector
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="director" className="mt-4">
+              {scriptTab}
+            </TabsContent>
+            <TabsContent value="storyboard" className="mt-4">
+              {storyboardArea}
+            </TabsContent>
+            <TabsContent value="canvas" className="mt-4">
+              {canvasArea}
+            </TabsContent>
+            <TabsContent value="timeline" className="mt-4">
+              {videoTab}
+            </TabsContent>
+            <TabsContent value="inspector" className="mt-4">
+              {inspectorArea}
+            </TabsContent>
+          </Tabs>
+        )
       ) : (
         <Tabs defaultValue="director">
           <TabsList className="grid grid-cols-2 bg-white/5">

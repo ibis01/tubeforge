@@ -33,7 +33,8 @@ import {
   type ZOrderAction,
 } from "@/lib/tubeforge/graphics/editor";
 import type { Placement } from "@/lib/tubeforge/whiteboard/svg";
-import type { GraphicsDoc, GraphicsScene } from "@/lib/tubeforge/graphics/types";
+import type { GraphicsDoc, GraphicsElement, GraphicsElementKind, GraphicsScene } from "@/lib/tubeforge/graphics/types";
+import { GraphicsMotionPanel, defaultElementFor } from "@/components/tubeforge/graphics/motion-panel";
 
 interface GraphicsBudgetReport {
   fps: 24 | 30;
@@ -430,6 +431,46 @@ export default function GraphicsStudio({ videoId, hasVideo, onRenderQueued }: Gr
     setDirty(true);
   };
 
+  // B4-2 — motion authoring: the SAME buffer → validated PUT path (no second
+  // doc writer). The motion panel is a friendly writer over the closed
+  // grammar; the validator stays the wall (time-sanity, kind compatibility,
+  // camera bounds are its job, not the UI's).
+  const patchElement = useCallback((sceneIndex: number, elId: string, fn: (el: GraphicsElement) => GraphicsElement): void => {
+    setBuffer((b) => {
+      if (!b) return b;
+      const scenes = b.scenes.map((s, i) =>
+        i !== sceneIndex ? s : { ...s, elements: s.elements.map((el) => (el.id === elId ? fn(el) : el)) }
+      );
+      return { ...b, scenes };
+    });
+    setDirty(true);
+  }, []);
+
+  const patchSceneDoc = useCallback((sceneIndex: number, fn: (s: GraphicsScene) => GraphicsScene): void => {
+    setBuffer((b) => {
+      if (!b) return b;
+      const scenes = b.scenes.map((s, i) => (i !== sceneIndex ? s : fn(s)));
+      return { ...b, scenes };
+    });
+    setDirty(true);
+  }, []);
+
+  const insertElement = useCallback((sceneIndex: number, kind: GraphicsElementKind): void => {
+    setBuffer((b) => {
+      if (!b) return b;
+      const scenes = b.scenes.map((s, i) => {
+        if (i !== sceneIndex) return s;
+        let n = s.elements.length + 1;
+        let id = `el-${n}`;
+        while (s.elements.some((e) => e.id === id)) id = `el-${++n}`;
+        const el = defaultElementFor(kind, id, b.width, b.height, s.elements.length);
+        return { ...s, elements: [...s.elements, el] };
+      });
+      return { ...b, scenes };
+    });
+    setDirty(true);
+  }, []);
+
   if (loading) {
     return (
       <div className="rounded-xl border border-white/10 bg-white/3 p-6 text-sm text-white/60">
@@ -657,6 +698,19 @@ export default function GraphicsStudio({ videoId, hasVideo, onRenderQueued }: Gr
                 {selectedId} is a member of {selectedClaim} — geometry and z-order ride the group (read-only here).
               </p>
             )}
+
+            {/* B4-2 — motion & easing authoring: insertion palette, the
+                enter/exit/emphasis editor with the 15-curve ease dropdown,
+                tween channels/keys, and the scene camera keys. Everything
+                rides the same working buffer → validated PUT. */}
+            <GraphicsMotionPanel
+              scene={scene}
+              selected={selected && !selectedClaim ? selected : undefined}
+              disabled={busy !== null}
+              onPatchElement={(elId, fn) => patchElement(activeSceneIndex, elId, fn)}
+              onPatchScene={(fn) => patchSceneDoc(activeSceneIndex, fn)}
+              onInsertElement={(kind) => insertElement(activeSceneIndex, kind)}
+            />
           </div>
         );
       })()}

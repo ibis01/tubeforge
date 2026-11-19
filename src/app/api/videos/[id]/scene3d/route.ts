@@ -9,6 +9,7 @@ import {
   scaffoldScene3D,
   scene3dClipKey,
   serializeScene3D,
+  SCENE3D_VERSION,
   type Scene3DAspect,
 } from "@/lib/tubeforge/scene3d";
 
@@ -111,4 +112,49 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   await storage.remove(scene3dClipKey(id)).catch(() => {});
   await db.video.update({ where: { id }, data: { scene3d: null } });
   return NextResponse.json({ cleared: true });
+}
+
+/**
+ * PUT (B4-3 — Creative Workspace Enhancement) — creator edits over the ONE
+ * parse law. Body: { doc: Scene3D, rerender?: boolean }.
+ *
+ * The doc rides parseScene3D — the same tolerant read every consumer uses
+ * (junk fields fall back honestly, per the S88 law); input that doesn't
+ * parse AT ALL (wrong version / unreadable) is refused with 400 and never
+ * overwrites the standing doc — the tolerant parse reads THAT as absent, and
+ * an absent doc must not be written over a good one by a rounding error.
+ * rerender:true re-enqueues the same deterministic job POST uses.
+ */
+export async function PUT(req: NextRequest, ctx: Ctx) {
+  const auth = await requireUser(req);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  auth.enter();
+
+  const { id } = await ctx.params;
+  const video = await db.video.findUnique({ where: { id } });
+  if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
+
+  const body = (await req.json().catch(() => ({}))) as { doc?: unknown; rerender?: boolean };
+  if (body.doc === undefined || body.doc === null)
+    return NextResponse.json({ error: "Provide { doc } — the Scene3D document to save" }, { status: 400 });
+
+  const raw = typeof body.doc === "string" ? body.doc : JSON.stringify(body.doc);
+  const doc = parseScene3D(raw);
+  if (!doc)
+    return NextResponse.json(
+      { error: "Unparseable Scene3D doc — the version must be " + SCENE3D_VERSION + " and the shape must read" },
+      { status: 400 }
+    );
+
+  const serialized = serializeScene3D(doc);
+  await db.video.update({ where: { id }, data: { scene3d: serialized, error: null } });
+
+  if (body.rerender) {
+    const accepted = await startJob(id, "scene3d", () => runScene3DJob(id));
+    return NextResponse.json(
+      { ok: true, rerenderQueued: accepted, doc: JSON.parse(serialized) },
+      { status: accepted ? 202 : 200 }
+    );
+  }
+  return NextResponse.json({ ok: true, doc: JSON.parse(serialized) });
 }
