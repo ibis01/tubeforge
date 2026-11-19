@@ -723,6 +723,61 @@ try {
     assertReportInvariants(r);
   });
 
+  await test("QC detector regexes tolerate BOTH ffmpeg log-prefix generations (7.x [filter @ …] and 8.x [Parsed_filter_N @ …])", async () => {
+    // The ffmpeg-8 false-pass receipt (Studio CI, pinned 8.1.3-static):
+    // ffmpeg 8 renamed the per-filter log prefix — [blackdetect @ …] became
+    // [Parsed_blackdetect_0 @ …] — and the three bracket-anchored detector
+    // regexes (blackdetect / freezedetect / silencedetect) matched NOTHING,
+    // so dead-air / black-frames / frozen-frames false-PASSED every render.
+    // The fix anchors on any bracket CONTAINING the filter name. This pin
+    // extracts the REAL deployed literals from qc.ts and evaluates them
+    // against both shapes, so the regression cannot return silently —
+    // including on a PATH that still ships ffmpeg 7 (where the old anchor
+    // keeps "passing").
+    const qcSrc = fs.readFileSync("src/lib/tubeforge/qc.ts", "utf8");
+    // 1) Extract the deployed literal for each detector (first matchAll whose
+    //    window mentions the filter name; literal = / … /g).
+    const literalFor = (filter: string): string | null => {
+      let idx = -1;
+      while ((idx = qcSrc.indexOf(".matchAll(", idx + 1)) !== -1) {
+        const window = qcSrc.slice(idx, idx + 400);
+        if (!window.includes(filter)) continue;
+        const start = qcSrc.indexOf("/", idx);
+        const end = qcSrc.indexOf("/g", start);
+        if (start === -1 || end === -1) return null;
+        return qcSrc.slice(start + 1, end);
+      }
+      return null;
+    };
+    // 2) Structural tripwire: the pre-fix anchor \[filter[^…]*\] must stay gone.
+    for (const f of ["blackdetect", "freezedetect", "silencedetect"])
+      ok(!qcSrc.includes(`\\[${f}[^\\]]*\\]`), `qc.ts ${f} detector reverted to the [${f} …] anchor — the ffmpeg-8 false-pass regression`);
+    // 3) Behavioral: both prefix generations must match the REAL literals.
+    const shapes = {
+      blackdetect: {
+        f7: "[blackdetect @ 0x7f14f8001f40] black_start:0 black_end:1.48 black_duration:1.48",
+        f8: "[Parsed_blackdetect_0 @ 0x7f14f8001f40] black_start:0 black_end:1.48 black_duration:1.48",
+      },
+      freezedetect: {
+        f7: "[freezedetect @ 0x7f14f8002200] lavfi.freezedetect.freeze_start: 0\n[freezedetect @ 0x7f14f8002200] lavfi.freezedetect.freeze_duration: 1.5",
+        f8: "[Parsed_freezedetect_0 @ 0x7f14f8002200] lavfi.freezedetect.freeze_start: 0\n[Parsed_freezedetect_0 @ 0x7f14f8002200] lavfi.freezedetect.freeze_duration: 1.5",
+      },
+      silencedetect: {
+        f7: "[silencedetect @ 0x7ff904002400] silence_start: 1.999977",
+        f8: "[Parsed_silencedetect_1 @ 0x7ff904002400] silence_start: 1.999977",
+      },
+    };
+    for (const [filter, sh] of Object.entries(shapes)) {
+      const lit = literalFor(filter);
+      ok(lit !== null, `qc.ts no longer carries a matchAll literal for ${filter} — re-anchor this pin`);
+      if (lit === null) continue;
+      const re7 = new RegExp(lit, "g");
+      const re8 = new RegExp(lit, "g");
+      ok(sh.f7.match(re7) !== null, `the deployed ${filter} regex no longer matches the ffmpeg 7.x [${filter} @ …] shape`);
+      ok(sh.f8.match(re8) !== null, `the deployed ${filter} regex does not match the ffmpeg 8.x [Parsed_${filter}_N @ …] shape (the false-pass regression)`);
+    }
+  });
+
   await test("healthy fixture: analysis-derived checks all reach a verdict", async () => {
     const r = await runQcReport(qcOpts(fadeMp4));
     for (const id of MEASURED_ANALYSIS_IDS)

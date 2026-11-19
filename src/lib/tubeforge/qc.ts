@@ -461,7 +461,12 @@ export async function runQcReport(opts: {
     // ffmpeg 7.x prefixes these log lines with the frame-metadata key
     // ("lavfi.blackdetect.") and varies the spacing after the colon — the
     // pattern tolerates both so the check works across ffmpeg versions.
-    const blacks = [...stderr.matchAll(/\[blackdetect[^\]]*\]\s*(?:lavfi\.blackdetect\.)?black_start:\s*(\d+(?:\.\d+)?)/g)]
+    // 2026-11-18: ffmpeg 8 changed the log prefix itself — [blackdetect @ …]
+    // became [Parsed_blackdetect_0 @ …] — so the bracket class no longer
+    // anchors on the filter name alone; match ANY bracket that CONTAINS the
+    // filter name (8.1.3-static CI evidence: dead-air false-passed every
+    // render before this fix).
+    const blacks = [...stderr.matchAll(/\[[^\]]*blackdetect[^\]]*\]\s*(?:lavfi\.blackdetect\.)?black_start:\s*(\d+(?:\.\d+)?)/g)]
       .map((m) => Number(m[1]));
     const unexpected = blacks.filter((t) => !isDesignedBlack(t));
     if (!analysisRan) {
@@ -490,7 +495,7 @@ export async function runQcReport(opts: {
     // the graphics lane's coverage judgment needs the EVENTS, not just the
     // starts.
     const freezeEvents = [...stderr.matchAll(
-      /\[freezedetect[^\]]*\]\s*(?:lavfi\.freezedetect\.)?freeze_start:\s*(\d+(?:\.\d+)?)[\s\S]*?\[freezedetect[^\]]*\]\s*(?:lavfi\.freezedetect\.)?freeze_duration:\s*(\d+(?:\.\d+)?)/g
+      /\[[^\]]*freezedetect[^\]]*\]\s*(?:lavfi\.freezedetect\.)?freeze_start:\s*(\d+(?:\.\d+)?)[\s\S]*?\[[^\]]*freezedetect[^\]]*\]\s*(?:lavfi\.freezedetect\.)?freeze_duration:\s*(\d+(?:\.\d+)?)/g
     )].map((m) => ({ startSec: Number(m[1]), endSec: Number(m[1]) + Number(m[2]) }));
     const freezes = freezeEvents.map((e) => e.startSec);
     // S123 — the lane split: the graphics lane judges DEAD-COMPOSITOR
@@ -589,7 +594,7 @@ export async function runQcReport(opts: {
     // contract's video-only file neither passes nor fails this lens; it is
     // simply not asked.
     const silences = audioApplicable
-      ? [...stderr.matchAll(/\[silencedetect[^\]]*\]\s*(?:lavfi\.silencedetect\.)?silence_start:\s*(\d+(?:\.\d+)?)/g)]
+      ? [...stderr.matchAll(/\[[^\]]*silencedetect[^\]]*\]\s*(?:lavfi\.silencedetect\.)?silence_start:\s*(\d+(?:\.\d+)?)/g)]
           .map((m) => Number(m[1]))
           .filter((s) => s > 1 && s < duration - 2)
       : [];
