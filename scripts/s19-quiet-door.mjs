@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S19 — the quiet door. readLegacyRows() now asks sqlite_master whether the
 // LegacySetting table exists before selecting from it, so a fresh install
 // (table absent by design since T-3.11) no longer makes Prisma log the
@@ -84,8 +86,8 @@ const after = screams();
 ok(after === before, `zero new screams (${before} -> ${after})`);
 
 // ---- 6. cleanup — the end-state law: the battery leaves NOTHING ----
-import { PrismaClient } from "@prisma/client";
-const db = new PrismaClient();
+
+const db = createPrisma();
 const u = await db.user.findUnique({
   where: { email },
   include: { memberships: { select: { organizationId: true } } },

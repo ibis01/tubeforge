@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S22 unit probe — "the world gets a door": the World library (Stage 5
 // module C) always had a backend half — GET/POST on /api/locations and
 // /api/props, read by the AI Director — and never a way in. No surface,
@@ -20,7 +22,7 @@
 process.env.TUBEFORGE_AUTH_SECRET ??= "probe-secret-0123456789abcdef";
 
 import { NextRequest } from "next/server";
-import { PrismaClient } from "@prisma/client";
+
 import {
   createApiToken,
   createSessionRecord,
@@ -44,7 +46,7 @@ import {
   DELETE as propDelete,
 } from "../src/app/api/props/[id]/route";
 
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 // S28 — the studio has a REAL tenant now (the owner's account lives in
 // this DB): teardown asserts NOTHING-BEHIND against the starting baseline.
 const __BASELINE = { users: await prisma.user.count(), orgs: await prisma.organization.count(), locations: await prisma.location.count(), props: await prisma.prop.count() };

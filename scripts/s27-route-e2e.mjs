@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S27 route e2e — "the $5 door" against the running daemon. The gate is a
 // GLOBAL, cross-request law, so the proof is a real account hammering the
 // real settings test route until the door slams:
@@ -21,14 +23,14 @@
 // Run after a daemon restart with TUBEFORGE_PRICING_VERIFIED=1:
 //   node scripts/s27-route-e2e.mjs
 
-import { PrismaClient } from "@prisma/client";
+
 // S28 — baseline-relative end state, captured BEFORE the suite creates
 // anything (the owner's real account lives in this DB now).
 const BASELINE = {
-  users: await new PrismaClient().user.count(),
-  orgs: await new PrismaClient().organization.count({ where: { memberships: { none: {} } } }),
-  usageRows: await new PrismaClient().usageRecord.count(),
-  reservations: await new PrismaClient().spendReservation.count(),
+  users: await createPrisma().user.count(),
+  orgs: await createPrisma().organization.count({ where: { memberships: { none: {} } } }),
+  usageRows: await createPrisma().usageRecord.count(),
+  reservations: await createPrisma().spendReservation.count(),
 };
 
 const BASE = "http://localhost:3000";
@@ -48,7 +50,7 @@ const check = (name, ok, detail) => {
 };
 const json = async (res) => res.json().catch(() => ({}));
 
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 
 // ---- 1. register through the real route ----
 const tag = `s27-${Date.now()}`;

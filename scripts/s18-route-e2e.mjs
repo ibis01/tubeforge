@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S18 route e2e — "the recovery": the forgotten half of the login screen
 // through the LIVE daemon. The full arc a locked-out owner walks:
 //   1. the public gate: every recovery endpoint answers WITHOUT a session;
@@ -16,9 +18,9 @@
 //      configured:false (the register screen — the S18 prelude's promise);
 //   8. cleanup: the throwaway account + org removed.
 // Run: node scripts/s18-route-e2e.mjs   (daemon on the S18 build)
-import { PrismaClient } from "@prisma/client";
 
-const db = new PrismaClient();
+
+const db = createPrisma();
 // S28 — baseline-relative end state, captured BEFORE the suite creates
 // anything (the owner's real account lives in this DB now).
 const BASELINE_USERS = await db.user.count();

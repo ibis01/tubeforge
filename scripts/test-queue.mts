@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // Stage 3 completion-gate integration test (T-3.5 + close-out).
 //
 // ROADMAP.md Stage 3 gate: "A video job can survive an application restart,
@@ -50,10 +52,10 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PrismaClient } from "@prisma/client";
+
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const db = new PrismaClient();
+const db = createPrisma();
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

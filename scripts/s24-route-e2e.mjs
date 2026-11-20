@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S24 route e2e — the money door over real HTTP: register → sign in → the
 // full law matrix against the running server (middleware, CSRF, limiter and
 // all), then the end-state law (the battery leaves NOTHING).
@@ -136,8 +138,7 @@ const authed = { "content-type": "application/json", cookie };
 }
 
 // ---- verify zero residue (direct DB) ----
-const { PrismaClient } = await import("@prisma/client");
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 {
   const u = await prisma.user.findUnique({ where: { email } });
   check("7.3  the user row is gone", u === null);

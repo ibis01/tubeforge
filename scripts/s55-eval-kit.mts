@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S55 T-55.6 — the human cinematic evaluation kit's anchor-render harness
 // (LOCAL ONLY, zero gateway spend; the stand-in gateway plays the AI
 // providers, same disclosure as the T-55.5 acceptance).
@@ -32,7 +34,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "util";
-import { PrismaClient } from "@prisma/client";
+
 import { withCtx, hashPassword } from "../src/lib/tubeforge/tenant";
 import { runDirectorPass, setDirectorState, parsePlan } from "../src/lib/tubeforge/director";
 import { runStoryboardJob, runRenderJob } from "../src/lib/tubeforge/video-jobs";
@@ -42,7 +44,7 @@ import { CAMERA_MOVES, FRAMINGS, PROFILE_IDS } from "../src/lib/tubeforge/direct
 import { startStandinGateway } from "./s55-standin-gateway.mts";
 
 const execFileAsync = promisify(execFile);
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 const LEG = process.env.S55_KIT_LEG ?? "profiles";
 const ONLY = (process.env.S55_KIT_PROFILES ?? "")
   .split(",").map((s) => s.trim()).filter(Boolean);

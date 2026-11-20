@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S16 route e2e — "the account": the rotation through the LIVE daemon.
 // The in-app password change the security card always promised. A throwaway
 // identity (never the owner) exercises every layer of the contract:
@@ -21,9 +23,9 @@
 //      runs LAST; afterwards the suite touches no auth endpoint);
 //  10. cleanup: the throwaway account is removed from the DB.
 // Run: node scripts/s16-route-e2e.mjs   (daemon on the S16 build)
-import { PrismaClient } from "@prisma/client";
 
-const db = new PrismaClient();
+
+const db = createPrisma();
 const BASE = "http://localhost:3000";
 let failures = 0;
 const check = (name, ok, detail) => {

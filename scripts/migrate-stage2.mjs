@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // Stage 2 — multi-user transition. Idempotent; safe to run repeatedly.
 //
 // WHAT IT DOES
@@ -52,9 +54,13 @@ const run = (args, opts = {}) =>
   execFileSync(prismaBin, args, { stdio: "inherit", cwd: root, ...opts });
 
 const execSql = (schemaFile, sql) => {
+  // Prisma 7: `db execute` no longer accepts --schema — the datasource URL
+  // comes from prisma.config.ts (env DATABASE_URL), which the caller's env
+  // already points at the right database. schemaFile stays in the signature
+  // for the log line / future per-schema configs.
   const child = execFileSync(
     prismaBin,
-    ["db", "execute", "--schema", schemaFile, "--stdin"],
+    ["db", "execute", "--stdin"],
     { cwd: root, input: sql, stdio: ["pipe", "inherit", "inherit"] }
   );
   return child;
@@ -351,8 +357,9 @@ async function pgRepairMissingInitTables(prisma) {
 }
 
 async function main() {
-  const { PrismaClient } = await import(join(root, "node_modules", "@prisma/client", "index.js"));
-  const prisma = new PrismaClient();
+  // Prisma 7: the client needs a driver adapter — the shared factory picks
+  // better-sqlite3 vs pg per DATABASE_URL protocol (the P1012 migration).
+  const prisma = createPrisma();
 
   try {
     if (!isSqlite) {
@@ -408,7 +415,7 @@ async function main() {
 
     // ---------- phase 2: db push (idempotent) ----------
     log("phase 2: prisma db push (sqlite)");
-    run(["db", "push", "--schema", "prisma/schema.sqlite.prisma", "--skip-generate"]);
+    run(["db", "push", "--schema", "prisma/schema.sqlite.prisma"]);
 
     // ---------- phase 3: bootstrap org + one-owner-per-org index ----------
     // Only rows still parked under 'default' count as legacy content — rows

@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S21 route e2e — "the confirmed address" against the running daemon. The
 // full arc a real account walks:
 //   register (the API alone does NOT verify — the gate's console auto-verify
@@ -8,10 +10,10 @@
 //   expired -> further resends answer 400 -> cleanup (zero users).
 // Run after a daemon restart: node scripts/s21-route-e2e.mjs
 
-import { PrismaClient } from "@prisma/client";
+
 // S28 — baseline-relative end state, captured BEFORE the suite creates
 // anything (the owner's real account lives in this DB now).
-const BASELINE_USERS = await new PrismaClient().user.count();
+const BASELINE_USERS = await createPrisma().user.count();
 
 const BASE = "http://localhost:3000";
 const jar = [];
@@ -97,7 +99,7 @@ const anon = await fetch(`${BASE}/api/auth/verify-email`, { method: "POST" });
 check("6.1  an anonymous resend -> 401", anon.status === 401, anon.status);
 
 // ---- 7. cleanup — the register-mode end state survives ----
-const db = new PrismaClient();
+const db = createPrisma();
 const u = await db.user.findUnique({
   where: { email },
   include: { memberships: { select: { organizationId: true } } },

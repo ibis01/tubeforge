@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S123 route e2e — the motion-graphics lane through the LIVE server.
 // The deeper receipts the Playwright suite can't reach (it owns the
 // user-facing contract; this probe owns the DURABLE evidence):
@@ -20,11 +22,11 @@
 //   7. cleanup: the throwaway account + org removed (baseline-relative).
 //
 // Run: TUBEFORGE_BASE=http://localhost:3000 node scripts/s123-route-e2e.mjs
-import { PrismaClient } from "@prisma/client";
+
 import fs from "node:fs";
 import path from "node:path";
 
-const db = new PrismaClient();
+const db = createPrisma();
 const BASE = process.env.TUBEFORGE_BASE ?? "http://localhost:3000";
 // The local storage driver's root (the uploads/ layout) — the draft and
 // per-scene artifacts are verified ON DISK here (the Playwright suite has

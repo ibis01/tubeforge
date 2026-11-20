@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 /**
  * S99 / P0.1 — the clean-clone verifier (docs/production-readiness.md).
  *
@@ -161,7 +162,8 @@ try {
     [
       "-e",
       `const { PrismaClient } = require("@prisma/client");
-const db = new PrismaClient({ log: ["error"] });
+const { PrismaBetterSqlite3 } = require("@prisma/adapter-better-sqlite3");
+const db = new PrismaClient({ adapter: new PrismaBetterSqlite3({ url: process.env.DATABASE_URL, timeout: 10000 }), log: ["error"] });
 db.organization.count()
   .then((n) => { console.log("PROBE_OK organizations=" + n); process.exit(0); })
   .catch((e) => { console.error("PROBE_FAIL " + ((e && e.message) || String(e))); process.exit(1); });`,

@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S5 route e2e — the sound stage against the LIVE server. Self-contained:
 // it builds its OWN fixture (two fresh accounts + a story video seeded
 // through the REAL doc modules), so a recycled database can never stale it.
@@ -15,11 +17,11 @@
 //   8. the fixture doc is restored byte-for-byte, then the probe rows are
 //      removed from the database (the factory leaves no litter).
 // Run: node --import tsx scripts/s5-route-e2e.mjs
-import { PrismaClient } from "@prisma/client";
+
 import { assembleTimeline, serializeTimeline } from "../src/lib/tubeforge/timeline";
 import { parseScenes } from "../src/lib/tubeforge/story";
 
-const db = new PrismaClient();
+const db = createPrisma();
 const BASE = "http://localhost:3000";
 let cookie = "";
 

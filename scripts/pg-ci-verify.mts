@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // PostgreSQL CI verification battery (S61) — the lane the S60 incident
 // proved missing. Runs INSIDE the CI `postgres` job (services: postgres:17)
 // AFTER two authentic postinstall passes (see .github/workflows/ci.yml):
@@ -34,10 +36,10 @@
 
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { PrismaClient } from "@prisma/client";
+
 import { dailyUsageSparkline } from "../src/lib/tubeforge/usage-sql";
 
-const db = new PrismaClient();
+const db = createPrisma();
 let failures = 0;
 
 function check(name: string, ok: boolean, detail = ""): void {

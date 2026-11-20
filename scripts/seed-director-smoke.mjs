@@ -1,10 +1,12 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // Local-only harness (never shipped): flip a freshly created classic video to
 // story format, seed one cast scene, and attach a character with an identity
 // anchor — so the AI Director route can be smoke-tested without a live LLM.
 // Usage: node scripts/seed-director-smoke.mjs <videoId>
-import { PrismaClient } from "@prisma/client";
 
-const prisma = new PrismaClient();
+
+const prisma = createPrisma();
 const videoId = process.argv[2];
 if (!videoId) {
   console.error("usage: node scripts/seed-director-smoke.mjs <videoId>");

@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S23 unit probe — "the account surface": three routes standing since
 // Stage 3/4 with nobody knocking — /api/account/usage (the aggregates
 // dashboard T-3.8 named but never shipped), /api/account/export (the GDPR
@@ -22,7 +24,7 @@
 process.env.TUBEFORGE_AUTH_SECRET ??= "probe-secret-0123456789abcdef";
 
 import { NextRequest } from "next/server";
-import { PrismaClient } from "@prisma/client";
+
 import {
   createApiToken,
   createSessionRecord,
@@ -36,7 +38,7 @@ import { POST as deletePost } from "../src/app/api/account/delete/route";
 import fs from "node:fs";
 import path from "node:path";
 
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 // S28 — the studio has a REAL tenant now (the owner's account lives in
 // this DB): teardown asserts NOTHING-BEHIND against the starting baseline.
 const __BASELINE = { users: await prisma.user.count(), orgs: await prisma.organization.count() };

@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S24 unit probe — "the money door": the plan card has been read-only since
 // Stage 7 with its own header admitting it ("once a checkout route exists
 // the Upgrade button wires straight into it"), and the payment-failed
@@ -28,7 +30,7 @@
 process.env.TUBEFORGE_AUTH_SECRET ??= "probe-secret-0123456789abcdef";
 
 import { NextRequest } from "next/server";
-import { PrismaClient } from "@prisma/client";
+
 import {
   createApiToken,
   createSessionRecord,
@@ -40,7 +42,7 @@ import { POST as checkoutPost } from "../src/app/api/billing/checkout/route";
 import { POST as portalPost } from "../src/app/api/billing/portal/route";
 import { GET as planGet } from "../src/app/api/billing/plan/route";
 
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 // S28 — the studio has a REAL tenant now (the owner's account lives in
 // this DB): teardown asserts NOTHING-BEHIND against the starting baseline.
 const __BASELINE = { users: await prisma.user.count(), orgs: await prisma.organization.count() };

@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // One-time end-state purge, run as part of the S31 battery.
 //
 // The end-state sweep after the e2e battery found yesterday's leftovers:
@@ -7,9 +9,9 @@
 // E2E law: residue is purged, orphan orgs are deleted, the sweep re-runs.
 //
 // Run: node --import tsx scripts/purge-ux-residue.mts
-import { PrismaClient } from "@prisma/client";
 
-const db = new PrismaClient();
+
+const db = createPrisma();
 
 const before = {
   users: await db.user.count(),

@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S15 route e2e — "the motion": the camera + the seam picks through the
 // LIVE daemon. The studio's four decisive picks (mode / amplitude / seam
 // style / blend length) PATCH the row catalog-gated like every tier since
@@ -24,9 +26,9 @@
 //      and motion picks land on slides rows too;
 //   9. the factory cleans up: rows removed — the probe leaves no litter.
 // Run: node --import tsx scripts/s15-route-e2e.mjs   (daemon on the S15 build)
-import { PrismaClient } from "@prisma/client";
 
-const db = new PrismaClient();
+
+const db = createPrisma();
 const BASE = "http://localhost:3000";
 let cookie = "";
 

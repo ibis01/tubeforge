@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S16 recovery — reseed the owner after the lost-segment wipe. Somewhere in
 // the gap between S15's push and this session, every User row vanished (the
 // DB shows 0 users / 0 memberships / 0 sessions but 6 orphan e2e orgs — a
@@ -12,7 +14,7 @@
 //     this — the script only writes rows).
 // Run: node --import tsx scripts/s16-owner-reseed.mts [password]
 import { hashPassword } from "../src/lib/tubeforge/tenant";
-import { PrismaClient } from "@prisma/client";
+
 
 const EMAIL = "ibis01abc@gmail.com";
 const password = process.argv[2] ?? "tubeforge2026";
@@ -21,7 +23,7 @@ if (password.length < 8) {
   process.exit(1);
 }
 
-const db = new PrismaClient();
+const db = createPrisma();
 try {
   // 1. orphan orgs (zero memberships) are e2e litter — remove them
   const orphans = await db.organization.findMany({

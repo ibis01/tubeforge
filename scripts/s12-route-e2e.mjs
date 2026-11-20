@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S12 route e2e — "the look": the cover-style pick through the LIVE
 // daemon. The subject's sibling axis — the studio PATCHes the row's
 // thumbStyle (catalog-gated), and the thumbnail job + A/B variants read
@@ -16,9 +18,9 @@
 //      the studio client guards the no-op, the row stays honest);
 //   7. the factory cleans up: rows removed — the probe leaves no litter.
 // Run: node --import tsx scripts/s12-route-e2e.mjs
-import { PrismaClient } from "@prisma/client";
 
-const db = new PrismaClient();
+
+const db = createPrisma();
 const BASE = "http://localhost:3000";
 let cookie = "";
 

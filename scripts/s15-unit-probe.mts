@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S15 unit probe — "the motion": the camera + the seam contract through
 // REAL modules. The last render tier the studio previewed but couldn't
 // shape (motion + transitions rode the detail dialog only, and the PATCH
@@ -46,7 +48,7 @@ import {
 } from "../src/lib/tubeforge/transitions";
 import { previewSettingsFrom } from "../src/lib/tubeforge/preview-lanes";
 import { serializeVideo } from "../src/lib/tubeforge/serialize";
-import { PrismaClient } from "@prisma/client";
+
 import crypto from "node:crypto";
 
 let failures = 0;
@@ -252,7 +254,7 @@ check(
 // 6. DB-backed — the DTO round-trip
 // =====================================================================
 const MARK = crypto.randomBytes(4).toString("hex");
-const raw = new PrismaClient();
+const raw = createPrisma();
 
 try {
   const org = await raw.organization.create({

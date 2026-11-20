@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S32 route e2e — the audit's P0 repairs proved over HTTP against the
 // running daemon. Three laws:
 //
@@ -24,7 +26,7 @@
 //
 // Run: node scripts/s32-route-e2e.mjs  (after the daemon is up in the right phase)
 
-import { PrismaClient } from "@prisma/client";
+
 
 const BASE = "http://localhost:3000";
 const jar = [];
@@ -43,7 +45,7 @@ const check = (name, ok, detail) => {
 };
 const json = async (res) => res.json().catch(() => ({}));
 
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 const BASELINE = {
   users: await prisma.user.count(),
   orgs: await prisma.organization.count({ where: { memberships: { none: {} } } }),

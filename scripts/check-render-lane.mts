@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // check-render-lane.mts — S119 lane-contract proof against a RUNNING dev
 // server on :3000. Reproduces the user's exact broken journey end-to-end and
 // proves the fix at every hop:
@@ -19,14 +21,14 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import { PrismaClient } from "@prisma/client";
+
 
 const execFileP = promisify(execFile);
 const BASE = "http://localhost:3000";
 const RUN = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 const EMAIL = `s119-lane-${RUN}@tubeforge.test`;
 const PASSWORD = "s119-lane-123";
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 
 let cookie = "";
 async function call(method: string, p: string, body?: unknown) {

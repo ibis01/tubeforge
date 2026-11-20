@@ -65,8 +65,8 @@ fi
 # ---------- check mode: prerequisites only, no probe ----------
 if [ "$MODE" = "check" ]; then
   node --import tsx -e "
-import { PrismaClient } from '@prisma/client';
-const p = new PrismaClient();
+import { createPrisma } from './src/lib/tubeforge/prisma-factory.mjs';
+const p = createPrisma();
 p.user.count().then(async (c) => { console.log('check: DB OK, users:', c); await p.\$disconnect(); })
  .catch((e) => { console.error('check: DB FAIL', String(e).slice(0, 120)); process.exit(1); });
 " || exit 2

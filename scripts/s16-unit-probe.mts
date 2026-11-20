@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S16 unit probe — "the account": the rotation contract through REAL modules.
 // The security card promised "you can change it later from here" since the
 // lock shipped; the surface never existed. Layers:
@@ -26,7 +28,6 @@
 process.env.TUBEFORGE_AUTH_SECRET ??= "probe-secret-0123456789abcdef";
 
 import { NextRequest } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import {
   createSignedToken,
   SESSION_COOKIE,
@@ -47,7 +48,7 @@ import {
 } from "../src/lib/tubeforge/auth-throttle";
 import { POST as changePassword } from "../src/app/api/auth/change-password/route";
 
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 let failures = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok || detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);

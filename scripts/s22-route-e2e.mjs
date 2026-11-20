@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S22 route e2e — "the world gets a door" against the running daemon. The
 // full arc a real account walks:
 //   register -> create a location + a prop through the real POST routes ->
@@ -8,14 +10,14 @@
 //   (zero users, zero orgs, zero locations, zero props).
 // Run after a daemon restart: node scripts/s22-route-e2e.mjs
 
-import { PrismaClient } from "@prisma/client";
+
 // S28 — baseline-relative end state, captured BEFORE the suite creates
 // anything (the owner's real account lives in this DB now).
 const BASELINE = {
-  users: await new PrismaClient().user.count(),
-  orgs: await new PrismaClient().organization.count(),
-  locations: await new PrismaClient().location.count(),
-  props: await new PrismaClient().prop.count(),
+  users: await createPrisma().user.count(),
+  orgs: await createPrisma().organization.count(),
+  locations: await createPrisma().location.count(),
+  props: await createPrisma().prop.count(),
 };
 
 const BASE = "http://localhost:3000";
@@ -151,7 +153,7 @@ const foreignPatch = await fetch(`${BASE}/api/props/${propId}`, {
 check("5.3  the stranger's PATCH -> 404", foreignPatch.status === 404, foreignPatch.status);
 
 // ---- 6. cleanup — the register-mode end state survives ----
-const db = new PrismaClient();
+const db = createPrisma();
 const u = await db.user.findUnique({
   where: { email },
   include: { memberships: { select: { organizationId: true } } },

@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S25 route e2e — the excavation over real HTTP:
 //   arc 1  register 201 → session cookie
 //   arc 2  the buried door: /api/settings/tts GET + PUT answer 404 with a
@@ -92,8 +94,7 @@ const authed = { "content-type": "application/json", cookie };
   check("5.1  the account deletes through its own door -> 200", del.status === 200, del.status);
 }
 
-const { PrismaClient } = await import("@prisma/client");
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 {
   const u = await prisma.user.findUnique({ where: { email } });
   check("5.2  the user row is gone", u === null);

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 /**
  * P0.6 docker-smoke walk phase (docs/production-readiness.md).
  *
@@ -28,7 +30,7 @@
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { PrismaClient } from "@prisma/client";
+
 
 const phase = (() => {
   const i = process.argv.indexOf("--phase");
@@ -37,7 +39,7 @@ const phase = (() => {
   return v;
 })();
 
-const db = new PrismaClient();
+const db = createPrisma();
 let failures = 0;
 
 function check(name: string, ok: boolean, detail = ""): void {

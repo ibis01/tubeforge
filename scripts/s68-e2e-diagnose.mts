@@ -1,9 +1,11 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // s68-e2e-diagnose.mts — manual driver of the S68 whiteboard E2E workflow
 // against a RUNNING dev server on :3000, with per-step timing, so the
 // render's cold/warm cost is measured instead of guessed.
 //
 //   node --import tsx scripts/s68-e2e-diagnose.mts
-import { PrismaClient } from "@prisma/client";
+
 
 const BASE = "http://localhost:3000";
 const RUN = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -60,7 +62,7 @@ async function call(method: string, path: string, body?: unknown) {
   return { status: res.status, json };
 }
 
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 async function jobRow(videoId: string) {
   const rows = await prisma.job.findMany({
     where: { entityId: videoId },

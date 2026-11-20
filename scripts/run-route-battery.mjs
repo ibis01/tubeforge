@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S56/T-56.5 — the nightly route-probe battery runner (SELF-CONTAINED).
 //
 // Boots its OWN daemon in two phases and runs the DURABLE s-series route
@@ -39,10 +41,10 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { PrismaClient } from "@prisma/client";
+
 
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
-const db = new PrismaClient();
+const db = createPrisma();
 
 // Out of scope, on demand only (each needs something a bare runner does
 // not have — documented per probe header):

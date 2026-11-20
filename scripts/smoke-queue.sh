@@ -29,8 +29,8 @@ for i in $(seq 1 40); do
   sleep 3
   STATUS=$(curl -s -b "$JAR" "$BASE/api/videos/$VID" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('status','?'))" 2>/dev/null || echo "?")
   JOB=$(node --input-type=module -e "
-import { PrismaClient } from '@prisma/client';
-const p = new PrismaClient();
+import { createPrisma } from './src/lib/tubeforge/prisma-factory.mjs';
+const p = createPrisma();
 const rows = await p.job.findMany({ where: { entityId: process.argv[1] }, orderBy: { startedAt: 'desc' }, select: { kind: true, status: true, claimedBy: true, attempts: true, error: true } });
 console.log(JSON.stringify(rows));
 await p.\$disconnect();

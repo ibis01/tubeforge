@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S21 unit probe — "the confirmed address": email verification's missing
 // half. The route's own error promised "sign in and request a new one" with
 // nothing to request FROM; the emailed link answered raw JSON to a human;
@@ -17,13 +19,13 @@
 process.env.TUBEFORGE_AUTH_SECRET ??= "probe-secret-0123456789abcdef";
 
 import { NextRequest } from "next/server";
-import { PrismaClient } from "@prisma/client";
+
 import { createApiToken, createSessionRecord, createSessionToken, hashPassword } from "../src/lib/tubeforge/tenant";
 import { SESSION_COOKIE } from "../src/lib/tubeforge/auth-token";
 import { GET as verifyGet, POST as verifyPost } from "../src/app/api/auth/verify-email/route";
 import { sha256Hex } from "../src/lib/tubeforge/crypto";
 
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 let failures = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok || detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);

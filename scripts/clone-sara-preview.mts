@@ -1,14 +1,15 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // Add "Sara" as a cloned voice for the preview user via the app's REAL
 // selfhost clone pipeline (validate → ffprobe → normalize to mono 24 kHz
 // PCM-16 WAV ≤30 s → store base64 on the VoiceProfile row). The sample is
 // read from upload/sara.mp3. No secrets printed.
 import fs from "fs";
 
-const { PrismaClient } = await import("@prisma/client");
 const _tenant = await import("../src/lib/tubeforge/tenant");
 const { cloneVoice } = await import("../src/lib/tubeforge/voice-clone");
 
-const db = new PrismaClient();
+const db = createPrisma();
 try {
   const user = await db.user.findFirstOrThrow({ where: { email: "ibis01abc@gmail.com" } });
   const membership = await db.membership.findFirstOrThrow({

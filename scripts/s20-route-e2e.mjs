@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S20 route e2e — "the keyring" against the running daemon. The mint route
 // existed since Stage 2 with no caller and no revocation; this walks the
 // whole console arc a user actually experiences:
@@ -10,11 +12,11 @@
 // Run after a daemon restart (the middleware write limiter is in-memory):
 //   node scripts/s20-route-e2e.mjs
 
-import { PrismaClient } from "@prisma/client";
+
 // S28 — baseline-relative end state, captured BEFORE the suite creates
 // anything (the owner's real account lives in this DB now).
-const BASELINE_USERS = await new PrismaClient().user.count();
-const BASELINE_TOKENS = await new PrismaClient().apiToken.count();
+const BASELINE_USERS = await createPrisma().user.count();
+const BASELINE_TOKENS = await createPrisma().apiToken.count();
 
 const BASE = "http://localhost:3000";
 const jarOf = () => [];
@@ -186,7 +188,7 @@ const anonList = await fetch(`${BASE}/api/auth/token`);
 check("11.1 an anonymous list -> 401", anonList.status === 401, anonList.status);
 
 // ---- 12. cleanup (the register-mode end state must survive every suite) ----
-const db = new PrismaClient();
+const db = createPrisma();
 for (const email of [`${tag}-a@e2e.local`, `${tag}-b@e2e.local`]) {
   const u = await db.user.findUnique({
     where: { email },

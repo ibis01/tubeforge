@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S12 unit probe — "the look": the cover-style contract through REAL
 // modules. The subject's sibling axis — S9 picked WHICH moment the cover
 // depicts; this picks WHAT the art looks like. Layers:
@@ -20,7 +22,7 @@
 import { THUMB_STYLES } from "../src/lib/tubeforge/types";
 import { pickVariantStyles } from "../src/lib/tubeforge/ai";
 import { serializeVideo } from "../src/lib/tubeforge/serialize";
-import { PrismaClient } from "@prisma/client";
+
 import crypto from "node:crypto";
 
 let failures = 0;
@@ -130,7 +132,7 @@ check(
 // 4. DB-backed — the DTO round-trip + the PATCH catalog gate's law
 // =====================================================================
 const MARK = crypto.randomBytes(4).toString("hex");
-const raw = new PrismaClient();
+const raw = createPrisma();
 
 try {
   const org = await raw.organization.create({

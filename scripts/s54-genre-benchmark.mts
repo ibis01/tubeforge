@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S54 — the seven-genre benchmark (the cinematic transformation's closing
 // measurement). The S47 baseline closed with: "genre/visual acceptance
 // thresholds are set at S54 with human review on record. This file exists
@@ -45,7 +47,7 @@
 
 process.env.TUBEFORGE_AUTH_SECRET ??= "probe-secret-0123456789abcdef";
 
-import { PrismaClient } from "@prisma/client";
+
 import { execFile } from "child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -77,7 +79,7 @@ import { saveCapability } from "../src/lib/tubeforge/providers/settings";
 import * as storage from "../src/lib/tubeforge/storage";
 
 const execFileAsync = promisify(execFile);
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 const SUFFIX = `${Date.now().toString(36)}-${process.pid.toString(36)}`;
 const UTC_DAY = new Date().toISOString().slice(0, 10);
 const BASELINE_PATH = `docs/baselines/s54-genre-benchmark-${UTC_DAY}.txt`;

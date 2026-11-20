@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S32 unit probe — the audit's P0 repairs on the $5 door:
 //   A. durable reservations — admitDispatch persists a pending row; settle
 //      updates it to settled; bootRecorded rebuilds holds + recordedMicro
@@ -22,7 +24,6 @@ process.env.TUBEFORGE_AUTH_SECRET ??= "probe-secret-0123456789abcdef";
 // pricing-unverified block (without). The env override is toggled per-section.
 process.env.TUBEFORGE_PRICING_VERIFIED ??= "1";
 
-import { PrismaClient } from "@prisma/client";
 import { withCtx, hashPassword } from "../src/lib/tubeforge/tenant";
 import {
   PRICING_VERSION,
@@ -36,7 +37,7 @@ import {
   SpendBootFailedError,
 } from "../src/lib/tubeforge/spend";
 
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 const SUFFIX = Date.now().toString(36);
 const EMAIL = `s32-probe-${SUFFIX}@e2e.local`;
 let userId = "";

@@ -1,10 +1,12 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // Inspect the render fixtures' DB state: the Battle Yamuk video + its
 // timeline doc (transitions, audio levels, captions) — what a re-render
 // would consume through the new S2 doc overlay.
-import { PrismaClient } from "@prisma/client";
+
 import fs from "fs";
 
-const db = new PrismaClient();
+const db = createPrisma();
 const ids = ["cmvya1qnk0031np0well7rjm5"];
 const any = await db.video.findMany({
   where: { OR: [{ id: { in: ids } }, { hasVoiceover: true, hasStoryboard: true }] },

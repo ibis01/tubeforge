@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 /**
  * S103 / P1.1 — the operational alert probe (docs/production-readiness.md).
  *
@@ -36,7 +38,7 @@
 import { existsSync, readFileSync, statfsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PrismaClient } from "@prisma/client";
+
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -83,7 +85,7 @@ function isPostgres(): boolean {
 }
 
 async function main(): Promise<void> {
-  const db = new PrismaClient();
+  const db = createPrisma();
   try {
     // 1. the database answers.
     try {

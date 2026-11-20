@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S13 route e2e — "the frame": the aspect + frame-rate pick through the
 // LIVE daemon. The studio PATCHes the row (catalog-gated like S12's style:
 // present-but-illegal dies with a readable 400 before any write), and the
@@ -22,9 +24,9 @@
 //      studio's picker is what locks vertical);
 //   9. the factory cleans up: rows removed — the probe leaves no litter.
 // Run: node scripts/s13-route-e2e.mjs   (daemon must be running the S13 build)
-import { PrismaClient } from "@prisma/client";
 
-const db = new PrismaClient();
+
+const db = createPrisma();
 const BASE = "http://localhost:3000";
 let cookie = "";
 

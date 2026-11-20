@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S34 unit probe — closing the spend-gate estimator's two remaining defects
 // (the audit's Gap C, deferred by S32's own commit message):
 //   1. Script-aware input floors — chars/3 under-reserved non-Latin text
@@ -20,7 +22,6 @@
 process.env.TUBEFORGE_AUTH_SECRET ??= "probe-secret-0123456789abcdef";
 process.env.TUBEFORGE_PRICING_VERIFIED ??= "1";
 
-import { PrismaClient } from "@prisma/client";
 import { withCtx, hashPassword } from "../src/lib/tubeforge/tenant";
 import {
   estimateInputTokens,
@@ -29,7 +30,7 @@ import {
   admitDispatch,
 } from "../src/lib/tubeforge/spend";
 
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 const SUFFIX = Date.now().toString(36);
 const EMAIL = `s34-probe-${SUFFIX}@e2e.local`;
 let userId = "";

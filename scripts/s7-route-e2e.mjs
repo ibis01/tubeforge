@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S7 route e2e — "the score" against the LIVE server. Self-contained: it
 // builds its OWN fixture (two fresh accounts + a story video seeded through
 // the REAL doc modules + two REAL library tracks with audible wav files), so
@@ -18,7 +20,7 @@
 //   9. a classic (non-story) video is refused with the honest 400;
 //  10. everything is cleaned up — videos, tracks, wav files, accounts.
 // Run: node --import tsx scripts/s7-route-e2e.mjs
-import { PrismaClient } from "@prisma/client";
+
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs";
@@ -27,7 +29,7 @@ import { assembleTimeline, serializeTimeline } from "../src/lib/tubeforge/timeli
 import { parseScenes } from "../src/lib/tubeforge/story";
 
 const execFileAsync = promisify(execFile);
-const db = new PrismaClient();
+const db = createPrisma();
 const BASE = "http://localhost:3000";
 let cookie = "";
 

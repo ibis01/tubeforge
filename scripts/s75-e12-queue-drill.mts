@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S75 E12 — the LIVE queue drill for the WHITEBOARD JobKind (the deferred
 // E12 ledger row, executed). The durable-resume contract is already proven
 // generically by scripts/test-queue.mts; this drill proves the WHITEBOARD
@@ -42,11 +44,11 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PrismaClient } from "@prisma/client";
+
 import { scaffoldWhiteboardProject } from "../src/lib/tubeforge/whiteboard/whiteboard-planner";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const db = new PrismaClient();
+const db = createPrisma();
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

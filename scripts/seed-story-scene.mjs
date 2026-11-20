@@ -1,9 +1,11 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // Local-only harness (never shipped): seed a deterministic 5-scene story
 // script into a video row so UI surfaces can be verified without a live LLM.
 // Usage: node scripts/seed-story-scene.mjs <videoId> [title]
-import { PrismaClient } from "@prisma/client";
 
-const prisma = new PrismaClient();
+
+const prisma = createPrisma();
 const videoId = process.argv[2];
 const title = process.argv[3] ?? "The Secret Economy of Container Ships";
 if (!videoId) {

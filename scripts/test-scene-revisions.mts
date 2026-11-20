@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S112 — Scene-Level Editing & Repair, Stage 1: the revision foundation's
 // DB-backed exit criteria (the billing-battery pattern: real SQLite DB,
 // real lib calls, fixtures cleaned up on exit).
@@ -32,12 +34,12 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { PrismaClient } from "@prisma/client";
+
 import type { Video } from "@prisma/client";
 
 const _root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
-const rawDb = new PrismaClient();
+const rawDb = createPrisma();
 
 import {
   commitSceneChanges,

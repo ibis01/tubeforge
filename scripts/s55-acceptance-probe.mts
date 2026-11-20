@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S55 T-55.5 — the Islamic export acceptance probe (LOCAL ONLY, zero
 // gateway spend). The owner's 7-step protocol, executed end-to-end on the
 // REAL production code with a local stand-in gateway playing the AI
@@ -45,7 +47,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "util";
-import { PrismaClient } from "@prisma/client";
+
 import { withCtx, hashPassword } from "../src/lib/tubeforge/tenant";
 import { runDirectorPass, setDirectorState, parsePlan } from "../src/lib/tubeforge/director";
 import {
@@ -72,7 +74,7 @@ import {
 } from "./s55-standin-gateway.mts";
 
 const execFileAsync = promisify(execFile);
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 const PHASE = process.env.S55_PHASE ?? "seed";
 const STATE_PATH = process.env.S55_ACC_STATE ?? "/tmp/s55-acc-state.json";
 const DATA_PATH = process.env.S55_ACC_DATA ?? "docs/audits/s55-acceptance-data.json";

@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S55 T-55.1 + T-55.2 — render forensics on the S54 §B anchor case.
 //
 // The S54 baseline's real-render matrix measured two failures:
@@ -28,7 +30,7 @@
 //   S55_EVIDENCE_DIR=… artifact copy dir   (default: /tmp/s55-evidence)
 //   S55_COMMIT=…       commit stamp recorded in the evidence
 
-import { PrismaClient } from "@prisma/client";
+
 import { execFile } from "child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -65,7 +67,7 @@ import { transitionOffsetsMulti } from "../src/lib/tubeforge/transitions";
 import { R_LEAD_SEC, R_TAIL_SEC, R_MIN_SEG_SEC } from "../src/lib/tubeforge/preview-lanes";
 
 const execFileAsync = promisify(execFile);
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 const SUFFIX = `${Date.now().toString(36)}-${process.pid.toString(36)}`;
 const DATA_PATH = process.env.S55_DATA_PATH ?? "docs/audits/s55-render-forensics-data.json";
 const EVIDENCE_DIR = process.env.S55_EVIDENCE_DIR ?? "/tmp/s55-evidence";

@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S20 unit probe — "the keyring": the API token registry contract through
 // REAL modules. Bearer tokens were pure HMAC payloads since Stage 2 —
 // nothing listed them, nothing revoked them; a leaked one was live for 90
@@ -21,7 +23,7 @@
 process.env.TUBEFORGE_AUTH_SECRET ??= "probe-secret-0123456789abcdef";
 
 import { NextRequest } from "next/server";
-import { PrismaClient } from "@prisma/client";
+
 import { createSignedToken, } from "../src/lib/tubeforge/auth-token";import { randomToken } from "../src/lib/tubeforge/crypto";
 import {
   createApiToken,
@@ -31,7 +33,7 @@ import {
   revokeApiToken,
 } from "../src/lib/tubeforge/tenant";
 
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 // S28 — the studio has a REAL tenant now (the owner's account lives in
 // this DB): teardown asserts NOTHING-BEHIND against the starting baseline.
 const __BASELINE = { tokens: await prisma.apiToken.count() };

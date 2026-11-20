@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S23 route e2e — "the account surface" against the running daemon. The
 // full arc a real account walks:
 //   register -> anon doors 401 -> a bearer may read usage but never the
@@ -8,12 +10,12 @@
 //   -> cleanup (zero users, zero orgs).
 // Run after a daemon restart: node scripts/s23-route-e2e.mjs
 
-import { PrismaClient } from "@prisma/client";
+
 // S28 — baseline-relative end state, captured BEFORE the suite creates
 // anything (the owner's real account lives in this DB now).
 const BASELINE = {
-  users: await new PrismaClient().user.count(),
-  orgs: await new PrismaClient().organization.count(),
+  users: await createPrisma().user.count(),
+  orgs: await createPrisma().organization.count(),
 };
 
 const BASE = "http://localhost:3000";
@@ -113,7 +115,7 @@ const status2 = await json(await fetch(`${BASE}/api/auth/status`, { headers: H()
 check("5.4  the session died with the account", status2.authenticated === false, status2);
 
 // ---- 6. cleanup — the register-mode end state survives ----
-const db = new PrismaClient();
+const db = createPrisma();
 const u = await db.user.findUnique({
   where: { email },
   include: { memberships: { select: { organizationId: true } } },

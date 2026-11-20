@@ -1,12 +1,14 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // Local-only harness (never shipped): seed deterministic Stage 4b verification
 // data for the NEWEST organization (the live-pass account) — research sessions
 // with ideas at mixed competition levels, published videos with two days of
 // stats snapshots, and a cast character with assigned videos. No AI calls.
 //
 // Usage: node scripts/seed-4b.mjs [orgId]   (default: newest organization)
-import { PrismaClient } from "@prisma/client";
 
-const prisma = new PrismaClient();
+
+const prisma = createPrisma();
 const orgArg = process.argv[2];
 const org = orgArg
   ? await prisma.organization.findUnique({ where: { id: orgArg } })

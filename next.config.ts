@@ -36,6 +36,15 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // Prisma 7 (P1012 migration): the runtime client rides driver adapters —
+  // better-sqlite3 is a NATIVE module the server bundler must never trace
+  // into the bundle (same class as the query-engine lesson below).
+  serverExternalPackages: [
+    "@prisma/adapter-better-sqlite3",
+    "@prisma/adapter-pg",
+    "better-sqlite3",
+    "pg",
+  ],
   // Strict TypeScript is enforced: `npm run typecheck` and the build both fail
   // on compiler errors. (ignoreBuildErrors was removed 2025-10 per the security
   // audit — all previously-suppressed errors were fixed at the source.)

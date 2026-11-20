@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S18 prelude — the fresh door. The user asked: "delete all the previous
 // login detail so I can login." The AuthGate replaces the whole app until
 // the browser holds a session, and with a user row present it shows LOGIN
@@ -13,9 +15,9 @@
 // exist today — 0 rows; if any did, they'd be orphaned to their org rows and
 // left in place, NOT deleted).
 // Run: node --import tsx scripts/s18-login-wipe.mts
-import { PrismaClient } from "@prisma/client";
 
-const db = new PrismaClient();
+
+const db = createPrisma();
 try {
   const usersBefore = await db.user.count();
   const sessions = await db.session.deleteMany({});

@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // TubeForge auth reset — Stage 2 edition (ARCHITECTURE.md §6.3).
 //
 // The old global lock toggle is gone with multi-user auth. This is now a
@@ -59,8 +61,7 @@ async function main() {
     process.exit(1);
   }
 
-  const { PrismaClient } = await import("@prisma/client");
-  const db = new PrismaClient();
+  const db = createPrisma();
 
   try {
     const user = await db.user.findUnique({ where: { email } });

@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S29 route e2e — "the whole hallway": one video through EVERY machine door.
 //
 // The audit's #1 priority was production reliability of the FULL chain —
@@ -40,13 +42,13 @@
 //
 // Run after a daemon restart: node scripts/s29-route-e2e.mjs
 
-import { PrismaClient } from "@prisma/client";
+
 import { execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
 
 const BASE = "http://localhost:3000";
-const db = new PrismaClient();
+const db = createPrisma();
 
 const stamp = Date.now().toString(36);
 const emailA = `s29-e2e-a-${stamp}@example.com`; // the throwaway owner

@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S30 route e2e — "the wire-up": the door the AI kept bouncing off.
 //
 // The phone evidence (two screenshots): Auto-Pilot's step 4 "AI Script +
@@ -38,10 +40,10 @@
 //   TUBEFORGE_COOKIE_SAMESITE=none TUBEFORGE_ALLOWED_ORIGINS=.space-z.ai
 //   node scripts/s30-route-e2e.mjs
 
-import { PrismaClient } from "@prisma/client";
+
 
 const BASE = "http://localhost:3000";
-const db = new PrismaClient();
+const db = createPrisma();
 
 const stamp = Date.now().toString(36);
 const email = `s30-e2e-${stamp}@example.com`;

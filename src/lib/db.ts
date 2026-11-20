@@ -1,4 +1,5 @@
-import { PrismaClient } from '@prisma/client'
+import type { PrismaClient } from '@prisma/client'
+import { createPrisma } from '@/lib/tubeforge/prisma-factory.mjs'
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
@@ -12,25 +13,26 @@ const globalForPrisma = globalThis as unknown as {
 const logQueries =
   process.env.NODE_ENV !== 'production' || process.env.TUBEFORGE_LOG_QUERIES === '1'
 
+// Prisma 7 (P1012): the client takes a DRIVER ADAPTER, not a URL — the
+// factory picks better-sqlite3 (busy timeout 10s) vs pg per DATABASE_URL
+// protocol. The S136 busy_timeout URL param became the adapter's `timeout`
+// option; the law is unchanged.
+
 // S136 — the SQLite contention floor (the Stabilisation Gate's data-
 // integrity findings): S135 gave the interactive transactions explicit 60s
 // budgets, but the ENGINE-level default stayed a 5-second writer lock — a
 // second writer after it still failed the whole write. `busy_timeout` makes
-// the wait polite at the engine level (verified live: the URL param is
-// honored by the Prisma 6 SQLite connector); WAL lets readers proceed
+// the wait polite at the engine level (now the better-sqlite3 adapter's
+// `timeout` option); WAL lets readers proceed
 // during a writer's commit and is a PERSISTENT property of the database
 // file, so a one-shot bootstrap PRAGMA upgrades every future connection.
 // Postgres datasources run MVCC and need neither.
 const isSqlite = process.env.DATABASE_URL?.startsWith('file:') ?? false
-const datasourceUrl = isSqlite
-  ? `${process.env.DATABASE_URL}${process.env.DATABASE_URL?.includes('?') ? '&' : '?'}busy_timeout=10000`
-  : undefined
 
 export const db =
   globalForPrisma.prisma ??
-  new PrismaClient({
+  createPrisma({
     log: logQueries ? ['query', 'error'] : ['error'],
-    ...(datasourceUrl ? { datasources: { db: { url: datasourceUrl } } } : {}),
   })
 
 if (isSqlite && !globalForPrisma.prisma) {

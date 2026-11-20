@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S17 route e2e — "the ship": the real publish machinery + the status law
 // through the LIVE daemon. The dialog's fossil surface is dead (the 404ing
 // /upload fetch, the fake PATCH that claimed a queue); the REAL routes get
@@ -20,9 +22,9 @@
 // grant) — the route's gates + the durable job contract are the e2e-able
 // surface here; runUploadJob's own flow is Stage-6-tested offline.
 // Run: node scripts/s17-route-e2e.mjs   (daemon on the S17 build)
-import { PrismaClient } from "@prisma/client";
 
-const db = new PrismaClient();
+
+const db = createPrisma();
 const BASE = "http://localhost:3000";
 let cookie = "";
 

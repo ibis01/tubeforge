@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 /**
  * S103 / P1.1 — the MEASURED restore drill (docs/production-readiness.md).
  *
@@ -33,7 +35,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, wr
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
+import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let failures = 0;
@@ -74,7 +77,8 @@ function liveDbPath(): string {
 }
 
 async function withClient<T>(dbPath: string, fn: (db: PrismaClient) => Promise<T>): Promise<T> {
-  const db = new PrismaClient({ datasources: { db: { url: `file:${dbPath}` } } });
+  // Prisma 7: per-file clients take a better-sqlite3 adapter (the P1012 law).
+  const db = createPrisma({ adapter: new PrismaBetterSqlite3({ url: `file:${dbPath}`, timeout: 10000 }) });
   try {
     return await fn(db);
   } finally {

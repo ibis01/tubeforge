@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S28 route e2e — "the door the preview couldn't open" against the running
 // daemon. The video evidence: a real sign-in inside the chat.z.ai preview
 // iframe bounced straight back to an empty form. This suite proves the whole
@@ -13,7 +15,7 @@
 //   lives in this DB now).
 // Run after a daemon restart: node scripts/s28-route-e2e.mjs
 
-import { PrismaClient } from "@prisma/client";
+
 
 const BASE = "http://localhost:3000";
 const jar = [];
@@ -33,7 +35,7 @@ const check = (name, ok, detail) => {
 };
 const json = async (res) => res.json().catch(() => ({}));
 
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 // S28 — baseline-relative end state, captured BEFORE the suite creates
 // anything (the owner's real account lives in this DB now).
 const BASELINE = {

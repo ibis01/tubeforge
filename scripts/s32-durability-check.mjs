@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S32 durability proof — the gate STAYS slammed across a daemon restart.
 //
 // The S27 route-e2e proved the gate slams; the S32 route-e2e proved settled
@@ -16,11 +18,11 @@
 //   # restart the daemon (still with TUBEFORGE_PRICING_VERIFIED=1)
 //   node scripts/s32-durability-check.mjs   # phase 2: verify still blocked
 
-import { PrismaClient } from "@prisma/client";
+
 import fs from "node:fs";
 
 const BASE = "http://localhost:3000";
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 const STATE_FILE = "/tmp/s32-durability-state.json";
 
 const jar = [];

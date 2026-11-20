@@ -1,0 +1,47 @@
+// Prisma 7 runtime factory (the P1012 migration): the generated client no
+// longer accepts a connection URL — `datasourceUrl`/`datasources` are gone
+// and every construction site must pass a driver adapter. ONE factory picks
+// the adapter per DATABASE_URL protocol so the app (src/lib/db.ts), the
+// boot/worker path, and every operator script share the same law:
+//   file:…           → @prisma/adapter-better-sqlite3 (busy timeout 10s —
+//                      the S136 contention floor, formerly the URL param)
+//   postgres(ql)://… → @prisma/adapter-pg
+// Plain ESM on purpose: tsx (.mts), plain node (.mjs) and the Next server
+// bundler all import it without a build step.
+//
+// URL params: the Prisma 6 connector consumed engine params riding the URL
+// (busy_timeout, socket_timeout, connection_limit…). The better-sqlite3
+// adapter's url is a FILESYSTEM PATH — a param-bearing string would open a
+// literal `custom.db?connection_limit=12` file (empty database, "table does
+// not exist"). Strip the params: busy_timeout maps onto the adapter's
+// `timeout` option; engine pool params are inert under the adapter model
+// (SQLite serializes on the writer lock + busy timeout, the S136 law).
+import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
+import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+
+export function createPrismaAdapter(url = process.env.DATABASE_URL) {
+  if (!url) {
+    throw new Error(
+      "DATABASE_URL is not set — the Prisma 7 client needs a driver adapter and no URL to derive it from",
+    );
+  }
+  if (url.startsWith("file:")) {
+    const [pathPart, queryPart] = url.slice("file:".length).split("?", 2);
+    let timeout = 10000; // the S136 busy_timeout floor (ms)
+    if (queryPart) {
+      for (const kv of queryPart.split("&")) {
+        const [k, v] = kv.split("=", 2);
+        if (k === "busy_timeout" && v && !Number.isNaN(Number(v))) {
+          timeout = Number(v);
+        }
+      }
+    }
+    return new PrismaBetterSqlite3({ url: `file:${pathPart}`, timeout });
+  }
+  return new PrismaPg(url);
+}
+
+export function createPrisma(options = {}) {
+  return new PrismaClient({ adapter: createPrismaAdapter(), ...options });
+}

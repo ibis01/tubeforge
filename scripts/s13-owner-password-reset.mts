@@ -1,10 +1,12 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S13 prelude — the owner's key: the login stopped answering, so this mints
 // a fresh password hash with the app's OWN hashPassword (same PBKDF2 shape
 // the register route writes: pbkdf2$120000$salt$hash) and writes it to the
 // owner row, plus consumes any stale reset/verify tokens so nothing dangles.
 // Run: node --import tsx scripts/s13-owner-password-reset.mts <newPassword>
 import { hashPassword } from "../src/lib/tubeforge/tenant";
-import { PrismaClient } from "@prisma/client";
+
 
 const EMAIL = "ibis01abc@gmail.com";
 const password = process.argv[2];
@@ -13,7 +15,7 @@ if (!password || password.length < 8) {
   process.exit(1);
 }
 
-const db = new PrismaClient();
+const db = createPrisma();
 try {
   const hash = await hashPassword(password);
   const user = await db.user.update({

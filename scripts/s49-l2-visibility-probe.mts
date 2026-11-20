@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S49 — L2 substitution-visibility probe (the warn path, live).
 //
 // The main probe (s49-policy-probe.mts) proved the happy layers on a topic
@@ -13,13 +15,13 @@
 process.env.TUBEFORGE_DB ??= "file:./db/custom.db";
 process.env.TUBEFORGE_AUTH_SECRET ??= "probe-secret-0123456789abcdef";
 
-import { PrismaClient } from "@prisma/client";
+
 import fs from "node:fs";
 import { withCtx, hashPassword } from "../src/lib/tubeforge/tenant";
 import { runDirectorPass, parsePlan } from "../src/lib/tubeforge/director";
 import { scanRestrictedSubjects } from "../src/lib/tubeforge/restricted-subjects";
 
-const prisma = new PrismaClient();
+const prisma = createPrisma();
 const SUFFIX = `${Date.now().toString(36)}-${process.pid.toString(36)}`;
 let failures = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {

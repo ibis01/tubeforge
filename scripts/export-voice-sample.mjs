@@ -1,7 +1,9 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // Export a cloned-voice sample from the VoiceProfile table to a WAV file,
 // ready for re-upload through another provider's Clone tab.
 // Usage: node scripts/export-voice-sample.mjs <profileName> <outPath>
-import { PrismaClient } from "@prisma/client";
+
 import { writeFileSync } from "fs";
 
 const [name, out] = process.argv.slice(2);
@@ -10,7 +12,7 @@ if (!name || !out) {
   process.exit(1);
 }
 
-const p = new PrismaClient();
+const p = createPrisma();
 try {
   const row = await p.voiceProfile.findFirst({
     where: { name: { contains: name } },

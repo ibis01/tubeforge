@@ -1,12 +1,13 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // Mint a local preview session for the registered preview user and write
 // the raw session token to /tmp/tf-session.txt (chmod 600, never logged).
 // Used to verify the preview CSRF origin gate end-to-end via curl.
 import fs from "fs";
 
-const { PrismaClient } = await import("@prisma/client");
 const tenant = await import("../src/lib/tubeforge/tenant");
 
-const db = new PrismaClient();
+const db = createPrisma();
 try {
   const user = await db.user.findFirstOrThrow({ where: { email: "ibis01abc@gmail.com" } });
   const membership = await db.membership.findFirstOrThrow({

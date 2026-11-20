@@ -102,7 +102,7 @@ run(['generate', '--schema', schema]);
 //    (Idempotent — a no-op when the database is already in sync.)
 if (isSqlite) {
   console.log('[postinstall] prisma db push (sqlite) — creates db file if missing');
-  run(['db', 'push', '--schema', 'prisma/schema.sqlite.prisma', '--skip-generate']);
+  run(['db', 'push', '--schema', 'prisma/schema.sqlite.prisma']);
 }
 
 // 4. Stage 2+ transition — BOTH providers, idempotent. On SQLite this is the

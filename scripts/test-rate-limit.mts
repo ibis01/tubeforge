@@ -1,3 +1,5 @@
+import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
+
 // S102 / P0.4 — the shared rate limiter + trusted-proxy battery
 // (docs/production-readiness.md: "multi-instance limits and spoofing tests pass").
 //
@@ -20,9 +22,9 @@
 //      rotation is dead).
 //   4. THE SWEEP — stale windows are pruned, fresh windows survive.
 
-import { PrismaClient } from "@prisma/client";
 
-const db = new PrismaClient();
+
+const db = createPrisma();
 
 let failed = false;
 function ok(cond: unknown, msg: string): asserts cond {
