@@ -26,7 +26,7 @@ import ZAI from "z-ai-web-dev-sdk";
 import { currentCtx } from "./tenant";
 import { rawDatabase as rawDb } from "./tenant-db";
 import { decryptSecret } from "./crypto";
-import { readZaiCredentials } from "./zai-config";
+import { syncZaiConfigFile } from "./zai-config";
 import { DEFAULT_ZAI_BASE_URL } from "./types";
 import { log } from "./log";
 
@@ -88,24 +88,6 @@ async function resolveUserZaiCredential(capability: string): Promise<ResolvedZai
   }
 }
 
-/** Materialize `.z-ai-config` from the legacy rows (platform path). */
-async function syncZaiConfigFile(): Promise<void> {
-  try {
-    const { baseUrl, apiKey } = await readZaiCredentials();
-    if (!apiKey) return;
-    const next = `${JSON.stringify(
-      { baseUrl: baseUrl || DEFAULT_ZAI_BASE_URL, apiKey },
-      null,
-      2
-    )}\n`;
-    const file = path.join(process.cwd(), ".z-ai-config");
-    const existing = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
-    if (existing.trim() !== next.trim()) fs.writeFileSync(file, next);
-  } catch {
-    /* read-only filesystem — fall back to the existing file */
-  }
-}
-
 /** The shared platform client (the pre-T-3.10 behavior). */
 async function platformZaiClient(): Promise<ZaiClient> {
   if (platformClient) return platformClient;
@@ -137,6 +119,11 @@ async function platformZaiClient(): Promise<ZaiClient> {
 /**
  * The Z.ai client for the CURRENT request: per-user when the acting user
  * stored a zai key, the shared platform client otherwise.
+ *
+ * The platform path materializes `.z-ai-config` from stored settings via
+ * syncZaiConfigFile (zai-config.ts) — the acting user's legacy rows first,
+ * then any active zai ProviderCredential row, so a job/worker/boot without
+ * a request context still finds the key a user saved in Settings.
  *
  * @param capability which capability is calling ("chat" | "tts" | "image" |
  *                  "video" | "asr") — only picks WHICH credential row wins.

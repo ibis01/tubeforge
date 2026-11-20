@@ -171,9 +171,16 @@ export async function serializeScenes(
   >();
   await Promise.all(
     scenes.map(async (s) => {
+      // The stat is cosmetic (existence + version stamp): a storage hiccup
+      // or a misconfigured driver degrades the scene to "no image yet"
+      // (hasImage false) instead of killing the whole serialization — the
+      // same law hasBrandLogo follows in serializeVideo. Real writes still
+      // fail loudly at their own boundary.
       artByIdx.set(
         s.index,
-        await storage.stat(`${videoId}/${sceneImageFile(s.index)}`)
+        await storage
+          .stat(`${videoId}/${sceneImageFile(s.index)}`)
+          .catch(() => null)
       );
     })
   );

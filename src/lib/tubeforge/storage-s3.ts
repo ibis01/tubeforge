@@ -20,10 +20,32 @@ export function s3Config(): S3Config | null {
   const accessKeyId = process.env.TUBEFORGE_S3_ACCESS_KEY_ID;
   const secretAccessKey = process.env.TUBEFORGE_S3_SECRET_ACCESS_KEY;
   if (!bucket || !accessKeyId || !secretAccessKey) return null;
+  const region = process.env.TUBEFORGE_S3_REGION ?? "auto";
+  const rawEndpoint = process.env.TUBEFORGE_S3_ENDPOINT;
+  const endpoint = (rawEndpoint ?? `https://s3.${region}.amazonaws.com`).replace(/\/+$/, "");
+  // Every signer call below parses this endpoint with new URL(). A set-but-
+  // empty or malformed value used to surface as a bare TypeError "Invalid
+  // URL" thrown from deep inside storage — a production 400/500 with no
+  // diagnosable trail (the POST /api/videos "Invalid URL" incident). Fail
+  // HERE instead, readably, naming the env var and the offending value (the
+  // endpoint is not a secret; the credentials never appear in this message).
+  let origin: URL;
+  try {
+    origin = new URL(endpoint);
+  } catch {
+    throw new Error(
+      `storage: TUBEFORGE_S3_ENDPOINT (${JSON.stringify(rawEndpoint ?? null)}) is not a usable URL — set a full origin like https://acct.r2.cloudflarestorage.com, or remove the variable to use the default AWS endpoint`
+    );
+  }
+  if (origin.protocol !== "https:" && origin.protocol !== "http:") {
+    throw new Error(
+      `storage: TUBEFORGE_S3_ENDPOINT (${JSON.stringify(rawEndpoint ?? null)}) must be an http(s) origin — "${origin.protocol}" endpoints cannot be signed`
+    );
+  }
   return {
     bucket,
-    region: process.env.TUBEFORGE_S3_REGION ?? "auto",
-    endpoint: (process.env.TUBEFORGE_S3_ENDPOINT ?? `https://s3.${process.env.TUBEFORGE_S3_REGION ?? "auto"}.amazonaws.com`).replace(/\/+$/, ""),
+    region,
+    endpoint,
     accessKeyId,
     secretAccessKey,
   };
