@@ -823,3 +823,75 @@ audio::-webkit-media-controls-panel {
     font-family: var(--font-geist-mono), ui-monospace, monospace;
   }
 }
+
+/* ==========================================================================
+   R1 (Cinematic full-studio upgrade) — elevation grammar, panel chrome,
+   scrollbar law and the global reduced-motion guard. Spec:
+   docs/design/R1_SHELL_CINEMATIC_SPEC.md. Existing B1/Stage-4a tokens stay
+   byte-stable; this layer ADDS the depth hierarchy the plan calls for.
+   ========================================================================== */
+
+:root {
+  /* Controlled elevation — three depths, subtle, never glow-heavy */
+  --tf-elev-1: 0 1px 2px rgb(0 0 0 / 35%);
+  --tf-elev-2: 0 4px 16px rgb(0 0 0 / 38%), 0 1px 3px rgb(0 0 0 / 30%);
+  --tf-elev-3: 0 12px 40px rgb(0 0 0 / 45%), 0 4px 12px rgb(0 0 0 / 35%);
+}
+
+@layer utilities {
+  .tf-elev-1 {
+    box-shadow: var(--tf-elev-1);
+  }
+  .tf-elev-2 {
+    box-shadow: var(--tf-elev-2);
+  }
+  .tf-elev-3 {
+    box-shadow: var(--tf-elev-3);
+  }
+
+  /* Shared panel chrome — inspector/workspace panes inherit one depth law */
+  .tf-panel {
+    background: var(--tf-surface-1);
+    border: 1px solid var(--tf-hairline);
+    border-radius: 0.75rem;
+    box-shadow: var(--tf-elev-1);
+  }
+
+  /* One scrollbar law for inner scroll areas (timeline, lists, palettes) */
+  .tf-scroll-bar {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(255 255 255 / 16%) transparent;
+  }
+  .tf-scroll-bar::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .tf-scroll-bar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .tf-scroll-bar::-webkit-scrollbar-thumb {
+    background: rgb(255 255 255 / 16%);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  .tf-scroll-bar::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(255 255 255 / 28%);
+  }
+}
+
+/* Reduced motion — the plan's law: restrained motion with COMPLETE
+   reduced-motion support. The Stage-4a guard paused only the render
+   primitives; this closes the UI layer: every transition and animation
+   collapses to effectively-instant under the OS setting. A static loader
+   still communicates state, so loading affordances remain honest. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

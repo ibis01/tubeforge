@@ -182,7 +182,7 @@ export function CommandPalette() {
     <>
       <Dialog open={paletteOpen} onOpenChange={setPaletteOpen}>
         <DialogContent
-          className="max-w-lg top-[12vh] translate-y-0 p-0 gap-0 overflow-hidden border-white/10 bg-[rgb(22_22_27/96%)] backdrop-blur-xl"
+          className="tf-elev-3 max-w-lg top-[12vh] translate-y-0 p-0 gap-0 overflow-hidden border-white/10 bg-[rgb(22_22_27/96%)] backdrop-blur-xl"
           onKeyDown={(e) => {
             if (e.key === "Escape") setPaletteOpen(false);
           }}

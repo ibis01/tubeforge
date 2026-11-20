@@ -2,6 +2,7 @@
 
 import { useEffect, useSyncExternalStore, useState } from "react";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -9,7 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import * as SelectPrimitive from "@radix-ui/react-select";
-import { CheckIcon, Loader2, Play, Square } from "lucide-react";
+import { CheckIcon, Loader2, Play, RotateCcw, Square, TriangleAlert } from "lucide-react";
 import { STATUS_META, VOICES, type VideoStatus } from "@/lib/tubeforge/types";
 import type { LucideIcon } from "lucide-react";
 import { clsx } from "clsx";
@@ -320,6 +321,163 @@ export function SkeletonRows({
         />
       ))}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// R1 panel grammar + state primitives (docs/design/R1_SHELL_CINEMATIC_SPEC.md)
+// ---------------------------------------------------------------------------
+
+/**
+ * Shared panel header — kicker + title + actions row. Every view's panels
+ * inherit ONE header rhythm instead of rolling their own; the chrome is
+ * `.tf-panel`'s top band (hairline separates it from the body).
+ */
+export function PanelHeader({
+  kicker,
+  title,
+  actions,
+  className,
+}: {
+  kicker?: string;
+  title: React.ReactNode;
+  actions?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={clsx(
+        "flex items-start justify-between gap-3 px-4 sm:px-5 py-3.5 border-b border-[color:var(--tf-hairline)]",
+        className
+      )}
+    >
+      <div className="min-w-0">
+        {kicker && <p className="tf-kicker">{kicker}</p>}
+        <h2
+          className={clsx(
+            "text-sm font-semibold tracking-tight truncate",
+            kicker && "mt-0.5"
+          )}
+        >
+          {title}
+        </h2>
+      </div>
+      {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
+    </div>
+  );
+}
+
+/**
+ * Designed failed-load state — distinct from EmptyState on purpose: red is
+ * reserved for failure, the message is honest, and the retry action is
+ * explicit (the plan: "empty, loading, error states are deliberately
+ * designed" and "quality-control failures are explained rather than hidden").
+ */
+export function ErrorState({
+  icon: Icon = TriangleAlert,
+  title = "Something failed",
+  message,
+  retry,
+  className,
+}: {
+  icon?: LucideIcon;
+  title?: string;
+  message?: string;
+  retry?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      role="alert"
+      className={clsx(
+        "tf-card rounded-2xl border-red-400/25 p-8 sm:p-10 flex flex-col items-center text-center",
+        className
+      )}
+    >
+      <div className="h-14 w-14 rounded-2xl bg-red-400/10 border border-red-400/30 flex items-center justify-center">
+        <Icon className="h-6 w-6 text-red-400" />
+      </div>
+      <p className="mt-4 text-base font-medium tracking-tight">{title}</p>
+      {message && (
+        <p className="text-sm text-muted-foreground mt-1.5 max-w-md leading-relaxed break-words">
+          {message}
+        </p>
+      )}
+      {retry && <div className="mt-5">{retry}</div>}
+    </div>
+  );
+}
+
+/** Retry action button for ErrorState — one consistent affordance. */
+export function RetryButton({
+  onClick,
+  label = "Retry",
+}: {
+  onClick: () => void;
+  label?: string;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={onClick}
+      className="gap-2"
+    >
+      <RotateCcw className="h-3.5 w-3.5" />
+      {label}
+    </Button>
+  );
+}
+
+/** Centered spinner block for async surfaces — the loading counterpart of EmptyState. */
+export function LoadingState({
+  label = "Loading",
+  className,
+}: {
+  label?: string;
+  className?: string;
+}) {
+  return (
+    <div
+      role="status"
+      aria-label={label}
+      className={clsx("flex flex-col items-center justify-center gap-3 py-14", className)}
+    >
+      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      <p className="text-xs text-muted-foreground">{label}…</p>
+    </div>
+  );
+}
+
+/**
+ * Cinematic preview frame — large, immersive, aspect-ratio-aware media
+ * presentation. One depth law (`tf-elev-2`), one hairline, one rail for a
+ * caption. Views stop improvising media chrome.
+ */
+export function PreviewFrame({
+  ratio = "16 / 9",
+  children,
+  caption,
+  className,
+}: {
+  ratio?: string;
+  children: React.ReactNode;
+  caption?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <figure className={clsx("min-w-0", className)}>
+      <div
+        className="relative w-full overflow-hidden rounded-xl border border-[color:var(--tf-hairline-strong)] bg-black/60 tf-elev-2"
+        style={{ aspectRatio: ratio }}
+      >
+        {children}
+      </div>
+      {caption && (
+        <figcaption className="mt-2 text-xs text-muted-foreground">{caption}</figcaption>
+      )}
+    </figure>
   );
 }
 

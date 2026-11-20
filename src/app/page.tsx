@@ -130,60 +130,74 @@ const INSIGHTS_GROUP: ViewId[] = [
   "channels",
 ];
 
-const VIEW_META: Record<ViewId, { title: string; subtitle: string }> = {
+const VIEW_META: Record<ViewId, { kicker: string; title: string; subtitle: string }> = {
   dashboard: {
+    kicker: "Studio",
     title: "Home",
     subtitle: "Your studio at a glance",
   },
   assets: {
+    kicker: "Studio",
     title: "Assets",
     subtitle: "Cast, world and voice — reusable across projects",
   },
   insights: {
+    kicker: "Studio",
     title: "Insights",
     subtitle: "Research, analytics and publishing intelligence",
   },
   analytics: {
+    kicker: "Insights",
     title: "Analytics",
     subtitle: "Real YouTube performance feeding the Topic Radar",
   },
   research: {
+    kicker: "Insights",
     title: "Topic Radar",
     subtitle: "AI keyword research — find what to make next",
   },
   create: {
+    kicker: "Production",
     title: "New Project",
     subtitle: "Brief in — directed production out",
   },
   library: {
+    kicker: "Production",
     title: "Projects",
     subtitle: "Every project in your studio — click to open",
   },
   workspace: {
+    kicker: "Production",
     title: "Workspace",
     subtitle: "Direct the production — scene by scene, stage by stage",
   },
   cast: {
+    kicker: "Assets",
     title: "Cast",
     subtitle: "Recurring characters with locked-in visual identity",
   },
   world: {
+    kicker: "Assets",
     title: "World",
     subtitle: "Recurring places & things for set continuity",
   },
   voice: {
+    kicker: "Assets",
     title: "Voice Studio",
     subtitle: "Narration voices, clones and the default narrator",
   },
   calendar: {
+    kicker: "Insights",
     title: "Publishing Calendar",
     subtitle: "Plan, schedule and ship uploads without gaps",
   },
   channels: {
+    kicker: "Insights",
     title: "Channels",
     subtitle: "Manage your channel lineup",
   },
   settings: {
+    kicker: "Studio",
     title: "Settings",
     subtitle: "Preferences, providers & integrations",
   },
@@ -256,6 +270,7 @@ export default function Home() {
               </Sheet>
 
               <div className="min-w-0 flex-1">
+                <p className="tf-kicker hidden sm:block">{meta.kicker}</p>
                 <h1 className="text-base sm:text-lg font-semibold tracking-tight truncate">
                   {meta.title}
                 </h1>

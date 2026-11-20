@@ -100,6 +100,7 @@ export function AppSidebar() {
 
       {/* Destinations */}
       <nav aria-label="Main navigation" className="flex-1 px-3 py-4">
+        <p className="tf-kicker px-3 pb-2">Destinations</p>
         <ul className="space-y-1.5">
           {NAV_ITEMS.map((item) => {
             const isActive = active === item.id;
@@ -108,12 +109,20 @@ export function AppSidebar() {
                 <button
                   onClick={() => setView(item.id)}
                   aria-current={isActive ? "page" : undefined}
-                  className={`w-full group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 ${
+                  title={item.hint}
+                  className={`tf-focusable relative w-full group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 ${
                     isActive
                       ? "bg-primary/15 text-primary font-medium shadow-[inset_0_0_0_1px_rgb(34_211_238/20%)]"
                       : "text-muted-foreground hover:bg-white/5 hover:text-foreground"
                   }`}
                 >
+                  {/* R1 active rail — one controlled accent, not a second color */}
+                  <span
+                    aria-hidden
+                    className={`absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-full bg-primary transition-opacity ${
+                      isActive ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
                   <item.icon
                     className={`h-4.5 w-4.5 shrink-0 transition-transform group-hover:scale-105 ${
                       isActive ? "text-primary" : ""
@@ -132,7 +141,7 @@ export function AppSidebar() {
 
       {/* Studio status card + session */}
       <div className="px-3 pb-4 space-y-2">
-        <div className="glass rounded-xl p-3.5">
+        <div className="glass tf-elev-1 rounded-xl p-3.5">
           <div className="flex items-center gap-2">
             <span className="animate-pulse-dot h-2 w-2 rounded-full bg-primary shrink-0" />
             <p className="text-xs font-medium">You direct · AI assists</p>
@@ -149,7 +158,7 @@ export function AppSidebar() {
                 window.location.reload(),
               );
             }}
-            className="w-full flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
+            className="tf-focusable w-full flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
             aria-label="Sign out"
           >
             <LogOut className="h-3.5 w-3.5" />
