@@ -32,20 +32,28 @@ if (!url && existsSync(envPath)) {
   url = m ? m[1].trim() : '';
 }
 if (!url) {
-  // Root-RELATIVE on purpose: Prisma 7 (and the better-sqlite3 runtime
-  // adapter) resolve relative file: URLs against the process CWD — npm
-  // scripts, next dev and the CLI children all run from the project root,
-  // so ./db/custom.db lands INSIDE the project for every consumer. The old
-  // '../db' form was the v6 schema-dir convention and, under v7, escaped
-  // the project (the clean-clone verifier's '[FAIL] db/custom.db was
-  // pushed' — the file landed in the clone's PARENT).
-  url = 'file:./db/custom.db';
+  // The sandbox contract (pinned verbatim by the clean-clone verifier):
+  // the SQLite path is SCHEMA-DIR-relative — '../db/custom.db' means
+  // <project>/db/custom.db. Prisma 6 resolved it against the schema dir;
+  // under v7 the CLI resolves against the CWD, so the CLI children below
+  // get the schema-ANCHORED ABSOLUTE form instead.
+  url = 'file:../db/custom.db';
   try {
     writeFileSync(envPath, `DATABASE_URL=${url}\n`, { flag: 'wx' });
     console.log(`[postinstall] created .env with DATABASE_URL=${url}`);
   } catch {
     /* read-only fs (e.g. Vercel) — platform env vars are used instead */
   }
+}
+
+// Prisma 7 resolves relative file: URLs against the process CWD — the v6
+// connector resolved them against the SCHEMA directory (prisma/), and
+// restore-drill.mts + test-backup.mts still do exactly that. Keep ONE
+// convention: anchor every relative file: URL at <root>/prisma/ so the CLI
+// children push <project>/db/custom.db regardless of the v7 CWD rule.
+if (url.startsWith('file:')) {
+  const p = url.slice('file:'.length);
+  if (p && !p.startsWith('/')) url = `file:${join(root, 'prisma', p)}`;
 }
 
 // Prisma 7 (the U2 migration): the CLI no longer auto-loads .env —

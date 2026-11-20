@@ -22,7 +22,7 @@
  *      (node_modules / .env / .next / coverage / next-env.d.ts / test-results
  *      / playwright-report / .vercel) and db/ carries only .gitkeep;
  *   2. boot proof — `npm ci` with NO injected DATABASE_URL bootstraps SQLite
- *      end-to-end: .env (file:./db/custom.db), provisioned
+ *      end-to-end: .env (file:../db/custom.db), provisioned
  *      TUBEFORGE_AUTH_SECRET + TUBEFORGE_ENCRYPTION_KEY, next-env.d.ts,
  *      the generated client, and the pushed db/custom.db;
  *   3. boot probe — the generated SQLITE client queries the pushed Stage-2
@@ -139,14 +139,12 @@ try {
   );
   shInherit("npm", ["ci", "--no-audit", "--no-fund"], { cwd: work, env: freshEnv });
 
-  // U2 re-anchor: the .env contract is now the ROOT-relative form — Prisma 7
-  // (and the runtime adapter) resolve relative file: URLs against the process
-  // CWD, so './db/custom.db' lands inside the clone for every consumer. The
-  // '../db' literal was the v6 schema-dir convention (the file escaped the
-  // clone under v7 — the '[FAIL] db/custom.db was pushed' of run 44767281646's
-  // fixup).
+  // The .env contract is VERBATIM and unchanged by the v7 migration: the
+  // SQLite path is schema-dir-relative ('../db' = <root>/db). postinstall
+  // and the adapter factory translate it explicitly under Prisma 7's
+  // CWD-resolution rule (see both files' anchor comments).
   const envText = readFileSync(join(work, ".env"), "utf8");
-  check(".env was created with the SQLite DATABASE_URL", /DATABASE_URL=file:\.\/db\/custom\.db/.test(envText), "file:./db/custom.db");
+  check(".env was created with the SQLite DATABASE_URL", /DATABASE_URL=file:\.\.\/db\/custom\.db/.test(envText), "file:../db/custom.db");
   check("TUBEFORGE_AUTH_SECRET was provisioned", /^TUBEFORGE_AUTH_SECRET=.+/m.test(envText));
   check("TUBEFORGE_ENCRYPTION_KEY was provisioned", /^TUBEFORGE_ENCRYPTION_KEY=.+/m.test(envText));
   check("next-env.d.ts was created", existsSync(join(work, "next-env.d.ts")));

@@ -61,7 +61,17 @@ export function createPrismaAdapter(url = resolveDatabaseUrl()) {
         }
       }
     }
-    return new PrismaBetterSqlite3({ url: `file:${pathPart}`, timeout });
+    // ONE convention for relative SQLite paths: SCHEMA-DIR-relative (the v6
+    // connector's rule, still codified in restore-drill.mts:71 and
+    // test-backup.mts:71 — '../db/custom.db' = <root>/db/custom.db). Prisma
+    // 7 resolves relative file: URLs against the process CWD instead, so
+    // translate explicitly; absolute URLs (CI/nightly/the clean-clone probe)
+    // pass through untouched.
+    let dbPath = pathPart;
+    if (dbPath && !dbPath.startsWith("/")) {
+      dbPath = path.join(process.cwd(), "prisma", dbPath);
+    }
+    return new PrismaBetterSqlite3({ url: `file:${dbPath}`, timeout });
   }
   return new PrismaPg(url);
 }

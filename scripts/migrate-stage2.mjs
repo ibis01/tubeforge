@@ -63,9 +63,14 @@ if (!url && existsSync(envPath)) {
   );
   url = m ? m[1].trim() : "";
 }
-// Root-relative (the v7 CWD-resolution law — see postinstall.mjs): npm
-// scripts run from the project root, so ./db/custom.db stays INSIDE it.
-if (!url) url = "file:./db/custom.db";
+if (!url) url = "file:../db/custom.db";
+// Prisma 7 resolves relative file: URLs against the CWD; the repo's one
+// convention anchors them at the SCHEMA directory (restore-drill.mts and
+// test-backup.mts join the same way) — '../db/custom.db' = <root>/db.
+// Children get the schema-anchored ABSOLUTE form (see postinstall.mjs).
+if (url.startsWith("file:") && !url.slice("file:".length).startsWith("/")) {
+  url = `file:${join(root, "prisma", url.slice("file:".length))}`;
+}
 const isSqlite = url.startsWith("file:");
 
 // Prisma 7 (U2): the CLI reads the datasource URL from prisma.config.ts's
