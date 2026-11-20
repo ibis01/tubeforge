@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type ComponentProps } from "react";
+import { Youtube } from "@/components/tubeforge/icons";
 import { useAppStore } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import { Card } from "@/components/ui/card";
@@ -53,7 +54,6 @@ import {
   Film,
   LayoutGrid,
   ScanText,
-  Youtube,
   Clapperboard,
   ChevronDown,
   Coins,

@@ -102,6 +102,12 @@ ${colorConfig
   )
 }
 
+// recharts 3 generified Tooltip/Legend and dropped the runtime payload
+// fields from their public prop types. The wrapper rides the exported
+// TooltipPayloadEntry (the runtime item recharts constructs always has
+// graphicalItemId set) instead of reaching into recharts internals.
+type ChartPayloadItem = RechartsPrimitive.TooltipPayloadEntry
+
 const ChartTooltip = RechartsPrimitive.Tooltip
 
 function ChartTooltipContent({
@@ -125,6 +131,9 @@ function ChartTooltipContent({
     indicator?: "line" | "dot" | "dashed"
     nameKey?: string
     labelKey?: string
+    // runtime-only fields recharts 3 stopped declaring on Tooltip props
+    payload?: ChartPayloadItem[]
+    label?: unknown
   }) {
   const { config } = useChart()
 
@@ -186,7 +195,7 @@ function ChartTooltipContent({
 
           return (
             <div
-              key={item.dataKey}
+              key={`${key}-${index}`}
               className={cn(
                 "[&>svg]:text-muted-foreground flex w-full flex-wrap items-stretch gap-2 [&>svg]:h-2.5 [&>svg]:w-2.5",
                 indicator === "dot" && "items-center"
@@ -256,10 +265,12 @@ function ChartLegendContent({
   payload,
   verticalAlign = "bottom",
   nameKey,
-}: React.ComponentProps<"div"> &
-  Pick<RechartsPrimitive.LegendProps, "payload" | "verticalAlign"> & {
+}: React.ComponentProps<"div"> & {
     hideIcon?: boolean
     nameKey?: string
+    // runtime-only fields recharts 3 stopped declaring on Legend props
+    payload?: ChartPayloadItem[]
+    verticalAlign?: "top" | "bottom" | "left" | "right"
   }) {
   const { config } = useChart()
 
@@ -281,7 +292,7 @@ function ChartLegendContent({
 
         return (
           <div
-            key={item.value}
+            key={String(item.value ?? key)}
             className={cn(
               "[&>svg]:text-muted-foreground flex items-center gap-1.5 [&>svg]:h-3 [&>svg]:w-3"
             )}

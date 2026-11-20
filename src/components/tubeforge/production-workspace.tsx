@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Youtube } from "@/components/tubeforge/icons";
 import { useAppStore } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -85,7 +86,6 @@ import {
   ScanText,
   MessageCircle,
   Copy,
-  Youtube,
   ExternalLink,
   Captions,
   Smartphone,

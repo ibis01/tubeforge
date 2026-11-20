@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Youtube } from "@/components/tubeforge/icons";
 import { useAppStore } from "@/lib/store";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,7 +28,6 @@ import {
   TrendingUp as TrendingIcon,
   RefreshCw,
   Loader2,
-  Youtube,
   Zap,
   Radar,
   Settings,
