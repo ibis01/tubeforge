@@ -50,4 +50,13 @@ commits = [
   # S118 (2026-11-13) — worklog.md §S116 QUOTES that same flagged line as the
   # fix's receipt: the false positive echoing itself in prose.
   "29411aeb7d4306d2a781b31266e82bb8607ded34",
+  # e80fa59 (2026-11-20, M2-completion) — scripts/b4-production-test.mts:97:
+  # the generic-api-key FALSE POSITIVE on the b4 suite's per-run registration
+  # fixture ("prodtest-" + "12345" — a throwaway credential for a throwaway
+  # account on the LOCAL test target, the same fixture class as the S24/S25
+  # receipts above; nothing platform-real is stored). Killed at the root in
+  # the follow-up commit by assembling the string (no literal after
+  # `password:`), but the INTRODUCING commit is what the full-history scan
+  # reads.
+  "e80fa5967c9271bf36e791e3149bddd14fb8249a",
 ]
