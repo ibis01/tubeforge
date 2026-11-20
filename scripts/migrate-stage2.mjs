@@ -50,22 +50,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const prismaBin = join(root, "node_modules", ".bin", "prisma");
 
-const run = (args, opts = {}) =>
-  execFileSync(prismaBin, args, { stdio: "inherit", cwd: root, ...opts });
-
-const execSql = (schemaFile, sql) => {
-  // Prisma 7: `db execute` no longer accepts --schema — the datasource URL
-  // comes from prisma.config.ts (env DATABASE_URL), which the caller's env
-  // already points at the right database. schemaFile stays in the signature
-  // for the log line / future per-schema configs.
-  const child = execFileSync(
-    prismaBin,
-    ["db", "execute", "--stdin"],
-    { cwd: root, input: sql, stdio: ["pipe", "inherit", "inherit"] }
-  );
-  return child;
-};
-
 // --- resolve DATABASE_URL the same way postinstall.mjs does: platform env
 // var FIRST (Vercel/CI inject it there and ship no .env file), then the local
 // .env file, then the SQLite fallback. Reading only .env made this script
@@ -81,6 +65,38 @@ if (!url && existsSync(envPath)) {
 }
 if (!url) url = "file:../db/custom.db";
 const isSqlite = url.startsWith("file:");
+
+// Prisma 7 (U2): the CLI reads the datasource URL from prisma.config.ts's
+// env("DATABASE_URL") — the PROCESS env only, .env is no longer auto-loaded.
+// This script resolved the URL above, so EVERY CLI child gets it injected.
+// The old "the caller's env already points at the right database" assumption
+// broke on fresh clones/CI (no platform env var → PrismaConfigEnvError —
+// five of eight CI jobs died at postinstall on 2026-11-20).
+const run = (args, opts = {}) =>
+  execFileSync(prismaBin, args, {
+    stdio: "inherit",
+    cwd: root,
+    env: { ...process.env, DATABASE_URL: url },
+    ...opts,
+  });
+
+const execSql = (schemaFile, sql) => {
+  // Prisma 7: `db execute` no longer accepts --schema — the datasource URL
+  // comes from prisma.config.ts (env DATABASE_URL), injected below from the
+  // URL this script resolved. schemaFile stays in the signature for the log
+  // line / future per-schema configs.
+  const child = execFileSync(
+    prismaBin,
+    ["db", "execute", "--stdin"],
+    {
+      cwd: root,
+      input: sql,
+      stdio: ["pipe", "inherit", "inherit"],
+      env: { ...process.env, DATABASE_URL: url },
+    }
+  );
+  return child;
+};
 
 // --- content tables that gain organizationId in phase 1 ---
 const TENANT_TABLES = [

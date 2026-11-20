@@ -93,6 +93,12 @@ COPY --from=build --chown=tubeforge:tubeforge /app/public ./.next/standalone/pub
 COPY --from=build --chown=tubeforge:tubeforge /app/src ./src
 COPY --from=build --chown=tubeforge:tubeforge /app/scripts ./scripts
 COPY --from=build --chown=tubeforge:tubeforge /app/prisma ./prisma
+# Prisma 7 (U2): the schemas no longer carry a connection URL — the CLI
+# (migrate deploy at container start, compose CMD) reads the datasource from
+# prisma.config.ts. Without it the runtime `migrate deploy` dies with
+# "The datasource.url property is required in your Prisma config file" and
+# the P0.6 smoke never goes healthy.
+COPY --from=build --chown=tubeforge:tubeforge /app/prisma.config.ts ./prisma.config.ts
 COPY --from=build --chown=tubeforge:tubeforge /app/tsconfig.json ./tsconfig.json
 COPY --from=build --chown=tubeforge:tubeforge /app/next.config.ts ./next.config.ts
 

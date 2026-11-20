@@ -19,9 +19,6 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const envPath = join(root, '.env');
 const prismaBin = join(root, 'node_modules', '.bin', 'prisma');
 
-const run = (args) =>
-  execFileSync(prismaBin, args, { stdio: 'inherit', cwd: root });
-
 // 1. Resolve DATABASE_URL. Precedence: platform env var FIRST (Vercel/CI
 //    inject it there and ship no .env file — reading only .env made this
 //    script pick SQLite mode on Vercel and crash `prisma db push` with P1012
@@ -45,6 +42,20 @@ if (!url) {
     /* read-only fs (e.g. Vercel) — platform env vars are used instead */
   }
 }
+
+// Prisma 7 (the U2 migration): the CLI no longer auto-loads .env —
+// prisma.config.ts's env("DATABASE_URL") reads the PROCESS env only. This
+// script is the component that resolved the URL above (platform env → .env
+// → SQLite fallback), so it must HAND it to every CLI child. Without this,
+// a fresh clone / CI runner (no platform env var) crashed `prisma generate`
+// with PrismaConfigEnvError: "Cannot resolve environment variable:
+// DATABASE_URL" — five of eight CI jobs died in this one step.
+const run = (args) =>
+  execFileSync(prismaBin, args, {
+    stdio: 'inherit',
+    cwd: root,
+    env: { ...process.env, DATABASE_URL: url },
+  });
 
 // 1b. Stage 2 — provision the signing + encryption secrets when missing so a
 // fresh clone / CI checkout boots usable (the middleware fails CLOSED without
@@ -119,7 +130,14 @@ console.log('[postinstall] running scripts/migrate-stage2.mjs (idempotent)');
 try {
   // 150s cap — a hung database connection (unreachable host, blackholed TCP)
   // must not wedge the install until the platform's build timeout kills it.
-  execFileSync('node', ['scripts/migrate-stage2.mjs'], { stdio: 'inherit', cwd: root, timeout: 150_000 });
+  // DATABASE_URL is injected so the child's prisma.config.ts resolves the
+  // same URL this script resolved (Prisma 7 reads the process env only).
+  execFileSync('node', ['scripts/migrate-stage2.mjs'], {
+    stdio: 'inherit',
+    cwd: root,
+    timeout: 150_000,
+    env: { ...process.env, DATABASE_URL: url },
+  });
 } catch (err) {
   if (isSqlite) throw err; // local dev wants loud failures
   console.warn(
