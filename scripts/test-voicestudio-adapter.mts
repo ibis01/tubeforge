@@ -39,6 +39,7 @@ import { asrTranscribeDetailed, type AsrWord } from "../src/lib/tubeforge/provid
 import {
   mouthBeatsFromSpans,
   mouthSchedule,
+  restSegmentsFromSpans,
   wordSpansFromAnchors,
   type WordSpan,
 } from "../src/lib/tubeforge/characters/rig-frame";
@@ -244,10 +245,18 @@ try {
     // The full schedule path — the same measured rung through mouthSchedule.
     const schedule = mouthSchedule({ narration: NARRATION, anchors, durationMs: DURATION_MS });
     eq(schedule.speaking, true, "a measured narration schedules speech");
+    // S166: the schedule is the ONE merge of the two exported builders — the
+    // beats plus the anchor clock's rest windows, sorted (the measured path's
+    // real pauses ride rest; the estimator's clock-tiling spans keep the S125
+    // byte shape, pinned in the unit battery). No third builder, no fork.
+    const merged = [
+      ...segments,
+      ...restSegmentsFromSpans(spans, DURATION_MS),
+    ].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
     eq(
       JSON.stringify(schedule.segments),
-      JSON.stringify(segments),
-      "mouthSchedule's segments are mouthBeatsFromSpans' bytes (one builder, no fork)",
+      JSON.stringify(merged),
+      "mouthSchedule's segments are the S166 merge of the beat + rest builders (one source, no fork)",
     );
     const silent = mouthSchedule({ narration: "", anchors, durationMs: DURATION_MS });
     eq(silent.speaking, false, "no narration → no speech (the honesty ladder's head)");
