@@ -201,7 +201,14 @@ export const APPLY_FRAME_FN = `(payloadJson) => {
     const targets = key.includes("::")
       ? [drawEl(key)].filter(Boolean)
       : Array.from(document.querySelectorAll("#g-" + key.replace(/[^a-zA-Z0-9_-]/g, "-") + " path"));
-    for (const el of targets) el.style.fillOpacity = String(prog);
+    for (const el of targets) {
+      el.style.fillOpacity = String(prog);
+      // P0 — the traced-remainder fade: stroke ink (fill="none") has no
+      // fillOpacity to drive; the setup marked these elements (dataset.fade)
+      // and they ride an OPACITY fade here instead. Absent marker → this
+      // branch never fires (byte-identical for every non-traced asset).
+      if (el.dataset.fade === "1") el.style.opacity = String(prog);
+    }
   }
   // W6 — the carried-ink layer: the carry plan owns these groups'
   // transforms (placements + the pan-away offset), the fade's group

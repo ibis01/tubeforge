@@ -5,7 +5,14 @@ import { StorageQuotaError } from "@/lib/tubeforge/storage";
 import { loadLibrary } from "@/lib/tubeforge/whiteboard/assets";
 import { parseWhiteboardDoc } from "@/lib/tubeforge/whiteboard/whiteboard-planner";
 import { probeAssetRasterization } from "@/lib/tubeforge/whiteboard/render";
-import { WB_UPLOAD_MAX_BYTES, validateUploadedSvg } from "@/lib/tubeforge/whiteboard/upload";
+import {
+  WB_RASTER_MAX_BYTES,
+  WB_UPLOAD_MAX_BYTES,
+  sniffRasterImage,
+  validateUpload,
+  type TracedUploadMeta,
+} from "@/lib/tubeforge/whiteboard/upload";
+import { resolveContentPolicy } from "@/lib/tubeforge/restricted-subjects";
 import {
   deleteVideoUpload,
   listVideoUploads,
@@ -21,17 +28,28 @@ type Ctx = { params: Promise<{ id: string }> };
  * S69 — the Whiteboard Engine's upload path (E9 Phase C / E11 §7), the
  * seven gates IN ORDER, each naming its unit-pinned sibling:
  *
- *   1. Transport  — multipart POST, 256 KB raw byte cap (413 over).
- *   2. Sniff      — UTF-8 + single root <svg> + usable viewBox (upload.ts).
+ *   1. Transport  — multipart POST, per-kind raw byte cap (413 over):
+ *                  SVG text 256 KB / raster (PNG+JPEG) 8 MB — the magic
+ *                  bytes pick the wall (headers lie; P0).
+ *   2. Sniff      — magic bytes for PNG/JPEG (raster branch), else UTF-8
+ *                  + single root <svg> + usable viewBox (upload.ts).
+ *   2.5 Trace     — P0 raster branch ONLY: the raster-to-stroke pipeline
+ *                  runs between sniff and sanitize; its OUTPUT (the derived
+ *                  single-subpath fragment) is what every later gate sees.
+ *                  Quality gate: blank/dense/noisy/photo sources are
+ *                  refused with the readable reason (audit §4A).
  *   3. Sanitize   — sanitizeSvg, the S64 attack battery (upload.ts).
- *   4. Budget     — 512/path, 2,048/asset commands, zero extractAsset
- *                  rejections — with the reasons (upload.ts).
+ *   4. Budget     — 512/path, 2,048/asset (SVG) or 4,096/asset (traced),
+ *                  zero extractAsset rejections — with the reasons.
  *   5. Rasterize-before-trust — the SAME network-aborted chromium the
  *                  renderer uses, ~5 s wall clock (render.ts).
  *   6. Quota      — per-org asset counts here; per-org BYTES through
  *                  storage.put's assertQuota (asset-store.ts).
  *   7. Storage    — <videoId>/whiteboard/assets/<assetId>.svg (the
- *                  SANITIZED fragment) + the manifest row with provenance.
+ *                  SANITIZED fragment — for traced uploads, the DERIVED
+ *                  fragment; the original raster is intentionally not
+ *                  persisted) + the manifest row with provenance (the
+ *                  trace receipt + the video's content policy id, P0-7).
  *
  * DELETE — removes one upload, refusing (409, with the scene list) while
  * the current project still references the asset: deleting a placed asset
@@ -57,29 +75,61 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const contentType = req.headers.get("content-type") ?? "";
   if (!contentType.includes("multipart/form-data"))
     return NextResponse.json(
-      { error: "Send the SVG as multipart/form-data with a 'file' field" },
+      { error: "Send the SVG or PNG/JPEG as multipart/form-data with a 'file' field" },
       { status: 400 }
     );
   const form = await req.formData().catch(() => null);
   const file = form?.get("file");
   if (!(file instanceof File) || file.size === 0)
-    return NextResponse.json({ error: "Attach an SVG file in the 'file' field" }, { status: 400 });
-  // Gate 1 — the transport wall (headers can lie about size; the parsed
-  // File is the truth the music-upload precedent checks too).
-  if (file.size > WB_UPLOAD_MAX_BYTES)
     return NextResponse.json(
-      { error: `The SVG is ${Math.round(file.size / 1024)} KB — the upload cap is ${WB_UPLOAD_MAX_BYTES / 1024} KB` },
+      { error: "Attach an SVG or PNG/JPEG file in the 'file' field" },
+      { status: 400 }
+    );
+
+  // Gate 1 — the transport wall, per-kind: the magic bytes pick the wall
+  // (raster 8 MB, SVG text 256 KB). Headers can lie about size; the parsed
+  // File is the truth the music-upload precedent checks too.
+  const raw = Buffer.from(await file.arrayBuffer());
+  const rasterMagic = sniffRasterImage(raw);
+  const byteCap = rasterMagic ? WB_RASTER_MAX_BYTES : WB_UPLOAD_MAX_BYTES;
+  if (raw.length > byteCap)
+    return NextResponse.json(
+      {
+        error: rasterMagic
+          ? `The image is ${((Math.round((raw.length / (1024 * 1024)) * 10) / 10)).toFixed(1)} MB — the raster upload cap is ${WB_RASTER_MAX_BYTES / (1024 * 1024)} MB`
+          : `The SVG is ${Math.round(raw.length / 1024)} KB — the upload cap is ${WB_UPLOAD_MAX_BYTES / 1024} KB`,
+      },
       { status: 413 }
     );
 
-  // Gates 2–4 — the pure battery (sniff, sanitize, budgets), with the id
-  // collision wall the route owns: built-ins + this video's existing rows.
+  // Gates 2–4 — the unified pure battery (sniff → [trace] → sanitize →
+  // budgets), with the id collision wall the route owns: built-ins + this
+  // video's existing rows.
   const reserved = new Set(loadLibrary().assets.keys());
   for (const row of await listVideoUploads(id)) reserved.add(row.assetId);
-  const raw = Buffer.from(await file.arrayBuffer());
-  const v = validateUploadedSvg(raw, file.name || "upload.svg", reserved);
+  const v = await validateUpload(raw, file.name || (rasterMagic ? "upload.png" : "upload.svg"), reserved);
   if (!v.ok)
-    return NextResponse.json({ error: "The SVG failed the upload gates", errors: v.errors }, { status: 400 });
+    return NextResponse.json({ error: "The file failed the upload gates", errors: v.errors }, { status: 400 });
+  // P0 — the trace provenance (compact meta on the row; the video's
+  // content policy id rides along on BOTH raster entries per P0-7c).
+  const tracedMeta: TracedUploadMeta | undefined = v.trace
+    ? {
+        strokes: v.trace.strokesKept,
+        commands: v.trace.commands,
+        sourceBytes: v.trace.sourceBytes,
+        sourceFormat: v.trace.sourceFormat,
+        ms:
+          v.trace.ms.decode +
+          v.trace.ms.normalize +
+          v.trace.ms.threshold +
+          v.trace.ms.skeleton +
+          v.trace.ms.trace +
+          v.trace.ms.simplify +
+          v.trace.ms.emit,
+        quality: v.trace.quality,
+        policyId: resolveContentPolicy(video.contentPolicy),
+      }
+    : undefined;
 
   // Gate 5 — rasterize-before-trust (the SAME renderer, network-aborted).
   const probe = await probeAssetRasterization(v.asset);
@@ -101,14 +151,16 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   // Gate 7 — storage + manifest. A byte-quota hit surfaces as 413, not 500.
   try {
-    const row = await saveVideoUpload(video, v.asset, auth.ctx.userId);
+    const row = await saveVideoUpload(video, v.asset, auth.ctx.userId, tracedMeta);
     await db.activity.create({
       data: {
         organizationId: video.organizationId,
         userId: auth.ctx.userId,
         videoId: id,
         stage: "whiteboard",
-        message: `Whiteboard asset uploaded — "${v.asset.id}" (${v.paths} paths, ${v.texts} texts, ${v.commands} commands, ${row.bytes} B stored, raster probe ${probe.ms} ms)`,
+        message: tracedMeta
+          ? `Whiteboard asset traced+uploaded — "${v.asset.id}" (${tracedMeta.strokes} strokes from ${tracedMeta.sourceBytes} B ${tracedMeta.sourceFormat}, ${v.commands} commands, quality ${tracedMeta.quality}, ${row.bytes} B stored, raster probe ${probe.ms} ms)`
+          : `Whiteboard asset uploaded — "${v.asset.id}" (${v.paths} paths, ${v.texts} texts, ${v.commands} commands, ${row.bytes} B stored, raster probe ${probe.ms} ms)`,
       },
     });
     return NextResponse.json(
@@ -121,6 +173,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         commands: v.commands,
         bytes: row.bytes,
         probeMs: probe.ms,
+        ...(tracedMeta ? { traced: { strokes: tracedMeta.strokes, quality: tracedMeta.quality, sourceFormat: tracedMeta.sourceFormat } } : {}),
       },
       { status: 201 }
     );

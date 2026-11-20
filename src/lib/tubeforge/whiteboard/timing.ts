@@ -29,6 +29,9 @@ import {
 // Type-only: erased at runtime, so the timing ← assets cycle cannot exist
 // (assets.ts imports this module's text registries at init).
 import type { AssetRole, HandPose } from "./assets";
+// P0 — the traced-placement budgets (pure constants; no cycle: trace-budget
+// imports nothing).
+import { WB_TRACED_FADE_MS, tracedCapForWindow } from "./trace-budget";
 
 /** The house narration pace (words/sec) — the director lane's constant. */
 export const WORDS_PER_SEC = 2.6;
@@ -156,12 +159,28 @@ export function anchorEnvelope(
  * text element the placements bring, in draw order, inside the narration
  * window. Pre-existing events for an element are RESPECTED (the editor's
  * explicit timing is senior — the studio's precedence law).
+ *
+ * P0 — `opts` carries the traced-placement cap split (built by
+ * tracedSplitForScene): over-cap paths of traced assets never become draw
+ * events (the fill law cannot fit them — they would schedule past the
+ * scene clock and stay invisible forever); instead they fade in as a
+ * group at the stroke-completion boundary through the EXISTING
+ * reveal_color grammar (no new event type). Absent opts → byte-for-byte
+ * today's schedule (the fallback law).
  */
+export interface SceneScheduleOpts {
+  /** assetId → the path ids allowed to DRAW (first-cap, draw order). */
+  allowed?: ReadonlyMap<string, ReadonlySet<string>>;
+  /** "assetId::pathId" keys that fade-reveal at the boundary. */
+  remainder?: readonly string[];
+}
+
 export function scheduleScene(
   scene: WhiteboardScene,
   durationMs: number,
   geometry: Map<string, AssetGeometry>,
-  anchors?: WordAnchors
+  anchors?: WordAnchors,
+  opts?: SceneScheduleOpts
 ): AnimationEvent[] {
   const events: AnimationEvent[] = [];
   const claimed = new Set<string>(); // "assetId::pathId" / "assetId::text:textId" / "assetId::color[:pathId]"
@@ -191,8 +210,12 @@ export function scheduleScene(
   for (const pl of ordered) {
     const geo = geometry.get(pl.assetId);
     if (!geo) continue;
+    // P0 — the traced cap: over-cap paths are the fade remainder (they are
+    // EXCLUDED from the work list here, revealed by the boundary fade below).
+    const allowedSet = opts?.allowed?.get(pl.assetId);
     for (const [pathId, segs] of geo.paths) {
       if (claimed.has(`${pl.assetId}::${pathId}`)) continue;
+      if (allowedSet && !allowedSet.has(pathId)) continue;
       const len = totalLength(segs) * pl.placement.scale;
       work.push({ kind: "path", assetId: pl.assetId, id: pathId, weight: Math.max(120, len) * derivedFactor(pathId) });
     }
@@ -247,7 +270,93 @@ export function scheduleScene(
     }
     t += durationMs + gapMs;
   });
+  // P0 — the completion-boundary fade: the over-cap remainder of traced
+  // placements reveals through the EXISTING reveal_color grammar (per-path;
+  // the applier drives opacity for the marked stroke elements). The fade
+  // starts when the last drawn stroke finishes and never outlasts the
+  // scene clock. Explicit author events stay senior: a remainder path the
+  // author already scheduled is not faded twice.
+  const fadeKeys = (opts?.remainder ?? []).filter((k) => !claimed.has(k));
+  if (fadeKeys.length > 0) {
+    const boundary = Math.min(t - gapMs, durationMs);
+    const fadeStart = Math.max(0, Math.min(boundary, durationMs - WB_TRACED_FADE_MS));
+    for (const key of fadeKeys) {
+      const sep = key.indexOf("::");
+      events.push({
+        type: "reveal_color",
+        assetId: key.slice(0, sep),
+        pathId: key.slice(sep + 2),
+        startMs: Math.round(fadeStart),
+        durationMs: WB_TRACED_FADE_MS,
+      });
+    }
+  }
   return events.sort((a, b) => a.startMs - b.startMs);
+}
+
+// ---------------------------------------------------------------------------
+// P0 — the traced-placement cap split (the one source the schedulers AND
+// both surfaces read; one derivation, so the fade keys the setup pre-hides
+// are byte-identical to the keys the scheduler excludes).
+// ---------------------------------------------------------------------------
+
+/** The draw window (the fill law's envelope) — extracted so the split
+ * below computes the SAME window scheduleScene schedules inside. */
+export function drawWindow(durationMs: number, anchors?: WordAnchors): { startMs: number; endMs: number } {
+  const spoken = anchorEnvelope(anchors, durationMs);
+  return {
+    startMs: spoken ? spoken.startMs : LEAD_IN_MS,
+    endMs: spoken ? spoken.endMs : durationMs - HOLD_END_MS,
+  };
+}
+
+export interface TracedPlacementSplit {
+  /** assetId → the path ids allowed to DRAW (first-cap, draw order). */
+  allowed: Map<string, Set<string>>;
+  /** "assetId::pathId" keys the boundary fade reveals. */
+  remainder: string[];
+}
+
+/** The cap split for one scene's traced placements: assets tagged
+ * "traced" draw at most tracedCapForWindow(window) strokes per placement
+ * (the fill law's honest arithmetic); the rest are the fade remainder.
+ * Returns null when no traced placement overflows — every caller takes
+ * the byte-for-byte legacy path (the fallback law). PURE + deterministic. */
+export function tracedSplitForScene(
+  scene: WhiteboardScene,
+  geometry: Map<string, AssetGeometry>,
+  assetTags: ReadonlyMap<string, readonly string[]> | undefined,
+  durationMs: number,
+  anchors?: WordAnchors
+): TracedPlacementSplit | null {
+  const win = drawWindow(durationMs, anchors);
+  const winMs = Math.max(1200, win.endMs - win.startMs);
+  const capped = new Set<string>();
+  for (const pl of scene.placements) {
+    const tags = assetTags?.get(pl.assetId);
+    if (tags && tags.includes("traced")) capped.add(pl.assetId);
+  }
+  if (capped.size === 0) return null;
+  const allowed = new Map<string, Set<string>>();
+  const remainder: string[] = [];
+  for (const assetId of capped) {
+    const geo = geometry.get(assetId);
+    if (!geo) continue;
+    const cap = tracedCapForWindow(winMs);
+    const keep = new Set<string>();
+    let n = 0;
+    for (const pathId of geo.paths.keys()) {
+      if (n < cap) {
+        keep.add(pathId);
+        n++;
+      } else {
+        remainder.push(`${assetId}::${pathId}`);
+      }
+    }
+    allowed.set(assetId, keep);
+  }
+  if (remainder.length === 0) return null; // every traced asset fits the window
+  return { allowed, remainder };
 }
 
 // Filled by assets.ts at module init (the asset library is static data —

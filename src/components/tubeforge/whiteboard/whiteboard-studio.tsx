@@ -36,6 +36,9 @@ interface LibraryEntry {
   svg?: string;
   bytes?: number;
   uploadedBy?: string;
+  /** P0: present on TRACED uploads/AI illustrations — the palette labels
+   *  them "traced · N strokes" (provenance from the manifest row). */
+  traced?: { strokes: number; quality: string; sourceFormat: string };
 }
 
 interface WhiteboardGetResponse {
@@ -294,9 +297,11 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
   // ---- Phase C loop (upload / delete — the §7 gates live server-side) ----
 
   const uploadAsset = async (file: File) => {
+    const isRaster = /\.(png|jpe?g)$/i.test(file.name) || file.type.startsWith("image/");
     setBusy("upload");
     setError(null);
     setNotice(null);
+    if (isRaster) setNotice("Tracing image → strokes…");
     try {
       const form = new FormData();
       form.append("file", file);
@@ -308,6 +313,7 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
         assetId?: string;
         bytes?: number;
         probeMs?: number;
+        traced?: { strokes: number; quality: string; sourceFormat: string };
         error?: string;
         errors?: string[];
       };
@@ -315,7 +321,11 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
         setError(body.errors?.length ? body.errors.join(" · ") : (body.error ?? "Upload failed"));
         return;
       }
-      setNotice(`Uploaded "${body.assetId}" (${body.bytes ?? 0} B stored, raster probe ${body.probeMs ?? "?"} ms)`);
+      setNotice(
+        body.traced
+          ? `Traced ${body.traced.strokes} strokes from the ${body.traced.sourceFormat.toUpperCase()} (quality: ${body.traced.quality}) → "${body.assetId}" (${body.bytes ?? 0} B stored)`
+          : `Uploaded "${body.assetId}" (${body.bytes ?? 0} B stored, raster probe ${body.probeMs ?? "?"} ms)`
+      );
       await load(); // refresh the palette + the merged library
     } catch {
       setError("Upload failed");
@@ -635,14 +645,14 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
           <div className="rounded-lg border border-white/10 bg-black/20 p-2.5">
             <div className="mb-1.5 flex items-center justify-between gap-2">
               <p className="text-[11px] font-medium uppercase tracking-wide text-white/40">
-                Uploads — your SVGs (256 KB cap, sanitized + budgeted)
+                Uploads — SVG / PNG / JPG (rasters trace to strokes)
               </p>
-              <label className={`${btnGhost} cursor-pointer`} title="Upload an SVG through the seven gates">
-                {busy === "upload" ? "Uploading…" : "+ Upload SVG"}
+              <label className={`${btnGhost} cursor-pointer`} title="Upload an SVG, PNG or JPEG through the seven gates (rasters are traced into drawable strokes)">
+                {busy === "upload" ? "Working…" : "+ Upload SVG / PNG / JPG"}
                 <input
                   ref={uploadFileRef}
                   type="file"
-                  accept=".svg,image/svg+xml"
+                  accept=".svg,image/svg+xml,.png,image/png,.jpg,.jpeg,image/jpeg"
                   className="hidden"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
@@ -679,10 +689,11 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
                       )}
                       <button
                         onClick={() => addPlacement(a.id)}
-                        title={a.tags.join(", ")}
+                        title={a.traced ? `${a.tags.join(", ")} · traced ${a.traced.strokes} strokes (${a.traced.quality}, from ${a.traced.sourceFormat.toUpperCase()})` : a.tags.join(", ")}
                         className="hover:underline"
                       >
                         {a.id}
+                        {a.traced ? <span className="ml-1 text-white/40">traced · {a.traced.strokes} strokes</span> : null}
                       </button>
                       <button
                         onClick={() => void deleteAsset(a.id)}

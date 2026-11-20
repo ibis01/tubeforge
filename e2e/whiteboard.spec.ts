@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
+import sharp from "sharp";
 
 // S68 — the Whiteboard Studio end-to-end (the authenticated workflow the
 // audit's next-milestone list asked for). Drives the REAL product surface
@@ -409,6 +410,104 @@ test.describe("S68 — whiteboard studio end-to-end", () => {
     const get2 = await request.get(`/api/videos/${videoId}/whiteboard`, { headers: { cookie } });
     const d2 = (await get2.json()) as { library: { id: string; uploaded?: boolean }[] };
     expect(d2.library.find((a) => a.id === "up-s69-probe")).toBeUndefined();
+  });
+
+  test("P0 — raster-to-stroke: a PNG upload traces through the same gates → palette → a real render", async ({ request }) => {
+    const email = `p0trace-${RUN}@tubeforge.test`;
+    const { cookie, verificationUrl } = await register(request, email);
+    if (verificationUrl) {
+      const v = await request.get(verificationUrl);
+      expect(v.status()).toBeLessThan(300);
+    }
+
+    const createRes = await request.post("/api/videos", {
+      headers: { cookie },
+      data: {
+        topic: `P0 trace probe ${RUN}`,
+        niche: "Science",
+        format: "story",
+        renderMode: "whiteboard",
+      },
+    });
+    expect(createRes.status()).toBeLessThan(300);
+    const videoId = ((await createRes.json()) as { video: { id: string } }).video.id;
+
+    // The line-art PNG (deterministic bytes; the same fixture the unit
+    // battery pins): two boxes + an arrow, black ink on white.
+    const svg =
+      `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="320"><rect width="480" height="320" fill="white"/>` +
+      `<rect x="40" y="60" width="120" height="80" fill="none" stroke="black" stroke-width="4"/>` +
+      `<circle cx="330" cy="100" r="55" fill="none" stroke="black" stroke-width="4"/>` +
+      `<path d="M 170 100 L 265 100" stroke="black" stroke-width="4" fill="none"/>` +
+      `<path d="M 230 92 L 250 100 L 230 108" fill="none" stroke="black" stroke-width="4"/>` +
+      `<path d="M 60 240 C 140 200, 240 280, 330 240" fill="none" stroke="black" stroke-width="4"/></svg>`;
+    const png = await sharp(Buffer.from(svg)).png().toBuffer();
+
+    const up = await request.post(`/api/videos/${videoId}/whiteboard/asset`, {
+      headers: { cookie },
+      multipart: { file: { name: "trace probe.png", mimeType: "image/png", buffer: png } },
+    });
+    expect(up.status(), "the PNG passes the trace gates and lands").toBe(201);
+    const traced = (await up.json()) as {
+      assetId: string;
+      traced?: { strokes: number; quality: string; sourceFormat: string };
+    };
+    expect(traced.assetId).toBe("up-trace-probe");
+    expect(traced.traced?.strokes).toBeGreaterThan(0);
+    expect(traced.traced?.sourceFormat).toBe("png");
+
+    // The palette carries the trace provenance + the traced tag.
+    const get1 = await request.get(`/api/videos/${videoId}/whiteboard`, { headers: { cookie } });
+    expect(get1.status()).toBe(200);
+    const d1 = (await get1.json()) as {
+      library: { id: string; uploaded?: boolean; svg?: string; paths?: string[]; traced?: { strokes: number } }[];
+    };
+    const entry = d1.library.find((a) => a.id === "up-trace-probe");
+    expect(entry?.uploaded).toBe(true);
+    expect(entry?.svg).toContain("<path");
+    expect(entry?.traced?.strokes).toBeGreaterThan(0);
+    // Traced assets SKIP the sketch pass (no -od retraces) — the source is
+    // already linework; every emitted path is a single-subpath stroke.
+    expect(entry?.paths?.every((p) => !p.endsWith("-od") && !p.endsWith("-h"))).toBe(true);
+
+    // Place + render a scene preview through the traced asset — the SAME
+    // renderer, the same frame clock (preview ≡ export by construction).
+    const project = handAuthoredProject("P0 trace board");
+    project.scenes[0].placements = [
+      { assetId: "up-trace-probe", placement: { x: 700, y: 300, scale: 1.6, rotateDeg: 0 }, order: 0 },
+    ];
+    const put1 = await request.put(`/api/videos/${videoId}/whiteboard`, {
+      headers: { cookie, "Content-Type": "application/json" },
+      data: { project },
+    });
+    expect(put1.status()).toBeLessThan(300);
+
+    const renderRes = await request.post(`/api/videos/${videoId}/whiteboard/render`, {
+      headers: { cookie, "Content-Type": "application/json" },
+      data: { sceneId: "scene-1" },
+    });
+    expect([200, 202]).toContain(renderRes.status());
+
+    test.setTimeout(240_000);
+    let previewUrl: string | null = null;
+    let lastError: string | null = null;
+    for (let i = 0; i < 90; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const dto = await request.get(`/api/videos/${videoId}`, { headers: { cookie } });
+      if (!dto.ok()) continue;
+      const body = (await dto.json()) as { video?: { previewUrl?: string | null; error?: string | null } };
+      lastError = body.video?.error ?? lastError;
+      if (body.video?.previewUrl) {
+        previewUrl = body.video.previewUrl;
+        break;
+      }
+    }
+    expect(previewUrl, `a render PLACING the traced asset must land (last video.error: ${lastError})`).toBe(
+      `/api/videos/${videoId}/mp4?variant=preview`
+    );
+    const mp4 = await request.get(`/api/videos/${videoId}/mp4?variant=preview`, { headers: { cookie } });
+    expect(mp4.status()).toBe(200);
+    expect((mp4.headers()["content-type"] ?? "")).toContain("video/");
   });
 });
 

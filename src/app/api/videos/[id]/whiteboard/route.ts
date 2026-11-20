@@ -85,6 +85,11 @@ export async function GET(req: NextRequest, ctx: Ctx) {
             svg: upload.svg,
             bytes: row?.bytes ?? 0,
             uploadedBy: row?.uploadedBy ?? "",
+            // P0 — the trace provenance the palette labels read
+            // ("traced · N strokes"); absent on pre-P0/SVG rows.
+            ...(row?.traced
+              ? { traced: { strokes: row.traced.strokes, quality: row.traced.quality, sourceFormat: row.traced.sourceFormat } }
+              : {}),
           }
         : {}),
     };

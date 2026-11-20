@@ -20,9 +20,21 @@
 import { countPathCommands, sanitizeSvg } from "./svg";
 import { extractAsset, WB_PATH_COMMAND_BUDGET, type WhiteboardAsset } from "./assets";
 import { validateAsset } from "./asset-validate";
+import { traceRasterToStrokes, TraceError, type TraceReceipt } from "./trace";
+import { WB_TRACED_TOTAL_BUDGET } from "./trace-budget";
 
 /** Gate 1 — the transport wall: 256 KB raw (design §7.1). */
 export const WB_UPLOAD_MAX_BYTES = 256 * 1024;
+
+/** Gate 1 — the RASTER transport wall (P0): PNG/JPEG decode+trace pays a
+ *  different byte economy than SVG text; 8 MB caps the decompression-bomb
+ *  surface while sharp's decoder works on fixed working dimensions. */
+export const WB_RASTER_MAX_BYTES = 8 * 1024 * 1024;
+
+/** Gate 2 — the raster dimension ceiling (mirrors the viewBox ceiling
+ *  law): a larger image is downsampled by the trace pipeline anyway, so
+ *  refusing oversized sources up front names the wall readably. */
+export const WB_RASTER_DIMENSION_MAX = 4096;
 
 /** Gate 4 — the per-asset TOTAL command budget (design §7.4). */
 export const WB_UPLOAD_TOTAL_COMMAND_BUDGET = 2048;
@@ -49,6 +61,23 @@ export interface UploadValidationOk {
   paths: number;
   texts: number;
   commands: number;
+  /** P0 — present ONLY for raster uploads: the trace receipt (the
+   *  manifest row carries the compact meta; this is the full record). */
+  trace?: TraceReceipt;
+}
+
+/** P0 — the compact trace provenance the manifest row stores (asset-store
+ *  WhiteboardUploadRow.traced; the plan's P0-4 shape, additive JSON). */
+export interface TracedUploadMeta {
+  strokes: number;
+  commands: number;
+  sourceBytes: number;
+  sourceFormat: "png" | "jpeg";
+  ms: number;
+  quality: string;
+  /** P0-7 — recorded ONLY on AI-generated assets (the bridge route). */
+  prompt?: string;
+  policyId?: string;
 }
 
 export interface UploadValidationErr {
@@ -187,4 +216,188 @@ export function validateUploadedSvg(
   }
 
   return { ok: true, asset, paths: ex.paths.length, texts: ex.texts.length, commands };
+}
+
+// ---------------------------------------------------------------------------
+// P0 — the raster gate branch (the plan's P0-2). The gates stay SEVEN and
+// in order: transport → sniff → [trace] → sanitize → budget → validator →
+// probe/quota/storage. The trace step sits between the sniff and sanitize
+// and its OUTPUT (the derived stroke fragment) is what every later gate
+// sees — the raster never bypasses a gate, it ENTERS them one stage later.
+// ---------------------------------------------------------------------------
+
+/** Gate 2 (raster) — the magic-byte sniff + header dimension parse.
+ *  Content-type headers are advisory only (the SVG sniff's law); the BYTES
+ *  are the truth. PNG IHDR / JPEG SOF scans are exact, so an oversized or
+ *  broken source is named BEFORE the decoder sees it. Returns null when
+ *  the bytes are neither PNG nor JPEG (the caller defers to the SVG path). */
+export function sniffRasterImage(raw: Buffer): { format: "png" | "jpeg"; width: number; height: number } | null {
+  if (raw.length < 24) return null;
+  // PNG: the 8-byte signature, then an IHDR chunk (length 13) whose body
+  // starts with the big-endian width/height pair.
+  if (
+    raw[0] === 0x89 && raw[1] === 0x50 && raw[2] === 0x4e && raw[3] === 0x47 &&
+    raw[4] === 0x0d && raw[5] === 0x0a && raw[6] === 0x1a && raw[7] === 0x0a
+  ) {
+    if (raw.length < 24 || raw.readUInt32BE(8) !== 13 || raw.toString("ascii", 12, 16) !== "IHDR") return null;
+    return { format: "png", width: raw.readUInt32BE(16), height: raw.readUInt32BE(20) };
+  }
+  // JPEG: SOI marker, then the segment walk to the first SOFx frame header
+  // (height at +5, width at +7, big-endian). RSTn/temple markers carry no
+  // length prefix — everything else does.
+  if (raw[0] === 0xff && raw[1] === 0xd8 && raw[2] === 0xff) {
+    let off = 2;
+    while (off + 4 <= raw.length) {
+      if (raw[off] !== 0xff) {
+        off++;
+        continue;
+      }
+      const marker = raw[off + 1];
+      if (marker === 0xff || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) {
+        off += 2;
+        continue;
+      }
+      if (off + 9 > raw.length) return null;
+      const segLen = raw.readUInt16BE(off + 2);
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return { format: "jpeg", width: raw.readUInt16BE(off + 7), height: raw.readUInt16BE(off + 5) };
+      }
+      off += 2 + segLen;
+    }
+    return null;
+  }
+  return null;
+}
+
+const TRACE_REJECT_REASON: Record<string, (r: { inkRatio: number; components: number }) => string> = {
+  blank: (r) =>
+    `the image is essentially blank (${(r.inkRatio * 100).toFixed(1)}% ink coverage) — there is no line art to trace; check that the file exported correctly`,
+  dense: (r) =>
+    `the image is mostly solid ink (${(r.inkRatio * 100).toFixed(1)}% coverage) — filled artwork and photographs do not trace into drawable strokes; use outline/line-art sources`,
+  noisy: (r) =>
+    `the image carries photo-like noise (${r.components} components) — tracing it would produce unreadable scribble; use clean, high-contrast line art`,
+  photo: (r) =>
+    `the image reads as a photograph (${(r.inkRatio * 100).toFixed(1)}% ink, ${r.components} components) — the tracer draws line art; use an outline drawing, a diagram, or generate one through the AI-illustration bridge`,
+};
+
+/** Gates 1–4 mapped to raster. The trace receipt rides the ok branch
+ *  (additive `trace` field — the SVG path's shape is untouched). ASYNC:
+ *  the trace pipeline is a codec pipeline (sharp has no sync decode). */
+export async function validateUploadedRaster(
+  raw: Buffer,
+  filename: string,
+  reservedIds: ReadonlySet<string> = new Set()
+): Promise<UploadValidation> {
+  if (raw.length === 0) return { ok: false, errors: ["the file is empty"] };
+  if (raw.length > WB_RASTER_MAX_BYTES) {
+    return {
+      ok: false,
+      errors: [
+        `the image is ${(Math.round((raw.length / (1024 * 1024)) * 10) / 10).toFixed(1)} MB — the raster upload cap is ${WB_RASTER_MAX_BYTES / (1024 * 1024)} MB`,
+      ],
+    };
+  }
+  const sniffed = sniffRasterImage(raw);
+  if (!sniffed) {
+    return { ok: false, errors: ["not a PNG or JPEG image (the magic bytes say so) — export the file as PNG or JPEG"] };
+  }
+  if (sniffed.width <= 0 || sniffed.height <= 0) {
+    return { ok: false, errors: ["the image header carries no usable dimensions — the file may be truncated"] };
+  }
+  if (sniffed.width > WB_RASTER_DIMENSION_MAX || sniffed.height > WB_RASTER_DIMENSION_MAX) {
+    return {
+      ok: false,
+      errors: [
+        `the image is ${sniffed.width}×${sniffed.height}px — the ceiling is ${WB_RASTER_DIMENSION_MAX}px on an axis (downscale it first; the tracer works at a fixed size anyway)`,
+      ],
+    };
+  }
+
+  const id = deriveUploadAssetId(filename);
+  if (reservedIds.has(id)) {
+    return {
+      ok: false,
+      errors: [`asset id "${id}" is already taken on this video — rename the file or delete the existing asset first`],
+    };
+  }
+
+  // The trace step (between sniff and sanitize — its OUTPUT is what the
+  // remaining gates see). TraceError messages are already user-shaped.
+  let result;
+  try {
+    result = await traceRasterToStrokes(raw);
+  } catch (err) {
+    if (err instanceof TraceError) return { ok: false, errors: [err.message] };
+    throw err;
+  }
+
+  // The quality gate (audit §4A): unsuitable images are rejected with the
+  // useful explanation, never traced into poor animations.
+  const reject = TRACE_REJECT_REASON[result.receipt.quality];
+  if (reject) return { ok: false, errors: [reject(result.receipt)] };
+
+  // Gate 3 — the SAME sanitizer (a property of the pipeline; the generated
+  // fragment is clean by construction, the gate runs anyway).
+  const sanitized = sanitizeSvg(result.svgFragment);
+
+  // Gate 4 — extraction + the walls: per-path 512 (traced strokes emit
+  // ≤ 96 by construction) and the TRACED total budget (4,096 — the raised
+  // wall the plan's P0-5 names; the SVG's 2,048 stays untouched).
+  const asset: WhiteboardAsset = {
+    id,
+    viewBox: result.viewBox,
+    tags: ["upload", "traced"],
+    svg: sanitized,
+  };
+  const errors: string[] = [];
+  const ex = extractAsset(asset);
+  for (const r of ex.rejected) {
+    const reason =
+      r.reason === "id-charset"
+        ? `element id "${r.id}" violates the id charset (namespace separators --/:: and exotic characters are forbidden)`
+        : `path "${r.id}" exceeds the ${WB_PATH_COMMAND_BUDGET}-command per-path budget`;
+    errors.push(reason);
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  if (ex.paths.length === 0) {
+    return { ok: false, errors: ["the trace produced no drawable <path> elements — internal tracer bug, please report"] };
+  }
+  let commands = 0;
+  for (const p of ex.paths) commands += countPathCommands(p.d);
+  if (commands > WB_TRACED_TOTAL_BUDGET) {
+    return {
+      ok: false,
+      errors: [`${commands} total path commands exceed the ${WB_TRACED_TOTAL_BUDGET}-command traced-asset budget`],
+    };
+  }
+
+  // W3 — the same validator the SVG path runs: single-subpath, no
+  // teleport, no self-crossing, sane caps (the split law's purpose).
+  const report = validateAsset(asset);
+  if (!report.ok) {
+    return { ok: false, errors: report.findings.map((f) => f.reason ?? "invalid stroke geometry") };
+  }
+
+  return { ok: true, asset, paths: ex.paths.length, texts: 0, commands, trace: result.receipt };
+}
+
+/** The ONE unified entry the route calls: sniff once, dispatch to the SVG
+ *  or raster validator. Non-raster non-UTF-8 bytes (a WebP, a PDF, a zip)
+ *  get the honest format list instead of the bare UTF-8 message. */
+export async function validateUpload(
+  raw: Buffer,
+  filename: string,
+  reservedIds: ReadonlySet<string> = new Set()
+): Promise<UploadValidation> {
+  if (raw.length === 0) return { ok: false, errors: ["the file is empty"] };
+  if (sniffRasterImage(raw)) return validateUploadedRaster(raw, filename, reservedIds);
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(raw);
+  } catch {
+    return {
+      ok: false,
+      errors: ["only PNG, JPEG or SVG files are supported — this file is neither valid raster magic nor UTF-8 text"],
+    };
+  }
+  return validateUploadedSvg(raw, filename, reservedIds);
 }

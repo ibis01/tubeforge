@@ -18,6 +18,7 @@
 import { db } from "@/lib/tubeforge/tenant-db";
 import { get, put, remove } from "@/lib/tubeforge/storage";
 import { loadLibrary, type WhiteboardAsset } from "./assets";
+import type { TracedUploadMeta } from "./upload";
 import {
   WB_UPLOADS_PER_ORG,
   WB_UPLOADS_PER_VIDEO,
@@ -37,14 +38,34 @@ export interface WhiteboardUploadRow {
   bytes: number;
   uploadedBy: string;
   createdAt: Date;
+  /** P0 — the trace provenance (JSON TEXT column; parsed, additive,
+   *  absent on pre-P0 rows). The compact meta per the plan's P0-4: the
+   *  original raster is NOT persisted (trace-only flow) — this receipt is
+   *  the provenance record; re-upload regenerates deterministically.
+   *  AI-generated assets additionally carry prompt + policyId (P0-7). */
+  traced?: TracedUploadMeta;
+}
+
+/** Normalize a raw Prisma row to the manifest shape: the `traced` TEXT
+ *  column parses to its JSON shape when present; absent/corrupt degrades
+ *  to no provenance (metadata is never load-bearing). */
+function toUploadRow(r: { traced: string | null } & Omit<WhiteboardUploadRow, "traced">): WhiteboardUploadRow {
+  const { traced, ...rest } = r;
+  if (!traced) return rest as WhiteboardUploadRow;
+  try {
+    return { ...rest, traced: JSON.parse(traced) as TracedUploadMeta };
+  } catch {
+    return rest as WhiteboardUploadRow;
+  }
 }
 
 /** The manifest rows for one video (oldest first — palette order). */
 export async function listVideoUploads(videoId: string): Promise<WhiteboardUploadRow[]> {
-  return db.whiteboardAssetUpload.findMany({
+  const rows = await db.whiteboardAssetUpload.findMany({
     where: { videoId },
     orderBy: { createdAt: "asc" },
   });
+  return rows.map(toUploadRow);
 }
 
 /** Gate 6 count walls: per-video + per-org asset counts (bytes ride put). */
@@ -61,15 +82,19 @@ export async function uploadCountWalls(
 
 /** Store the sanitized fragment + write the manifest row (gates 6–7; the
  *  caller has already run gates 1–5). storage.put enforces the per-org BYTE
- *  quota; the route checked the COUNT walls before calling this. */
+ *  quota; the route checked the COUNT walls before calling this.
+ *  P0: `tracedMeta` records the raster-to-stroke provenance (or the AI
+ *  bridge's prompt + policy) on the row — additive, optional, JSON-TEXT
+ *  (the house law keeps the column TEXT so SQLite and Postgres match). */
 export async function saveVideoUpload(
   video: { id: string; organizationId: string },
   asset: WhiteboardAsset,
-  uploadedBy: string
+  uploadedBy: string,
+  tracedMeta?: TracedUploadMeta
 ): Promise<WhiteboardUploadRow> {
   const bytes = Buffer.byteLength(asset.svg, "utf8");
   await put(whiteboardAssetKey(video.id, asset.id), Buffer.from(asset.svg, "utf8"));
-  return db.whiteboardAssetUpload.create({
+  const created = await db.whiteboardAssetUpload.create({
     data: {
       organizationId: video.organizationId,
       videoId: video.id,
@@ -78,8 +103,10 @@ export async function saveVideoUpload(
       viewBoxH: asset.viewBox.h,
       bytes,
       uploadedBy,
+      ...(tracedMeta ? { traced: JSON.stringify(tracedMeta) } : {}),
     },
   });
+  return toUploadRow(created);
 }
 
 /** Delete one upload (manifest row + object). Returns false when the assetId
@@ -142,7 +169,10 @@ export async function loadVideoLibrary(videoId: string): Promise<VideoLibrary> {
       list.push({
         id: row.assetId,
         viewBox: { w: row.viewBoxW, h: row.viewBoxH },
-        tags: ["upload"],
+        // P0 — traced uploads carry the tag so the schedulers' cap + fade
+        // law (WB_TRACED_STROKES_PER_PLACEMENT) recognizes them; the
+        // tag rides the ROW (provenance), not the stored fragment.
+        tags: row.traced ? ["upload", "traced"] : ["upload"],
         svg: buf.toString("utf8"),
       });
     } catch {

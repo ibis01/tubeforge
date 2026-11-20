@@ -37,6 +37,7 @@ import {
   frameCount,
   resolveCarriedInk,
   sceneDurationMs,
+  tracedSplitForScene,
 } from "@/lib/tubeforge/whiteboard/timing";
 // W2 — the semantic beat compiler: the preview schedules through the same
 // beatSceneEvents the renderer runs (the one-source law — preview ≡ final).
@@ -119,7 +120,20 @@ function sceneRuntime(
           scene.board
         )
       : null;
-  return { lib, geometry, scene, durationMs, events: beatSceneEvents(scene, durationMs, geometry, assetTags, undefined, assetMeta), carry, roles };
+  // P0 — the traced-remainder fade keys: the SAME tracedSplitForScene
+  // derivation the scheduler used (one source, both surfaces) — the setup
+  // pre-hides these paths with the marker the applier's fade reads.
+  const tracedSplit = tracedSplitForScene(scene, geometry, assetTags, durationMs);
+  return {
+    lib,
+    geometry,
+    scene,
+    durationMs,
+    events: beatSceneEvents(scene, durationMs, geometry, assetTags, undefined, assetMeta),
+    carry,
+    roles,
+    fadeKeys: new Set(tracedSplit?.remainder ?? []),
+  };
 }
 
 /** Placement bbox corners in SCENE space: R(rot)·s·(u,v) + (x,y) over the
@@ -261,6 +275,17 @@ export default function WbCanvas({
       w.__wbText = new Map(composed.textEls);
       for (const [key, elId] of composed.pathEls) {
         const [assetId, pathId] = key.split("::");
+        // P0 — the traced remainder: opacity-fade ONLY (no dash machinery —
+        // the colors applier drives these elements at the completion
+        // boundary). Same derivation the scheduler used (one source).
+        if (rt.fadeKeys.has(key)) {
+          const el = doc.getElementById(elId);
+          if (el) {
+            (el as unknown as { style: CSSStyleDeclaration }).style.opacity = "0";
+            el.dataset.fade = "1";
+          }
+          continue;
+        }
         const segs = rt.geometry.get(assetId)?.paths.get(pathId);
         if (!segs) continue;
         let len = 0;

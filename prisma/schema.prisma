@@ -513,6 +513,13 @@ model WhiteboardAssetUpload {
   viewBoxH       Int
   bytes          Int      @default(0)
   uploadedBy     String
+  /** P0 raster-to-stroke — the trace provenance as JSON TEXT (the house
+   *  law keeps it TEXT, not Json, so SQLite and Postgres behave
+   *  identically): {strokes, commands, sourceBytes, sourceFormat, ms,
+   *  quality, prompt?, policyId?}. Additive + nullable; pre-P0 rows carry
+   *  null. The original raster is intentionally not persisted (trace-only
+   *  flow) — this receipt IS the provenance record. */
+  traced         String?
   createdAt      DateTime @default(now())
 
   video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)

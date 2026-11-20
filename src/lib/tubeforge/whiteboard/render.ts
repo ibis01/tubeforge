@@ -41,6 +41,7 @@ import {
   estimateProjectFrames,
   frameAt,
   resolveCarriedInk,
+  tracedSplitForScene,
   WB_RENDER_FRAME_BUDGET,
   type FrameState,
 } from "./timing";
@@ -510,6 +511,12 @@ export async function renderWhiteboard(
       // anchorless scenes keep the estimator byte-for-byte.
       const events = beatSceneEvents(scene, durationMs, geometry, assetTags, anchorsBySceneId.get(scene.id), assetMeta);
       eventsByScene.push(events);
+      // P0 — the traced-remainder fade keys: the SAME tracedSplitForScene
+      // derivation the scheduler just used (one source) — the setup pass
+      // pre-hides these paths with the opacity marker the applier's fade
+      // reads. Null split → empty set → byte-identical setup.
+      const tracedSplit = tracedSplitForScene(scene, geometry, assetTags, durationMs, anchorsBySceneId.get(scene.id));
+      const fadeKeys = new Set(tracedSplit?.remainder ?? []);
       const frames = clock.scenes[si].frames;
       // W6 — the carry plan: a continuous scene inherits the PREVIOUS
       // scene's ink, resolved as DATA at the previous scene's own clock
@@ -595,6 +602,19 @@ export async function renderWhiteboard(
       );
       for (const [key, elId] of composed.pathEls) {
         const [assetId, pathId] = key.split("::");
+        // P0 — the traced remainder: opacity-fade ONLY (no dash machinery —
+        // the colors applier drives these elements at the completion
+        // boundary). The fade keys come from the SAME tracedSplitForScene
+        // derivation the schedulers used for the events (one source).
+        if (fadeKeys.has(key)) {
+          await page.evaluate(({ elId }) => {
+            const el = document.getElementById(elId);
+            if (!el) return;
+            el.style.opacity = "0";
+            el.dataset.fade = "1";
+          }, { elId });
+          continue;
+        }
         const segs = geometry.get(assetId)?.paths.get(pathId);
         if (!segs) continue;
         let len = 0;

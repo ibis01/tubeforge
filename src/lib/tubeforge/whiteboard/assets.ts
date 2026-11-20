@@ -619,7 +619,15 @@ export function loadLibrary(uploaded: WhiteboardAsset[] = []): {
     // S164 — assets that carry the additive roughness/bowing knobs ride
     // the Rough.js geometry BEHIND that pass; absent knobs (every built-in)
     // take the exact legacy call, byte for byte.
-    if (!(a.id.startsWith("hand-") || a.tags.includes("hand"))) {
+    // P0 — traced assets SKIP the sketch pass: the source already carries
+    // the drawing's own linework (a seeded retrace would double the
+    // scheduler's work items and re-sketch camera-derived contours — the
+    // hand would redraw a photograph's contours twice). Every other asset
+    // rides the pass byte-for-byte (the fallback law).
+    if (
+      !(a.id.startsWith("hand-") || a.tags.includes("hand")) &&
+      !a.tags.includes("traced")
+    ) {
       const knobs =
         a.roughness !== undefined || a.bowing !== undefined
           ? { roughness: a.roughness, bowing: a.bowing }

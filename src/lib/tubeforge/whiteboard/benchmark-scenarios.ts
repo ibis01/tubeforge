@@ -303,6 +303,133 @@ export function buildBenchmarkProject(aspect: W1AspectId): WhiteboardProject {
 }
 
 // ---------------------------------------------------------------------------
+// P0 — the traced-image benchmark seed (the plan's P0-8) + the five-subject
+// slots. The W1 five-scene set above stays FROZEN (the reconciliation's
+// law); the traced seed rides BESIDE it as its own scene id + a pure
+// builder, so buildBenchmarkProject remains byte-identical (the
+// no-regression pin) while the harness gains a raster lane.
+// ---------------------------------------------------------------------------
+
+export const W1_TRACED_SCENE_ID = "w1-traced";
+
+/** The committed line-art fixture the benchmark script, the unit battery
+ *  and the e2e golden path all trace (scripts/fixtures/whiteboard-trace-
+ *  fixture.png). This module stays PURE: the bytes are a PARAMETER — the
+ *  script reads the file and traces it through traceRasterToStrokes; here
+ *  only the RESULT is placed. */
+export const W1_TRACED_FIXTURE = "scripts/fixtures/whiteboard-trace-fixture.png";
+
+export interface W1TracedAssetInput {
+  assetId: string;
+  /** The traced fragment (extractAsset-shaped, single-subpath paths). */
+  svg: string;
+  viewBox: { w: number; h: number };
+  strokes: number;
+}
+
+export const W1_TRACED_NARRATION =
+  "This diagram was not drawn by hand. A picture went in, and the pen drew every line of it — the same strokes, the same engine.";
+
+/** The five-subject benchmark suite slots (the operator's five benchmark
+ *  subjects): NAMED now with placeholder topics + policy ids, FILLED in
+ *  the benchmark stage (the plan's own timing decision). The
+ *  islamic-history slot carries its content policy from day one — the I.8
+ *  constraint is a property of the SLOT, not an afterthought. */
+export const W1_SUBJECT_SLOTS: readonly {
+  id: string;
+  topic: string;
+  policyId: "standard" | "islamic-history";
+  scenarioIds: readonly string[];
+  status: "active" | "placeholder";
+}[] = [
+  {
+    id: "science",
+    topic: "How Your Heart Works",
+    policyId: "standard",
+    scenarioIds: W1_SCENE_IDS,
+    status: "active",
+  },
+  {
+    id: "engineering",
+    topic: "How a Suspension Bridge Holds (placeholder)",
+    policyId: "standard",
+    scenarioIds: [],
+    status: "placeholder",
+  },
+  {
+    id: "islamic-history",
+    topic: "The House of Wisdom, Baghdad (placeholder)",
+    policyId: "islamic-history",
+    scenarioIds: [],
+    status: "placeholder",
+  },
+  {
+    id: "business",
+    topic: "Why Startups Run Out of Cash (placeholder)",
+    policyId: "standard",
+    scenarioIds: [],
+    status: "placeholder",
+  },
+  {
+    id: "general-education",
+    topic: "How Rivers Shape the Land (placeholder)",
+    policyId: "standard",
+    scenarioIds: [],
+    status: "placeholder",
+  },
+];
+
+/** Build the traced benchmark project for one aspect — PURE, deterministic
+ *  (the traced asset is an INPUT, not a file read; two calls with the same
+ *  input return deep-equal projects). One process-diagram scene: the
+ *  traced illustration draws progressively under the fill law, the arrow
+ *  punctuates it, and the traced strokes ride the SAME scheduleScene /
+ *  frameAt machinery every built-in rides. */
+export function buildTracedBenchmarkProject(aspect: W1AspectId, traced: W1TracedAssetInput): WhiteboardProject {
+  const { width, height } = W1_ASPECTS[aspect];
+  const fit = fitFor(aspect);
+  // Display target ~480 design px wide (portrait: ~380) — the traced asset
+  // scales like a library asset despite its own viewBox size.
+  const designScale = Math.round(((aspect === "9:16" ? 380 : 480) / traced.viewBox.w) * 1000) / 1000;
+  const items: W1DesignItem[] = [
+    { assetId: traced.assetId, dx: aspect === "9:16" ? 90 : 320, dy: aspect === "9:16" ? 620 : 220, designScale },
+    { assetId: "arrow-curve", dx: aspect === "9:16" ? 380 : 880, dy: aspect === "9:16" ? 560 : 500, designScale: 0.9, rotateDeg: -15, order: 2 },
+  ];
+  const placements = items.map((it) => {
+    const vb = it.assetId === traced.assetId ? traced.viewBox : W1_ASSET_VIEWBOX[it.assetId];
+    if (!vb) throw new Error(`w1-traced references unmapped asset ${it.assetId}`);
+    return {
+      assetId: it.assetId,
+      placement: {
+        x: round1(fit.ox + it.dx * fit.scale),
+        y: round1(fit.oy + it.dy * fit.scale),
+        scale: round3(it.designScale * fit.scale),
+        rotateDeg: it.rotateDeg ?? 0,
+      },
+      ...(it.order !== undefined ? { order: it.order } : {}),
+    };
+  });
+  return {
+    title: "W1 traced-image seed — the raster-to-stroke lane",
+    width,
+    height,
+    fps: W1_FPS,
+    hand: { style: "marker", scale: 1 },
+    scenes: [
+      {
+        id: W1_TRACED_SCENE_ID,
+        narration: W1_TRACED_NARRATION,
+        durationMs: 8500,
+        background: "#ffffff" as const,
+        placements,
+        animations: [],
+        camera: [],
+      },
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The clock — explicit durations, cumulative spans, sample + seam times.
 // Aspect-independent (durations are frozen), so timestamps are comparable
 // across aspects and runs.

@@ -197,6 +197,13 @@ jobs:
       - name: Unit + regression suite
         run: npm run test
 
+      # P0 raster-to-stroke — the trace battery (the plan's P0-9): stage
+      # pins (skeleton/junction/DP/ordering), budget pins, magic-byte pins,
+      # the W3 validator pins, the scheduler cap+fade pins, the benchmark
+      # seed pins. Pure + deterministic (sharp decodes in-memory bytes).
+      - name: Whiteboard trace battery (P0 raster-to-stroke)
+        run: npm run test:whiteboard-trace
+
       - name: Queue integration suite (resume contract, real worker restart)
         run: npm run test:queue
 

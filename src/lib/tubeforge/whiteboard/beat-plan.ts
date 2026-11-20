@@ -45,9 +45,11 @@ import {
   TEXT_IDS_BY_ASSET,
   anchorEnvelope,
   scheduleScene,
+  tracedSplitForScene,
   type AssetGeometry,
   type WordAnchors,
 } from "./timing";
+import { WB_TRACED_FADE_MS } from "./trace-budget";
 import { totalLength } from "./svg";
 import type { AnimationEvent, WhiteboardScene } from "./storyboard";
 
@@ -598,7 +600,8 @@ export function compileBeats(
   beats: WhiteboardBeat[],
   scene: WhiteboardScene,
   durationMs: number,
-  geometry: Map<string, AssetGeometry>
+  geometry: Map<string, AssetGeometry>,
+  traced?: { allowed?: ReadonlyMap<string, ReadonlySet<string>>; remainder?: readonly string[] }
 ): AnimationEvent[] {
   const events: AnimationEvent[] = [...scene.animations];
   const claimed = claimedKeys(scene);
@@ -615,8 +618,13 @@ export function compileBeats(
       const geo = geometry.get(assetId);
       if (geo) {
         const scale = scene.placements.find((pl) => pl.assetId === assetId)?.placement.scale ?? 1;
+        // P0 — the traced cap: over-cap paths never enter any beat's fill
+        // (they would schedule past the scene clock); they ride the
+        // completion-boundary fade below instead.
+        const allowedSet = traced?.allowed?.get(assetId);
         for (const [pathId, segs] of geo.paths) {
           if (claimed.has(`${assetId}::${pathId}`)) continue;
+          if (allowedSet && !allowedSet.has(pathId)) continue;
           items.push({ kind: "path", assetId, id: pathId, weight: Math.max(120, totalLength(segs) * scale) });
         }
       }
@@ -670,6 +678,31 @@ export function compileBeats(
       t += dur + PATH_GAP_MS;
     }
   }
+  // P0 — the completion-boundary fade: the over-cap remainder of traced
+  // placements reveals through the EXISTING reveal_color grammar when the
+  // last drawn stroke finishes (never outlasting the scene clock). Explicit
+  // author events stay senior — an already-claimed remainder path is not
+  // faded twice. Absent traced opts → byte-identical compile.
+  const fadeKeys = (traced?.remainder ?? []).filter((k) => !claimed.has(k));
+  if (fadeKeys.length > 0) {
+    let maxEnd = 0;
+    for (const e of events) {
+      if (e.type === "draw_path" || e.type === "write_text") {
+        maxEnd = Math.max(maxEnd, e.startMs + e.durationMs);
+      }
+    }
+    const fadeStart = Math.max(0, Math.min(maxEnd, durationMs - WB_TRACED_FADE_MS));
+    for (const key of fadeKeys) {
+      const sep = key.indexOf("::");
+      events.push({
+        type: "reveal_color",
+        assetId: key.slice(0, sep),
+        pathId: key.slice(sep + 2),
+        startMs: Math.round(fadeStart),
+        durationMs: WB_TRACED_FADE_MS,
+      });
+    }
+  }
   return events.sort((a, b) => a.startMs - b.startMs);
 }
 
@@ -696,11 +729,16 @@ export function beatSceneEvents(
   anchors?: WordAnchors,
   assetMeta?: ReadonlyMap<string, AssetBeatMeta>
 ): AnimationEvent[] {
-  const fallback = () => scheduleScene(scene, durationMs, geometry, anchors);
+  // P0 — the traced-placement cap split, computed ONCE here (the same pure
+  // derivation the renderer's setup and the editor's setup read for the
+  // fade pre-hide — one source, both surfaces).
+  const split = tracedSplitForScene(scene, geometry, assetTags, durationMs, anchors);
+  const traced = split ? { allowed: split.allowed, remainder: split.remainder } : undefined;
+  const fallback = () => scheduleScene(scene, durationMs, geometry, anchors, traced);
   if (!(durationMs > 0)) return fallback();
   const beats = planBeats(scene, { durationMs, geometry, assetTags, anchors, assetMeta });
   if (beats.length === 0) return fallback();
-  const events = compileBeats(beats, scene, durationMs, geometry);
+  const events = compileBeats(beats, scene, durationMs, geometry, traced);
   // A usable plan always adds the unclaimed work; an empty list here is
   // the degenerate corner (nothing drawable at all) — the fill law's
   // output would be identical, so either path agrees. Take the fallback
