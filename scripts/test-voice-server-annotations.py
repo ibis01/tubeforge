@@ -11,14 +11,15 @@ Broken (before fix):
     both     -> 422 {"detail":[{"type":"missing","loc":["query","request"] ...
 """
 
+import os
 import sys
 
-sys.path.insert(0, "/home/z/my-project/voice-server")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "voice-server"))
 
 import voice_server
 from fastapi.testclient import TestClient
 
-app = voice_server.build_app("ismail-01", "en")
+app = voice_server.build_app("tubeforge-test", "en")
 client = TestClient(app)
 
 r_health = client.get("/health")
@@ -27,7 +28,7 @@ print("health   :", r_health.status_code, r_health.text[:100])
 r1 = client.post("/tts", json={"text": "hi"})
 print("no-key   :", r1.status_code, r1.text[:120])
 
-r2 = client.post("/tts", json={"text": "hi"}, headers={"X-Voice-Key": "ismail-01"})
+r2 = client.post("/tts", json={"text": "hi"}, headers={"X-Voice-Key": "tubeforge-test"})
 print("with-key :", r2.status_code, r2.text[:120])
 
 ok = r1.status_code == 401 and r2.status_code == 503

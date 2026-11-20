@@ -21,8 +21,8 @@ await page.goto("http://localhost:3000/", { waitUntil: "domcontentloaded", timeo
 await page.waitForTimeout(4000);
 const email = page.getByLabel("Email");
 if (await email.count()) {
-  await email.fill("ibismuh@yahoo.com");
-  await page.locator('form input[type="password"]').first().fill("StudioS1-2026");
+  await email.fill("operator@tubeforge.local");
+  await page.locator('form input[type="password"]').first().fill("tubeforge-demo-2026");
   await page.getByRole("button", { name: "Sign in" }).click();
   await page.waitForTimeout(5000);
 }

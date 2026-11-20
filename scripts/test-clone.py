@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Test the self-hosted clone endpoint with a reference sample.
 
-Sends POST /tts {"text", "voice": <base64 wav>} through the Tailscale Funnel
+Sends POST /tts {"text", "voice": <base64 wav>} through the tunnel
 and reports status / audio stats.
 """
 import base64
@@ -9,8 +9,8 @@ import json
 import sys
 import urllib.request
 
-BASE = "https://ibismuh-hp-elitebook-845-g8-notebook-pc.taila6859e.ts.net"
-KEY = "ismail-01"
+BASE = "http://localhost:3000"
+KEY = "tubeforge-local"
 
 sample_path, text = sys.argv[1], sys.argv[2]
 

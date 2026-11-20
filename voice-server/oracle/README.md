@@ -65,7 +65,7 @@ terminal app, works entirely from the phone browser:
    cd /tmp
    curl -fsSL -o voice_server.py https://raw.githubusercontent.com/ibis01/tubeforge/main/voice-server/voice_server.py
    curl -fsSL -o setup-oracle.sh https://raw.githubusercontent.com/ibis01/tubeforge/main/voice-server/oracle/setup-oracle.sh
-   bash setup-oracle.sh --key ismail-01
+   bash setup-oracle.sh --key tubeforge-voice-key
    ```
 
    The `--key` value is your `X-Voice-Key` — change it to anything you like.
