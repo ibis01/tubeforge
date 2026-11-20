@@ -20,13 +20,11 @@
 // change takes effect on the very next call.
 
 import crypto from "crypto";
-import fs from "fs";
-import path from "path";
 import ZAI from "z-ai-web-dev-sdk";
 import { currentCtx } from "./tenant";
 import { rawDatabase as rawDb } from "./tenant-db";
 import { decryptSecret } from "./crypto";
-import { syncZaiConfigFile } from "./zai-config";
+import { ensureVercelZaiHome, syncZaiConfigFile, writeZaiConfigFile } from "./zai-config";
 import { DEFAULT_ZAI_BASE_URL } from "./types";
 import { log } from "./log";
 
@@ -91,10 +89,10 @@ async function resolveUserZaiCredential(capability: string): Promise<ResolvedZai
 /** The shared platform client (the pre-T-3.10 behavior). */
 async function platformZaiClient(): Promise<ZaiClient> {
   if (platformClient) return platformClient;
-  // VERCEL FIX: point HOME at /tmp so the SDK's fallback search works there.
-  if (process.env.VERCEL === "1" || process.env.NOW_BUILDER === "1") {
-    process.env.HOME = "/tmp";
-  }
+  // VERCEL FIX: point HOME at /tmp so the SDK's fallback search works there
+  // (the one law lives in zai-config.ts — ensureVercelZaiHome; the write seam
+  // and this search must meet at /tmp).
+  ensureVercelZaiHome();
   platformClient = await withFileLock(async () => {
     await syncZaiConfigFile();
     try {
@@ -140,15 +138,19 @@ export async function zaiClientFor(capability: string): Promise<ZaiClient> {
   const cached = clientCache.get(cacheKey);
   if (cached) return cached;
 
-  // Critical section: the SDK's only configuration surface is the file in
-  // process.cwd() — writes from concurrent users MUST be serialized.
+  // Critical section: the SDK's only configuration surface is the ONE config
+  // file — writes from concurrent users MUST be serialized, and the write
+  // rides zai-config.ts's seam (project dir, then the home dir on read-only
+  // hosts like Vercel — where it lands in /tmp, exactly where HOME points).
   const client = await withFileLock(async () => {
-    const file = path.join(process.cwd(), ".z-ai-config");
-    fs.writeFileSync(
-      file,
-      `${JSON.stringify({ baseUrl: user.baseUrl, apiKey: user.apiKey }, null, 2)}\n`,
-      { mode: 0o600 }
+    const written = writeZaiConfigFile(
+      `${JSON.stringify({ baseUrl: user.baseUrl, apiKey: user.apiKey }, null, 2)}\n`
     );
+    if (!written) {
+      throw new Error(
+        "could not write .z-ai-config — project dir and home dir are both read-only"
+      );
+    }
     return ZAI.create();
   });
 
