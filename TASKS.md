@@ -20,7 +20,17 @@ Capability expansion and product-experience modernization. Reference: `ibis01/ib
 | M3 | Design foundation + Home/Projects (B1+B2) | `db2241e` | battery + premium-ux/mobile-sweep e2e + walk 1440/390 | ✅ DONE — `2661bc7` (battery 1010/1010, e2e 37/37, walk 1440/390 clean, round-trip 0 fails, de-rebrand law + compat-strips per audit §4) |
 | M4 | Full-page production workspace (B3) | `76df60e` | battery + e2e incl. S86 jump selectors | ✅ DONE — `2c61aea` (battery 1015/1015 incl. five B3 pins, e2e 37/37, walk: Director/Inspector/back-flow verified, rename dialog→production-workspace 92%) |
 | M5 | Creative workspace enhancement (B4) | `af15635` | battery + byte-identical no-sfx render check | ✅ DONE — `11cd529` (battery 1021/1021 incl. six B4 pins, e2e 37/37, three-surface walk 1440 + 390 stacked law; render.ts +86/−0 additive seam on round-trip-identical base; harness-env pin re-derived for TF's never-renamed keys) |
-| — | Whiteboard W1–W7 | standing roadmap | unchanged; runs in parallel (zero shared files with M0–M5) | PROPOSED (W1 first) |
+| — | Whiteboard W1–W7 | standing roadmap | unchanged; runs in parallel | W1 harness ✅ (N6 five-subject benchmark fill); W3 brush assets ✅ CLOSED (N5 raster-to-stroke — Studio's implementation, same engine/clock/gates); W2/W4–W7 unchanged |
+| N0 | AI settings-first everywhere + req.nextUrl (kills 'Invalid URL' 500s) | `06a4009` | battery + tsc + lint | ✅ DONE — `eff08b3` (24 files; stored provider keys no longer bypassed) |
+| N1 | R1 cinematic shell layer (tf-elev/tf-panel, whole-UI reduced-motion, Error/Loading/PreviewFrame primitives) | `966b007` | battery + tsc + lint | ✅ DONE — `a76c1fd` (grammar authored tf-prefixed — identity-compatible by construction) |
+| N2 | R2 creator surfaces tell the truth (ErrorState, scrollbar law, indigo leaves identity) | `5360e9e` | battery + tsc + lint | ✅ DONE — `7260187` (sw cache tubeforge-v1→v2 for eviction; offline.html identity-preserving no-op) |
+| N3 | Postgres compat: readLegacyRows probes to_regclass, never screams on missing table | `551bd63` | battery + tsc | ✅ DONE — `9f02f0c` |
+| N4 | Platform zai credential lifeline + S3 config-time truth + serialization cosmetics never fatal | `ddeeee5` | battery + tsc | ✅ DONE — `a72e168` |
+| N5 | Whiteboard P0 raster-to-stroke engine (PNG/JPEG → drawable strokes, same engine/clock/gates) | `9e11e89` | trace suite + battery + tsc | ✅ DONE — `3297463` (additive nullable migration 20261124000000; trace 25/25; closes W3) |
+| N6 | W1 five-subject benchmark fill + P5 production profiles + AI-provider friendliness overhaul | `81fc34e` | profiles+registry suites + battery | ✅ DONE — `4ddd6e5` (profiles 22/22, registry 16/16; Studio worklog hunk not ported — identity law) |
+| N7 | e2e step budget 28 → 40 min (mirror-starvation net) | `7bf860f` | workflow-only | ✅ DONE — `b6cddd0` (applied pre-N5 for ci.yml hunk baseline) |
+| N8 | Reference docs ride-along: whiteboard P0 audit+plan re-anchored | `82499bc` | n/a (docs) | ✅ DONE — `11df86e` |
+| — | Studio rebrand-era commits `e5387bf` `5e9e03a` + release-record docs | — | n/a | EXCLUDED per audit §2/§4 — they repair rebrand-caused breakage TubeForge never had |
 
 **Rules of the programme:** cherry-pick + de-rebrand law (`src/lib/ibismuh` → `src/lib/tubeforge`, `IBISMUH_STUDIO_*` → `TUBEFORGE_*`, `ibismuh_session` → `tf_session`, strings re-pointed; `compat-env.ts` not needed); one migration merged and green before the next; engines byte-pinned; history preserved.
 

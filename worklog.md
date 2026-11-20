@@ -7022,3 +7022,71 @@ order, narration alignment — is the operator's next human step.
 - De-rebrand law applied (audit §4): ibismuh paths/keys/cookies mapped to the
   TubeForge originals; battery 1010 → 1015 pins (B3 suite appended before the
   summary block; S119/S151 file pins follow the rename).
+
+---
+
+## 2026-11-19 — TubeForge Next, session 3: the N-series closes the NEW Studio delta (capability equality re-asserted, identity intact)
+
+**Trigger.** The operator ordered: "Update tubeforge from Ibismuh-studio
+without it losing its identity." Re-ran the Phase 0 shape against the live
+remotes: Studio is no longer b06f222+26 — it is b06f222+**45**. The M-series
+(26 commits, sessions 1–2) covered the fork through `b2fd3f3`; **19 newer
+commits existed with zero TubeForge coverage.** This session enumerated,
+classified, and backported the code-bearing ones as N0–N8.
+
+**The new delta, classified (audit §2 law):**
+- MIGRATE (code): `06a4009` N0 · `966b007` N1 · `5360e9e` N2 · `551bd63` N3 ·
+  `ddeeee5` N4 · `9e11e89` N5 · `81fc34e` N6 · `7bf860f` N7 · `82499bc` N8 (docs).
+- EXCLUDE (rebrand-caused, TubeForge never had the breakage):
+  `e5387bf` `5e9e03a` (battery/gitleaks pins repairing the rename's seam),
+  R1/R2 release records + dispatch-receipt docs (Studio-identity artifacts).
+- The delta now carries ONE prisma migration (`20261124000000_wb_p0_trace_meta`) —
+  additive + nullable; charter-safe; customer data untouched.
+
+**What landed (each = one commit, provenance in the message):**
+- N0 settings-first AI: stored provider keys stop being silently bypassed by
+  the platform singletons (ai.ts, llm.ts ride zaiClientFor); 19 route handlers
+  read req.nextUrl (the bare 'Invalid URL' 500 class dies); middleware keeps
+  dev HMR upgrades out of the document matcher; x-tf-csp-nonce law untouched.
+- N1 R1 cinematic shell: tf-elev/tf-panel elevation grammar, whole-UI
+  reduced-motion guard, shared Error/Loading/PreviewFrame primitives, sidebar
+  kicker + active rail, header kicker. The grammar was authored tf-prefixed
+  upstream — identity-compatible by construction.
+- N2 R2 truth-telling: designed ErrorState replaces lying-empty failures
+  (library/research/calendar/dashboard); one scrollbar law; indigo leaves the
+  running state; sw cache tubeforge-v1→**v2** (Studio's eviction mechanism,
+  TubeForge's name); offline.html lines landed as identity-preserving no-ops.
+- N3 Postgres: readLegacyRows probes to_regclass — the S19 scream dies on
+  fresh Postgres installs.
+- N4 production roots: readAnyZaiProviderCredential (jobs/worker/boot no
+  longer starve when a Settings-saved key exists), S3 endpoints fail at
+  config time naming the env var, serializeScenes' cosmetic stats degrade
+  to no-image instead of killing serialization.
+- N5 the P0 raster-to-stroke ENGINE: PNG/JPEG become drawable strokes on the
+  SAME engine, same frame clock, same seven gates — trace.ts (Otsu →
+  Zhang-Suen → junction-aware following → guarded Douglas-Peucker →
+  deterministic ordering) is PURE and byte-identical for identical bytes;
+  additive nullable migration; the thin AI-illustration bridge route; the
+  policy guard on both raster entries. **Closes whiteboard W3** with the
+  Studio implementation instead of a re-derivation.
+- N6 W1 benchmark fill + P5 profiles + provider friendliness: the
+  five-subject benchmark harness (5 videos × 3 aspect ratios) the W-roadmap
+  ordered; production profiles as conservative deltas; providers tell the
+  truth about capabilities. Studio's worklog hunk deliberately not ported.
+- N7 e2e budget 28→40 (workflow-only; applied pre-N5 for hunk baseline).
+- N8 the 356-line whiteboard audit+plan rides with its engine, re-anchored
+  to TubeForge paths.
+
+**Gates (all green, this sandbox):** tsc clean · eslint clean on all 71
+changed TS files · battery **1021/1021** · whiteboard-trace **25/25** ·
+provider-registry **16/16** · whiteboard-profiles **22/22**. Identity sweep:
+zero ibismuh strings introduced by any N commit (the only tree matches are
+pre-existing operator tooling + the battery pin that GUARDS the identity).
+
+**Programme state:** TubeForge remains capability-equal to Studio — now
+against Studio's LIVE head (`81fc34e`), not the fork-era snapshot — with
+engines, history, migrations, and identity preserved. W2/W4–W7 remain
+PROPOSED on the standing roadmap; their Studio-side counterparts (beat
+compiler, word-anchored handwriting, camera director, continuous canvas,
+finishers) already live in the tree from the fork, so the remaining W-work
+is TubeForge-side acceptance, not porting.
