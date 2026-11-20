@@ -75,7 +75,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const video = await db.video.findUnique({ where: { id } });
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-  const url = new URL(req.url);
+  const url = req.nextUrl;
   if (url.searchParams.get("clip") === "1") {
     const key = scene3dClipKey(id);
     const exists = await storage.exists(key).catch(() => false);

@@ -90,7 +90,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   // render job runs, returned as data URIs (assetKey → per-frame list).
   // Org-scoped by the video row; spriteless studios pay nothing (the
   // resolution runs only when asked).
-  if (new URL(req.url).searchParams.get("resolve") === "1") {
+  if (req.nextUrl.searchParams.get("resolve") === "1") {
     const { resolveSpriteAssets } = await import("@/lib/tubeforge/graphics/import-store");
     const { assets, missing } = await resolveSpriteAssets(
       id,
@@ -391,7 +391,7 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   const video = await db.video.findUnique({ where: { id } });
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-  const importId = new URL(req.url).searchParams.get("importId")?.trim() ?? "";
+  const importId = req.nextUrl.searchParams.get("importId")?.trim() ?? "";
   if (!importId)
     return NextResponse.json({ error: "Pass ?importId= of the import to delete" }, { status: 400 });
 

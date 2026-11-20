@@ -21,7 +21,7 @@
 // Image / TTS / ASR / video stages intentionally stay on the Z.ai SDK: those
 // APIs are not standardized across providers.
 
-import ZAI from "z-ai-web-dev-sdk";
+import { zaiClientFor } from "./zai-client";
 import { safeFetch } from "./net-guard";
 import { allowPrivateProviderHosts } from "./providers/http";
 import { getCapability } from "./providers/settings";
@@ -125,12 +125,18 @@ async function effectiveSettings(): Promise<LLMSettings> {
   return { ...s, provider: "zai", model: "" };
 }
 
-// ---------- Z.ai gateway client (own instance — no import cycle with ai.ts) ----------
+// ---------- Z.ai gateway client (Settings-first, via zai-client) ----------
 
-let zaiClient: Awaited<ReturnType<typeof ZAI.create>> | null = null;
 async function getZai() {
-  zaiClient ??= await ZAI.create();
-  return zaiClient;
+  // T-3.10 law — the acting user's zai key saved in Settings → AI Providers
+  // takes priority; the platform .z-ai-config file (and the /etc fallback)
+  // is only the fallback. The old module-wide ZAI.create() singleton
+  // silently BYPASSED a stored provider key on every call here (shorts,
+  // reference-video, packaging-lint, research search) — zaiClientFor
+  // resolves the per-user credential (cached per user+key-hash, so this is
+  // no slower than the singleton) and throws an honest error when no
+  // provider is configured at all.
+  return zaiClientFor("chat");
 }
 
 /** Whether the Z.ai gateway (from .z-ai-config) is usable — shown in Settings. */
@@ -382,7 +388,9 @@ export async function testLLM(
   if (s.provider === "openai" && (!s.baseUrl || !s.apiKey))
     throw new Error("Custom LLM selected but base URL / API key is missing");
   if (s.provider === "zai" && !(await zaiConfigured()))
-    throw new Error("Z.ai gateway not configured — create .z-ai-config (see LOCAL-SETUP.md §4)");
+    throw new Error(
+      "No AI provider configured — add a Z.ai key in Settings → AI Providers (or provide a .z-ai-config file on the server)"
+    );
 
   const completion = await chatWith(
     s,

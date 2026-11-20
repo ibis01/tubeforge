@@ -36,12 +36,12 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!video)
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-  const variantParam = new URL(req.url).searchParams.get("variant");
+  const variantParam = req.nextUrl.searchParams.get("variant");
   // S114 — the scene-preview variant: ?variant=scene-preview&n=<index>
   // streams one scene's preview (scene-preview-NN.mp4).
   // S116 — the boundary-pair variant: ?variant=scene-boundary&n=<afterScene>
   // streams the seam pair (scene-boundary-NN.mp4).
-  const scenePreviewN = Number(new URL(req.url).searchParams.get("n"));
+  const scenePreviewN = Number(req.nextUrl.searchParams.get("n"));
   const variant =
     variantParam === "preview"
       ? ("preview" as const)
@@ -94,7 +94,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   // s3 driver — hand the client a presigned URL; bytes flow CDN→client.
   const signed = await presign(key, 300);
   if (signed) {
-    const download = new URL(req.url).searchParams.get("download") === "1";
+    const download = req.nextUrl.searchParams.get("download") === "1";
     return NextResponse.redirect(
       download
         ? `${signed}${signed.includes("?") ? "&" : "?"}response-content-disposition=attachment%3B%20filename%3D%22${encodeURIComponent(fileName)}%22`
@@ -136,7 +136,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     }
   }
 
-  const download = new URL(req.url).searchParams.get("download") === "1";
+  const download = req.nextUrl.searchParams.get("download") === "1";
   return new NextResponse(streamRange(0, total - 1), {
     status: 200,
     headers: {

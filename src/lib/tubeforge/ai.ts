@@ -3,11 +3,10 @@
 
 import fs from "fs";
 import path from "path";
-import ZAI from "z-ai-web-dev-sdk";
 import { mergeWavs } from "./wav";
 import { aiCall } from "./budget";
 import { LENGTHS, THUMB_STYLES, type ResearchIdea } from "./types";
-import { syncZaiConfigFile } from "./providers/config";
+import { zaiClientFor, invalidateZaiClients } from "./zai-client";
 import { chatComplete } from "./providers/chat";
 import { ttsSynthesize } from "./providers/tts";
 import {
@@ -33,25 +32,22 @@ export function videoDir(videoId: string) {
   return dir;
 }
 
-let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null;
+/**
+ * The Settings-aware Z.ai client (T-3.10 law). The acting user's key saved
+ * in Settings → AI Providers takes priority; the platform .z-ai-config file
+ * (and the /etc fallback) is only the fallback. getZAI() historically ran
+ * ONE platform singleton for every caller — a stored provider key was
+ * silently ignored on this path. zaiClientFor resolves the per-user
+ * credential (cached per user+key-hash) and throws an honest error when no
+ * provider is configured at all; it owns the VERCEL HOME=/tmp fix too.
+ */
 export async function getZAI() {
-  if (!zaiInstance) {
-    // VERCEL FIX: Point HOME to /tmp so the SDK reads the config from there
-    if (process.env.VERCEL === "1" || process.env.NOW_BUILDER === "1") {
-      process.env.HOME = "/tmp";
-    }
-
-    // Settings stored in the UI (API key / base URL) win over any existing
-    // config file — materialize them before the SDK reads the file.
-    await syncZaiConfigFile();
-    zaiInstance = await ZAI.create();
-  }
-  return zaiInstance;
+  return zaiClientFor("chat");
 }
 
-/** Drop the cached SDK client so the next getZAI() picks up fresh settings. */
+/** Drop the cached SDK clients so the next getZAI() picks up fresh settings. */
 export function resetZAIClient() {
-  zaiInstance = null;
+  invalidateZaiClients();
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

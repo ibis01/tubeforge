@@ -140,7 +140,7 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   const video = await db.video.findUnique({ where: { id } });
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-  const assetId = new URL(req.url).searchParams.get("assetId")?.trim() ?? "";
+  const assetId = req.nextUrl.searchParams.get("assetId")?.trim() ?? "";
   if (!assetId)
     return NextResponse.json({ error: "Pass ?assetId= of the upload to delete" }, { status: 400 });
 

@@ -63,7 +63,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
-  const params = new URL(req.url).searchParams;
+  const params = req.nextUrl.searchParams;
 
   // ---- S7: the music bank — audition the resolved bed ----
   if (params.get("bank") === "music") {

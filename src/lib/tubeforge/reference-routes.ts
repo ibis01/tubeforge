@@ -131,7 +131,7 @@ export function makeReferenceHandlers(deps: ReferenceHandlerDeps) {
     const row = await deps.find(id);
     if (!row) return NextResponse.json({ error: `${deps.noun} not found` }, { status: 404 });
 
-    const key = new URL(req.url).searchParams.get("key") ?? "";
+    const key = req.nextUrl.searchParams.get("key") ?? "";
     const prefix = deps.prefixFor(id);
     if (!isReferenceKey(prefix, key) || !parseReferenceKeys(row.referenceImages).includes(key))
       return NextResponse.json({ error: "No such reference on this " + deps.noun }, { status: 404 });

@@ -213,7 +213,7 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   const video = await db.video.findUnique({ where: { id } });
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-  const sceneKey = new URL(req.url).searchParams.get("sceneKey")?.trim() ?? "";
+  const sceneKey = req.nextUrl.searchParams.get("sceneKey")?.trim() ?? "";
   try {
     const existing = await storage.get(MOCAP_KEY(id));
     const body = JSON.parse(existing.toString("utf8")) as MocapFile;

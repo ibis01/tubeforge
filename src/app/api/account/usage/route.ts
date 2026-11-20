@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
   auth.enter();
   const { userId, organizationId } = auth.ctx;
 
-  const daysParam = Number(new URL(req.url).searchParams.get("days") ?? "30");
+  const daysParam = Number(req.nextUrl.searchParams.get("days") ?? "30");
   const days = Number.isFinite(daysParam) ? Math.min(Math.max(Math.floor(daysParam), 1), 90) : 30;
   const since = new Date(Date.now() - days * 24 * 3600 * 1000);
 

@@ -12892,8 +12892,8 @@ await test("S104 THE OWNERSHIP LAW: middleware owns the CSP, next.config ships n
     "middleware passes dev:!isProd — production gets the strict contract (no unsafe-eval) by CONSTRUCTION, dev keeps HMR",
   );
   ok(
-    mw.includes('"/((?!api/|_next/static|_next/image|favicon.ico).*)"'),
-    "the matcher covers documents now — they used to bypass middleware entirely and carry the static policy",
+    mw.includes('"/((?!api/|_next/static|_next/image|_next/hmr|favicon.ico).*)"'),
+    "the matcher covers documents now — they used to bypass middleware entirely and carry the static policy (and the dev HMR websocket upgrade stays out: an edge-layer response can never emit a valid 101)",
   );
   ok(
     mw.indexOf('pathname.startsWith("/api/")') >= 0 &&

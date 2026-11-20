@@ -231,6 +231,11 @@ export async function middleware(req: NextRequest) {
 export const config = {
   matcher: [
     "/api/:path*",
-    "/((?!api/|_next/static|_next/image|favicon.ico).*)",
+    // _next/hmr: the dev HMR websocket upgrade. Upgrades must NEVER ride the
+    // document middleware — an edge-layer response cannot produce a valid 101
+    // (observed live: the upgrade socket answered HTTP/0.9 garbage, which
+    // strands the dev client's HMR socket; the same hygiene class as the
+    // _next/static and _next/image exclusions).
+    "/((?!api/|_next/static|_next/image|_next/hmr|favicon.ico).*)",
   ],
 };

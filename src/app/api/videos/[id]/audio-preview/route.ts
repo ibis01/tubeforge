@@ -27,7 +27,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       { status: 400 }
     );
 
-  const params = new URL(req.url).searchParams;
+  const params = req.nextUrl.searchParams;
   const startRaw = Number(params.get("start"));
   const durRaw = Number(params.get("duration"));
   const startSec = Number.isFinite(startRaw) && startRaw > 0 ? startRaw : 0;

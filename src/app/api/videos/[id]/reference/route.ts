@@ -106,7 +106,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       { status: 404 }
     );
 
-  const keyframeParam = new URL(req.url).searchParams.get("keyframe");
+  const keyframeParam = req.nextUrl.searchParams.get("keyframe");
   if (keyframeParam !== null) {
     const idx = Number(keyframeParam);
     const win = analysis.sceneMap[Number.isInteger(idx) ? idx : -1];

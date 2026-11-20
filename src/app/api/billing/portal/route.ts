@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
       { status: 409 }
     );
 
-  const origin = new URL(req.url).origin;
+  const origin = req.nextUrl.origin;
   // S58/T-58.1 — a real fix, not churn: the old `stripeGate().secret!` passed
   // undefined into the Authorization header when the key was missing; the
   // honest gate mirrors checkout's 503.

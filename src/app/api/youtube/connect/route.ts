@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
   auth.enter(); // tenant scope: handler + spawned job closures
 
   try {
-    const origin = new URL(req.url).origin;
+    const origin = req.nextUrl.origin;
     const authUrl = await buildAuthUrl(origin);
     return NextResponse.json({ authUrl });
   } catch (err) {

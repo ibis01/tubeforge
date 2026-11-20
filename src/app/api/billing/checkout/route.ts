@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
       { status: 409 }
     );
 
-  const origin = new URL(req.url).origin;
+  const origin = req.nextUrl.origin;
   // checkoutReady() above guarantees the price exists — capture it once so
   // the compiler can see what the guard proved (S58/T-58.1).
   const priceId = gate.prices[tier];

@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
   auth.enter(); // tenant scope: handler + spawned job closures
 
-  const { searchParams } = new URL(req.url);
+  const { searchParams } = req.nextUrl;
   const status = searchParams.get("status");
   const limit = Math.min(Number(searchParams.get("limit") ?? 100), 200);
 

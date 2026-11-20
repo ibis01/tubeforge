@@ -34,7 +34,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const video = await db.video.findUnique({ where: { id } });
   if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-  const url = new URL(req.url);
+  const url = req.nextUrl;
   const format = url.searchParams.get("format") === "vtt" ? "vtt" : "srt";
 
   let srt: string;

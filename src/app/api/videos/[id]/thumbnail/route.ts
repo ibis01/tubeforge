@@ -65,7 +65,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
   // S9 — job-state poll for the studio's regenerate arm.
-  if (new URL(req.url).searchParams.get("status") === "1") {
+  if (req.nextUrl.searchParams.get("status") === "1") {
     return NextResponse.json({
       generating: isJobRunning(id, "thumbnail"),
       hasThumbnail: video.hasThumbnail,

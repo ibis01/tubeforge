@@ -115,7 +115,21 @@ async function platformZaiClient(): Promise<ZaiClient> {
   }
   platformClient = await withFileLock(async () => {
     await syncZaiConfigFile();
-    return ZAI.create();
+    try {
+      return await ZAI.create();
+    } catch (err) {
+      // The SDK's raw message ("Configuration file not found or invalid…")
+      // reads like an operator error to an end user. What it actually means
+      // for THEM: no usable provider exists anywhere — no key saved in
+      // Settings → AI Providers, no platform .z-ai-config on the server.
+      // Say that instead; log the raw cause for the operator.
+      zaiLog.error("platform zai client unavailable", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+      throw new Error(
+        "No AI provider configured — add a key in Settings → AI Providers (or provide a .z-ai-config file on the server)"
+      );
+    }
   });
   return platformClient;
 }

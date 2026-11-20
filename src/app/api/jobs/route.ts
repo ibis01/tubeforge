@@ -8,7 +8,7 @@ export async function GET(req: NextRequest) {
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
   auth.enter(); // tenant scope: handler + spawned job closures
 
-  const limitRaw = Number(new URL(req.url).searchParams.get("limit"));
+  const limitRaw = Number(req.nextUrl.searchParams.get("limit"));
   const limit = Number.isInteger(limitRaw) && limitRaw >= 1 ? Math.min(limitRaw, 100) : 20;
 
   const jobs = await jobHistory(limit);

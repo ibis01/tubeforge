@@ -16,7 +16,7 @@ import { requestLog } from "@/lib/tubeforge/log";
  * user's first membership. The middleware allow-lists the path (PUBLIC_API).
  */
 export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
+  const url = req.nextUrl;
   const origin = url.origin;
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
