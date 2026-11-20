@@ -15,11 +15,14 @@ import { createPrisma } from "../src/lib/tubeforge/prisma-factory.mjs";
 const BASE = "http://localhost:3000";
 // S28 — baseline-relative end state, captured BEFORE the suite creates
 // anything (the owner's real account lives in this DB now).
-const { PrismaClient: __PC25 } = await import("@prisma/client");
+// U2 (Prisma 7): the client takes a DRIVER ADAPTER — the baseline probe rides
+// the ONE factory (the raw `new PrismaClient()` died the moment U2 landed;
+// the U2 codemod's 85-site sweep missed this top-level block).
+const __baselinePrisma = createPrisma();
 const BASELINE = {
-  users: await new __PC25().user.count(),
-  orgs: await new __PC25().organization.count(),
-  settings: await new __PC25().userSetting.count(),
+  users: await __baselinePrisma.user.count(),
+  orgs: await __baselinePrisma.organization.count(),
+  settings: await __baselinePrisma.userSetting.count(),
 };
 let failures = 0;
 const check = (name, ok, detail) => {
@@ -68,7 +71,10 @@ const authed = { "content-type": "application/json", cookie };
 {
   const sw = await fetch(`${BASE}/sw.js`);
   const swText = await sw.text();
-  check("4.1  /sw.js -> 200 + registers offline + network-first", sw.status === 200 && swText.includes("offline.html") && swText.includes("tubeforge-v1"), sw.status);
+  // N2 bumped the cache to tubeforge-v2 (asset invalidation by design); the
+  // probe follows the cache-NAME SHAPE, not the version literal — the next
+  // bump must not re-red this battery.
+  check("4.1  /sw.js -> 200 + registers offline + network-first", sw.status === 200 && swText.includes("offline.html") && /tubeforge-v\d+/.test(swText), sw.status);
   const man = await fetch(`${BASE}/manifest.webmanifest`);
   const md = await j(man);
   check("4.2  manifest -> 200, standalone, TubeForge", man.status === 200 && md.display === "standalone" && String(md.name).includes("TubeForge"), md.name);
@@ -82,7 +88,9 @@ const authed = { "content-type": "application/json", cookie };
   const page = await fetch(`${BASE}/`);
   const html = await page.text();
   check("4.6  the root HTML links the manifest", html.includes("/manifest.webmanifest"), undefined);
-  check("4.7  the root HTML carries the theme color", html.includes("#0a0a0a"), undefined);
+  // M3 (the design foundation) moved the theme token to #0b1220 — the probe
+  // pins the CURRENT law, not the pre-M3 color.
+  check("4.7  the root HTML carries the theme color", html.includes("#0b1220"), undefined);
   check("4.8  the root HTML links the apple touch icon", html.includes("/icons/apple-touch-icon.png"), undefined);
 }
 
