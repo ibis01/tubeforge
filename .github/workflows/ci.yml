@@ -477,7 +477,17 @@ jobs:
     # S33: run on PRs AND on pushes to main (was PR-only — never fired,
     # because this repository has no pull-request history).
     if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    timeout-minutes: 28
+    # 2026-11-19 (run 44476098714, b6a9be2): the e2e budget was 28 minutes,
+    # sized for healthy-mirror days (run 44468211608: e2e finished in 5.5
+    # minutes). On this run azure flapped again: the probe-and-swap fired,
+    # canonical ALSO starved ("apt exhausted" at 07:13:51 — the outage net
+    # rescued ffmpeg), and `playwright install --with-deps` then spent 17.4
+    # minutes inside apt's retries before Chromium landed. The suite got ~3
+    # of 28 minutes and was cancelled mid-battery — 7/8 jobs green, e2e
+    # cancelled, zero test failures. Budget raised 28 → 40 so a
+    # mirror-starved setup cannot eat the suite's slot; healthy days are
+    # unaffected (~6-minute e2e wall).
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
 
