@@ -16,11 +16,35 @@
 // not exist"). Strip the params: busy_timeout maps onto the adapter's
 // `timeout` option; engine pool params are inert under the adapter model
 // (SQLite serializes on the writer lock + busy timeout, the S136 law).
+import fs from "node:fs";
+import path from "node:path";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 
-export function createPrismaAdapter(url = process.env.DATABASE_URL) {
+// DATABASE_URL resolution — the SAME precedence postinstall.mjs establishes:
+// the platform env FIRST (Vercel/CI/compose inject it there), then the
+// project .env. The .env fallback is NOT cosmetic: Prisma 6's client
+// auto-loaded .env at runtime, the Prisma 7 adapter model does NOT — under
+// U2 every tsx script, the worker and any plain-node entry without an
+// exported DATABASE_URL starved ("DATABASE_URL is not set") the moment they
+// touched the db; the U2 sweep was validated in a shell that carried the
+// export, masking exactly this. npm scripts / next dev / the standalone
+// server all run from the project root, so the CWD .env is the project's.
+function resolveDatabaseUrl() {
+  const direct = (process.env.DATABASE_URL || "").trim();
+  if (direct) return direct;
+  try {
+    const envText = fs.readFileSync(path.join(process.cwd(), ".env"), "utf8");
+    const m = envText.match(/^\s*DATABASE_URL\s*=\s*"?([^"\r\n]+)"?\s*$/m);
+    if (m) return m[1].trim();
+  } catch {
+    /* no .env — the caller throws the honest error */
+  }
+  return "";
+}
+
+export function createPrismaAdapter(url = resolveDatabaseUrl()) {
   if (!url) {
     throw new Error(
       "DATABASE_URL is not set — the Prisma 7 client needs a driver adapter and no URL to derive it from",

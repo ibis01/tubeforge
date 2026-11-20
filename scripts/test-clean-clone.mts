@@ -22,7 +22,7 @@
  *      (node_modules / .env / .next / coverage / next-env.d.ts / test-results
  *      / playwright-report / .vercel) and db/ carries only .gitkeep;
  *   2. boot proof — `npm ci` with NO injected DATABASE_URL bootstraps SQLite
- *      end-to-end: .env (file:../db/custom.db), provisioned
+ *      end-to-end: .env (file:./db/custom.db), provisioned
  *      TUBEFORGE_AUTH_SECRET + TUBEFORGE_ENCRYPTION_KEY, next-env.d.ts,
  *      the generated client, and the pushed db/custom.db;
  *   3. boot probe — the generated SQLITE client queries the pushed Stage-2
@@ -139,8 +139,14 @@ try {
   );
   shInherit("npm", ["ci", "--no-audit", "--no-fund"], { cwd: work, env: freshEnv });
 
+  // U2 re-anchor: the .env contract is now the ROOT-relative form — Prisma 7
+  // (and the runtime adapter) resolve relative file: URLs against the process
+  // CWD, so './db/custom.db' lands inside the clone for every consumer. The
+  // '../db' literal was the v6 schema-dir convention (the file escaped the
+  // clone under v7 — the '[FAIL] db/custom.db was pushed' of run 44767281646's
+  // fixup).
   const envText = readFileSync(join(work, ".env"), "utf8");
-  check(".env was created with the SQLite DATABASE_URL", /DATABASE_URL=file:\.\.\/db\/custom\.db/.test(envText), "file:../db/custom.db");
+  check(".env was created with the SQLite DATABASE_URL", /DATABASE_URL=file:\.\/db\/custom\.db/.test(envText), "file:./db/custom.db");
   check("TUBEFORGE_AUTH_SECRET was provisioned", /^TUBEFORGE_AUTH_SECRET=.+/m.test(envText));
   check("TUBEFORGE_ENCRYPTION_KEY was provisioned", /^TUBEFORGE_ENCRYPTION_KEY=.+/m.test(envText));
   check("next-env.d.ts was created", existsSync(join(work, "next-env.d.ts")));
@@ -180,7 +186,7 @@ db.organization.count()
   //    for BOTH dialects, and the dialects must produce DIFFERENT artifacts.
   const sqliteHash1 = manifestDigest(clientManifest(work));
   console.log("[clean-clone] prisma generate (sqlite, regenerate for determinism)");
-  shInherit("npx", ["--no-install", "prisma", "generate", "--schema", "prisma/schema.sqlite.prisma"], { cwd: work, env: freshEnv });
+  shInherit("npx", ["--no-install", "prisma", "generate", "--schema", "prisma/schema.sqlite.prisma"], { cwd: work, env: probeEnv });
   const sqliteHash2 = manifestDigest(clientManifest(work));
   check(
     "SQLite client generation is deterministic (regenerate → byte-identical manifest)",
@@ -189,11 +195,11 @@ db.organization.count()
   );
 
   console.log("[clean-clone] prisma generate (postgres, regenerate for determinism)");
-  shInherit("npx", ["--no-install", "prisma", "generate", "--schema", "prisma/schema.prisma"], { cwd: work, env: freshEnv });
+  shInherit("npx", ["--no-install", "prisma", "generate", "--schema", "prisma/schema.prisma"], { cwd: work, env: probeEnv });
   const pgHash1 = manifestDigest(clientManifest(work));
   const pgSchema = readFileSync(join(work, "node_modules", ".prisma", "client", "schema.prisma"), "utf8");
   check('POSTGRES client generates cleanly in the fresh clone (provider = "postgresql")', /provider\s*=\s*"postgresql"/.test(pgSchema));
-  shInherit("npx", ["--no-install", "prisma", "generate", "--schema", "prisma/schema.prisma"], { cwd: work, env: freshEnv });
+  shInherit("npx", ["--no-install", "prisma", "generate", "--schema", "prisma/schema.prisma"], { cwd: work, env: probeEnv });
   const pgHash2 = manifestDigest(clientManifest(work));
   check(
     "Postgres client generation is deterministic (regenerate → byte-identical manifest)",

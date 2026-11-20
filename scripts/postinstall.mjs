@@ -32,9 +32,14 @@ if (!url && existsSync(envPath)) {
   url = m ? m[1].trim() : '';
 }
 if (!url) {
-  // Relative file: paths are resolved by Prisma against the schema directory
-  // (prisma/), so ../db/custom.db lands in <project>/db/custom.db.
-  url = 'file:../db/custom.db';
+  // Root-RELATIVE on purpose: Prisma 7 (and the better-sqlite3 runtime
+  // adapter) resolve relative file: URLs against the process CWD — npm
+  // scripts, next dev and the CLI children all run from the project root,
+  // so ./db/custom.db lands INSIDE the project for every consumer. The old
+  // '../db' form was the v6 schema-dir convention and, under v7, escaped
+  // the project (the clean-clone verifier's '[FAIL] db/custom.db was
+  // pushed' — the file landed in the clone's PARENT).
+  url = 'file:./db/custom.db';
   try {
     writeFileSync(envPath, `DATABASE_URL=${url}\n`, { flag: 'wx' });
     console.log(`[postinstall] created .env with DATABASE_URL=${url}`);

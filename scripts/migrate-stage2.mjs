@@ -63,7 +63,9 @@ if (!url && existsSync(envPath)) {
   );
   url = m ? m[1].trim() : "";
 }
-if (!url) url = "file:../db/custom.db";
+// Root-relative (the v7 CWD-resolution law — see postinstall.mjs): npm
+// scripts run from the project root, so ./db/custom.db stays INSIDE it.
+if (!url) url = "file:./db/custom.db";
 const isSqlite = url.startsWith("file:");
 
 // Prisma 7 (U2): the CLI reads the datasource URL from prisma.config.ts's
