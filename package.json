@@ -19,7 +19,7 @@
     "migrate:stage2": "node scripts/migrate-stage2.mjs",
     "db:sync-sqlite": "node scripts/sync-sqlite-schema.mjs",
     "auth:reset": "node scripts/auth-reset.mjs",
-    "db:push": "prisma db push --accept-data-loss",
+    "db:push": "node scripts/db-push.mjs",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
