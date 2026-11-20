@@ -50,7 +50,9 @@ const STAGE_DOT: Record<BoardStage["state"], string> = {
   done: "bg-emerald-400",
   partial: "bg-amber-400",
   preview: "bg-sky-400",
-  running: "bg-indigo-400 animate-pulse",
+  // R2 — the live-state color law: running is the studio's primary (cyan),
+  // matching every other in-flight indicator; indigo is outside the identity.
+  running: "bg-primary animate-pulse",
   missing: "bg-zinc-600",
 };
 
@@ -121,7 +123,7 @@ export function ProductionBoard({ videoId }: { videoId: string }) {
             >
               <span className={`h-1.5 w-1.5 rounded-full ${STAGE_DOT[s.state]}`} />
               <span className="text-[11px] text-zinc-300">{s.label}</span>
-              {s.state === "running" && <Loader2 className="h-3 w-3 animate-spin text-indigo-300" />}
+              {s.state === "running" && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
               {s.detail && (
                 <span className="text-[10px] text-muted-foreground">{s.detail}</span>
               )}

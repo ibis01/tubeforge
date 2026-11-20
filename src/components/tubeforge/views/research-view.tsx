@@ -18,6 +18,8 @@ import {
 } from "@/components/ui/select";
 import {
   EmptyState,
+  ErrorState,
+  RetryButton,
   timeAgo,
 } from "@/components/tubeforge/shared";
 import {
@@ -370,6 +372,9 @@ export function ResearchView() {
   const [sessions, setSessions] = useState<ResearchSessionDTO[]>([]);
   const [active, setActive] = useState<ResearchSessionDTO | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // R2 — failure is not emptiness: a failed session load renders the
+  // designed error state instead of "No scans yet" (S-outage honesty).
+  const [loadError, setLoadError] = useState(false);
   const [greenlightId, setGreenlightId] = useState<string | null>(null);
   const [ideaSort, setIdeaSort] = useState<"viral" | "volume" | "length">("viral");
   const [compFilter, setCompFilter] = useState<"all" | "low" | "medium" | "high">("all");
@@ -380,6 +385,7 @@ export function ResearchView() {
       const data = await res.json();
       if (res.ok) {
         setSessions(data.sessions ?? []);
+        setLoadError(false);
         // Auto-select the first session only when none is active — a
         // functional update reads the CURRENT active, so the callback
         // carries no `active` closure (the deps stay honestly empty).
@@ -387,7 +393,7 @@ export function ResearchView() {
         if (first) setActive((cur) => cur ?? first);
       }
     } catch {
-      // silent — first paint shows empty state
+      setLoadError(true);
     } finally {
       setLoaded(true);
     }
@@ -790,6 +796,20 @@ export function ResearchView() {
               </div>
             )}
           </div>
+        ) : loadError && loaded ? (
+          <ErrorState
+            icon={Radar}
+            title="Could not load your scans"
+            message="The research service did not respond. Nothing was lost — run a new scan or retry the load."
+            retry={
+              <RetryButton
+                onClick={() => {
+                  setLoadError(false);
+                  void loadSessions();
+                }}
+              />
+            }
+          />
         ) : loaded ? (
           <EmptyState
             icon={Radar}

@@ -7,7 +7,7 @@
 //   2. static asset cache (icons/manifest) so the installed shell still looks right
 // API calls (/api/*) are never intercepted or cached.
 
-const CACHE = "tubeforge-v1";
+const CACHE = "tubeforge-v2";
 const OFFLINE_URL = "/offline.html";
 const PRECACHE = [OFFLINE_URL, "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"];
 

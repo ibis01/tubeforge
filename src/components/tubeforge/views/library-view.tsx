@@ -6,7 +6,14 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { StatusBadge, EmptyState, formatDuration, timeAgo } from "@/components/tubeforge/shared";
+import {
+  StatusBadge,
+  EmptyState,
+  ErrorState,
+  RetryButton,
+  formatDuration,
+  timeAgo,
+} from "@/components/tubeforge/shared";
 import type { VideoDTO } from "@/lib/tubeforge/types";
 import {
   Film,
@@ -36,16 +43,21 @@ export function LibraryView() {
   const [videos, setVideos] = useState<VideoDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
+  // R2 — failure is not emptiness: a failed load renders the designed error
+  // state (with retry) instead of pretending the library is fresh.
+  const [loadError, setLoadError] = useState(false);
 
   const load = useCallback(() => {
     return fetch(`/api/videos?status=${filter}`)
       .then((r) => r.json())
       .then((d) => {
         setVideos(d.videos ?? []);
+        setLoadError(false);
         setLoading(false);
       })
       .catch(() => {
         setVideos([]);
+        setLoadError(true);
         setLoading(false);
       });
   }, [filter]);
@@ -73,7 +85,7 @@ export function LibraryView() {
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <Tabs value={filter} onValueChange={setFilter} className="w-full sm:w-auto">
-          <TabsList className="bg-white/4 border border-white/8 h-10 w-full sm:w-auto overflow-x-auto scroll-area-bar">
+          <TabsList className="bg-white/4 border border-white/8 h-10 w-full sm:w-auto overflow-x-auto tf-scroll-bar">
             {FILTERS.map((f) => (
               <TabsTrigger
                 key={f.id}
@@ -92,7 +104,22 @@ export function LibraryView() {
         </p>
       </div>
 
-      {loading ? (
+      {loadError ? (
+        <ErrorState
+          icon={LibraryIcon}
+          title="Could not load the library"
+          message="The projects service did not respond. Your projects are safe — nothing was deleted; the list just failed to arrive."
+          retry={
+            <RetryButton
+              onClick={() => {
+                setLoadError(false);
+                setLoading(true);
+                load();
+              }}
+            />
+          }
+        />
+      ) : loading ? (
         <div className="grid md:grid-cols-2 gap-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} className="h-40 rounded-2xl bg-white/5" />

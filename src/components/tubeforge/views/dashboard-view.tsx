@@ -7,7 +7,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import {
   StatCard,
-  EmptyState,
+  ErrorState,
+  RetryButton,
   StatusBadge,
   timeAgo,
   formatDuration,
@@ -26,7 +27,6 @@ import {
   Mic,
   Image as ImageIcon,
   Radio,
-  AlertTriangle,
   ArrowRight,
   Eye,
   Heart,
@@ -104,18 +104,15 @@ export function DashboardView() {
   }
 
   if (!stats) {
+    // R2 — failure is not emptiness: the dashboard's designed failure state
+    // (the message stays honest — stats specifically did not respond).
     return (
-      <EmptyState
-        icon={AlertTriangle}
-        title="Could not load dashboard"
-        hint="The stats service did not respond. Please retry."
-        action={
-          <Button
-            onClick={() => useAppStore.getState().bumpRefresh()}
-            variant="outline"
-          >
-            Retry
-          </Button>
+      <ErrorState
+        icon={Wand2}
+        title="Could not load the dashboard"
+        message="The stats service did not respond. Your projects and their progress are unaffected — retry when the service is back."
+        retry={
+          <RetryButton onClick={() => useAppStore.getState().bumpRefresh()} />
         }
       />
     );
@@ -559,7 +556,7 @@ export function DashboardView() {
             Nothing yet — start your first project to see the studio in action.
           </p>
         ) : (
-          <div className="mt-4 max-h-80 overflow-y-auto scroll-area-bar pr-1">
+          <div className="mt-4 max-h-80 overflow-y-auto tf-scroll-bar pr-1">
             <ul className="space-y-1">
               {stats.recent.map((a) => {
                 const Icon = STAGE_ICONS[a.stage] ?? Wand2;

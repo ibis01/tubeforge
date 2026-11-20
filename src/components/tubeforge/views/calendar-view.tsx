@@ -37,7 +37,7 @@ import {
   startOfMonth,
   startOfWeek,
 } from "date-fns";
-import { EmptyState, StatusBadge } from "@/components/tubeforge/shared";
+import { EmptyState, ErrorState, RetryButton, StatusBadge } from "@/components/tubeforge/shared";
 import {
   SLOT_TIMES,
   type SlotDTO,
@@ -95,6 +95,9 @@ export function CalendarView() {
   const [slots, setSlots] = useState<SlotDTO[]>([]);
   const [schedulable, setSchedulable] = useState<SchedulableVideo[]>([]);
   const [loading, setLoading] = useState(true);
+  // R2 — failure is not emptiness: the toast gives immediate feedback, and
+  // the designed error state replaces the lying-empty agenda/sidebar.
+  const [loadError, setLoadError] = useState(false);
   const [slotBusy, setSlotBusy] = useState<string | null>(null);
 
   // Create-slot dialog state
@@ -119,8 +122,10 @@ export function CalendarView() {
       if (res.ok) {
         setSlots(data.slots ?? []);
         setSchedulable(data.schedulable ?? []);
+        setLoadError(false);
       }
     } catch {
+      setLoadError(true);
       toast({
         title: "Could not load calendar",
         variant: "destructive",
@@ -335,6 +340,21 @@ export function CalendarView() {
         <div className="lg:hidden space-y-2">
           {loading ? (
             [0, 1, 2].map((i) => <Skeleton key={i} className="h-16 rounded-2xl" />)
+          ) : loadError ? (
+            <ErrorState
+              icon={CalendarDays}
+              title="Could not load the schedule"
+              message="The schedule service did not respond. Your slots are safe — retry the load."
+              retry={
+                <RetryButton
+                  onClick={() => {
+                    setLoadError(false);
+                    setLoading(true);
+                    load();
+                  }}
+                />
+              }
+            />
           ) : slots.length === 0 ? (
             <EmptyState
               icon={CalendarDays}
@@ -469,6 +489,22 @@ export function CalendarView() {
                 <Skeleton key={i} className="h-14 rounded-xl" />
               ))}
             </div>
+          ) : loadError ? (
+            <ErrorState
+              className="p-4"
+              icon={VideoIcon}
+              title="Could not load"
+              message="The schedule service did not respond — retry the load."
+              retry={
+                <RetryButton
+                  onClick={() => {
+                    setLoadError(false);
+                    setLoading(true);
+                    load();
+                  }}
+                />
+              }
+            />
           ) : schedulable.length === 0 ? (
             <div className="text-center py-6">
               <p className="text-sm text-muted-foreground">
@@ -484,7 +520,7 @@ export function CalendarView() {
               </Button>
             </div>
           ) : (
-            <div className="space-y-2 max-h-[26rem] overflow-y-auto scroll-area-bar pr-1">
+            <div className="space-y-2 max-h-[26rem] overflow-y-auto tf-scroll-bar pr-1">
               {schedulable.map((v) => (
                 <div
                   key={v.id}

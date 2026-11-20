@@ -14,6 +14,7 @@ import { CheckIcon, Loader2, Play, RotateCcw, Square, TriangleAlert } from "luci
 import { STATUS_META, VOICES, type VideoStatus } from "@/lib/tubeforge/types";
 import type { LucideIcon } from "lucide-react";
 import { clsx } from "clsx";
+import { twMerge } from "tailwind-merge";
 
 /** Voice catalog of the ACTIVE voiceover provider (Z.ai or OpenAI-compatible).
  *  Falls back to the built-in Z.ai list until the endpoint answers.
@@ -389,7 +390,7 @@ export function ErrorState({
   return (
     <div
       role="alert"
-      className={clsx(
+      className={twMerge(
         "tf-card rounded-2xl border-red-400/25 p-8 sm:p-10 flex flex-col items-center text-center",
         className
       )}
