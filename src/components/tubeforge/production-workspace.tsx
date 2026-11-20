@@ -4410,13 +4410,12 @@ export function ProductionWorkspace({
               </TabsList>
             </Tabs>
             <ResizablePanelGroup direction="vertical" className="h-[calc(100vh-16rem)] min-h-[640px]">
-              <ResizablePanel defaultSize={64} minSize={25} id="ws-main" order={1}>
+              <ResizablePanel defaultSize="64" minSize="25" id="ws-main">
                 <ResizablePanelGroup direction="horizontal" className="h-full">
                   <ResizablePanel
-                    defaultSize={70}
-                    minSize={40}
+                    defaultSize="70"
+                    minSize="40"
                     id="ws-center"
-                    order={1}
                     className="h-full overflow-y-auto scroll-area-bar pr-1"
                   >
                     {activeTab === "director"
@@ -4433,10 +4432,9 @@ export function ProductionWorkspace({
                   {activeTab !== "inspector" && <ResizableHandle withHandle />}
                   {activeTab !== "inspector" && (
                     <ResizablePanel
-                      defaultSize={30}
-                      minSize={16}
+                      defaultSize="30"
+                      minSize="16"
                       id="ws-inspector"
-                      order={2}
                       className="h-full overflow-y-auto scroll-area-bar pl-1"
                     >
                       {inspectorArea}
@@ -4446,10 +4444,9 @@ export function ProductionWorkspace({
               </ResizablePanel>
               <ResizableHandle withHandle />
               <ResizablePanel
-                defaultSize={36}
-                minSize={12}
+                defaultSize="36"
+                minSize="12"
                 id="ws-timeline"
-                order={2}
                 className="overflow-y-auto scroll-area-bar"
               >
                 {timelineStrip}
