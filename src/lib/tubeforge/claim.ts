@@ -87,14 +87,28 @@ export async function pendingLegacyRows(): Promise<
 }
 
 /** Raw read — tolerates the table being absent (fresh install / claimed).
- *  The presence check goes through sqlite_master, which cannot fail: asking
- *  for the rows directly made Prisma log the EXPECTED "no such table" as a
+ *  The presence check goes through sqlite_master (SQLite) or to_regclass
+ *  (Postgres), neither of which can fail on a missing table: asking for the
+ *  rows directly made Prisma log the EXPECTED "no such table" as a
  *  prisma:error on every auth-status poll — a fresh install screamed in its
- *  own log on each page load (S19: the quiet door). */
+ *  own log on each page load (S19: the quiet door).
+ *
+ *  Production gate follow-up: the probe used to be sqlite_master-only, so
+ *  every Postgres deployment re-introduced the S19 noise class — the probe
+ *  threw (42703 "relation sqlite_master does not exist"), the catch
+ *  swallowed it, and the error log screamed on each auth-status poll of a
+ *  fresh install. The Postgres branch uses to_regclass, which yields NULL
+ *  (never an error) for a missing table, so the quiet door now holds on
+ *  both providers. */
 async function readLegacyRows(): Promise<{ key: string; value: string }[]> {
   try {
-    const present = await rawDb.$queryRaw<{ name: string }[]>`
-      SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'LegacySetting'`;
+    const isSqlite = process.env.DATABASE_URL?.startsWith("file:") ?? false;
+    const present = isSqlite
+      ? await rawDb.$queryRaw<{ name: string }[]>`
+        SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'LegacySetting'`
+      : await rawDb.$queryRaw<{ name: string }[]>`
+        SELECT 'LegacySetting' AS name
+        WHERE to_regclass('public."LegacySetting"') IS NOT NULL`;
     if (present.length === 0) return []; // fresh install or already claimed
     return (await rawDb.$queryRaw<
       { key: string; value: string }[]
