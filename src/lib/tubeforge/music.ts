@@ -436,7 +436,15 @@ async function synthesizeOriginal(def: OriginalTrackDef): Promise<{ filePath: st
     { timeout: 120_000, maxBuffer: 8 * 1024 * 1024 }
   );
   const durationSec = await probeDuration(outPath);
-  return { filePath: path.relative(MUSIC_DIR, outPath).replace(/^(\.\.[/\\])+/, "_music/"), durationSec, bytes: fs.statSync(outPath).size };
+  // The STORAGE KEY (relative to UPLOAD_ROOT — trackAbsolutePath's law), not
+  // relative to MUSIC_DIR: e78702b (2026-11-01) switched this to a
+  // MUSIC_DIR-relative path, which for files INSIDE _music/ is a BARE name —
+  // and every fresh-seeded row then resolved to uploads/<slug>.flac (missing)
+  // at render time, failing every graphics assembly that mixed a bed (the
+  // three-project production test caught it: "Error opening input file"). The
+  // key shape is _music/<slug>.flac — explicit, and exactly what the S7-era
+  // rows carried.
+  return { filePath: `_music/${def.slug}.flac`, durationSec, bytes: fs.statSync(outPath).size };
 }
 
 // ---------------------------------------------------------------------------
@@ -670,7 +678,10 @@ export async function ingestUploadedTrack(buffer: Buffer, meta: UploadTrackMeta)
         moods: meta.moods.slice(0, 200),
         genre: meta.genre?.slice(0, 60) || null,
         durationSec,
-        filePath: path.relative(MUSIC_DIR, outPath).replace(/^(\.\.[/\\])+/, "_music/"),
+        // The UPLOAD_ROOT-relative storage key (trackAbsolutePath's law) — the
+        // MUSIC_DIR-relative bare name broke uploaded tracks at render time
+        // the same way it broke fresh-seeded originals (the e78702b class).
+        filePath: `_music/${path.basename(outPath)}`,
         fileSizeBytes: fs.statSync(outPath).size,
         isOriginal: false,
         licenseType: meta.licenseType.slice(0, 80),
