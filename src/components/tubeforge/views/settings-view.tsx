@@ -55,10 +55,13 @@ import {
   ScanText,
   Youtube,
   Clapperboard,
+  ChevronDown,
+  Coins,
   ExternalLink,
   Copy,
   Check,
   Bot,
+  BookOpen,
   KeyRound,
   FlaskConical,
   PenLine,
@@ -81,6 +84,7 @@ import {
   CAPABILITY_META,
   imageTestFreeLane,
   type CapabilityId,
+  type ProviderTier,
 } from "@/lib/tubeforge/providers/registry";
 
 const KIND_META: Record<string, { label: string; icon: typeof Mic }> = {
@@ -127,6 +131,28 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   pending: {
     label: "Queued",
     cls: "bg-sky-500/15 text-sky-400 border-sky-500/30",
+  },
+};
+
+// Affordability tier badges (registry `tier`) — the tiny tag that sits next
+// to a capability row's provider select. free=emerald, local=cyan,
+// budget=amber, premium=neutral — all drawn from the file's palette.
+const TIER_META: Record<ProviderTier, { label: string; cls: string }> = {
+  free: {
+    label: "Free",
+    cls: "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30",
+  },
+  local: {
+    label: "Local ($0)",
+    cls: "bg-cyan-500/15 text-cyan-300 border border-cyan-500/30",
+  },
+  budget: {
+    label: "Budget",
+    cls: "bg-amber-500/15 text-amber-400 border border-amber-500/30",
+  },
+  premium: {
+    label: "Premium",
+    cls: "bg-white/6 text-zinc-300 border border-white/10",
   },
 };
 
@@ -310,6 +336,15 @@ export function SettingsView() {
       }[]
     >
   >({});
+
+  // Setup-guide disclosure per capability row — the freshly picked
+  // provider's guide pops open the moment the user switches that row's
+  // provider (set in changeProvider) and stays collapsed otherwise.
+  const [guideOpen, setGuideOpen] = useState<
+    Partial<Record<CapabilityId, boolean>>
+  >({});
+  // The shared-credentials "What is this for?" explainer toggle.
+  const [sharedHelpOpen, setSharedHelpOpen] = useState(false);
 
   const loadYouTube = useCallback(async () => {
     try {
@@ -936,15 +971,69 @@ export function SettingsView() {
                   shared
                 </Badge>
               </p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                One account for the built-in gateway — used by every task you
-                leave on its default provider
+              <p className="text-[11px] text-muted-foreground mt-1.5 leading-relaxed max-w-xl">
+                Your single account for the built-in Z.ai gateway: one API key
+                that powers every capability left on the Z.ai default — script
+                writing, voiceover, artwork, scene animation — plus the
+                background jobs that run for you (script generation, voiceover
+                rendering) and the platform fallback when a capability row
+                below has no key of its own. It is not per-team sharing —
+                credentials stay per-user, on your account only.
               </p>
             </div>
             {zaiCreds.hasKey && (
               <Badge className="bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[11px] shrink-0">
                 {zaiCreds.maskedKey}
               </Badge>
+            )}
+          </div>
+
+          {/* The real explainer — what the shared key does and does not do */}
+          <div className="rounded-lg border border-white/10 bg-white/[0.02] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setSharedHelpOpen((v) => !v)}
+              aria-expanded={sharedHelpOpen}
+              className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-foreground/90 hover:bg-white/5 transition-colors"
+            >
+              What is this for?
+              <ChevronDown
+                className={`h-3.5 w-3.5 text-muted-foreground transition-transform shrink-0 ${
+                  sharedHelpOpen ? "rotate-180" : ""
+                }`}
+              />
+            </button>
+            {sharedHelpOpen && (
+              <ul className="px-3 pb-3 pt-2 border-t border-white/10 space-y-1.5">
+                <li className="flex gap-2 text-[11px] leading-relaxed text-muted-foreground">
+                  <span className="text-primary shrink-0">•</span>
+                  <span>
+                    Defaults ride it — leave a row on Z.ai and that task uses
+                    this key, zero per-task setup.
+                  </span>
+                </li>
+                <li className="flex gap-2 text-[11px] leading-relaxed text-muted-foreground">
+                  <span className="text-primary shrink-0">•</span>
+                  <span>
+                    Background jobs inherit it — scheduled script generation,
+                    voiceover and one-click pipeline runs all read it.
+                  </span>
+                </li>
+                <li className="flex gap-2 text-[11px] leading-relaxed text-muted-foreground">
+                  <span className="text-primary shrink-0">•</span>
+                  <span>
+                    Per-capability rows override it — a key saved inside a row
+                    below wins for that task only.
+                  </span>
+                </li>
+                <li className="flex gap-2 text-[11px] leading-relaxed text-muted-foreground">
+                  <span className="text-primary shrink-0">•</span>
+                  <span>
+                    Keys are encrypted at rest — saved keys are stored
+                    encrypted per account and never echoed back in full.
+                  </span>
+                </li>
+              </ul>
             )}
           </div>
 
@@ -1029,6 +1118,57 @@ export function SettingsView() {
               row.provider !== "zai" &&
               chatRow.provider === row.provider &&
               chatRow.hasKey;
+            // Affordability signals for the selected provider — tier badge
+            // next to the select, a one-line pricing caption, and the
+            // $0/local lanes as one-click chips.
+            const tier = active.tier;
+            const setup = active.setup;
+            const affordable = providers
+              .filter((p) => p.tier === "free" || p.tier === "local")
+              .slice(0, 5);
+
+            // ONE setter for both the provider Select and the Affordable
+            // picks chips — identical model-fallback + saved-key-restore
+            // behavior (S159), and a freshly picked provider pops its
+            // setup guide open.
+            const changeProvider = (v: string) => {
+              setProv((f) => {
+                const p = providers.find((x) => x.id === v);
+                const fallbackModel =
+                  v === "zai"
+                    ? cap === "chat"
+                      ? DEFAULT_CHAT_MODEL
+                      : cap === "video"
+                        ? "cogvideox-3"
+                        : ""
+                    : (p?.models[0]?.id ?? "");
+                // S159 — switching providers RESTORES the newly
+                // selected provider's own saved state (key badge
+                // + base URL from the credentials map) instead of
+                // wiping it. The key INPUT stays blank — secrets
+                // never echo — but the placeholder and the badge
+                // tell the truth: a saved key exists for THIS
+                // provider, and saving with a blank field keeps
+                // it. Going A → B → A brings A's key back.
+                const saved = f[cap].keys?.[v];
+                return {
+                  ...f,
+                  [cap]: {
+                    ...f[cap],
+                    provider: v,
+                    model:
+                      f[cap].provider === v
+                        ? f[cap].model
+                        : fallbackModel,
+                    baseUrl: saved?.baseUrl ?? "",
+                    apiKey: "",
+                    hasKey: saved?.hasKey ?? false,
+                    maskedKey: saved?.maskedKey ?? "",
+                  },
+                };
+              });
+              setGuideOpen((g) => ({ ...g, [cap]: true }));
+            };
 
             return (
               <div
@@ -1053,45 +1193,16 @@ export function SettingsView() {
                         {shortLabel} · {row.maskedKey}
                       </Badge>
                     )}
+                    {tier && (
+                      <Badge
+                        className={`${TIER_META[tier].cls} text-[10px] shrink-0`}
+                      >
+                        {TIER_META[tier].label}
+                      </Badge>
+                    )}
                     <Select
                       value={row.provider}
-                      onValueChange={(v) =>
-                        setProv((f) => {
-                          const p = providers.find((x) => x.id === v);
-                          const fallbackModel =
-                            v === "zai"
-                              ? cap === "chat"
-                                ? DEFAULT_CHAT_MODEL
-                                : cap === "video"
-                                  ? "cogvideox-3"
-                                  : ""
-                              : (p?.models[0]?.id ?? "");
-                          // S159 — switching providers RESTORES the newly
-                          // selected provider's own saved state (key badge
-                          // + base URL from the credentials map) instead of
-                          // wiping it. The key INPUT stays blank — secrets
-                          // never echo — but the placeholder and the badge
-                          // tell the truth: a saved key exists for THIS
-                          // provider, and saving with a blank field keeps
-                          // it. Going A → B → A brings A's key back.
-                          const saved = f[cap].keys?.[v];
-                          return {
-                            ...f,
-                            [cap]: {
-                              ...f[cap],
-                              provider: v,
-                              model:
-                                f[cap].provider === v
-                                  ? f[cap].model
-                                  : fallbackModel,
-                              baseUrl: saved?.baseUrl ?? "",
-                              apiKey: "",
-                              hasKey: saved?.hasKey ?? false,
-                              maskedKey: saved?.maskedKey ?? "",
-                            },
-                          };
-                        })
-                      }
+                      onValueChange={(v) => changeProvider(v)}
                     >
                       <SelectTrigger className="bg-white/5 border-white/10 text-xs h-9 w-[230px] max-w-full">
                         <SelectValue />
@@ -1110,6 +1221,133 @@ export function SettingsView() {
                     </Select>
                   </div>
                 </div>
+
+                {/* The selected provider's pricing, in one honest line */}
+                {active.pricing && (
+                  <p className="text-[11px] text-white/40 leading-relaxed">
+                    {active.pricing}
+                  </p>
+                )}
+
+                {/* Affordable picks — the $0/local lanes, one click away */}
+                {affordable.length > 0 && (
+                  <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-muted-foreground">
+                    <span className="inline-flex items-center gap-1">
+                      <Coins className="h-3 w-3 text-primary" />
+                      Affordable picks:
+                    </span>
+                    {affordable.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => changeProvider(p.id)}
+                        aria-label={`Use ${p.label} for ${meta.label}`}
+                        aria-pressed={row.provider === p.id}
+                        title={p.pricing ?? p.label}
+                        className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                          row.provider === p.id
+                            ? "border-primary/50 bg-primary/15 text-primary"
+                            : "border-white/10 bg-white/4 text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {p.id}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* The setup guide — same anatomy for every provider
+                    (Z.ai included): numbered steps, console/docs/pricing
+                    links, and the key-format hint. */}
+                {setup && (
+                  <div className="rounded-lg border border-white/10 bg-white/[0.03] overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setGuideOpen((g) => ({
+                          ...g,
+                          [cap]: !(g[cap] ?? false),
+                        }))
+                      }
+                      aria-expanded={guideOpen[cap] ?? false}
+                      className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-foreground/90 hover:bg-white/5 transition-colors"
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        <BookOpen className="h-3.5 w-3.5 text-primary" />
+                        Setup guide
+                        <span className="text-[10px] font-normal text-muted-foreground">
+                          {setup.steps.length} steps
+                        </span>
+                      </span>
+                      <ChevronDown
+                        className={`h-3.5 w-3.5 text-muted-foreground transition-transform shrink-0 ${
+                          guideOpen[cap] ? "rotate-180" : ""
+                        }`}
+                      />
+                    </button>
+                    {(guideOpen[cap] ?? false) && (
+                      <div className="px-3 pb-3 pt-2 border-t border-white/10 space-y-2.5">
+                        <ol className="space-y-2">
+                          {setup.steps.map((step, i) => (
+                            <li
+                              key={i}
+                              className="flex gap-2.5 text-xs leading-relaxed text-muted-foreground"
+                            >
+                              <span className="shrink-0 h-4.5 w-4.5 rounded-full bg-white/6 border border-white/10 text-[10px] flex items-center justify-center text-foreground/80 mt-px">
+                                {i + 1}
+                              </span>
+                              <span>{step}</span>
+                            </li>
+                          ))}
+                        </ol>
+                        {(setup.consoleUrl ||
+                          setup.docsUrl ||
+                          setup.pricingUrl) && (
+                          <div className="flex items-center gap-3 flex-wrap">
+                            {setup.consoleUrl && (
+                              <a
+                                href={setup.consoleUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2 inline-flex items-center gap-1"
+                              >
+                                <ExternalLink className="h-3 w-3" />
+                                Console
+                              </a>
+                            )}
+                            {setup.docsUrl && (
+                              <a
+                                href={setup.docsUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2 inline-flex items-center gap-1"
+                              >
+                                <BookOpen className="h-3 w-3" />
+                                Docs
+                              </a>
+                            )}
+                            {setup.pricingUrl && (
+                              <a
+                                href={setup.pricingUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2 inline-flex items-center gap-1"
+                              >
+                                <Coins className="h-3 w-3" />
+                                Pricing
+                              </a>
+                            )}
+                          </div>
+                        )}
+                        {setup.keyFormat && (
+                          <p className="text-[11px] text-white/40">
+                            Key format: {setup.keyFormat}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {(() => {
                   const scored = provScores[cap];

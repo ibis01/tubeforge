@@ -10,6 +10,7 @@
 // (later phase) edits exactly these.
 import type { Placement } from "./svg";
 import { cameraPolicies } from "./camera-director";
+import { WHITEBOARD_PROFILE_IDS, type WhiteboardProfileId } from "./profiles";
 
 export type HandStyle = "marker" | "pencil" | "chalk";
 /** W7 — which hand holds the tool (additive; absent = right, today). */
@@ -136,6 +137,11 @@ export interface WhiteboardProject {
   /** W7 — optional whiteboard SFX (pen strokes, page turns). OFF by
    *  default (decision §10.4); audio-only, frames never depend on it. */
   sfxOn?: boolean;
+  /** P5 — the production profile the project rides (the recipe STAMP —
+   *  the recipe itself is baked into the per-project knobs by
+   *  applyWhiteboardProfile; this field records which one). Absent = the
+   *  classic house shape (the additive-parse law). */
+  profile?: string;
   scenes: WhiteboardScene[];
 }
 
@@ -499,6 +505,19 @@ export function validateWhiteboardProject(
       ? "left"
       : undefined;
 
+  // P5 — the profile stamp (parsed BEFORE the tail return so a bad id is
+  // a validation error, same law as the camera policies).
+  let profileId: string | undefined;
+  if (p.profile !== undefined) {
+    if (typeof p.profile !== "string" || !WHITEBOARD_PROFILE_IDS.includes(p.profile as WhiteboardProfileId)) {
+      errors.push(
+        `profile: "${String(p.profile).slice(0, 40)}" is not one of the production profiles (${WHITEBOARD_PROFILE_IDS.join(", ")})`
+      );
+      return { project: null, errors };
+    }
+    profileId = p.profile;
+  }
+
   return {
     project: {
       title: typeof p.title === "string" && p.title ? p.title : "Untitled whiteboard",
@@ -508,6 +527,10 @@ export function validateWhiteboardProject(
       hand: { style: handStyle, scale: handScale, ...(handSide ? { side: handSide } : {}) },
       // Strict boolean write: absent/false reads off; anything else is not on.
       ...(p.sfxOn === true ? { sfxOn: true } : {}),
+      // P5 — the profile stamp: an id outside the frozen roster is a
+      // validation ERROR (saved docs cite these ids; a typo must not
+      // silently render as classic). Absent = absent (byte-identical).
+      ...(p.profile !== undefined ? { profile: profileId } : {}),
       scenes,
     },
     errors: [],

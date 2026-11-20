@@ -36,13 +36,26 @@ import {
   W1_FPS,
   W1_RUBRIC_DIMENSIONS,
   W1_SCENE_IDS,
+  W1_TRACED_FIXTURE,
+  W1_SUBJECT_SLOTS,
+  SUBJECT_IDS,
   buildBenchmarkProject,
+  buildSubjectBenchmarkProject,
+  buildTracedBenchmarkProject,
+  subjectSamplePlan,
+  subjectSeamPlan,
+  subjectSpans,
+  subjectTotalDurationMs,
   w1SamplePlan,
   w1SceneSpans,
   w1SeamPlan,
   w1TotalDurationMs,
   type W1AspectId,
 } from "../src/lib/tubeforge/whiteboard/benchmark-scenarios";
+import { traceRasterToStrokes } from "../src/lib/tubeforge/whiteboard/trace";
+
+type SubjectIdUnion = (typeof SUBJECT_IDS)[number] | "science";
+import type { WhiteboardAsset } from "../src/lib/tubeforge/whiteboard/assets";
 import { loadLibrary } from "../src/lib/tubeforge/whiteboard/assets";
 import { validateWhiteboardProject } from "../src/lib/tubeforge/whiteboard/storyboard";
 import { renderWhiteboard, probeDurationSec } from "../src/lib/tubeforge/whiteboard/render";
@@ -186,15 +199,46 @@ interface AspectReceipt {
   qc: { overall: string; checks: { id: string; status: string }[] };
 }
 
+// The benchmark stage's harness: the W1 frozen set IS the science slot;
+// --subject renders one of the other four authored sets; --traced renders
+// the P0 raster-to-stroke seed (the committed fixture traced at run time).
+// Every mode rides the SAME renderAspect lenses (samples, seams, QC) —
+// the receipts stay comparable by construction.
+interface RenderHarness {
+  id: string;
+  label: string;
+  buildProject(aspect: W1AspectId): WhiteboardProject;
+  totalDurationMs(aspect: W1AspectId): number;
+  samplePlan(aspect: W1AspectId): { id: string; kind: string; tSec: number }[];
+  seamPlan(aspect: W1AspectId): { between: [string, string]; lastTSec: number; firstTSec: number }[];
+  sceneCount: number;
+  /** Extra (uploaded/traced) assets merged into the render library. */
+  extraAssets?: WhiteboardAsset[];
+}
+
+const W1_HARNESS: RenderHarness = {
+  id: "science",
+  label: "W1",
+  buildProject: (a) => buildBenchmarkProject(a),
+  totalDurationMs: () => w1TotalDurationMs(),
+  samplePlan: () => w1SamplePlan(),
+  seamPlan: () => w1SeamPlan(),
+  sceneCount: W1_SCENE_IDS.length,
+};
+
 async function renderAspect(
+  harness: RenderHarness,
   aspect: W1AspectId,
   outDir: string,
   label: string
 ): Promise<AspectReceipt> {
   const { width, height } = W1_ASPECTS[aspect];
-  const project = buildBenchmarkProject(aspect);
+  const project = harness.buildProject(aspect);
 
-  const lib = loadLibrary();
+  // S69 — validate against the MERGED library (uploads included), exactly
+  // what the editor and the render route do; the traced seed rides as an
+  // uploaded asset through the same merge law.
+  const lib = loadLibrary(harness.extraAssets ?? []);
   const { project: valid, errors } = validateWhiteboardProject(project, lib.libraryIndex);
   if (!valid) throw new Error(`[${label}] benchmark project failed validation: ${errors.join(" · ")}`);
   fs.mkdirSync(outDir, { recursive: true });
@@ -204,6 +248,7 @@ async function renderAspect(
   const result = await renderWhiteboard(valid, {
     outDir,
     musicPath: path.join(OUT_DIR, "bed.flac"),
+    ...(harness.extraAssets && harness.extraAssets.length > 0 ? { uploadedAssets: harness.extraAssets } : {}),
     onProgress: (l, frac) => {
       const pct = Math.round(frac * 100);
       if (pct % 20 === 0) console.log(`      [${label}] ${pct}% ${l}`);
@@ -213,13 +258,13 @@ async function renderAspect(
 
   const durSec = (await probeDurationSec(result.file)) ?? 0;
   const decoded = await decodedFrameCount(result.file);
-  const expectedFrames = Math.round(w1TotalDurationMs() / 1000 * W1_FPS);
+  const expectedFrames = Math.round(harness.totalDurationMs(aspect) / 1000 * W1_FPS);
 
   // Sample frames — the rubric's JPEGs + the hash receipts.
   const framesDir = path.join(outDir, "frames");
   fs.mkdirSync(framesDir, { recursive: true });
   const samples: AspectReceipt["samples"] = [];
-  for (const s of w1SamplePlan()) {
+  for (const s of harness.samplePlan(aspect)) {
     const buf = await decodeFrameRgb(result.file, s.tSec, width, height);
     const stats = analyzeFrame(buf, width, height);
     samples.push({ id: s.id, kind: s.kind, tSec: s.tSec, ...stats });
@@ -236,7 +281,7 @@ async function renderAspect(
   // (~0.16% dark) with NO ink strokes. So: outgoing must still carry ink
   // (dark ≥ 0.1%), incoming must be stroke-free (dark ≤ 0.5%).
   const seams: AspectReceipt["seams"] = [];
-  for (const seam of w1SeamPlan()) {
+  for (const seam of harness.seamPlan(aspect)) {
     const last = await decodeFrameRgb(result.file, seam.lastTSec, width, height);
     const first = await decodeFrameRgb(result.file, seam.firstTSec, width, height);
     seams.push({
@@ -285,6 +330,94 @@ async function renderAspect(
   };
 }
 
+// ---------------------------------------------------------------------------
+// The gate lenses — shared by all three modes (the W1 lenses ARE the
+// benchmark stage's lenses; every receipt earns the same scrutiny).
+// ---------------------------------------------------------------------------
+function gateReceipts(
+  receipts: Record<string, AspectReceipt>,
+  harness: RenderHarness,
+  aspects: W1AspectId[]
+): string[] {
+  const failures: string[] = [];
+  for (const aspect of aspects) {
+    const r = receipts[aspect];
+    const expectedSec = harness.totalDurationMs(aspect) / 1000;
+    if (Math.abs(r.durationSec - expectedSec) > 0.5)
+      failures.push(`${aspect}: duration ${r.durationSec}s != expected ${expectedSec}s (0.5s)`);
+    if (r.decodedFrames === null || Math.abs(r.decodedFrames - r.expectedFrames) > r.expectedFrames * 0.02)
+      failures.push(`${aspect}: decoded ${r.decodedFrames} frames vs expected ${r.expectedFrames} (2%)`);
+    if (r.sceneReceipts.length !== harness.sceneCount)
+      failures.push(`${aspect}: ${r.sceneReceipts.length} scenes != ${harness.sceneCount}`);
+    for (const s of r.samples) {
+      if (s.darkRatio < 0.001)
+        failures.push(`${aspect}/${s.id}: sample @${s.tSec}s reads blank (dark ratio ${(s.darkRatio * 100).toFixed(3)}%)`);
+    }
+    for (const seam of r.seams) {
+      if (seam.outgoing.darkRatio < 0.001)
+        failures.push(`${aspect}: seam ${seam.between.join("->")} — outgoing last frame lost its ink (dark ${(seam.outgoing.darkRatio * 100).toFixed(3)}%)`);
+      if (seam.incoming.darkRatio > 0.005)
+        failures.push(`${aspect}: seam ${seam.between.join("->")} — incoming first frame carries unexpected ink (dark ${(seam.incoming.darkRatio * 100).toFixed(3)}%)`);
+    }
+    const qcFails = r.qc.checks.filter((c) => c.status === "fail");
+    if (qcFails.length > 0)
+      failures.push(`${aspect}: qc fails — ${qcFails.map((c) => c.id).join(", ")}`);
+  }
+  return failures;
+}
+
+async function renderReceiptDir(
+  harness: RenderHarness,
+  aspects: W1AspectId[],
+  dirRoot: string,
+  receiptFile: string,
+  extraDefinition: Record<string, unknown> = {}
+): Promise<void> {
+  const receipts: Record<string, AspectReceipt> = {};
+  for (const aspect of aspects) {
+    const dirName = `aspect-${aspect.replace(":", "x")}`;
+    console.log(`\n[${harness.id}] rendering ${aspect} (${W1_ASPECTS[aspect].width}x${W1_ASPECTS[aspect].height})...`);
+    receipts[aspect] = await renderAspect(harness, aspect, path.join(dirRoot, dirName), aspect);
+    const r = receipts[aspect];
+    console.log(
+      `[${harness.id}] ${aspect}: ${r.durationSec}s, decoded ${r.decodedFrames ?? "?"} frames ` +
+      `(expected ${r.expectedFrames}), ${r.renderWallMs}ms wall, qc ${r.qc.overall}`
+    );
+  }
+  const failures = gateReceipts(receipts, harness, aspects);
+  const today = new Date().toISOString().slice(0, 10);
+  const projectHashes: Record<string, string> = {};
+  for (const a of aspects) projectHashes[a] = sha256(JSON.stringify(harness.buildProject(a)));
+  const receipt = {
+    stage: harness.id,
+    what: `whiteboard benchmark — ${harness.label}`,
+    definition: {
+      module: "src/lib/tubeforge/whiteboard/benchmark-scenarios.ts",
+      projectHashes,
+      fps: W1_FPS,
+      totalDurationMs: harness.totalDurationMs(aspects[0]),
+      sceneIds: harness.buildProject(aspects[0]).scenes.map((s) => s.id),
+      ...(harness.id !== "traced-seed"
+        ? { spans: subjectSpans(harness.id as SubjectIdUnion) }
+        : {}),
+      ...extraDefinition,
+    },
+    recordedAt: new Date().toISOString(),
+    environment: {
+      node: process.version,
+      ffmpeg: await toolVersion("ffmpeg", ["-version"]),
+      chromium: chromiumReceipt(),
+    },
+    aspects: receipts,
+    gate: { passed: failures.length === 0, failures },
+  };
+  fs.mkdirSync(path.dirname(receiptFile), { recursive: true });
+  fs.writeFileSync(receiptFile.replace("<date>", today), JSON.stringify(receipt, null, 2));
+  console.log(`\n[${harness.id}] receipt: ${path.relative(process.cwd(), receiptFile.replace("<date>", today))}`);
+  console.log(`[${harness.id}] GATE ${failures.length === 0 ? "GREEN" : "RED"}${failures.length ? " — " + failures.join(" | ") : ""}`);
+  if (failures.length > 0) process.exit(1);
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const aspectsIdx = args.indexOf("--aspects");
@@ -292,16 +425,94 @@ async function main(): Promise<void> {
   const aspectsRaw = aspectsEq
     ? aspectsEq.split("=")[1] ?? ""
     : aspectsIdx >= 0 ? args[aspectsIdx + 1] ?? "" : "";
-  const aspects: W1AspectId[] = aspectsRaw
+  const aspectsGiven: W1AspectId[] | null = aspectsRaw
     ? aspectsRaw.split(",").filter((a): a is W1AspectId =>
         (W1_ASPECT_IDS as string[]).includes(a))
-    : W1_ASPECT_IDS;
-  if (aspects.length === 0) throw new Error(`--aspects: none of the given ids are in ${W1_ASPECT_IDS.join("/")}`);
+    : null;
+  if (aspectsGiven && aspectsGiven.length === 0)
+    throw new Error(`--aspects: none of the given ids are in ${W1_ASPECT_IDS.join("/")}`);
   const repeat = !args.includes("--no-repeat");
   const blind = !args.includes("--no-blind");
 
+  // ---- The benchmark stage's modes ----------------------------------------
+  const subjectIdx = args.indexOf("--subject");
+  const subjectEq = args.find((a) => a.startsWith("--subject="));
+  const subjectRaw = subjectEq
+    ? subjectEq.split("=")[1] ?? ""
+    : subjectIdx >= 0 ? args[subjectIdx + 1] ?? "" : "";
+  const traced = args.includes("--traced");
+  if (traced && subjectRaw) throw new Error("--traced and --subject are one mode per run");
+
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const bedPath = path.join(OUT_DIR, "bed.flac");
+  await synthBed(bedPath, w1TotalDurationMs() / 1000); // covers every mode (subject 38s, traced 8.5s)
+
+  // --subject: one authored subject set through the same lenses. Aspects
+  // default to 16:9 (cost); --aspects widens.
+  if (subjectRaw) {
+    if (!(SUBJECT_IDS as readonly string[]).includes(subjectRaw)) {
+      throw new Error(`--subject: unknown subject "${subjectRaw}" (one of ${SUBJECT_IDS.join(", ")})`);
+    }
+    const subjectId = subjectRaw as (typeof SUBJECT_IDS)[number];
+    const aspects = aspectsGiven ?? (["16:9"] as W1AspectId[]);
+    const harness: RenderHarness = {
+      id: subjectId,
+      label: `five fixed scene types — ${subjectId}`,
+      buildProject: (a) => buildSubjectBenchmarkProject(subjectId, a),
+      totalDurationMs: () => subjectTotalDurationMs(subjectId),
+      samplePlan: () => subjectSamplePlan(subjectId),
+      seamPlan: () => subjectSeamPlan(subjectId),
+      sceneCount: 5,
+    };
+    await renderReceiptDir(harness, aspects, path.join(OUT_DIR, "subjects", subjectId),
+      path.join(OUT_DIR, "subjects", `w1-subjects-${subjectId}-<date>.json`),
+      { subject: subjectId, policyId: W1_SUBJECT_SLOTS.find((s) => s.id === subjectId)?.policyId ?? "standard" });
+    return;
+  }
+
+  // --traced: the P0 raster-to-stroke seed. The committed line-art fixture
+  // is traced at run time through the SAME traceRasterToStrokes the upload
+  // gates ride; the traced fragment registers as an uploaded asset so the
+  // renderer sees exactly what the editor would. This is the "after" half
+  // of the before/after pair (before = the frozen W1 library run above).
+  if (traced) {
+    const bytes = fs.readFileSync(path.resolve(W1_TRACED_FIXTURE));
+    const t0 = Date.now();
+    const traced = await traceRasterToStrokes(bytes);
+    const traceMs = Date.now() - t0;
+    const tracedInput = {
+      assetId: "wb-traced-fixture",
+      svg: traced.svgFragment,
+      viewBox: traced.viewBox,
+      strokes: traced.strokes,
+    };
+    const harness: RenderHarness = {
+      id: "traced-seed",
+      label: "raster-to-stroke seed — the traced fixture draws progressively",
+      buildProject: (a) => buildTracedBenchmarkProject(a, tracedInput),
+      totalDurationMs: () => 8500,
+      samplePlan: () => [{ id: "w1-traced", kind: "process diagram (traced)", tSec: 5.1 }],
+      seamPlan: () => [],
+      sceneCount: 1,
+      extraAssets: [{ id: "wb-traced-fixture", svg: traced.svgFragment, viewBox: traced.viewBox, tags: ["traced"] }],
+    };
+    await renderReceiptDir(harness, ["16:9" as W1AspectId], path.join(OUT_DIR, "traced"),
+      path.join(OUT_DIR, "traced", "wb-traced-<date>.json"),
+      {
+        trace: {
+          fixture: W1_TRACED_FIXTURE,
+          strokes: traced.strokes,
+          commands: traced.commands,
+          quality: traced.receipt.quality,
+          sourceBytes: traced.receipt.sourceBytes,
+          traceMs,
+        },
+      });
+    return;
+  }
+
+  // ---- The frozen W1 path (the baseline; behavior byte-identical) ---------
+  const aspects = aspectsGiven ?? W1_ASPECT_IDS;
   await synthBed(bedPath, w1TotalDurationMs() / 1000);
 
   console.log(`[w1] five fixed scenes × aspects ${aspects.join(", ")} @ ${W1_FPS}fps — total ${(w1TotalDurationMs() / 1000).toFixed(1)}s each`);
@@ -316,8 +527,8 @@ async function main(): Promise<void> {
   const receipts: Record<string, AspectReceipt> = {};
   for (const aspect of aspects) {
     const dirName = `aspect-${aspect.replace(":", "x")}`;
-    console.log(`\n[w1] rendering ${aspect} (${W1_ASPECTS[aspect].width}x${W1_ASPECTS[aspect].height})…`);
-    receipts[aspect] = await renderAspect(aspect, path.join(OUT_DIR, dirName), aspect);
+    console.log(`\n[w1] rendering ${aspect} (${W1_ASPECTS[aspect].width}x${W1_ASPECTS[aspect].height})...`);
+    receipts[aspect] = await renderAspect(W1_HARNESS, aspect, path.join(OUT_DIR, dirName), aspect);
     const r = receipts[aspect];
     console.log(
       `[w1] ${aspect}: ${r.durationSec}s, decoded ${r.decodedFrames ?? "?"} frames ` +
@@ -336,8 +547,8 @@ async function main(): Promise<void> {
     hashes: string[][];
   } | null = null;
   if (repeat && aspects.includes("16:9")) {
-    console.log("\n[w1] determinism pin — re-rendering 16:9…");
-    const second = await renderAspect("16:9", path.join(OUT_DIR, "aspect-16x9-run2"), "16:9-r2");
+    console.log("\n[w1] determinism pin — re-rendering 16:9...");
+    const second = await renderAspect(W1_HARNESS, "16:9", path.join(OUT_DIR, "aspect-16x9-run2"), "16:9-r2");
     const first = receipts["16:9"];
     const h1 = first.samples.map((s) => s.sha256);
     const h2 = second.samples.map((s) => s.sha256);
@@ -384,30 +595,7 @@ async function main(): Promise<void> {
   // ---------------------------------------------------------------------------
   // The gate — hard receipts or the baseline does not land.
   // ---------------------------------------------------------------------------
-  const failures: string[] = [];
-  const expectedSec = w1TotalDurationMs() / 1000;
-  for (const aspect of aspects) {
-    const r = receipts[aspect];
-    if (Math.abs(r.durationSec - expectedSec) > 0.5)
-      failures.push(`${aspect}: duration ${r.durationSec}s ≠ expected ${expectedSec}s (±0.5)`);
-    if (r.decodedFrames === null || Math.abs(r.decodedFrames - r.expectedFrames) > r.expectedFrames * 0.02)
-      failures.push(`${aspect}: decoded ${r.decodedFrames} frames vs expected ${r.expectedFrames} (±2%)`);
-    if (r.sceneReceipts.length !== W1_SCENE_IDS.length)
-      failures.push(`${aspect}: ${r.sceneReceipts.length} scenes ≠ ${W1_SCENE_IDS.length}`);
-    for (const s of r.samples) {
-      if (s.darkRatio < 0.001)
-        failures.push(`${aspect}/${s.id}: sample @${s.tSec}s reads blank (dark ratio ${(s.darkRatio * 100).toFixed(3)}%)`);
-    }
-    for (const seam of r.seams) {
-      if (seam.outgoing.darkRatio < 0.001)
-        failures.push(`${aspect}: seam ${seam.between.join("→")} — outgoing last frame lost its ink (dark ${(seam.outgoing.darkRatio * 100).toFixed(3)}%)`);
-      if (seam.incoming.darkRatio > 0.005)
-        failures.push(`${aspect}: seam ${seam.between.join("→")} — incoming first frame carries unexpected ink (dark ${(seam.incoming.darkRatio * 100).toFixed(3)}%)`);
-    }
-    const qcFails = r.qc.checks.filter((c) => c.status === "fail");
-    if (qcFails.length > 0)
-      failures.push(`${aspect}: qc fails — ${qcFails.map((c) => c.id).join(", ")}`);
-  }
+  const failures = gateReceipts(receipts, W1_HARNESS, aspects);
   if (determinismPin && !determinismPin.sampleHashesIdentical)
     failures.push("determinism pin: 16:9 frame hashes DIVERGED between runs");
 

@@ -33,7 +33,7 @@ const CAPABILITY_KEYS: Record<CapabilityId, string> = {
   video: "ai.video",
 };
 
-export const VIDEO_DEFAULT_MODEL = "fal-ai/fast-svd";
+export const VIDEO_DEFAULT_MODEL = "cogvideox-3";
 
 function defaultFor(capability: CapabilityId): CapabilityConfig {
   switch (capability) {
@@ -44,7 +44,9 @@ function defaultFor(capability: CapabilityId): CapabilityConfig {
         visionModel: "",
       };
     case "video":
-      return { provider: "fal", model: VIDEO_DEFAULT_MODEL };
+      // The zai default rides the SHARED-credentials story (one account,
+      // every capability); fal remains available in the registry.
+      return { provider: "zai", model: VIDEO_DEFAULT_MODEL };
     case "image":
       return { provider: "zai", model: "" };
     default:

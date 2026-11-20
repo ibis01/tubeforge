@@ -111,6 +111,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       fps: typeof b.fps === "number" ? b.fps : undefined,
       catalog: buildPlannerCatalog(lib.assets.values()),
       generatedAssets: generatedCards,
+      profileId: typeof b.profileId === "string" ? b.profileId : undefined,
     });
     project = llm.project;
     plannerReport = llm.report;
@@ -122,6 +123,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       height: typeof b.height === "number" ? b.height : undefined,
       fps: typeof b.fps === "number" ? b.fps : undefined,
       generatedAssets: generatedCards,
+      profileId: typeof b.profileId === "string" ? b.profileId : undefined,
     });
   }
 

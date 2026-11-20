@@ -204,6 +204,22 @@ jobs:
       - name: Whiteboard trace battery (P0 raster-to-stroke)
         run: npm run test:whiteboard-trace
 
+      # P5 production profiles + the five-subject benchmark fill: the recipe
+      # applier pins (pure/additive/authored-override), the validator pins
+      # (unknown id = error), the scaffold passthrough, the subject builders
+      # (deterministic, in-canvas, validated), the I.8 allowlist + narration
+      # scan, and the frozen W1 project hashes.
+      - name: Whiteboard profiles + subject benchmark battery (P5)
+        run: npm run test:whiteboard-profiles
+
+      # AI-provider friendliness battery: catalog integrity (unique ids,
+      # https keyUrls), the friendly layer (tier+pricing+setup on EVERY
+      # row), the $0 lanes per capability, groq ASR, the leveled Z.ai
+      # video lane (source pins), the config dedupe, the capability
+      # language.
+      - name: Provider registry friendliness battery
+        run: npm run test:provider-registry
+
       - name: Queue integration suite (resume contract, real worker restart)
         run: npm run test:queue
 

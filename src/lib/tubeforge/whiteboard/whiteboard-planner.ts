@@ -11,6 +11,7 @@
 // modules + the story Scene type only — never Director, never generation
 // APIs (the design §1 laws 1 and 5: native scaffold is $0 work).
 import type { WhiteboardAsset } from "./assets";
+import { applyWhiteboardProfile } from "./profiles";
 import type { WhiteboardAssetPlacement, WhiteboardProject, WhiteboardScene } from "./storyboard";
 import { WB_BUDGETS } from "./storyboard";
 import type { Placement } from "./svg";
@@ -374,6 +375,11 @@ export function scaffoldWhiteboardProject(input: {
    *  exists — the rich path is the product default, the legacy path is
    *  the pinned fallback. */
   generatedAssets?: WhiteboardAsset[];
+  /** P5 — the production profile: the recipe bakes onto the scaffolded
+   *  project (hand, sfx, papers, board defaults). Absent = the classic
+   *  house shape, byte-identical to the pre-P5 scaffold (the fallback
+   *  law). Unknown ids apply nothing (the applier reports it). */
+  profileId?: string;
 }): WhiteboardProject {
   if (input.scenes.length === 0) {
     throw new Error("whiteboard scaffold needs at least one story scene");
@@ -481,14 +487,17 @@ export function scaffoldWhiteboardProject(input: {
     };
   });
 
-  return {
-    title: input.topic ? `Whiteboard — ${input.topic}`.slice(0, 120) : "Whiteboard",
-    width,
-    height,
-    fps,
-    hand: { style: "marker", scale: 1 },
-    scenes,
-  };
+  return applyWhiteboardProfile(
+    {
+      title: input.topic ? `Whiteboard — ${input.topic}`.slice(0, 120) : "Whiteboard",
+      width,
+      height,
+      fps,
+      hand: { style: "marker", scale: 1 },
+      scenes,
+    },
+    input.profileId ?? null
+  ).project;
 }
 
 // ---------------------------------------------------------------------------

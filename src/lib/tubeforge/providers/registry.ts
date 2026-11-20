@@ -21,6 +21,32 @@ export interface ProviderMeta {
   note?: string;
   /** Local servers (Ollama, LM Studio, vLLM) don't need an API key. */
   requiresKey?: boolean;
+  /** Affordability tier — the settings UI sorts and badges by it. */
+  tier?: ProviderTier;
+  /** One-line pricing hint (the UI shows it under the model picker). */
+  pricing?: string;
+  /** The per-provider setup walkthrough (the UI's "How to set this up" panel). */
+  setup?: ProviderSetup;
+}
+
+/** Affordability tiers. "free" = a usable $0 lane (free tier or keyless),
+ *  "local" = your own machine ($0 forever, you host it), "budget" = the
+ *  cheapest paid lanes (pennies per generation or free credits),
+ *  "premium" = flagship pricing. Advisory — the test button's confirmCost
+ *  gate is the enforcement. */
+export type ProviderTier = "free" | "local" | "budget" | "premium";
+
+export interface ProviderSetup {
+  /** Numbered setup steps, shown verbatim when the provider is selected. */
+  steps: string[];
+  /** The console/dashboard URL (create the account, manage keys). */
+  consoleUrl?: string;
+  /** The docs home for this provider's API. */
+  docsUrl?: string;
+  /** The pricing page. */
+  pricingUrl?: string;
+  /** What the API key looks like (prefix/shape) — paste-check for the user. */
+  keyFormat?: string;
 }
 
 // ───────────────────────────── CHAT ─────────────────────────────
@@ -336,6 +362,18 @@ export const ASR_PROVIDERS: ProviderMeta[] = [
     models: [{ id: "whisper-1", hint: "word timestamps via verbose_json" }],
   },
   {
+    id: "groq",
+    kind: "openai",
+    label: "Groq Whisper (fast, free tier)",
+    defaultBaseUrl: "https://api.groq.com/openai/v1",
+    keyUrl: "https://console.groq.com/keys",
+    models: [
+      { id: "whisper-large-v3-turbo", hint: "recommended — fast, word timestamps via verbose_json" },
+      { id: "whisper-large-v3", hint: "legacy — highest accuracy" },
+    ],
+    note: "The same Groq key as Script writing — OpenAI-compatible transcription shape (verbose_json word timestamps supported). Free tier covers a regular posting habit.",
+  },
+  {
     id: "zai",
     kind: "zai",
     label: "Z.ai ASR",
@@ -471,6 +509,24 @@ export const IMAGE_PROVIDERS: ProviderMeta[] = [
       { id: "stability-ai/sdxl", hint: "SDXL" },
     ],
   },
+  {
+    id: "ideogram",
+    kind: "native",
+    label: "Ideogram (text in images)",
+    defaultBaseUrl: "https://api.ideogram.ai/v1",
+    keyUrl: "https://ideogram.ai",
+    models: [{ id: "ideogram-v3", hint: "legible TEXT inside images — posters, thumbnails" }],
+    note: "The specialty model for words rendered inside the picture — thumbnails and title cards that read correctly.",
+  },
+  {
+    id: "recraft",
+    kind: "native",
+    label: "Recraft (vector-style art)",
+    defaultBaseUrl: "https://external.api.recraft.ai/v1",
+    keyUrl: "https://www.recraft.ai",
+    models: [{ id: "recraftv3", hint: "vector-style sets, brand icons" }],
+    note: "Vector-STYLE art and brand-consistent icon sets — a good artwork lane for clean design looks.",
+  },
 ];
 
 // ───────────────────────────── VIDEO ─────────────────────────────
@@ -597,12 +653,839 @@ export const VIDEO_PROVIDERS: ProviderMeta[] = [
   },
 ];
 
+// ─────────────────────────────────────────────────────────────────────────
+// The friendly layer: affordability tiers + per-provider setup guides.
+//
+// KEYS ARE `${capability}:${providerId}` — one record, both surfaces read
+// it: the settings UI (the "How to set this up" panel + the tier badges)
+// and the registry battery (completeness pin: every provider with
+// requiresKey or a paid tier MUST carry a setup entry — a new registry
+// row without one fails the battery, so the UI can never show a blank
+// panel).
+//
+// Pricing hints are ADVISORY (the S98 law): they change upstream without
+// notice, so they read "as of late 2026" and the confirmCost gate stays
+// the enforcement. Steps describe the CURRENT console flows.
+// ─────────────────────────────────────────────────────────────────────────
+
+interface ProviderEnrichment {
+  tier: ProviderTier;
+  pricing: string;
+  setup: ProviderSetup;
+}
+
+const ENRICHMENT: Record<string, ProviderEnrichment> = {
+  // ── CHAT (script writing) ──
+  "chat:zai": {
+    tier: "free",
+    pricing: "glm-4.5-flash: free. Flagship GLM models: pennies per script.",
+    setup: {
+      steps: [
+        "Nothing to configure — the built-in gateway works out of the box with the shared credentials below.",
+        "Optional: create your own z.ai account (z.ai/model-api) and copy your API key.",
+        "Paste the key into Shared AI credentials — every capability left on Z.ai uses it, including background jobs.",
+        "Pick a model: glm-4.5-flash is the $0 workhorse; flagship models cost more and read better.",
+        "Hit Test — script writing routes through your key the moment it is saved.",
+      ],
+      consoleUrl: "https://z.ai/model-api",
+      docsUrl: "https://docs.z.ai/guides/llm/glm-4.5",
+      pricingUrl: "https://z.ai/model-api",
+      keyFormat: "long hex/base64 token from the z.ai console",
+    },
+  },
+  "chat:openai": {
+    tier: "premium",
+    pricing: "gpt-6-luna $0.10/$0.50 per 1M; gpt-6.1-terra $1/$5; flagship $10/$50.",
+    setup: {
+      steps: [
+        "Create an OpenAI account and add prepaid credit (Billing → Add payment, from $5 — the API is prepaid, not subscription).",
+        "platform.openai.com/api-keys → Create a new secret key (starts sk-).",
+        "Paste the key here. Keys are encrypted at rest and never leave this deployment.",
+        "Pick gpt-6-luna to keep script costs near zero, gpt-6.1-terra for the current-gen quality floor.",
+        "Test — a full script generation costs fractions of a cent on the cheap models.",
+      ],
+      consoleUrl: "https://platform.openai.com/api-keys",
+      docsUrl: "https://platform.openai.com/docs",
+      pricingUrl: "https://openai.com/api/pricing",
+      keyFormat: "sk-...",
+    },
+  },
+  "chat:groq": {
+    tier: "free",
+    pricing: "Free tier: generous daily token limits, resets daily. Paid lane is cheap.",
+    setup: {
+      steps: [
+        "Sign up at console.groq.com — no credit card needed.",
+        "console.groq.com/keys → Create API Key (starts gsk_).",
+        "Paste the key here.",
+        "Pick openai/gpt-oss-120b — the free-tier workhorse, extremely fast.",
+        "Test — free tier rate-limits by tokens/day; a daily script habit fits comfortably.",
+      ],
+      consoleUrl: "https://console.groq.com/keys",
+      docsUrl: "https://console.groq.com/docs/openai",
+      pricingUrl: "https://groq.com/pricing",
+      keyFormat: "gsk_...",
+    },
+  },
+  "chat:gemini": {
+    tier: "free",
+    pricing: "AI Studio key: free tier with daily limits; flash-lite is cents per 1M.",
+    setup: {
+      steps: [
+        "Open aistudio.google.com with any Google account.",
+        "Get API key → Create API key (free tier activates automatically, no card).",
+        "Paste the key here.",
+        "Pick gemini-3.6-flash for daily driving; flash-lite when volume matters.",
+        "Test — free tier limits reset daily; paid billing is per-token and cheap.",
+      ],
+      consoleUrl: "https://aistudio.google.com/apikey",
+      docsUrl: "https://ai.google.dev/gemini-api/docs",
+      pricingUrl: "https://ai.google.dev/pricing",
+      keyFormat: "AIza...",
+    },
+  },
+  "chat:deepseek": {
+    tier: "budget",
+    pricing: "deepseek-flash peak $0.30/$1.20 per 1M — among the cheapest paid lanes.",
+    setup: {
+      steps: [
+        "Sign up at platform.deepseek.com.",
+        "API Keys → Create new key.",
+        "Top up from $2 (card or crypto) — pure pay-as-you-go, no subscription.",
+        "Paste the key here and pick deepseek-flash (fast) or deepseek-v4-pro (reasoning).",
+        "Test — one script costs well under a cent.",
+      ],
+      consoleUrl: "https://platform.deepseek.com/api_keys",
+      docsUrl: "https://api-docs.deepseek.com",
+      pricingUrl: "https://api-docs.deepseek.com/quick_start/pricing",
+      keyFormat: "sk-...",
+    },
+  },
+  "chat:anthropic": {
+    tier: "premium",
+    pricing: "claude-haiku-4-5 is the affordable lane; Sonnet is the quality lane.",
+    setup: {
+      steps: [
+        "Create a console.anthropic.com account.",
+        "Settings → Keys → Create key.",
+        "Add prepaid credit (Billing, from $5).",
+        "Paste the key here; pick claude-haiku-4-5 for affordable scripts or claude-sonnet-4-5 for depth.",
+        "Test — a script costs a fraction of a cent on Haiku.",
+      ],
+      consoleUrl: "https://console.anthropic.com/settings/keys",
+      docsUrl: "https://docs.anthropic.com",
+      pricingUrl: "https://www.anthropic.com/pricing",
+      keyFormat: "sk-ant-...",
+    },
+  },
+  "chat:mistral": {
+    tier: "budget",
+    pricing: "Free experiment tier on signup; paid per-token afterwards.",
+    setup: {
+      steps: [
+        "Sign up at console.mistral.ai (the free experiment tier needs no card).",
+        "API Keys → Create new key.",
+        "Paste the key here.",
+        "Pick mistral-large-latest (the free tier serves the small models).",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://console.mistral.ai/api-keys/",
+      docsUrl: "https://docs.mistral.ai",
+      pricingUrl: "https://mistral.ai/pricing",
+      keyFormat: "long alpha token",
+    },
+  },
+  "chat:xai": {
+    tier: "premium",
+    pricing: "grok-4 $3/$15 per 1M; grok-4.1-fast is the cheaper lane.",
+    setup: {
+      steps: [
+        "Sign up at console.x.ai.",
+        "API Keys → Create key.",
+        "Add prepaid credit.",
+        "Paste the key here and pick grok-4.1-fast for value or grok-4 for flagship quality.",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://console.x.ai/",
+      docsUrl: "https://docs.x.ai",
+      pricingUrl: "https://x.ai/api",
+      keyFormat: "xai-...",
+    },
+  },
+  "chat:openrouter": {
+    tier: "budget",
+    pricing: "Models suffixed :free cost $0; paid models pass through at provider price.",
+    setup: {
+      steps: [
+        "Sign up at openrouter.ai.",
+        "Keys → Create key (starts sk-or-).",
+        "Optional: add $5 credit to unlock the paid catalog (the :free models work without it).",
+        "Paste the key here; try meta-llama/llama-3.3-70b-instruct:free for $0 scripts.",
+        "Test — the response names the route it took.",
+      ],
+      consoleUrl: "https://openrouter.ai/keys",
+      docsUrl: "https://openrouter.ai/docs",
+      pricingUrl: "https://openrouter.ai/models",
+      keyFormat: "sk-or-...",
+    },
+  },
+  "chat:ollama": {
+    tier: "local",
+    pricing: "$0 forever — runs on your machine.",
+    setup: {
+      steps: [
+        "Install Ollama from ollama.com/download.",
+        "Pull a model: ollama pull llama3.2 (or qwen2.5 / deepseek-r1).",
+        "Keep the server running (it starts automatically; default port 11434).",
+        "Paste http://localhost:11434/v1 as Base URL if you changed it — no API key needed.",
+        "Test — the model runs locally, so nothing leaves your machine.",
+      ],
+      consoleUrl: "https://ollama.com/download",
+      docsUrl: "https://github.com/ollama/ollama/blob/main/docs/api.md",
+      keyFormat: "none — leave the key blank",
+    },
+  },
+  "chat:lmstudio": {
+    tier: "local",
+    pricing: "$0 forever — runs on your machine.",
+    setup: {
+      steps: [
+        "Install LM Studio from lmstudio.ai and download any GGUF chat model.",
+        "Start the local server: Developer tab → Start Server (default port 1234).",
+        "Paste http://localhost:1234/v1 as Base URL — no key needed.",
+        "Leave the model blank to use whatever the server has loaded.",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://lmstudio.ai/",
+      docsUrl: "https://lmstudio.ai/docs/app/api",
+      keyFormat: "none — leave the key blank",
+    },
+  },
+
+  // ── TTS (voiceover) ──
+  "tts:zai": {
+    tier: "free",
+    pricing: "7 built-in studio voices via the shared key — voiceover is $0 on flash tiers.",
+    setup: {
+      steps: [
+        "Works out of the box with the shared credentials — no separate signup.",
+        "Optional: your own z.ai key in Shared AI credentials gives you the same 7 voices on your account.",
+        "Pick a voice in Video → Voice; the provider test confirms access.",
+      ],
+      consoleUrl: "https://z.ai/model-api",
+      docsUrl: "https://docs.z.ai",
+      keyFormat: "shared key — or leave blank for the built-in gateway",
+    },
+  },
+  "tts:voicestudio": {
+    tier: "local",
+    pricing: "$0 — your own server (Apache-2.0 engines).",
+    setup: {
+      steps: [
+        "Run the VoiceStudio server on any machine you control (github.com/debpalash/VoiceStudio — docker one-liner in its README).",
+        "Keep its default port 3900, or paste your server URL as Base URL.",
+        "Loopback servers need no key; remote ones take the OMNIVOICE_API_KEY value as the API key.",
+        "Pick voxcpm2 or cosyvoice (both Apache-2.0, commercial-OK) — kittentts runs CPU-only.",
+        "Test — word-perfect for the voiceover lane and it powers word-timed ASR too.",
+      ],
+      consoleUrl: "https://github.com/debpalash/VoiceStudio",
+      docsUrl: "https://github.com/debpalash/VoiceStudio/blob/main/README.md",
+      keyFormat: "OMNIVOICE_API_KEY value (remote only)",
+    },
+  },
+  "tts:selfhost": {
+    tier: "local",
+    pricing: "$0 forever — open-source Chatterbox (MIT) on a host you control.",
+    setup: {
+      steps: [
+        "Host Chatterbox yourself: your PC (voice-server/README.md in this repo), an Oracle Always-Free VM (voice-server/oracle/README.md), or a free Hugging Face Space (voice-server/hf-space/README.md).",
+        "Note the host's URL and its secret (--key / VOICE_KEY).",
+        "Paste the URL as Base URL and the secret as the API key.",
+        "Pick chatterbox (English, MIT, commercial-OK) or chatterbox-multilingual (23 languages).",
+        "Test — CPU speed is slower than paid APIs but there are no rate limits and no bill.",
+      ],
+      consoleUrl: "https://github.com/resemble-ai/chatterbox",
+      docsUrl: "https://github.com/resemble-ai/chatterbox",
+      keyFormat: "the host's VOICE_KEY secret",
+    },
+  },
+  "tts:kokoro": {
+    tier: "local",
+    pricing: "$0 — 82M-param Apache-2.0 model, CPU-friendly.",
+    setup: {
+      steps: [
+        "Run kokoro-fastapi (github.com/reinsbreadcrumbs/kokoro-fastapi — docker) or any OpenAI-compatible Kokoro server.",
+        "Paste the server URL as Base URL (default http://localhost:8880/v1).",
+        "No key needed.",
+        "Pick the kokoro model.",
+        "Test — the lightweight lane where Chatterbox is too heavy.",
+      ],
+      consoleUrl: "https://huggingface.co/hexgrad/Kokoro-82M",
+      docsUrl: "https://huggingface.co/hexgrad/Kokoro-82M",
+      keyFormat: "none — leave the key blank",
+    },
+  },
+  "tts:zhipu": {
+    tier: "budget",
+    pricing: "GLM-TTS is pay-per-character on Zhipu; very cheap at script lengths.",
+    setup: {
+      steps: [
+        "Create a bigmodel.cn account.",
+        "User Center → API Keys → create one.",
+        "Paste the key here.",
+        "Pick glm-tts — the same 7 studio voices plus any voice you clone (Video → Voice → Clone, a 3-second sample).",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://bigmodel.cn/usercenter/proj-mgmt/apikeys",
+      docsUrl: "https://docs.bigmodel.cn",
+      keyFormat: "hex token id.secret",
+    },
+  },
+  "tts:heygen": {
+    tier: "free",
+    pricing: "Free API tier — 30 req/min, free turbo voice until 2026-11-30.",
+    setup: {
+      steps: [
+        "Create a HeyGen account at platform.heygen.com.",
+        "Settings → API Keys → create one.",
+        "Paste the key here.",
+        "Pick heygen-voice-1-turbo-free; the note lists a known public voice id you can paste as the model.",
+        "Test — 30 requests/minute on the free tier.",
+      ],
+      consoleUrl: "https://platform.heygen.com/api-keys",
+      docsUrl: "https://docs.heygen.com",
+      keyFormat: "hex key from HeyGen settings",
+    },
+  },
+  "tts:openai": {
+    tier: "premium",
+    pricing: "gpt-4o-mini-tts ~$0.015/min class; all TTS models retire Jan 6, 2027.",
+    setup: {
+      steps: [
+        "Use the SAME OpenAI key as Script writing (or a separate one from platform.openai.com/api-keys).",
+        "Paste the key here, or use the 'Use the same account as Script writing' button.",
+        "Pick gpt-4o-mini-tts (the newest voice model).",
+        "Heads-up: OpenAI retires its TTS models Jan 6, 2027 — plan a migration to another voice provider.",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://platform.openai.com/api-keys",
+      docsUrl: "https://platform.openai.com/docs/guides/text-to-speech",
+      pricingUrl: "https://openai.com/api/pricing",
+      keyFormat: "sk-...",
+    },
+  },
+  "tts:elevenlabs": {
+    tier: "premium",
+    pricing: "Free tier: 10k credits/month; paid from $5/mo.",
+    setup: {
+      steps: [
+        "Create an elevenlabs.io account.",
+        "Profile → API Keys → create one.",
+        "Paste the key here.",
+        "Pick eleven_multilingual_v2 (quality) or eleven_turbo_v2_5 (faster, cheaper).",
+        "Test — the free tier's monthly credits cover a handful of narrations.",
+      ],
+      consoleUrl: "https://elevenlabs.io/app/settings/api-keys",
+      docsUrl: "https://elevenlabs.io/docs",
+      pricingUrl: "https://elevenlabs.io/pricing",
+      keyFormat: "32-char hex key",
+    },
+  },
+  "tts:gemini": {
+    tier: "budget",
+    pricing: "Flash-TTS classes are cents per million characters; free tier covers trials.",
+    setup: {
+      steps: [
+        "Use any AI Studio key (aistudio.google.com/apikey) with TTS-model access.",
+        "Paste the key here (or copy from the Script writing row).",
+        "Pick gemini-3.8-flash-tts (expressive) or gemini-3.8-flash-lite-tts (cheaper).",
+        "Test — returns WAV audio.",
+      ],
+      consoleUrl: "https://aistudio.google.com/apikey",
+      docsUrl: "https://ai.google.dev/gemini-api/docs/speech-generation",
+      keyFormat: "AIza...",
+    },
+  },
+  "tts:cartesia": {
+    tier: "premium",
+    pricing: "Free tier available; paid from ~$5/mo — ultra-low latency.",
+    setup: {
+      steps: [
+        "Create an account at play.cartesia.ai.",
+        "Console → API Keys → create one.",
+        "Paste the key here.",
+        "Pick sonic-3.6 (current gen).",
+        "Test — voice pickers load YOUR account's voices live, custom voices included.",
+      ],
+      consoleUrl: "https://play.cartesia.ai/console",
+      docsUrl: "https://docs.cartesia.ai",
+      keyFormat: "X-API-Key value",
+    },
+  },
+  "tts:deepgram": {
+    tier: "budget",
+    pricing: "$200 free credits on new accounts — months of narration at Aura prices.",
+    setup: {
+      steps: [
+        "Create a console.deepgram.com account (the $200 credit activates on signup, no card).",
+        "API Keys → create one.",
+        "Paste the key here.",
+        "Pick an aura-2 voice (thalia/asteria/orpheus/arcas).",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://console.deepgram.com/",
+      docsUrl: "https://developers.deepgram.com",
+      keyFormat: "32-char hex key",
+    },
+  },
+  "tts:playht": {
+    tier: "budget",
+    pricing: "Free trial credits; paid per-character afterwards.",
+    setup: {
+      steps: [
+        "Create a play.ht account and open Studio → API Access.",
+        "Copy BOTH the User ID and the API Key.",
+        "Enter them as 'userId:apiKey' in the API Key field (the colon format is required).",
+        "Pick Play3.0-mini for realtime narration.",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://play.ht/studio/api-access",
+      docsUrl: "https://docs.play.ht",
+      keyFormat: "userId:apiKey (both, colon-separated)",
+    },
+  },
+
+  // ── ASR (transcription) ──
+  "asr:voicestudio": {
+    tier: "local",
+    pricing: "$0 — word-timestamp ASR on your own server.",
+    setup: {
+      steps: [
+        "Run the same VoiceStudio server as the Voiceover row (port 3900 by default).",
+        "Pick whisperx — verified word timestamps that upgrade captions and whiteboard anchors from derived to MEASURED timing.",
+        "faster-whisper is the fallback; moonshine runs CPU-only but has NO word timestamps.",
+        "No key for loopback servers.",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://github.com/debpalash/VoiceStudio",
+      keyFormat: "OMNIVOICE_API_KEY value (remote only)",
+    },
+  },
+  "asr:groq": {
+    tier: "free",
+    pricing: "Free tier on whisper-large-v3-turbo; paid lane is ~$0.04/hour of audio.",
+    setup: {
+      steps: [
+        "The SAME Groq key as Script writing works here (console.groq.com/keys).",
+        "Paste the key, or use the 'Use the same account as Script writing' button after configuring Groq there.",
+        "Pick whisper-large-v3-turbo.",
+        "Test — Groq serves the OpenAI transcription shape (word timestamps via verbose_json).",
+      ],
+      consoleUrl: "https://console.groq.com/keys",
+      docsUrl: "https://console.groq.com/docs/speech-to-text",
+      pricingUrl: "https://groq.com/pricing",
+      keyFormat: "gsk_...",
+    },
+  },
+  "asr:openai": {
+    tier: "budget",
+    pricing: "whisper-1 ~$0.006/min — pennies per narration.",
+    setup: {
+      steps: [
+        "Use the same OpenAI key as Script writing.",
+        "Paste the key (or copy from the Script writing row).",
+        "Pick whisper-1 — word timestamps via verbose_json.",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://platform.openai.com/api-keys",
+      docsUrl: "https://platform.openai.com/docs/guides/speech-to-text",
+      keyFormat: "sk-...",
+    },
+  },
+  "asr:zai": {
+    tier: "free",
+    pricing: "Bundled SDK transcription via the shared key — $0.",
+    setup: {
+      steps: [
+        "Works out of the box with the shared credentials.",
+        "No word timestamps — the silence ladder derives timing instead (captions stay aligned).",
+        "Pick this when you do not need measured word timing.",
+      ],
+      consoleUrl: "https://z.ai/model-api",
+      keyFormat: "shared key — or leave blank for the built-in gateway",
+    },
+  },
+
+  // ── IMAGE (artwork) ──
+  "image:zai": {
+    tier: "free",
+    pricing: "CogView via the shared key; thumbnails and storyboard art are $0 on flash tiers.",
+    setup: {
+      steps: [
+        "Works out of the box with the shared credentials.",
+        "Supports identity-locked edits (character consistency across scenes).",
+        "Optional: your own z.ai key in Shared AI credentials.",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://z.ai/model-api",
+      keyFormat: "shared key — or leave blank for the built-in gateway",
+    },
+  },
+  "image:pollinations": {
+    tier: "free",
+    pricing: "$0, keyless — watermarked, 1 image/45s anonymous lane.",
+    setup: {
+      steps: [
+        "No account, no key — pick it and Test.",
+        "Know the trade-offs: every image is watermarked and the anonymous lane allows 1 image per 45s per IP (a 16-scene storyboard takes ~12 min).",
+        "For watermark-free free images use Cloudflare, Together (-Free), Hugging Face, or NVIDIA instead.",
+      ],
+      consoleUrl: "https://enter.pollinations.ai",
+      docsUrl: "https://github.com/pollinations/pollinations/blob/master/APIS.md",
+      keyFormat: "none — leave the key blank",
+    },
+  },
+  "image:cloudflare": {
+    tier: "free",
+    pricing: "10,000 Neurons/day free (~500 FLUX-schnell images), no card.",
+    setup: {
+      steps: [
+        "Create a Cloudflare account (free).",
+        "Copy your Account ID (Workers & Pages → sidebar).",
+        "Paste it into the Base URL, replacing YOUR_ACCOUNT_ID.",
+        "dash.cloudflare.com/profile/api-tokens → Create token (Workers AI permission) → paste it here.",
+        "Pick @cf/black-forest-labs/flux-1-schnell (the free lane) and Test.",
+      ],
+      consoleUrl: "https://dash.cloudflare.com/profile/api-tokens",
+      docsUrl: "https://developers.cloudflare.com/workers-ai/models/",
+      keyFormat: "Cloudflare API token",
+    },
+  },
+  "image:huggingface": {
+    tier: "free",
+    pricing: "~300 requests/hour free; models cold-start 30-90s.",
+    setup: {
+      steps: [
+        "Create a huggingface.co account (free, no card).",
+        "Settings → Access Tokens → create a token with read access (hf_...).",
+        "Paste the token here.",
+        "Pick black-forest-labs/FLUX.1-schnell for speed or FLUX.1-dev for quality.",
+        "Test — a cold model answers with a retryable rate limit; try again after 30-90s.",
+      ],
+      consoleUrl: "https://huggingface.co/settings/tokens",
+      docsUrl: "https://huggingface.co/docs/api-inference",
+      keyFormat: "hf_...",
+    },
+  },
+  "image:nvidia": {
+    tier: "free",
+    pricing: "1,000 credits/month free, no card.",
+    setup: {
+      steps: [
+        "Create an NVIDIA build account (build.nvidia.com).",
+        "Grab an API key from the model page (starts nvapi-).",
+        "Paste the key here.",
+        "Pick black-forest-labs/flux.1-dev or flux.2-klein-4b.",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://build.nvidia.com/explore/visual",
+      docsUrl: "https://docs.api.nvidia.com",
+      keyFormat: "nvapi-...",
+    },
+  },
+  "image:together": {
+    tier: "free",
+    pricing: "FLUX.1-schnell-Free is $0 (~10 img/min); paid schnell ~$0.004/image.",
+    setup: {
+      steps: [
+        "Sign up at api.together.ai — NOTE: a one-time $15 credit purchase is required before the key is issued (refundable if unused).",
+        "Settings → API Keys → create one.",
+        "Paste the key here.",
+        "Pick black-forest-labs/FLUX.1-schnell-Free — real FLUX quality, NO watermark, ~10 images/min.",
+        "Test — the -Free model is always the $0 lane.",
+      ],
+      consoleUrl: "https://api.together.ai/settings/api-keys",
+      docsUrl: "https://docs.together.ai",
+      pricingUrl: "https://www.together.ai/pricing",
+      keyFormat: "64-char hex key",
+    },
+  },
+  "image:openai": {
+    tier: "premium",
+    pricing: "gpt-image-1 ~$0.02-0.19/image by quality; dall-e-3 ~$0.04-0.12.",
+    setup: {
+      steps: [
+        "Use the same OpenAI key as Script writing (prepaid credit required).",
+        "Pick gpt-image-1 — the only OpenAI image model with identity-locked EDITS.",
+        "dall-e-3 for classic generations.",
+        "Test (confirmCost applies — OpenAI images are not free).",
+      ],
+      consoleUrl: "https://platform.openai.com/api-keys",
+      docsUrl: "https://platform.openai.com/docs/guides/image-generation",
+      keyFormat: "sk-...",
+    },
+  },
+  "image:stability": {
+    tier: "premium",
+    pricing: "SD3.5-large ~$0.065/image; credits-based.",
+    setup: {
+      steps: [
+        "Create a platform.stability.ai account.",
+        "Account → API Keys → create one.",
+        "Prepaid credits (from $10).",
+        "Pick sd3.5-large and Test.",
+      ],
+      consoleUrl: "https://platform.stability.ai/account/keys",
+      docsUrl: "https://platform.stability.ai/docs/api-reference",
+      keyFormat: "sk-...",
+    },
+  },
+  "image:fal": {
+    tier: "budget",
+    pricing: "Free starting credits; FLUX ~$0.003-0.05/image.",
+    setup: {
+      steps: [
+        "Create a fal.ai account.",
+        "Dashboard → Keys → create one.",
+        "Paste the key here.",
+        "Pick fal-ai/flux-pro/v1.1 (quality) or fal-ai/flux/dev (fast).",
+        "Test — starting credits cover plenty of thumbnails.",
+      ],
+      consoleUrl: "https://fal.ai/dashboard/keys",
+      docsUrl: "https://fal.ai/models",
+      keyFormat: "hex key id:secret",
+    },
+  },
+  "image:replicate": {
+    tier: "budget",
+    pricing: "$5 free credits on signup; SDXL ~$0.002-0.01/image.",
+    setup: {
+      steps: [
+        "Create a replicate.com account (the $5 credit activates on signup).",
+        "Account → API tokens → create one (r8_...).",
+        "Paste the token here.",
+        "Pick black-forest-labs/flux-1.1-pro or stability-ai/sdxl.",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://replicate.com/account/api-tokens",
+      docsUrl: "https://replicate.com/docs",
+      keyFormat: "r8_...",
+    },
+  },
+  "image:ideogram": {
+    tier: "budget",
+    pricing: "Free daily credits; paid per-image from ~$0.02.",
+    setup: {
+      steps: [
+        "Create an ideogram.ai account.",
+        "Profile → API Keys → create one.",
+        "Paste the key here.",
+        "Ideogram's specialty is TEXT INSIDE IMAGES — posters, thumbnails with legible words.",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://ideogram.ai",
+      docsUrl: "https://ideogram.ai/docs/api",
+      keyFormat: "hex key",
+    },
+  },
+  "image:recraft": {
+    tier: "budget",
+    pricing: "Free tier: 50 credits/day; paid from $0.04/image.",
+    setup: {
+      steps: [
+        "Create a recraft.ai account.",
+        "Dashboard → API keys → create one.",
+        "Paste the key here.",
+        "Recraft's specialty is VECTOR-STYLE art and brand-consistent icon sets.",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://www.recraft.ai",
+      docsUrl: "https://docs.recraft.ai",
+      keyFormat: "long token",
+    },
+  },
+
+  // ── VIDEO (scene animation) ──
+  "video:zai": {
+    tier: "budget",
+    pricing: "CogVideoX-3: paid per 5s clip (cents-class); Ken Burns mode needs NO AI video at all.",
+    setup: {
+      steps: [
+        "Works with the shared credentials — the same z.ai key powers scripts, art and animation.",
+        "Pick cogvideox-3 (5s 1080p clips).",
+        "Remember: Ken Burns render mode is free and needs no AI video — animated mode calls the provider per scene.",
+        "Test (confirmCost applies — each clip bills).",
+      ],
+      consoleUrl: "https://z.ai/model-api",
+      keyFormat: "shared key — or leave blank for the built-in gateway",
+    },
+  },
+  "video:agnes": {
+    tier: "free",
+    pricing: "Completely free — 720P clips, async polling.",
+    setup: {
+      steps: [
+        "Create an account at platform.agnes-ai.com — no credit card.",
+        "Copy your API key.",
+        "Paste the key here and pick agnes-video-2.5.",
+        "Test — clips render 720P with async polling, free.",
+      ],
+      consoleUrl: "https://platform.agnes-ai.com",
+      keyFormat: "API key from the Agnes platform",
+    },
+  },
+  "video:nvidia": {
+    tier: "free",
+    pricing: "1,000 credits/month free — Wan2.2 clips on the house.",
+    setup: {
+      steps: [
+        "Same NVIDIA account as the Artwork row (build.nvidia.com).",
+        "Grab the nvapi- key.",
+        "Pick wan-ai/wan2.2-animate-2-14b.",
+        "Test — free tier credits cover a handful of animated scenes per month.",
+      ],
+      consoleUrl: "https://build.nvidia.com/explore/visual",
+      keyFormat: "nvapi-...",
+    },
+  },
+  "video:kling": {
+    tier: "budget",
+    pricing: "Daily free credits + one-time signup credits; paid per 5s clip.",
+    setup: {
+      steps: [
+        "Create an account at app.klingai.com/dev.",
+        "Generate an API credential pair (access key + secret) and paste as directed.",
+        "Pick kling-v2-master (current 2.x gen).",
+        "Test — new users get one-time free credits plus daily refresh credits.",
+      ],
+      consoleUrl: "https://app.klingai.com/dev",
+      keyFormat: "access-key:secret-key",
+    },
+  },
+  "video:hailuo": {
+    tier: "budget",
+    pricing: "200 free credits on signup; Hailuo-02 1080P/6s clips.",
+    setup: {
+      steps: [
+        "Create a platform.minimax.io account (200 free credits activate on signup).",
+        "API Keys → create one.",
+        "Paste the key here.",
+        "Pick MiniMax-Hailuo-02 (1080P, 6s) or MiniMax-Hailuo-2.3 (newer, faster).",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://platform.minimax.io",
+      keyFormat: "eyJ... JWT key",
+    },
+  },
+  "video:ltxstudio": {
+    tier: "budget",
+    pricing: "800 one-time free credits on signup; LTX 2.5 fast lane is the cheap one.",
+    setup: {
+      steps: [
+        "Create an account at ltx.studio.",
+        "Developer settings → generate an API key.",
+        "Paste the key here.",
+        "Pick ltx-2-5-fast for cost, ltx-2-5-pro for quality (8s clips).",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://ltx.studio",
+      keyFormat: "API key from LTX developer settings",
+    },
+  },
+  "video:magichour": {
+    tier: "free",
+    pricing: "400 credits on signup + 100 credits DAILY — no card.",
+    setup: {
+      steps: [
+        "Create an account at magichour.ai/developer (no card needed).",
+        "API Keys → create one.",
+        "Paste the key here.",
+        "Pick ltx-2.5 (fast default), wan-2.2 (physics), kling-3.0 (cinematic) or minimax-h3 (native audio).",
+        "Test — the daily credit drip covers a regular posting schedule.",
+      ],
+      consoleUrl: "https://magichour.ai/developer",
+      keyFormat: "API key from Magic Hour developer settings",
+    },
+  },
+  "video:replicate": {
+    tier: "budget",
+    pricing: "$5 free credits on signup; per-clip pricing by model.",
+    setup: {
+      steps: [
+        "Same Replicate account as the Artwork row ($5 signup credit).",
+        "Paste the r8_ token here.",
+        "Pick minimax/video-01.",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://replicate.com/account/api-tokens",
+      keyFormat: "r8_...",
+    },
+  },
+  "video:runway": {
+    tier: "budget",
+    pricing: "125 one-time free credits; gen4_turbo per-clip pricing.",
+    setup: {
+      steps: [
+        "Create a dev.runwayml.com account.",
+        "Account → API Keys → create one.",
+        "Paste the key here.",
+        "Pick gen4_turbo (gen3a_turbo was retired Aug 2026).",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://dev.runwayml.com/",
+      docsUrl: "https://docs.dev.runwayml.com",
+      keyFormat: "key_...",
+    },
+  },
+  "video:luma": {
+    tier: "premium",
+    pricing: "Ray-2 class pricing — premium lane.",
+    setup: {
+      steps: [
+        "Create a lumalabs.ai account.",
+        "Dream Machine → API Keys → create one.",
+        "Paste the key here.",
+        "Pick ray-2 (quality) or ray-flash-2 (faster, cheaper).",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://lumalabs.ai/dream-machine/api/keys",
+      docsUrl: "https://lumalabs.ai/api",
+      keyFormat: "luma-... API key",
+    },
+  },
+  "video:fal": {
+    tier: "budget",
+    pricing: "Free starting credits; fast-svd is the cheapest lane.",
+    setup: {
+      steps: [
+        "Same fal.ai account as the Artwork row.",
+        "Paste the key here.",
+        "Pick fal-ai/fast-svd (cheapest) or fal-ai/minimax/video-01/image-to-video (Hailuo quality).",
+        "Test — the response confirms the key and the model.",
+      ],
+      consoleUrl: "https://fal.ai/dashboard/keys",
+      keyFormat: "hex key id:secret",
+    },
+  },
+};
+
+/** Merge the enrichment onto the registry arrays — one lookup surface for
+ *  both the UI (tier badges, setup panel, pricing hints) and the battery
+ *  (completeness pins). Pure data, client-safe. */
+function enrich(list: ProviderMeta[], capability: CapabilityId): ProviderMeta[] {
+  return list.map((p) => {
+    const e = ENRICHMENT[`${capability}:${p.id}`];
+    if (!e) return p;
+    return { ...p, tier: e.tier, pricing: e.pricing, setup: e.setup };
+  });
+}
+
 export const PROVIDERS_BY_CAPABILITY: Record<CapabilityId, ProviderMeta[]> = {
-  chat: CHAT_PROVIDERS,
-  tts: TTS_PROVIDERS,
-  asr: ASR_PROVIDERS,
-  image: IMAGE_PROVIDERS,
-  video: VIDEO_PROVIDERS,
+  chat: enrich(CHAT_PROVIDERS, "chat"),
+  tts: enrich(TTS_PROVIDERS, "tts"),
+  asr: enrich(ASR_PROVIDERS, "asr"),
+  image: enrich(IMAGE_PROVIDERS, "image"),
+  video: enrich(VIDEO_PROVIDERS, "video"),
 };
 
 export const CAPABILITY_META: Record<

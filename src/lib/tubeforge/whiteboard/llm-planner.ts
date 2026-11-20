@@ -555,6 +555,9 @@ export async function scaffoldWhiteboardProjectLlm(
     /** S137 — the per-video generated cards; they ride the native base so
      *  the composed scaffold keeps the topic's own title/close cards. */
     generatedAssets?: import("./assets").WhiteboardAsset[];
+    /** P5 — flows through to the native scaffold (composeLlmScaffold
+     *  spreads the native base, so the recipe survives the LLM pass). */
+    profileId?: string;
   },
   opts: { ask?: () => Promise<string>; call?: PlannerCall } = {}
 ): Promise<{ project: WhiteboardProject; report: WhiteboardLlmPlannerReport }> {

@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AnimationEvent, CameraEvent, WhiteboardProject } from "@/lib/tubeforge/whiteboard/storyboard";
 import type { Placement } from "@/lib/tubeforge/whiteboard/svg";
 import { sceneDurationMs } from "@/lib/tubeforge/whiteboard/timing";
+import { WHITEBOARD_PROFILES, WHITEBOARD_PROFILE_IDS, applyWhiteboardProfile } from "@/lib/tubeforge/whiteboard/profiles";
 import WbCanvas, { type WbEditing } from "./wb-canvas";
 
 interface LibraryEntry {
@@ -414,6 +415,9 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
         body: JSON.stringify({
           ...(force ? { force: true } : {}),
           ...(aiPlanner ? { planner: "llm" } : {}),
+          // P5 — a scaffold REPLACES the doc; the current profile rides
+          // along so the recipe survives regeneration.
+          ...(data?.project?.profile ? { profileId: data.project.profile } : {}),
         }),
       });
       const body = (await res.json()) as {
@@ -993,6 +997,40 @@ export default function WhiteboardStudio({ videoId, hasVideo, onRenderQueued }: 
             {sceneIndex === 0 && (
               <p className="mt-1.5 text-[11px] text-white/40">The first scene always starts on a clean board.</p>
             )}
+          </div>
+
+          {/* P5 — production profiles: the recipe layer over the per-project
+              knobs (hand, paper, board behavior, pen sound). Applying one
+              bakes it into the doc — authored choices are never overridden
+              (profiles.ts law), so the selector is honest about what it
+              changed via the report. */}
+          <div>
+            <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-white/40">
+              Production profile — the recipe behind hand, paper and board
+            </p>
+            <div className="flex flex-col gap-1.5">
+              <select
+                value={project.profile ?? ""}
+                onChange={(e) => {
+                  const id = e.target.value || null;
+                  mutateProject((p) => applyWhiteboardProfile(p, id).project);
+                }}
+                className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs"
+                aria-label="Production profile"
+              >
+                <option value="">No profile (custom)</option>
+                {WHITEBOARD_PROFILE_IDS.map((id) => (
+                  <option key={id} value={id}>
+                    {WHITEBOARD_PROFILES[id].label}
+                  </option>
+                ))}
+              </select>
+              {project.profile && (
+                <p className="text-[11px] leading-snug text-white/40">
+                  {WHITEBOARD_PROFILES[project.profile as keyof typeof WHITEBOARD_PROFILES]?.description}
+                </p>
+              )}
+            </div>
           </div>
 
           {/* W7 — hand + sound: the tool hand, its side, and the optional

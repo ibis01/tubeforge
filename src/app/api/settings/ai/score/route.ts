@@ -28,7 +28,7 @@ import { errorText } from "@/lib/tubeforge/redact";
  * and clamped — junk falls back to the production-calibrated defaults).
  */
 
-const CAPS: CapabilityId[] = ["chat", "tts", "image", "video"];
+const CAPS: CapabilityId[] = ["chat", "tts", "asr", "image", "video"];
 const WEIGHTS_KEY = "ai.scoreWeights";
 const OBSERVATION_WINDOW_DAYS = 90;
 const OBSERVATION_ROW_CAP = 4000;

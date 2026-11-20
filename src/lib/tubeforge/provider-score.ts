@@ -104,6 +104,7 @@ const TTS_PRIORS: Record<string, ProviderPriors> = {
 const ASR_PRIORS: Record<string, ProviderPriors> = {
   voicestudio: { quality: 0.85, latency: 0.5, fit: 0.95 }, // verbose_json word timestamps
   openai: { quality: 0.82, latency: 0.75, fit: 0.8 }, // whisper-1 word granularity
+  groq: { quality: 0.8, latency: 0.92, fit: 0.82 }, // whisper-large-v3-turbo via the OpenAI shape; word timestamps; free tier
   zai: { quality: 0.78, latency: 0.85, fit: 0.6 }, // no word timestamps — the silence ladder covers timing
 };
 
@@ -123,6 +124,8 @@ const IMAGE_PRIORS: Record<string, ProviderPriors> = {
   cloudflare: { quality: 0.78, latency: 0.8, fit: 0.6 }, // Workers AI FLUX-schnell/SDXL; ~500 img/day free, no edits
   huggingface: { quality: 0.8, latency: 0.7, fit: 0.58 }, // FLUX.1-dev/schnell + SDXL via Inference API; free tier, no edits
   nvidia: { quality: 0.82, latency: 0.72, fit: 0.62 }, // FLUX.1-dev / flux.2-klein via NIM; 1,000 credits/month free, no edits
+  ideogram: { quality: 0.8, latency: 0.72, fit: 0.7 }, // text-inside-images specialty; thumbnails/posters, no identity-locked edits
+  recraft: { quality: 0.78, latency: 0.74, fit: 0.65 }, // vector-style art + brand icon sets; no edits
 };
 
 /** Video priors. */

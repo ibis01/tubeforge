@@ -42,6 +42,7 @@ import {
   type DuckIntensity,
 } from "./audiomix";
 import { getCapability, VIDEO_DEFAULT_MODEL } from "./providers/settings";
+import { imageToVideo } from "./providers/video";
 import { runProcess } from "./proc";
 import {
   planSlides,
@@ -439,15 +440,13 @@ async function ensureSceneClip(
   const imagePath = path.join(videoDir(videoId), sceneImageFile(scene.index));
   const imageB64 = fs.readFileSync(imagePath).toString("base64");
 
-  // Video generation is Z.ai CogVideoX — validate the provider up front so
-  // misconfigured installs fail with a actionable message instead of an
-  // opaque SDK error deep inside the render.
+  // Scene animation rides the VIDEO capability — Z.ai CogVideoX (the shared
+  // default) OR any of the adapter-backed providers (agnes/nvidia/kling/
+  // hailuo/ltxstudio/magichour/replicate/runway/luma/fal). The provider
+  // resolves like every capability; a missing configuration fails HERE with
+  // an actionable message instead of an opaque SDK error mid-render.
   const videoConfig = await getCapability("video");
-  if (videoConfig.provider !== "zai") {
-    throw new Error(
-      "Scene animation only supports Z.ai CogVideoX — fix it in Settings → AI Providers, or render with Ken Burns mode (no AI video needed)"
-    );
-  }
+  const isZai = videoConfig.provider === "zai";
   const videoModel = videoConfig.model?.trim() || VIDEO_DEFAULT_MODEL;
 
   // S50 — the i2v motion prompt rides the content policy like every other
@@ -478,30 +477,38 @@ async function ensureSceneClip(
       })
     : null;
 
-  const zai = await zaiClientFor("video");
+  const zai = isZai ? await zaiClientFor("video") : null;
   const clip = await aiCall(
     "video",
     `scene ${scene.index} i2v`,
     async () => {
-      // S36-audit wiring — the submit/poll/download loop now lives in the
-      // tested core (providers/zai-video-core.ts), shared with the provider
-      // adapter; this site keeps the clip cache, the 10s×60 window and the
-      // aiCall retry it always had.
-      const buf = await zaiVideoViaClient(
-        zai,
-        {
-          prompt: motionPrompt,
-          imagePngBase64: imageB64,
-        },
-        {
-          model: videoModel,
-          duration: 5,
-          fps: FPS,
-          size: "1920x1080",
-          pollMs: 10_000,
-          maxPolls: 60,
-        },
-      );
+      // S36-audit wiring — the zai submit/poll/download loop lives in the
+      // tested core (providers/zai-video-core.ts); every OTHER provider
+      // rides the SAME generic imageToVideo dispatch the settings test
+      // button proves (one adapter set, two call sites — the zai-vs-rest
+      // wall is gone; Z.ai is now simply the default among peers).
+      // `zai` is assigned only when isZai holds — the truthy check IS the
+      // dispatch (no non-null assertion, the lint law).
+      const buf = zai
+        ? await zaiVideoViaClient(
+            zai,
+            {
+              prompt: motionPrompt,
+              imagePngBase64: imageB64,
+            },
+            {
+              model: videoModel,
+              duration: 5,
+              fps: FPS,
+              size: "1920x1080",
+              pollMs: 10_000,
+              maxPolls: 60,
+            },
+          )
+        : await imageToVideo(
+            { prompt: motionPrompt, imagePngBase64: imageB64, duration: 5 },
+            videoConfig,
+          );
       fs.writeFileSync(clipPath, buf);
       return clipPath;
     },
@@ -1856,7 +1863,11 @@ export async function renderVideo(opts: RenderOptions): Promise<RenderResult> {
       // (it IS i2v — the provider error surfaces from ensureSceneClip itself,
       // as it always has) and slides/stock-with-clips never generate.
       try {
-        i2vReady = (await getCapability("video")).provider === "zai";
+        // Any ADAPTER-BACKED video provider readies the i2v lane (Z.ai is
+        // simply the default peer); a zai-only check would strand every
+        // other provider's clips behind a false "not ready".
+        await getCapability("video");
+        i2vReady = true;
       } catch {
         i2vReady = false; // no provider configured — honest KB fallback below
       }

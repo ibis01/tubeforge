@@ -33,6 +33,7 @@ export const ASR_WORD_TIMESTAMP_SUPPORT: Readonly<Record<string, boolean>> =
   Object.freeze({
     voicestudio: true, // verbose_json + timestamp_granularities[]=word (verified)
     openai: true, // whisper-1 verbose_json word granularity
+    groq: true, // the OpenAI-compatible shape — whisper-large-v3(-turbo) verbose_json words
     zai: false, // the bundled SDK answers text only
   });
 
@@ -247,8 +248,9 @@ async function openaiAsr(
   wavBuffer: Buffer,
   config: CapabilityConfig,
   detailed: boolean,
+  providerId: "openai" | "groq" = "openai",
 ): Promise<{ text: string; words: AsrWord[] | null }> {
-  const meta = providerMetaRequired("asr", "openai");
+  const meta = providerMetaRequired("asr", providerId);
   const baseUrl = config.baseUrl?.trim() || meta.defaultBaseUrl;
   const key = config.apiKey?.trim();
   if (!key) throw new Error("OpenAI-compatible transcription needs an API key");
@@ -318,8 +320,10 @@ async function asrPass(
   if (provider === "voicestudio") {
     return voicestudioAsr(wavBuffer, config, detailed);
   }
-  if (provider === "openai") {
-    return openaiAsr(wavBuffer, config, detailed);
+  // groq speaks the OpenAI transcription shape — the SAME adapter rides it
+  // (its registry defaultBaseUrl points at api.groq.com/openai/v1).
+  if (provider === "openai" || provider === "groq") {
+    return openaiAsr(wavBuffer, config, detailed, provider);
   }
   return zaiAsr(wavBuffer);
 }
