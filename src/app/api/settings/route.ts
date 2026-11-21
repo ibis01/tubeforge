@@ -53,7 +53,10 @@ import {
 } from "@/lib/tubeforge/providers/tts";
 import { imageEdit, imageGenerate } from "@/lib/tubeforge/providers/image";
 import { errorText } from "@/lib/tubeforge/redact";
-import { imageToVideo } from "@/lib/tubeforge/providers/video";
+import {
+  imageToVideo,
+  normalizeMagicHourBaseUrl,
+} from "@/lib/tubeforge/providers/video";
 
 const CAPABILITIES: CapabilityId[] = ["chat", "tts", "asr", "image", "video"];
 
@@ -421,8 +424,9 @@ export async function POST(req: NextRequest) {
         // video generation uses real storyboard scene images via the
         // imageToVideo() pipeline call, not this test endpoint.
         if (provider === "magichour") {
-          const baseUrl =
-            overrides.baseUrl?.trim() || "https://api.magichour.ai/v1";
+          // Users often paste the bare host (no /v1) — normalize so the
+          // probe targets the real route instead of 404-ing.
+          const baseUrl = normalizeMagicHourBaseUrl(overrides.baseUrl);
           const cfg = await getCapability("video", overrides);
           const key = apiKeyOverride || cfg.apiKey || "";
           if (!key) {
@@ -442,11 +446,15 @@ export async function POST(req: NextRequest) {
             });
             if (!res.ok) {
               const text = await res.text().catch(() => "");
+              const hint =
+                res.status === 404
+                  ? " — 404 means the base URL path is wrong; it should look like https://api.magichour.ai/v1"
+                  : "";
               return NextResponse.json(
                 {
                   ok: false,
                   capability: "video",
-                  error: `Magic Hour auth failed (HTTP ${res.status}): ${text.slice(0, 200)}`,
+                  error: `Magic Hour auth failed (HTTP ${res.status}): ${text.slice(0, 200)}${hint}`,
                 },
                 { status: 200 },
               );

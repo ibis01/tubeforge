@@ -318,6 +318,29 @@ async function lumaVideo(
 
 // ---------- Magic Hour (free tier) ----------
 
+// Magic Hour's REST API lives under the /v1 path prefix, but the base URL
+// field is free-text and users routinely paste the bare host
+// ("https://api.magichour.ai"). That spelling produces 404
+// {"message":"Not Found"} on every probe/generation and looks like an
+// auth failure. Normalize defensively: empty → default; bare origin (no
+// path) → append /v1; explicit paths (proxies, versioned overrides) are
+// kept as typed.
+export function normalizeMagicHourBaseUrl(raw: string | undefined): string {
+  const fallback = "https://api.magichour.ai/v1";
+  const trimmed = raw?.trim();
+  if (!trimmed) return fallback;
+  const stripped = trimmed.replace(/\/+$/, "");
+  try {
+    const url = new URL(stripped);
+    if (url.pathname === "" || url.pathname === "/") {
+      return `${url.origin}/v1`;
+    }
+    return stripped;
+  } catch {
+    return stripped;
+  }
+}
+
 export async function magicHourVideo(
   req: ImageToVideoRequest,
   config: CapabilityConfig,
@@ -325,7 +348,7 @@ export async function magicHourVideo(
 ): Promise<Buffer> {
   const pollMs = opts.pollMs ?? 5000;
   const maxPolls = opts.maxPolls ?? 60;
-  const baseUrl = config.baseUrl?.trim() || "https://api.magichour.ai/v1";
+  const baseUrl = normalizeMagicHourBaseUrl(config.baseUrl);
   const key = config.apiKey?.trim();
   if (!key) throw new Error("Magic Hour needs an API key");
 

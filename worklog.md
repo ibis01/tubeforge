@@ -7190,3 +7190,34 @@ call, never a file — rotation advised per the PAT law); CI owns the 8/8
 evidence after. First CI run: 7/8 — the E2E job caught exactly the stale-spec
 contract above; the spec fix rides this entry's commit and CI re-owns the
 evidence.
+
+## 2026-11-21 — TubeForge Next, session 6: Magic Hour probe 404 — base URL normalization (bare-host spellings now work)
+
+**Trigger.** Operator screenshot (fly deployment): the Magic Hour provider
+Test button returns `auth failed (HTTP 404): {"message":"Not Found"}` with
+base URL `https://api.magichour.ai` (bare host, no `/v1`). Live probes against
+Magic Hour's own API reproduced the split conclusively:
+`GET https://api.magichour.ai/v1/video-projects` → 401
+`{"code":"unauthorized"}` (route exists, key check runs) while
+`GET https://api.magichour.ai/video-projects` → 404 `{"message":"Not Found"}`
+— byte-for-byte the error body in the screenshot. Root cause: the probe and
+the generation adapter honoured a typed base URL verbatim and only fell back
+to the `/v1` default when the field was EMPTY, so the bare-host spelling hit a
+non-existent route and the UI surfaced it as an "auth failure". The key itself
+is very likely fine.
+
+**What landed (one commit, three call sites):** `providers/video.ts` exports
+`normalizeMagicHourBaseUrl()` — empty → default, bare origin → append `/v1`,
+trailing slashes stripped, explicit paths kept (proxies/versioned overrides) —
+and `magicHourVideo()` now uses it, so real generations survive the same
+spelling. Both Settings test routes (`/api/settings`, `/api/settings/ai`)
+normalize before probing, and a 404 response now carries an actionable hint
+("base URL path is wrong; should look like https://api.magichour.ai/v1").
+9-case unit check of the normalizer passes (undefined/blank/whitespace/bare
+host/trailing slashes/`/v1` exact/`/v1` + slash/custom proxy path).
+
+**Gates (this sandbox):** eslint 0 errors repo-wide (12 pre-existing
+`no-explicit-any` warnings, scripts/b4-production-test.mts — untouched).
+CI owns the 8/8 evidence after push. Note: Vercel auto-deploys main; fly.io
+has no CI deploy job, so the fly deployment picks this up on its next
+`fly deploy`.
