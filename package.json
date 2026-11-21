@@ -143,5 +143,13 @@
     "@parcel/watcher",
     "@swc/core",
     "better-sqlite3"
-  ]
+  ],
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "@prisma/engines@7.10.1": true,
+    "prisma@7.10.1": true,
+    "esbuild@0.28.2": true,
+    "@swc/core@1.16.20": true,
+    "@parcel/watcher@2.6.0": true
+  }
 }
