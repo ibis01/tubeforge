@@ -79,6 +79,17 @@ jobs:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # Pull-request mode enumerates the PR's commits (GET /pulls/{n}/commits)
+    # BEFORE it can scan — an app-token call that the default workflow
+    # permissions (pull-requests: NONE) refuse with "Resource not accessible
+    # by integration" (the Studio-side twin runs 44678395569 + 44679114429;
+    # comments were NOT the failing call — the scan never started). This
+    # grants exactly the two READ categories the scanner needs; zero writes,
+    # and GITLEAKS_ENABLE_COMMENTS=false (below) keeps it from ever wanting
+    # one. Ported from the Studio fix (ac71af7) — same action, same shape.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -89,6 +100,14 @@ jobs:
           # Free for personal (user-owned) repositories; if this repo ever
           # moves to an org, GITLEAKS_LICENSE becomes required.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PR mode (pull_request events) defaults to POSTING findings as PR
+          # comments — a write the read-only default GITHUB_TOKEN cannot do,
+          # so the JOB dies with "Resource not accessible by integration"
+          # while the scan itself was never the problem. Comments off keeps
+          # the scanner read-only like the rest of CI; a real leak still
+          # fails the job (non-zero exit) — it just no longer needs comment
+          # rights to say so. Ported from the Studio fix (1b5b2e0).
+          GITLEAKS_ENABLE_COMMENTS: "false"
 
   check:
     name: Typecheck · Lint · Unit
