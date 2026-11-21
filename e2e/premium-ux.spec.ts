@@ -145,11 +145,18 @@ test.describe("Stage 4a premium UX", () => {
     await expect(editor).toHaveValue(/Original narration/);
 
     // Edit + autosave (1s debounce) → the text persists server-side.
+    // The debounce + PATCH round-trip is genuinely slow under load (the
+    // sandbox filesystem measured a 5.4s write; the fixed 2.2s sleep raced
+    // the in-flight PATCH and read the PRE-save row — the flake this
+    // replaces). Await the WRITE itself, per the neighboring test's law:
+    // poll the read model until the saved text lands, never guess a delay.
     await editor.fill("Edited narration. The autosave path proves the Director area writes through.");
-    await page.waitForTimeout(2200);
-    const after = await request.get(`/api/videos/${classicVideoId}`, { headers: { cookie } });
-    const afterBody = (await after.json()) as { video: { script: string } };
-    expect(afterBody.video.script).toContain("Edited narration");
+    await expect(async () => {
+      const after = await request.get(`/api/videos/${classicVideoId}`, { headers: { cookie } });
+      expect(after.status()).toBeLessThan(500);
+      const afterBody = (await after.json()) as { video: { script: string } };
+      expect(afterBody.video.script).toContain("Edited narration");
+    }).toPass({ timeout: 20_000 });
   });
 });
 
