@@ -88,6 +88,17 @@
   }
   html {
     color-scheme: dark;
+    /* Polish pass — crisper text on the dark canvas (rendering only, no
+       color/identity change). Smooth scroll rides the SAME reduced-motion
+       law as every other transition: the reduce block below forces it
+       back to auto with !important. */
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
   }
   body {
     @apply bg-background text-foreground;
@@ -95,12 +106,14 @@
 }
 
 @layer utilities {
-  /* Glassmorphism card */
+  /* Glassmorphism card — polish pass: one hairline of light along the top
+     edge (neutral white alpha) so panels read as lit from above. */
   .glass {
     background: rgb(255 255 255 / 4%);
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
     border: 1px solid rgb(255 255 255 / 8%);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 5%);
   }
 
   .glass-strong {
@@ -108,6 +121,7 @@
     backdrop-filter: blur(18px);
     -webkit-backdrop-filter: blur(18px);
     border: 1px solid rgb(255 255 255 / 10%);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 4%);
   }
 
   /* Blue → cyan brand gradient (restrained: CTA + logo + one hero wash) */
@@ -748,24 +762,32 @@ audio::-webkit-media-controls-panel {
 }
 
 @layer utilities {
-  /* Standard elevated surface for cards/panels */
+  /* Standard elevated surface for cards/panels — polish pass adds the same
+     neutral top-light hairline as .glass (no color change, no depth change). */
   .tf-card {
     background: var(--tf-surface-1);
     border: 1px solid var(--tf-hairline);
     border-radius: 0.75rem;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 4%);
   }
 
-  /* Interactive card — lifts on hover */
+  /* Interactive card — lifts on hover. Polish pass: the lift now carries a
+     soft NEUTRAL elevation shadow (black alpha only) so the -2px rise feels
+     physical; the top-light hairline survives the hover via the inset. */
   .tf-card-hover {
     transition:
       transform var(--tf-dur) var(--tf-ease),
       border-color var(--tf-dur) var(--tf-ease),
-      background var(--tf-dur) var(--tf-ease);
+      background var(--tf-dur) var(--tf-ease),
+      box-shadow var(--tf-dur) var(--tf-ease);
   }
   .tf-card-hover:hover {
     transform: translateY(-2px);
     border-color: var(--tf-hairline-strong);
     background: var(--tf-surface-2);
+    box-shadow:
+      0 10px 28px rgb(0 0 0 / 35%),
+      inset 0 1px 0 rgb(255 255 255 / 4%);
   }
 
   /* Small uppercase section label */
@@ -849,12 +871,16 @@ audio::-webkit-media-controls-panel {
     box-shadow: var(--tf-elev-3);
   }
 
-  /* Shared panel chrome — inspector/workspace panes inherit one depth law */
+  /* Shared panel chrome — inspector/workspace panes inherit one depth law.
+     Polish pass: the depth law is COMPOSED with the top-light hairline
+     (elev-1 stays — this adds, never replaces). */
   .tf-panel {
     background: var(--tf-surface-1);
     border: 1px solid var(--tf-hairline);
     border-radius: 0.75rem;
-    box-shadow: var(--tf-elev-1);
+    box-shadow:
+      var(--tf-elev-1),
+      inset 0 1px 0 rgb(255 255 255 / 4%);
   }
 
   /* One scrollbar law for inner scroll areas (timeline, lists, palettes) */
