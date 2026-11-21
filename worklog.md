@@ -7148,3 +7148,40 @@ current.
 operator PAT — the prior tokens are gone from the environment, and the
 PAT law holds: env var or push-URL header only, never a file, rotation
 advised). Once pushed, CI owns the 8/8 evidence.
+
+---
+
+## 2026-11-21 — TubeForge Next, session 5: the reload law (URL-anchored views — ported, identity untouched)
+
+**Trigger.** The operator reported: reloading the app (Vercel + fly) "resets
+all settings without saving the settings and apis" and "takes me straight back
+to home instead remaining on the app". Evidence-first, per the audit law:
+persistence probes against BOTH live deployments (fresh probe account → save →
+read back ×4, account deleted after) proved the servers healthy — preferences
+AND provider keys persist, /api/diag shows postgres + authSecret +
+encryptionKey present, migrations applied. The live-UI repro (Settings →
+reload → Home on BOTH tubeforge-ibismuh.vercel.app AND ibismuh-studio.fly.dev)
+pinned the real bug: the view lives only in the Zustand store — every reload
+rebooted the studio on Home; the "settings reset" reading was the downstream
+perception (thrown away from the saved-key chips, which verifiably render
+after reload).
+
+**What landed (one commit, port of Studio's same-session reload law):**
+`src/lib/store.ts` gains VIEW_IDS (validated restore targets), `viewToHash()`
+("" for Home so "/" stays the bare entry URL; `#/workspace/<videoId>` for a
+focused workspace) and `restoreViewFromHash()` (boot restore + hashchange deep
+links; invalid hashes restore nothing). `src/app/page.tsx` mirrors every
+(view, focusVideoId) change into the hash via `history.replaceState` (no
+history spam, no server round-trip, no host-specific rewrite rules) and
+restores on mount — a reload, a signed-in return, or the 401 auto-reload all
+land BACK on the surface the operator was on; the workspace restores WITH its
+project. Prefills stay ephemeral BY DESIGN. Zero visual change: no color, no
+logo, no workflow markup touched (the operator's freeze re-affirmed).
+
+**Gates (this sandbox):** tsc clean · eslint clean on changed files · the
+premium-ux reload-draft e2e contract unaffected (the reload now mounts Create
+restored directly).
+
+**Programme state:** pushed with the operator token (push-URL header, single
+call, never a file — rotation advised per the PAT law); CI owns the 8/8
+evidence after.

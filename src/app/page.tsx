@@ -2,7 +2,12 @@
 
 import { useEffect, useState, type ComponentType } from "react";
 import dynamic from "next/dynamic";
-import { useAppStore, type ViewId } from "@/lib/store";
+import {
+  useAppStore,
+  restoreViewFromHash,
+  viewToHash,
+  type ViewId,
+} from "@/lib/store";
 import {
   AppSidebar,
   MOBILE_NAV_ITEMS,
@@ -226,6 +231,33 @@ export default function Home() {
     }) as typeof fetch;
     return () => {
       window.fetch = orig;
+    };
+  }, []);
+
+  // URL-anchored views (the reload law): the store is memory, the hash is the
+  // persistence. Restore on boot — a reload, a signed-in return, or the 401
+  // auto-reload above all land BACK on the surface the operator was on
+  // (workspace restores with its project). Mirror every (view, focus) change
+  // into the hash via replaceState — no history spam, no server round-trip —
+  // and honor pasted deep links via hashchange. Home keeps the bare "/" URL.
+  // Port of Studio's reload law — provenance: Ibismuh-studio (same session).
+  useEffect(() => {
+    const writeHash = () => {
+      const s = useAppStore.getState();
+      const h = viewToHash(s.view, s.focusVideoId);
+      if (window.location.hash !== h)
+        window.history.replaceState(null, "", `${window.location.pathname}${h}`);
+    };
+    restoreViewFromHash();
+    writeHash();
+    const unsub = useAppStore.subscribe(writeHash);
+    const onHashChange = () => {
+      restoreViewFromHash();
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => {
+      unsub();
+      window.removeEventListener("hashchange", onHashChange);
     };
   }, []);
 
