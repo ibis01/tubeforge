@@ -117,7 +117,7 @@
     "@prisma/adapter-better-sqlite3": "^7.10.1"
   },
   "devDependencies": {
-    "@playwright/test": "^1.65.0",
+    "@playwright/test": "^1.65.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^26.6.6",
     "@types/react": "^19",
@@ -126,11 +126,11 @@
     "c8": "^12.0.0",
     "eslint": "^10",
     "eslint-config-next": "^16.4.5",
+    "prisma": "^7.10.1",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "tw-animate-css": "^1.3.5",
-    "typescript": "^5",
-    "prisma": "^7.10.1"
+    "typescript": "^5"
   },
   "overrides": {
     "@typescript-eslint/typescript-estree": {
