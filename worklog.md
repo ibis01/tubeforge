@@ -7090,3 +7090,61 @@ PROPOSED on the standing roadmap; their Studio-side counterparts (beat
 compiler, word-anchored handwriting, camera director, continuous canvas,
 finishers) already live in the tree from the fork, so the remaining W-work
 is TubeForge-side acceptance, not porting.
+
+---
+
+## 2026-11-21 — TubeForge Next, session 4: the delta rides again (O-series: the Studio tail, classified and ported; the operator's order re-affirmed)
+
+**Trigger.** The operator ordered: "update this" (tubeforge). Studio had
+moved past the session-3 coverage head (`81fc34e`) by seven commits. This
+session re-ran the Phase 0 shape: enumerate, classify, backport the
+code-bearing ones as O0–O2, keep the identity law and the color/logo
+freeze intact.
+
+**The delta, classified (audit §2 law):**
+- MIGRATE (code): `ac71af7` O0 · `1b5b2e0` (rides O0) · `c37981c` O1 ·
+  `a6e03b4` O2 (additive-only, identity unchanged).
+- EXCLUDE (already covered): `c3abe17` (R2 truth-telling — landed here as
+  N2).
+- EXCLUDE (Studio-side only): `c1b071a` (its corrupted-push-filter story —
+  THIS repo's push filter is byte-verified intact: `branches: [main]`).
+- EXCLUDE (operator's standing order): `446974e` + `cdd74fd` (the R3
+  futuristic pass — the operator kept the former look; Studio itself
+  reverted it in `31727cf` and polished additively in `a6e03b4`, which is
+  the part that ports).
+- EXCLUDE (never a bug here): the malformed-JSON script-brief crash class —
+  `parseJsonLoose` (fence strip, repairCommonJson, structuralRepair,
+  largestBalancedJson) already covers it.
+
+**What landed (each = one commit, provenance in the message):**
+- O0 `9cf964b` ci(secrets): job-scoped `contents: read` +
+  `pull-requests: read` and `GITLEAKS_ENABLE_COMMENTS=false` — the PR-mode
+  scan never starts without the read right ("Resource not accessible by
+  integration", the Studio twin's runs 44678395569 + 44679114429); zero
+  writes, real leaks still fail the job.
+- O1 `145a4a6` e2e(autosave): the T-4.4 fixed 2.2s sleep raced the
+  debounced PATCH (5.4s cold); toPass(20s) polling with a sub-500 guard
+  awaits the WRITE per the file's own law.
+- O2 `a6501e4` ui(polish): light-from-above hairline on .glass /
+  .glass-strong / .tf-card / .tf-panel (composed, never replacing the
+  elev law), neutral black-alpha tactile lift on .tf-card-hover,
+  antialiased text + reduced-motion-guarded smooth scroll. Colors, logo,
+  workflow markup: untouched — the operator's freeze re-affirmed.
+
+**Gates (all green, this sandbox):** tsc clean · eslint 0 errors (12
+documented baseline warnings) · battery **1022/1022** · whiteboard-trace
+**25/25** · whiteboard-profiles ALL PASS · provider-registry ALL PASS ·
+production build exit 0 (standalone + static + public receipts). The
+build's TS step needs `--max-old-space-size` on this 4 GB sandbox —
+environment memory, not a gate regression.
+
+**Freshness evidence:** `npm outdated` shows patch-level drift only
+(eslint 10.15.0, eslint-config-next 16.4.6, react-query 5.108.2,
+tailwind-merge 3.7.1, undici 8.13.1); prisma 8.0.0-rc.x is an RC, TS 7 is
+a major — correctly not taken. The U3 majors (landed 2026-11-20) remain
+current.
+
+**Programme state:** the three commits are LOCAL (push needs a fresh
+operator PAT — the prior tokens are gone from the environment, and the
+PAT law holds: env var or push-URL header only, never a file, rotation
+advised). Once pushed, CI owns the 8/8 evidence.
