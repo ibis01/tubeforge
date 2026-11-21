@@ -30,6 +30,18 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
 
+# The browser binary is downloaded HERE, in the deps stage, against the SAME
+# node_modules that npm ci just installed — the revision the runtime resolves
+# can never drift from the revision that was downloaded. The runner-stage
+# `npx playwright install` that used to sit further down resolved its own
+# node_modules COPY; after the U3 lock bump (playwright 1.65.0 → 1.65.1,
+# chromium build 1254 → 1255) the smoke's whiteboard render began dying with
+# "Executable doesn't exist" — the downloaded build was 1254 while the
+# runtime demanded 1255. One install site, one source of truth.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN npx playwright install chromium \
+  && node -e "const b=require('playwright-core/browsers.json');const c=b.browsers.find(x=>x.name==='chromium');console.log('[deps] playwright-core '+require('playwright-core/package.json').version+' pinned chromium-'+c.revision)"
+
 # ---------- 2. build ----------
 FROM node:24-bookworm-slim AS build
 WORKDIR /app
@@ -49,7 +61,7 @@ WORKDIR /app
 # ffmpeg/ffprobe (render + QC), ca-certificates (TLS to providers/S3),
 # tini (zombie reaping under container init quirkiness — belt to proc.ts's
 # suspenders), fonts-liberation (base web fonts). Chromium's OS library
-# closure is installed by `playwright install --with-deps` further down
+# closure is installed by `playwright install-deps` further down
 # (its own apt layer, so this layer stays cached across browser bumps).
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -76,14 +88,15 @@ COPY --from=build --chown=tubeforge:tubeforge /app/package.json ./package.json
 COPY --from=build --chown=tubeforge:tubeforge /app/package-lock.json ./package-lock.json
 
 # Whiteboard/slides Chromium (DEPLOYMENT.md §5.1 — as root, before
-# USER tubeforge). Runs AFTER the node_modules COPY so npx resolves the
-# pinned playwright from the image's own node_modules (1.57.0 → browser
-# build chromium-1200); `--with-deps` apt-installs the OS library
-# closure for THIS base (bookworm — playwright emits the matching
-# package names per distro at build time) including CJK/emoji fallback
-# fonts; the tree is chowned so the non-root worker can execute it.
-RUN npx playwright install --with-deps chromium \
-  && chown -R tubeforge:tubeforge /opt/ms-playwright
+# USER tubeforge). The BROWSER build was downloaded in the deps stage from
+# the very node_modules that ships (one install site — no revision drift);
+# this stage brings the binary over and apt-installs only the OS library
+# closure for THIS base (bookworm — playwright emits the matching package
+# names per distro at build time) including CJK/emoji fallback fonts.
+# `install-deps` NEVER touches the browser downloads, so the binary that
+# lands in /opt/ms-playwright is the exact revision the runtime resolves.
+COPY --from=deps --chown=tubeforge:tubeforge /opt/ms-playwright /opt/ms-playwright
+RUN npx playwright install-deps chromium
 
 # Application code: standalone server (web role)…
 COPY --from=build --chown=tubeforge:tubeforge /app/.next/standalone ./.next/standalone
