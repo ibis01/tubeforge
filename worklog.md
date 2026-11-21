@@ -7178,10 +7178,15 @@ land BACK on the surface the operator was on; the workspace restores WITH its
 project. Prefills stay ephemeral BY DESIGN. Zero visual change: no color, no
 logo, no workflow markup touched (the operator's freeze re-affirmed).
 
-**Gates (this sandbox):** tsc clean · eslint clean on changed files · the
-premium-ux reload-draft e2e contract unaffected (the reload now mounts Create
-restored directly).
+**Gates (this sandbox):** tsc clean · eslint clean on changed files · battery
+1022/1022 · the premium-ux reload-draft e2e UPDATED to the new contract — the
+old spec clicked header 'New Project' AFTER the reload, which the restore law
+makes impossible (Create mounts restored directly, and the header hides the
+button on Create); the corrected spec reloads and asserts the draft banner +
+topic straight away — run locally, 1 passed.
 
 **Programme state:** pushed with the operator token (push-URL header, single
 call, never a file — rotation advised per the PAT law); CI owns the 8/8
-evidence after.
+evidence after. First CI run: 7/8 — the E2E job caught exactly the stale-spec
+contract above; the spec fix rides this entry's commit and CI re-owns the
+evidence.
