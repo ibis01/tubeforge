@@ -40,7 +40,7 @@ RUN npm ci --ignore-scripts
 # runtime demanded 1255. One install site, one source of truth.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN npx playwright install chromium \
-  && node -e "const b=require('playwright-core/browsers.json');const c=b.browsers.find(x=>x.name==='chromium');console.log('[deps] playwright-core '+require('playwright-core/package.json').version+' pinned chromium-'+c.revision)"
+  && node -e "const fs=require('fs');const b=JSON.parse(fs.readFileSync('node_modules/playwright-core/browsers.json','utf8'));const c=b.browsers.find(x=>x.name==='chromium');console.log('[deps] pinned chromium-'+c.revision)"
 
 # ---------- 2. build ----------
 FROM node:24-bookworm-slim AS build
