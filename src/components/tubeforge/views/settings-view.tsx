@@ -841,7 +841,7 @@ export function SettingsView() {
 
   if (!loaded) {
     return (
-      <div className="max-w-2xl space-y-4">
+      <div className="space-y-4">
         <Skeleton className="h-64 rounded-2xl bg-white/5" />
         <Skeleton className="h-44 rounded-2xl bg-white/5" />
         <Skeleton className="h-56 rounded-2xl bg-white/5" />
@@ -869,7 +869,7 @@ export function SettingsView() {
   ];
 
   return (
-    <div className="max-w-2xl space-y-5">
+    <div className="space-y-5">
       <PlanCard />
       <Card className="glass rounded-2xl p-5 sm:p-6">
         <div className="flex items-center gap-2.5 mb-5">
