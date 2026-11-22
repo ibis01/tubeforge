@@ -50,6 +50,25 @@ export function createPrismaAdapter(url = resolveDatabaseUrl()) {
       "DATABASE_URL is not set — the Prisma 7 client needs a driver adapter and no URL to derive it from",
     );
   }
+  // Runtime guard: if the app boots with SQLite on Vercel's ephemeral
+  // serverless filesystem, every DB write is lost on cold start — settings
+  // silently vanish after reload. Fail loudly with an actionable error
+  // instead of serving an app that eats its own data. (The postinstall
+  // guard catches this at build time; this catches runtime env drift, e.g.
+  // DATABASE_URL set late or a stale .env bundled into the deployment.)
+  // Local dev / sandbox / CI do not set VERCEL, so SQLite still works there.
+  if (
+    (process.env.VERCEL === "1" || process.env.VERCEL_ENV) &&
+    url.startsWith("file:")
+  ) {
+    throw new Error(
+      "DATABASE_URL resolves to SQLite (file: URL) on Vercel. " +
+        "Vercel's serverless filesystem is ephemeral — settings will NOT persist " +
+        "(every write is lost on cold start). Set DATABASE_URL to a Postgres " +
+        "connection string in Vercel → Settings → Environment Variables " +
+        "(Neon / Vercel Postgres / Supabase), then redeploy.",
+    );
+  }
   if (url.startsWith("file:")) {
     const [pathPart, queryPart] = url.slice("file:".length).split("?", 2);
     let timeout = 10000; // the S136 busy_timeout floor (ms)

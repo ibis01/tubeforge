@@ -46,6 +46,32 @@ if (!url) {
   }
 }
 
+// Production guard: SQLite on Vercel's ephemeral serverless filesystem
+// silently loses every DB write on cold start — settings, provider configs,
+// users, jobs all vanish after a reload, which is exactly the
+// "settings don't persist" symptom. The fallback above is correct for
+// local dev / the sandbox, but on Vercel it is a data-loss trap. Fail the
+// build LOUDLY so the missing DATABASE_URL is fixed in the Vercel dashboard
+// instead of corrupting every user's data. (CI / GitHub Actions do not set
+// VERCEL, so test suites that intentionally use SQLite are unaffected.)
+if (
+  (process.env.VERCEL === '1' || process.env.VERCEL_ENV) &&
+  url.startsWith('file:')
+) {
+  console.error(
+    '\n[postinstall] FATAL: SQLite (file: URL) detected on Vercel.\n' +
+      "Vercel's serverless filesystem is EPHEMERAL — every DB write (settings, " +
+      'provider configs, users) is lost on cold start, so the app appears to ' +
+      'save correctly then reverts to defaults after reload.\n\n' +
+      'FIX: set DATABASE_URL to a durable Postgres connection string in\n' +
+      'Vercel → Project → Settings → Environment Variables.\n' +
+      'Free options: Neon (neon.tech), Vercel Postgres, or Supabase.\n' +
+      'Example: postgresql://user:pass@ep-xxx.us-east-2.aws.neon.tech/dbname?sslmode=require\n' +
+      'Then redeploy. Local dev / sandbox (no VERCEL env) keeps the SQLite fallback.\n'
+  );
+  process.exit(1);
+}
+
 // Prisma 7 resolves relative file: URLs against the process CWD — the v6
 // connector resolved them against the SCHEMA directory (prisma/), and
 // restore-drill.mts + test-backup.mts still do exactly that. Keep ONE
