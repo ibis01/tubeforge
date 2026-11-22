@@ -7259,3 +7259,38 @@ as contract-conformant, zero real defects behind them.
 file · tsc --noEmit clean · kokoro behavioral smoke (catalog 13 voices,
 bf_emma passthrough, unknown-voice falls to af_heart, openai's alloy
 unchanged). CI owns the push evidence.
+
+## 2026-11-22 — Studio session: the six-type pipeline verification — the S153 kinetic compose law
+
+**Trigger.** The operator asked to "verify all the 6 video types pipeline
+work perfectly". The six Create presets (classic, story, whiteboard,
+graphics2d, character, slides) each rode their FULL pipeline end-to-end on
+a local all-sandbox runtime (sqlite + the platform gateway + real ffmpeg):
+script (GLM) → storyboard art (CogView) / engine-doc scaffold ($0) →
+voiceover (Z.ai TTS) → thumbnail → render (kenburns / whiteboard / graphics
+/ slides lanes) → final.mp4, ffprobe-verified (h264 + AAC, 117–146s each).
+The character type additionally rode the portrait + the 3/3 consistency
+sheet and the CAST storyboard anchor. All six PASSED; classic's package
+(ready, no render) is by design.
+
+**The defect the run caught (one, both repos):** the slides lane's kinetic
+compose — S153 (`13032df`) — mapped the story lane's `[v]` FILTER LABEL
+while its graph is audio-only (`sceneAudio` defines `[voice]`/`[a]`, never
+`[v]`): every clip-backed scene compose failed with "Output with label 'v'
+does not exist in any defined filter graph". The still fallback masked it
+on hosts without Chromium — a Chromium-present host never rendered a
+kinetic slide video. The fix maps the INPUT stream (`0:v`) for the
+pass-through clip and keeps the audio graph untouched (`common.slice(4)`
+drops only the dead label pair). The re-render produced a real 143s 9.1MB
+h264+aac keynote.
+
+**Also (environment, not code):** the slides/whiteboard/graphics lanes need
+Playwright Chromium — installed here via `playwright install chromium`;
+deployments without it see slides fail at deck design (the error names the
+requirement) and the engine lanes fall back or refuse loudly.
+
+**Gates (this sandbox):** batteries 1022/1022 + 1026/1026 · eslint clean on
+the changed file · tsc --noEmit clean · five final.mp4 artifacts ffprobe
+verified (slides 143s/9.1MB, graphics 117s/5.1MB, whiteboard 146s/24.7MB,
+story 128s/30.5MB, character 144s/33.5MB — every one h264 + AAC). CI owns
+the push evidence.

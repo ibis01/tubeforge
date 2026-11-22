@@ -913,12 +913,21 @@ async function buildSegment(opts: {
       throw new Error(`Scene ${scene.index} has no slide image — the slide deck step was skipped`);
     const kineticClip = opts.slideKinetic?.clip ?? null;
     if (kineticClip && fs.existsSync(kineticClip)) {
+      // The kinetic clip IS the scene's video — it passes through
+      // unfiltered (this graph is audio-only), so the video map names the
+      // INPUT stream. Mapping the story lane's [v] filter label here
+      // 404-ed: sceneAudio's graph never defines [v], and ffmpeg
+      // correctly refuses "Output with label 'v' does not exist in any
+      // defined filter graph" — every clip-backed scene compose failed
+      // (S153 shipped the label; the still fallback masked it on hosts
+      // without Chromium, where no clip ever existed).
       await run("ffmpeg", [
         "-i", kineticClip,
         "-i", wav,
         ...audio.inputs,
         "-filter_complex", audio.graph,
-        ...common,
+        "-map", "0:v", "-map", "[a]",
+        ...common.slice(4),
       ]);
       return;
     }
