@@ -47,6 +47,22 @@ import {
 
 const CAPABILITIES: CapabilityId[] = ["chat", "tts", "asr", "image", "video"];
 
+// Per-user provider config must NEVER be statically cached or served from a
+// stale cache — the create-view / settings-view mount reads this on every
+// load, and a stale response makes saved provider keys/models vanish on
+// reload. force-dynamic + revalidate 0 keeps Next.js from memoizing across
+// requests; the Cache-Control header keeps the browser from serving a stale
+// pre-save response after a save+reload.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+/** Common no-cache headers applied to every response from this route. */
+const NO_CACHE_HEADERS: Record<string, string> = {
+  "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+  Pragma: "no-cache",
+  Expires: "0",
+};
+
 /** 1x1 transparent PNG — enough bytes to exercise a vision/edit wire call. */
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -98,7 +114,7 @@ export async function GET(req: NextRequest) {
       chatModel: DEFAULT_CHAT_MODEL,
       zaiBaseUrl: DEFAULT_ZAI_BASE_URL,
     },
-  });
+  }, { headers: NO_CACHE_HEADERS });
 }
 
 export async function PUT(req: NextRequest) {

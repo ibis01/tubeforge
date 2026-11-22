@@ -60,6 +60,21 @@ import {
 
 const CAPABILITIES: CapabilityId[] = ["chat", "tts", "asr", "image", "video"];
 
+// These routes read per-user data from the database and must NEVER be
+// statically cached or served from a stale cache. force-dynamic + revalidate 0
+// keeps Next.js from memoizing the GET across requests; the Cache-Control
+// header below keeps the browser from serving a stale pre-save response after
+// a save+reload (the root cause of "settings disappear after reload").
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+/** Common no-cache headers applied to every response from this route. */
+const NO_CACHE_HEADERS: Record<string, string> = {
+  "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+  Pragma: "no-cache",
+  Expires: "0",
+};
+
 /** Stored preference rows restricted to the public allow-list (defaults merged).
  * The multi-provider rewrite (a2eabd8) dropped this read path; five UI
  * consumers (settings-view, create-view, voice-view, music-controls,
@@ -103,7 +118,7 @@ export async function GET(req: NextRequest) {
       chatModel: DEFAULT_CHAT_MODEL,
       zaiBaseUrl: DEFAULT_ZAI_BASE_URL,
     },
-  });
+  }, { headers: NO_CACHE_HEADERS });
 }
 
 export async function PUT(req: NextRequest) {
@@ -127,8 +142,11 @@ export async function PUT(req: NextRequest) {
       const allowList = new Set(Object.keys(DEFAULT_SETTINGS));
 
       // Preference keys: the public allow-list decides (no secret ever
-      // rides this path). Booleans stringify; blanks skip; music.trackId
-      // null/"" explicitly CLEARS the manual default (the old law).
+      // rides this path). Booleans stringify; music.trackId null/"" and any
+      // other blank value CLEARS the stored row (the old law silently
+      // skipped blanks, so clearing a field never persisted — the old value
+      // survived the save). Now a blank clears so the default re-emerges.
+      const blankKeys: string[] = [];
       for (const [key, raw] of Object.entries(body)) {
         if (
           key === "scope" ||
@@ -138,13 +156,14 @@ export async function PUT(req: NextRequest) {
         )
           continue;
         if (!allowList.has(key)) continue;
-        if (key === "music.trackId" && (raw === null || raw === "")) {
-          await deleteUserSetting(key);
-          continue;
-        }
         const value =
           typeof raw === "boolean" ? String(raw) : String(raw ?? "").trim();
-        if (!value) continue;
+        if (!value) {
+          // Blank (empty string / null / whitespace) → clear the stored row
+          // so the merged default re-emerges instead of the stale old value.
+          blankKeys.push(key);
+          continue;
+        }
         prefUpdates[key] = value;
       }
 
@@ -166,7 +185,11 @@ export async function PUT(req: NextRequest) {
         if (apiKey) credUpdates[ZAI_SETTING_KEYS.apiKey] = apiKey;
       }
 
-      if (Object.keys(credUpdates).length === 0 && Object.keys(prefUpdates).length === 0) {
+      if (
+        Object.keys(credUpdates).length === 0 &&
+        Object.keys(prefUpdates).length === 0 &&
+        blankKeys.length === 0
+      ) {
         return NextResponse.json({ error: "Nothing to save" }, { status: 400 });
       }
 
@@ -179,6 +202,11 @@ export async function PUT(req: NextRequest) {
       if (Object.keys(prefUpdates).length > 0) {
         await setUserSettings(prefUpdates);
       }
+      // Clear blanked keys last so the merged-default re-emerges on the
+      // immediate readPublicSettings() below.
+      for (const key of blankKeys) {
+        await deleteUserSetting(key);
+      }
 
       const legacy = await readLegacyZai();
       return NextResponse.json({
@@ -189,7 +217,7 @@ export async function PUT(req: NextRequest) {
           hasKey: Boolean(legacy.apiKey),
           maskedKey: maskKey(legacy.apiKey),
         },
-      });
+      }, { headers: NO_CACHE_HEADERS });
     }
 
     // ---- Scope 2: one capability's provider ----

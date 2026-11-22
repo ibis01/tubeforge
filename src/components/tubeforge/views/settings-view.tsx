@@ -475,7 +475,12 @@ export function SettingsView() {
   };
 
   useEffect(() => {
-    fetch("/api/settings")
+    // cache: "no-store" is REQUIRED here. Without it, Next.js / the browser
+    // may serve the stale pre-save GET response after a save+reload, so saved
+    // settings appear to vanish on reload. Every other settings reader in
+    // the app already passes this option; the mount load here and
+    // create-view's load were the two gaps that caused the bug.
+    fetch("/api/settings", { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => {
         const s = d.settings ?? {};
