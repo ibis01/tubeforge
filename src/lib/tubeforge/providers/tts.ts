@@ -298,6 +298,26 @@ export function isPlayhtCloneVoiceId(voice: string): boolean {
   return (voice ?? "").startsWith("s3://");
 }
 
+/** Kokoro-82M's own sample set (hexgrad/Kokoro-82M, Apache-2.0). The
+ *  zai-fallthrough would serve studio-voice ids the local kokoro-fastapi
+ *  server has never heard of — Kokoro owns its catalog, like every other
+ *  provider here. */
+export const KOKORO_VOICES = [
+  { id: "af_heart", label: "Heart — warm female (recommended)" },
+  { id: "af_bella", label: "Bella — expressive female" },
+  { id: "af_nicole", label: "Nicole — soft female" },
+  { id: "af_sky", label: "Sky — bright female" },
+  { id: "af_sarah", label: "Sarah — steady female" },
+  { id: "am_adam", label: "Adam — grounded male" },
+  { id: "am_michael", label: "Michael — steady male" },
+  { id: "am_echo", label: "Echo — resonant male" },
+  { id: "am_eric", label: "Eric — conversational male" },
+  { id: "bf_emma", label: "Emma — British female" },
+  { id: "bf_isabella", label: "Isabella — British female" },
+  { id: "bm_george", label: "George — British male" },
+  { id: "bm_lewis", label: "Lewis — British male" },
+] as const;
+
 /** In-memory caches for the live voice lists — keyed by credential
  *  fingerprint so switching accounts never serves the wrong account's
  *  voices. 5-minute TTL (the Cartesia cache's law). */
@@ -533,6 +553,10 @@ export function voiceCatalog(provider: ProviderId, model = "") {
     // resolveElevenlabsVoiceId (the Cartesia law).
     return ELEVEN_STATIC_VOICES.map((v) => ({ ...v }));
   }
+  if (provider === "kokoro") {
+    // Kokoro's own catalog — never the zai fallthrough.
+    return KOKORO_VOICES.map((v) => ({ ...v }));
+  }
   // zai + zhipu share the same 7 studio voices; zhipu additionally accepts
   // cloned ids (appended to the catalog by the API layer, which can hit the DB).
   return VOICES.map((v) => ({ id: v.id, label: v.label }));
@@ -656,6 +680,14 @@ export async function ttsSynthesize(
   }
   if (config.provider === "elevenlabs") {
     return elevenlabsTts(request, config);
+  }
+  // Kokoro (local kokoro-fastapi) speaks the OpenAI /audio/speech shape —
+  // it rides the SAME adapter as OpenAI TTS; its registry meta supplies
+  // localhost:8880/v1 and requiresKey:false, and the adapter's local-host
+  // key skip covers loopback. Without this case it fell to zaiTts (the
+  // Z.ai SDK), a wire protocol the local server cannot answer.
+  if (config.provider === "kokoro") {
+    return openaiTts(request, config);
   }
   return zaiTts(request, config);
 }
@@ -1403,7 +1435,10 @@ async function openaiTts(
     config.baseUrl?.trim() ||
     meta?.defaultBaseUrl ||
     "https://api.openai.com/v1";
-  const model = config.model?.trim() || "gpt-4o-mini-tts";
+  const model =
+    config.model?.trim() ||
+    meta?.models[0]?.id ||
+    "gpt-4o-mini-tts";
   const key = config.apiKey?.trim();
 
   // Skip the API key check if the provider is local (like TTSFM) or

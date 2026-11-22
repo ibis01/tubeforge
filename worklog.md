@@ -7221,3 +7221,41 @@ host/trailing slashes/`/v1` exact/`/v1` + slash/custom proxy path).
 CI owns the 8/8 evidence after push. Note: Vercel auto-deploys main; fly.io
 has no CI deploy job, so the fly deployment picks this up on its next
 `fly deploy`.
+
+## 2026-11-22 — Studio session: the provider shape audit — every registry id now has a wire route (the kokoro law)
+
+**Trigger.** The operator asked to "verify all providers are in shape". The
+audit ran a structural pass over the provider layer: registry invariants
+(meta fields, tier values, defaultBaseUrl http(s), model arrays), adapter
+export resolution, the joinUrl + normalizeMagicHourBaseUrl laws, twin parity
+(tubeforge vs the Ibismuh-studio fork), and — the decisive check — DISPATCH
+COVERAGE: every registry id must route to a wire adapter.
+
+**Finding (one genuine hole, both repos):** `kokoro` — the registry has
+advertised it since the S173 affordable-voice work (kind: openai, local
+kokoro-fastapi at localhost:8880/v1, requiresKey:false) — had NO dispatch
+case in `ttsSynthesize`, so selecting it fell through to `zaiTts` (the Z.ai
+SDK): a wire protocol the local server cannot answer. `voiceCatalog
+("kokoro")` also fell to the 7 Z.ai studio voices — ids the local server has
+never heard of. Two smaller guarantees landed with the fix: `openaiTts` now
+defaults its model from the provider's OWN registry meta
+(`meta.models[0].id`) instead of hardcoding gpt-4o-mini-tts (chat's modelFor
+law, mirrored), and `KOKORO_VOICES` gives Kokoro its own 13-voice sample set
+(hexgrad/Kokoro-82M, Apache-2.0). Kokoro rides the SAME openai-compatible
+adapter as OpenAI TTS — no new adapter, no redesign; the local-host key skip
+already covered loopback.
+
+**Everything else passed clean:** CHAT 11/11 routed (8 ids via the
+OPENAI_COMPATIBLE group, anthropic/gemini/zai explicit), IMAGE 12/12 and
+12/12 (generate + edit), VIDEO 11/11, ASR 4/4; registry invariants hold on
+all 50 meta rows; the joinUrl law (3 cases) and the Magic Hour normalizer
+law (6 cases) hold; the twins are wire-identical modulo the rebrand
+namespace (env prefixes TUBEFORGE_* vs IBISMUH_STUDIO_*, comments, labels).
+54 initial audit "failures" were audit over-strictness (optional `tier`,
+intentional `models: []` for zai TTS/ASR/image and lmstudio) — re-verified
+as contract-conformant, zero real defects behind them.
+
+**Gates (this sandbox):** battery 1022/1022 · eslint clean on the changed
+file · tsc --noEmit clean · kokoro behavioral smoke (catalog 13 voices,
+bf_emma passthrough, unknown-voice falls to af_heart, openai's alloy
+unchanged). CI owns the push evidence.
