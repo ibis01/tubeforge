@@ -20,6 +20,7 @@ import {
   publicCapability,
   maskKey,
   readLegacyZai,
+  encryptionKeyUsable,
   type CapabilityConfig,
 } from "@/lib/tubeforge/providers/settings";
 import {
@@ -67,6 +68,40 @@ const NO_CACHE_HEADERS: Record<string, string> = {
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
+/** S186 — the storage-health probe served with every settings GET. The
+ *  settings view renders a banner when durability is compromised, so the
+ *  "saved settings revert to default" failure mode is VISIBLE in-app instead
+ *  of silently eating the user's provider choices. Booleans only — never env
+ *  values. */
+function storageHealth(): {
+  durable: boolean;
+  database: "postgres" | "sqlite" | "unset";
+  onVercel: boolean;
+  encryption: boolean;
+  warning: string | null;
+} {
+  const url = (process.env.DATABASE_URL ?? "").trim();
+  const onVercel = process.env.VERCEL === "1" || Boolean(process.env.VERCEL_ENV);
+  const database = url.startsWith("file:")
+    ? "sqlite"
+    : /^postgres(ql)?:/.test(url)
+      ? "postgres"
+      : url
+        ? "sqlite"
+        : "unset";
+  const encryption = encryptionKeyUsable();
+  const durable = database === "postgres" || (!onVercel && database === "sqlite");
+  let warning: string | null = null;
+  if (onVercel && database !== "postgres") {
+    warning =
+      "This deployment has no durable database — settings, projects and accounts are stored on Vercel's EPHEMERAL filesystem and vanish on restart/redeploy. Fix: set DATABASE_URL to a Postgres connection string (free tiers: Neon, Vercel Postgres, Supabase) in Vercel → Project → Settings → Environment Variables, then redeploy.";
+  } else if (!encryption) {
+    warning =
+      "TUBEFORGE_ENCRYPTION_KEY is not set — provider API keys cannot be stored securely. Set it (openssl rand -hex 32) in your hosting environment variables, then redeploy. Keep it STABLE: rotating it makes every saved key unreadable.";
+  }
+  return { durable, database, onVercel, encryption, warning };
+}
+
 export async function GET(req: NextRequest) {
   const auth = await requireUser(req);
   if (!auth.ok)
@@ -76,13 +111,17 @@ export async function GET(req: NextRequest) {
   const caps: Record<string, ReturnType<typeof publicCapability> & {
     keys: Record<string, { hasKey: boolean; maskedKey: string; baseUrl: string }>;
   }> = {};
+  const unreadableKeys: string[] = [];
   for (const cap of CAPABILITIES) {
     const config = await getCapability(cap);
     // S159 — EVERY provider's saved-key state for this capability, not just
     // the active one. The UI reads this map on provider switches so going
     // A → B → A restores A's saved key badge (the row still exists; the
     // switch must never read as "the key disappeared").
+    // S186 — an unreadable (decrypt-failed) row degrades to "no key shown"
+    // for THAT provider only; it never 500s the GET or resets the selection.
     const saved = await listProviderCredentials(cap);
+    if (saved.unreadable.length) unreadableKeys.push(...saved.unreadable);
     const keys: Record<string, { hasKey: boolean; maskedKey: string; baseUrl: string }> = {};
     for (const p of PROVIDERS_BY_CAPABILITY[cap] ?? []) {
       const cred = saved.get(p.id);
@@ -114,6 +153,14 @@ export async function GET(req: NextRequest) {
       chatModel: DEFAULT_CHAT_MODEL,
       zaiBaseUrl: DEFAULT_ZAI_BASE_URL,
     },
+    storage: storageHealth(),
+    ...(unreadableKeys.length
+      ? {
+          unreadableKeys: Array.from(new Set(unreadableKeys)),
+          unreadableKeysWarning:
+            "Some saved provider keys could not be decrypted (the server's TUBEFORGE_ENCRYPTION_KEY changed or is missing). Re-enter those keys — your provider selections are intact.",
+        }
+      : {}),
   }, { headers: NO_CACHE_HEADERS });
 }
 

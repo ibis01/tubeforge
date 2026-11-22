@@ -1,6 +1,7 @@
 // Per-capability AI provider settings — Stage 2 per-user edition.
 
 import { DEFAULT_CHAT_MODEL } from "../types";
+import { log } from "../log";
 import {
   PROVIDERS_BY_CAPABILITY,
   type CapabilityId,
@@ -93,6 +94,23 @@ interface StoredCapability {
   baseUrl?: string;
 }
 
+const settingsLog = log.child({ mod: "providers/settings" });
+
+/**
+ * S186 — the NO-SILENT-DEFAULTS law.
+ *
+ * getCapability used to wrap its ENTIRE read (saved row parse + credential
+ * decrypt) in one try/catch whose catch arm returned `defaultFor(capability)`.
+ * Any single failure — a rotated TUBEFORGE_ENCRYPTION_KEY, a DB hiccup, a
+ * corrupt row — therefore read as "the user never saved anything": the UI
+ * showed zai defaults over a row that still said groq, which is exactly the
+ * "settings revert to default after I save and log back in" incident.
+ *
+ * The law now: the PERSISTED SELECTION (provider/model/baseUrl) survives any
+ * secret-half failure. Each failure mode is isolated, logged loudly, and only
+ * degrades what it actually broke — a unreadable API key reports hasKey:false
+ * (the UI prompts to re-enter it), it NEVER resets the provider choice.
+ */
 export async function getCapability(
   capability: CapabilityId,
   overrides?: Partial<CapabilityConfig>,
@@ -113,43 +131,64 @@ export async function getCapability(
     if (!savedRow) return getCapability("tts", overrides);
   }
   const config = defaultFor(capability);
+
+  // -- Half 1: the persisted selection (non-secret) -------------------------
+  // Isolated: a corrupt row or DB hiccup degrades to the capability default
+  // WITHOUT dragging the secret half (or the legacy shared provider) down.
   try {
-    const legacy = await readLegacyZai();
     const map = await getUserSettings([CAPABILITY_KEYS[capability]]);
     const row = map.get(CAPABILITY_KEYS[capability]);
     const parsed = row ? (JSON.parse(row) as StoredCapability) : null;
-
-    // Check if the shared provider supports this capability
-    const sharedSupportsCap =
-      PROVIDERS_BY_CAPABILITY[capability]?.some(
-        (p) => p.id === legacy.provider,
-      ) ?? false;
-
     if (parsed && typeof parsed.provider === "string") {
-      // A specific capability config was explicitly saved
+      // A specific capability config was explicitly saved — the durable truth.
       config.provider = parsed.provider as ProviderId;
       config.model = parsed.model ?? config.model;
       config.visionModel = parsed.visionModel ?? config.visionModel;
       config.baseUrl = parsed.baseUrl ?? config.baseUrl;
-    } else if (legacy.provider !== "zai" && sharedSupportsCap) {
-      // No specific override, but shared provider is non-default and supports this — inherit
-      config.provider = legacy.provider as ProviderId;
-      config.baseUrl = legacy.baseUrl;
-      config.apiKey = legacy.apiKey;
-    } else if (capability === "chat") {
-      if (legacy.chatModel) config.model = legacy.chatModel;
-      if (legacy.visionModel) config.visionModel = legacy.visionModel;
+    } else {
+      // No specific override — the legacy shared-provider inheritance.
+      const legacy = await readLegacyZai();
+      const sharedSupportsCap =
+        PROVIDERS_BY_CAPABILITY[capability]?.some(
+          (p) => p.id === legacy.provider,
+        ) ?? false;
+      if (legacy.provider !== "zai" && sharedSupportsCap) {
+        config.provider = legacy.provider as ProviderId;
+        config.baseUrl = legacy.baseUrl;
+        config.apiKey = legacy.apiKey;
+      } else if (capability === "chat") {
+        if (legacy.chatModel) config.model = legacy.chatModel;
+        if (legacy.visionModel) config.visionModel = legacy.visionModel;
+      }
     }
+  } catch (err) {
+    settingsLog.error(
+      `[getCapability:${capability}] the saved selection row could not be read — ` +
+        `serving the capability default until the storage issue is fixed`,
+      { detail: err instanceof Error ? err.message : String(err) },
+    );
+  }
 
-    // Secret half — ProviderCredential (encrypted at rest)
-    if (!config.apiKey) {
+  // -- Half 2: the secret (ProviderCredential, encrypted at rest) -----------
+  // Isolated: a decrypt failure (rotated TUBEFORGE_ENCRYPTION_KEY is the
+  // historical trigger) must NOT erase the selection above. The capability
+  // reports "no usable key" and the settings UI asks the user to re-enter it.
+  if (!config.apiKey) {
+    try {
       const cred = await getProviderCredential(capability, config.provider);
       config.apiKey = cred?.apiKey ?? "";
       config.baseUrl = config.baseUrl || cred?.baseUrl || "";
+    } catch (err) {
+      settingsLog.error(
+        `[getCapability:${capability}] the saved credential for provider ` +
+          `"${config.provider}" could not be decrypted — the key reports ` +
+          `missing (re-enter it in Settings) instead of resetting the provider`,
+        { detail: err instanceof Error ? err.message : String(err) },
+      );
+      config.apiKey = "";
     }
-  } catch {
-    /* corrupt row — fall back to defaults */
   }
+
   const merged = { ...config, ...overrides };
   merged.model = merged.model?.trim() ?? "";
   return merged;
@@ -183,15 +222,35 @@ export async function saveCapability(
   // foreign key silently riding the wire).
   const providerChanged = next.provider !== current.provider;
   if (providerChanged && !(patch.apiKey ?? "").trim()) {
-    const cred = await getProviderCredential(capability, next.provider);
-    next.apiKey = cred?.apiKey ?? "";
-    next.baseUrl = next.baseUrl?.trim() || cred?.baseUrl || "";
+    // S186 — the NEW provider's saved credential, decoded in isolation: a
+    // decrypt failure here (rotated encryption key) degrades to "no saved
+    // key" — the save proceeds and the UI asks for the key — it never 400s
+    // the whole provider switch.
+    try {
+      const cred = await getProviderCredential(capability, next.provider);
+      next.apiKey = cred?.apiKey ?? "";
+      next.baseUrl = next.baseUrl?.trim() || cred?.baseUrl || "";
+    } catch {
+      next.apiKey = "";
+    }
   } else if (patch.apiKey === "") {
     next.apiKey = current.apiKey;
   }
 
   const ctx = currentCtx();
   if (!ctx) throw new Error("saveCapability requires an authenticated context");
+
+  // S186 — the SAVE pre-flight. An unusable encryption key used to surface as
+  // a raw Node crypto error AFTER the provider row was already written (a
+  // partial save with a cryptic 400). Detect it BEFORE any write and answer
+  // with the exact operator fix.
+  if (next.apiKey && !encryptionKeyUsable()) {
+    throw new Error(
+      "TUBEFORGE_ENCRYPTION_KEY is missing or too short — the API key cannot be stored securely. " +
+        "Set it (64 hex chars, openssl rand -hex 32) in your hosting environment variables, " +
+        "then redeploy. Your provider/model selection is NOT lost — only the key save was refused.",
+    );
+  }
 
   const blob: StoredCapability = {
     provider: next.provider,
@@ -211,6 +270,13 @@ export async function saveCapability(
   invalidateZaiClients();
 
   return next;
+}
+
+/** S186 — can secrets be encrypted in THIS process? (save pre-flight + the
+ *  settings GET's storage.health probe). True when the env key is present and
+ *  ≥16 chars — the same contract requireKey enforces. */
+export function encryptionKeyUsable(): boolean {
+  return (process.env.TUBEFORGE_ENCRYPTION_KEY ?? "").length >= 16;
 }
 
 export function effectiveModel(

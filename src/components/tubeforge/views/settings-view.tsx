@@ -73,6 +73,7 @@ import {
   Presentation,
   Ban,
   Sparkles,
+  AlertTriangle,
 } from "lucide-react";
 import {
   useVoices,
@@ -345,6 +346,15 @@ export function SettingsView() {
   >({});
   // The shared-credentials "What is this for?" explainer toggle.
   const [sharedHelpOpen, setSharedHelpOpen] = useState(false);
+  // S186 — storage health served by GET /api/settings/ai. When the deployment
+  // writes to an ephemeral database (Vercel + SQLite) or cannot encrypt
+  // secrets, the user SEES the warning here instead of silently losing saved
+  // providers on the next restart/redeploy.
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
+  // S186 — a saved provider key whose ciphertext no longer matches the
+  // server's TUBEFORGE_ENCRYPTION_KEY. The provider selection survives; the
+  // key needs re-entering. Surfaced here so the empty key badge explains itself.
+  const [unreadableWarning, setUnreadableWarning] = useState<string | null>(null);
 
   const loadYouTube = useCallback(async () => {
     try {
@@ -363,6 +373,12 @@ export function SettingsView() {
       const res = await fetch("/api/settings/ai", { cache: "no-store" });
       if (!res.ok) return;
       const d = await res.json();
+      setStorageWarning(
+        typeof d.storage?.warning === "string" ? d.storage.warning : null,
+      );
+      setUnreadableWarning(
+        typeof d.unreadableKeysWarning === "string" ? d.unreadableKeysWarning : null,
+      );
       setZaiCreds({
         provider: d.zai?.provider ?? "zai",
         baseUrl: d.zai?.baseUrl ?? DEFAULT_ZAI_BASE_URL,
@@ -964,6 +980,42 @@ export function SettingsView() {
             </p>
           </div>
         </div>
+
+        {/* S186 — durability + key-integrity banners: the storage failure
+            modes that used to read as "my settings just reverted" are now
+            named here, with the exact fix. */}
+        {storageWarning && (
+          <div
+            role="alert"
+            className="mt-4 flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4"
+          >
+            <AlertTriangle className="h-4.5 w-4.5 text-red-400 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-red-300">
+                Saved settings will not survive a restart on this deployment
+              </p>
+              <p className="text-xs text-red-200/80 mt-1 leading-relaxed">
+                {storageWarning}
+              </p>
+            </div>
+          </div>
+        )}
+        {unreadableWarning && (
+          <div
+            role="alert"
+            className="mt-3 flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4"
+          >
+            <AlertTriangle className="h-4.5 w-4.5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-amber-300">
+                A saved provider key needs re-entering
+              </p>
+              <p className="text-xs text-amber-200/80 mt-1 leading-relaxed">
+                {unreadableWarning}
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Shared credentials */}
         <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">

@@ -72,6 +72,37 @@ if (
   process.exit(1);
 }
 
+// S186 — the STABLE-SECRETS guard (same forcing function as the guard above).
+// The pre-guard behavior provisioned a RANDOM TUBEFORGE_AUTH_SECRET /
+// TUBEFORGE_ENCRYPTION_KEY into a build-time .env whenever the platform env
+// lacked them — so every redeploy rotated the encryption key and made every
+// saved provider credential unreadable (getCapability then silently showed
+// defaults — the same "settings revert after redeploy" incident). Production
+// must never boot with absent or rotating secrets: fail the build with the
+// exact fix instead. Local dev / sandbox / CI (no VERCEL env) keep the
+// auto-provisioning path below.
+if (process.env.VERCEL === '1' || process.env.VERCEL_ENV) {
+  const missing = [];
+  for (const key of ['TUBEFORGE_AUTH_SECRET', 'TUBEFORGE_ENCRYPTION_KEY']) {
+    const value = (process.env[key] || '').trim();
+    if (value.length < 16) missing.push(key);
+  }
+  if (missing.length) {
+    console.error(
+      `\n[postinstall] FATAL: ${missing.join(' and ')} ${missing.length === 1 ? 'is' : 'are'} missing or too short (<16 chars) on Vercel.\n` +
+        'TUBEFORGE_AUTH_SECRET signs every session — without it sign-in 503s.\n' +
+        'TUBEFORGE_ENCRYPTION_KEY encrypts saved provider API keys — without it\n' +
+        'key saves fail, and auto-provisioning a fresh one per build would make\n' +
+        'every previously saved key unreadable after each redeploy.\n\n' +
+        'FIX: set BOTH in Vercel → Project → Settings → Environment Variables\n' +
+        '(generate each once with `openssl rand -hex 32`) and NEVER rotate\n' +
+        'TUBEFORGE_ENCRYPTION_KEY without re-entering saved provider keys.\n' +
+        'Then redeploy. Local dev / sandbox keeps the auto-provision fallback.\n'
+    );
+    process.exit(1);
+  }
+}
+
 // Prisma 7 resolves relative file: URLs against the process CWD — the v6
 // connector resolved them against the SCHEMA directory (prisma/), and
 // restore-drill.mts + test-backup.mts still do exactly that. Keep ONE
